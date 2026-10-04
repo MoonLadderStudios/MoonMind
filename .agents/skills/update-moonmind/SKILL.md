@@ -59,6 +59,14 @@ recovery exhausts; preserve primary deployment success when only reporting remai
 
 ## Recovery
 
+Image selection can fail before any submission exists. For Docker's
+`read-only file system` or `no space left on device` errors, inspect both the
+host's free disk space and Docker's data disk, reclaim unused image/build caches,
+and free host space before restarting Docker Desktop. Preserve deployment
+volumes and active workflow state; do not reset the Docker data disk. Retry the
+entrypoint after Docker can write again. No release recovery owner is created
+by a failed image-selection pull.
+
 If the caller disappears, resume the printed submission with `--resume <submission-id>`. Keep its original image and inputs. The submission names its controller operation (`host-<submission-id>`), so a resume or a lost acknowledgment reattaches to that operation instead of launching a competing writer. When Settings Operations is already applying the same target, the entrypoint observes that operation instead. Inspect the durable result before retrying any side effect; preserve primary deployment success if only cleanup remains. Report the exact unfinished phase and its recorded recovery owner when bounded recovery exhausts. Retry in Settings Operations starts the controller's fresh bounded attempt for the failed operation with prior diagnostics retained; rerunning this entrypoint without `--resume` records a new operation.
 
 The standalone controller project is the replacement owner that survives target-stack shutdown: install, update, or restore it while MoonMind is unhealthy with `python3 deploy/controller/bootstrap.py [install|start|update|restore|status]`. Bootstrap also attaches it to the deployment's private `deployment-controller-network` so the API can reach it. Controller update is host-owned and never self-applied.

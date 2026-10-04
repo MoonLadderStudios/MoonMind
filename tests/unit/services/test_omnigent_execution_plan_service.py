@@ -43,9 +43,8 @@ _OPENCODE_ALLOWED_LAUNCH_POLICIES = [
 _SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
 
 
-@pytest.fixture(autouse=True)
-def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """Give OpenCode plan tests exact resolver evidence for selected refs."""
+def _configure_ready_host_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Give plan tests exact resolver evidence for selected host images."""
 
     from moonmind.omnigent.bootstrap import store
 
@@ -88,6 +87,11 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str
     monkeypatch.setattr(store, "load_resolved_state", load_state)
 
     return provenance
+
+
+@pytest.fixture(autouse=True)
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    return _configure_ready_host_image_pair(monkeypatch)
 
 
 class _LegacyClassAdmissionDecision(BaseModel):
@@ -446,6 +450,7 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
     if harness == "claude-native":
         monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    if harness in {"claude-native", "codex-native"}:
         monkeypatch.setenv(
             "OMNIGENT_SHARED_HOST_IMAGE_REF",
             "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
@@ -1028,8 +1033,9 @@ async def test_qualified_claude_catalog_admits_pinned_native_harness(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("generic_admitted", [False, True])
 async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, generic_admitted, _ready_opencode_image_pair
 ) -> None:
     """Codex via Omnigent compiles from the inventory a real endpoint reports.
 
@@ -1050,6 +1056,10 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         DbHarnessCatalogRepository,
         OmnigentHarnessCatalogService,
     )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentPlannedHostResolver,
+    )
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 
     class Endpoint:
         async def get_version(self):
@@ -1092,6 +1102,14 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         observation_overlay=_overlay_native_harnesses,
     ).synchronize()
 
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    host_image_ref = "ghcr.io/example/omnigent-host@sha256:" + "f" * 64
+    host_build_digest = "sha256:" + "d" * 64
+    _ready_opencode_image_pair["hostBuildDigest"] = host_build_digest
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", host_image_ref)
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
     monkeypatch.setattr(
         service,
@@ -1111,9 +1129,11 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         policy="codex-on-demand@2",
         provider_id="codex-oauth",
     )
+    artifacts = _ArtifactService()
+    plan_store = DbExecutionPlanStore(factory)
     result = await service.compile_and_persist_execution_plan(
         session_factory=factory,
-        artifact_service=_ArtifactService(),
+        artifact_service=artifacts,
         principal="user-1",
         workflow_id="mm:test-codex-synchronized-inventory",
         agent_profile_snapshot=snapshot,
@@ -1133,11 +1153,20 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         authored_request_digest="sha256:" + "1" * 64,
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
-        execution_plan_store=_PlanStore(object()),
+        execution_plan_store=plan_store,
     )
 
     payload = result.envelope.payload
-    assert payload.executionRealizerRef == "codex-profile-bound@1"
+    assert payload.executionRealizerRef == (
+        "generic-omnigent-host@1" if generic_admitted else "codex-profile-bound@1"
+    )
+    assert payload.hostImageRef == host_image_ref
+    assert payload.omnigentHostBuildDigest == host_build_digest
+    assert payload.supportIdentity.omnigentHostBuildRef == host_build_digest
+    assert (
+        payload.supportIdentity.omnigentServerBuildRef
+        == synchronized.snapshot.omnigentBuildDigest
+    )
     assert payload.harnessCatalogRef == synchronized.snapshot.catalogRef
     codex = next(
         row for row in synchronized.snapshot.harnesses if row.id == "codex-native"
@@ -1145,7 +1174,68 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
     assert payload.harnessImplementationRef == (
         codex.implementation.implementation_ref()
     )
+
+    class Gateway:
+        async def read_bytes(self, ref):
+            return artifacts.payloads[ref.removeprefix("artifact:")]
+
+    persisted = await plan_store.load(result.envelope.planRef)
+    host_class, policy = await OmnigentPlannedHostResolver(
+        catalog_repository=DbHarnessCatalogRepository(factory),
+        artifact_gateway=Gateway(),
+    )(persisted)
+    assert host_class.imageRef == host_image_ref
+    assert host_class.omnigentBuildDigest == host_build_digest
+    assert policy.ref == "codex-on-demand@2"
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic_admitted", [False, True])
+async def test_codex_admission_rejects_conflicting_policy_image_before_persistence(
+    monkeypatch, generic_admitted
+) -> None:
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "8" * 64,
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    artifacts = _ArtifactService()
+    with pytest.raises(ValueError, match="effective launch host image conflicts"):
+        await service.compile_and_persist_execution_plan(
+            session_factory=object(),
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:codex-conflicting-host-image",
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "workflow": {"instructions": "Use the admitted host."},
+            },
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            execution_plan_store=_PlanStore(object()),
+        )
+    assert artifacts.payloads == {}
 
 
 @pytest.mark.asyncio
@@ -1619,6 +1709,10 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
 ) -> None:
     from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
 
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
     monkeypatch.setenv(
         "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
     )

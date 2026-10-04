@@ -1245,14 +1245,20 @@ class OmnigentCredentialProvisioningService:
         acquired_leases: tuple[AcquiredProviderLease, ...],
         writer_image_ref: str,
     ) -> tuple[CredentialRuntimeHandle, ...]:
+        from moonmind.omnigent.harness_platform.credential_bindings import (
+            model_bindings_of,
+        )
         from moonmind.omnigent.harness_platform.materializers import get_materializer
 
+        # Repository delivery is owned by host workspace preparation. Those
+        # bindings have no model-capacity lease or Provider Profile secret.
+        model_bindings = model_bindings_of(plan.payload.credentialBindings)
         by_slot = {item.slot: item for item in acquired_leases}
         handles: list[CredentialRuntimeHandle] = []
         materialized: dict[tuple[str, str], CredentialRuntimeHandle] = {}
         try:
-            for slot in sorted(plan.payload.credentialBindings):
-                binding = plan.payload.credentialBindings[slot]
+            for slot in sorted(model_bindings):
+                binding = model_bindings[slot]
                 acquired = by_slot.get(slot)
                 if acquired is None:
                     raise HarnessPlatformError(

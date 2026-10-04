@@ -86,6 +86,11 @@ def _sleep(seconds):
 
 def _classify_pull_failure(combined_lower):
     if (
+        "read-only file system" in combined_lower
+        or "no space left on device" in combined_lower
+    ):
+        return "storage"
+    if (
         "cannot connect to the docker daemon" in combined_lower
         or "is the docker daemon running" in combined_lower
         or "permission denied while trying to connect" in combined_lower
@@ -113,6 +118,13 @@ def _classify_pull_failure(combined_lower):
 
 
 _PULL_HINTS = {
+    "storage": (
+        "Hint: Docker storage is not writable. Check free space on both the "
+        "host and Docker data disk; reclaim unused images/build cache. On "
+        "Docker Desktop, free host disk space before restarting Desktop to "
+        "recover a read-only filesystem, then retry. Preserve deployment "
+        "volumes and active workflow data; do not reset Docker's data disk."
+    ),
     "daemon": (
         "Hint: the Docker daemon is unreachable; start Docker Desktop "
         "(or check DOCKER_HOST and socket permissions) and retry."
@@ -151,8 +163,7 @@ def run(args, *, cwd, env=None):
         if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
             hint = _docker_pull_hint(combined.lower())
         message = (
-            f"{command} failed (exit {result.returncode}); "
-            "deployment remains owned by its recorded release job"
+            f"{command} failed (exit {result.returncode})"
             f"\nCommand (redacted): {full_command}"
         )
         if detail:
@@ -1034,5 +1045,14 @@ def _local_build_update(args, repo):
     return 0
 
 
+def cli(argv=None):
+    """Report expected operational failures without a Python traceback."""
+    try:
+        return main(argv)
+    except (RuntimeError, ValueError) as exc:
+        print(f"Update failed: {_redact_diagnostics(str(exc))}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli())
