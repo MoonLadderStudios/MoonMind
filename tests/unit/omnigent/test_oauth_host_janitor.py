@@ -1381,6 +1381,87 @@ async def test_drain_completes_owned_claim_and_leaves_foreign_claims() -> None:
     assert foreign_id != owned.lease_id
 
 
+def _expired_slot_claim() -> dict:
+    return {
+        "lease_id": "provider-lease-1",
+        "profile_id": "profile-1",
+        "fencing_generation": 7,
+        "claim_id": "provider-lease-1:7",
+        "reason": "lease_expired",
+        "runId": "run-admitted-1",
+        "evidenceIdentity": "evidence-admitted-1",
+        "attempt": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_drain_defers_expired_slot_claim_while_host_owner_is_live() -> None:
+    """Slot age alone never tears down a host its owner is still heartbeating.
+
+    A long repository-continuation run outlived the Provider Profile slot's
+    maximum duration while its coordinator kept the host lease fresh. Stopping
+    that host failed the run with "host lease cleanup is owned by the janitor";
+    the live owner releases the slot itself when its turn ends.
+    """
+
+    owned = _drain_lease(provider_lease_id="provider-lease-1")
+    now = datetime.now(UTC)
+    owned.status = "assigned"
+    owned.last_heartbeat_at = now - timedelta(seconds=5)
+    owned.expires_at = now + timedelta(seconds=3600)
+    repository = _Repository(owned)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient()
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+
+    result = await janitor.drain_manager_cleanup_claims(
+        "codex_cli", [_expired_slot_claim()]
+    )
+
+    assert result["actions"] == [
+        {
+            "claimId": "provider-lease-1:7",
+            "providerLeaseId": "provider-lease-1",
+            "action": "cleanup_claim_deferred_live_owner",
+        }
+    ]
+    assert owned.status == "assigned"
+    assert runtime.stopped == 0
+    assert lease_client.verified == []
+
+
+@pytest.mark.asyncio
+async def test_drain_completes_expired_slot_claim_once_host_owner_is_stale() -> None:
+    """The deferral is bounded: an abandoned host is still reclaimed."""
+
+    owned = _drain_lease(provider_lease_id="provider-lease-1")
+    owned.status = "assigned"
+    repository = _Repository(owned)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient()
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+
+    result = await janitor.drain_manager_cleanup_claims(
+        "codex_cli", [_expired_slot_claim()]
+    )
+
+    assert [a["action"] for a in result["actions"]] == [
+        "cleanup_claim_completed_verified"
+    ]
+    assert owned.status == "stopped"
+    assert runtime.stopped == 1
+
+
 @pytest.mark.asyncio
 async def test_proactive_release_without_fenced_claim_leaves_slot_owed() -> None:
     """No fenced obligation means no verified signal and no false release."""
