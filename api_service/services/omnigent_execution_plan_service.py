@@ -683,6 +683,284 @@ def _build_v2_profile(
     )
 
 
+async def _admit_repository_plan_inputs(
+    *,
+    session_factory: Any,
+    db_session: Any,
+    artifact_service: Any,
+    principal: str,
+    workflow_id: str,
+    initial_parameters: Mapping[str, Any],
+    requires_github: bool,
+    parent_plan: OmnigentExecutionPlanEnvelope | None,
+) -> dict[str, Any]:
+    """Derive transport/tool roles and freeze selection through existing owners."""
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        attenuate_repository_binding_for_child,
+        repository_bindings_of,
+    )
+    from moonmind.omnigent.repository_sources import normalize_repository_source
+    from moonmind.omnigent.workspace_sources import compile_workspace_source
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryIdentity,
+        admit_scoped_route,
+        github_repository_name_from_value,
+    )
+
+    workflow = (
+        initial_parameters.get("workflow") or initial_parameters.get("task") or {}
+    )
+    workspace = dict(
+        initial_parameters.get("workspaceSpec")
+        or initial_parameters.get("workspace")
+        or workflow.get("workspace")
+        or {}
+    )
+    target = (
+        initial_parameters.get("repository")
+        or workspace.get("repositoryTarget")
+        or workspace.get("repository")
+    )
+    if isinstance(target, Mapping) and target.get("provider"):
+        workspace["repositoryTarget"] = dict(target)
+        workspace.pop("repository", None)
+    elif target:
+        workspace["repository"] = target
+    git = workflow.get("git") or {}
+    branch = (
+        initial_parameters.get("repositoryBranch")
+        or git.get("startingBranch")
+        or workflow.get("startingBranch")
+    )
+    if branch and not workspace.get("branch"):
+        workspace["branch"] = branch
+    source = compile_workspace_source(
+        workspace,
+        workflow_id=workflow_id,
+        step_execution_id=workflow_id,
+        runtime="omnigent",
+    )
+    result: dict[str, Any] = {
+        "bindings": {},
+        "declarations": {},
+        "access": {},
+        "sourceKind": source.kind,
+    }
+    if not source.repository_ref:
+        return result
+    _remote, kind = normalize_repository_source(source.repository_ref)
+    if kind != "github_https":
+        # Local/content sources never acquire repository transport credentials.
+        return result
+    repository = github_repository_name_from_value(source.repository_ref)
+    authored = workspace.get("workspaceSource") or {}
+    source_target = authored.get("repositoryTarget") or target
+    connection_ref = str(
+        (
+            source_target.get("connectionRef")
+            if isinstance(source_target, Mapping)
+            else None
+        )
+        or authored.get("connectionRef")
+        or workspace.get("connectionRef")
+        or ""
+    ).strip()
+    mode = (
+        AccessMode.ANONYMOUS
+        if authored.get("accessMode") == "anonymous"
+        else (AccessMode.EXPLICIT if connection_ref else AccessMode.ROUTED)
+    )
+    publication = workflow.get("publish") or {}
+    publish_mode = str(
+        initial_parameters.get("publishMode") or publication.get("mode") or "none"
+    ).lower()
+    slots = {"source": ("source_read", ("read",))}
+    if requires_github and mode != AccessMode.ANONYMOUS:
+        operations = ("read",)
+        if publish_mode in {"auto", "pr"}:
+            operations = ("read", "write", "branch_write", "review_request")
+        elif publish_mode == "branch":
+            operations = ("read", "write", "branch_write")
+        slots["collaboration"] = ("collaboration", operations)
+    if publish_mode in {"branch", "pr"}:
+        slots["destination"] = (
+            "destination_write",
+            (
+                ("write", "branch_write", "review_request")
+                if publish_mode == "pr"
+                else ("write", "branch_write")
+            ),
+        )
+    if mode == AccessMode.ANONYMOUS and publish_mode != "none":
+        raise ValueError("anonymous source cannot admit publication authority")
+    parent_bindings = (
+        repository_bindings_of(parent_plan.payload.credentialBindings)
+        if parent_plan
+        else {}
+    )
+
+    @asynccontextmanager
+    async def admission_session():
+        if db_session is not None:
+            yield db_session
+        elif mode == AccessMode.ANONYMOUS:
+            yield None
+        else:
+            async with session_factory() as session:
+                yield session
+
+    async with admission_session() as session:
+        connections = (
+            RepositoryConnectionService(session) if session is not None else None
+        )
+        selected_connection = None
+        assignment = None
+        candidates = []
+        if mode != AccessMode.ANONYMOUS:
+            if parent_bindings:
+                inherited = parent_bindings.get("source")
+                if inherited is None:
+                    raise ValueError("parent has no admitted source authority")
+                if connection_ref and connection_ref != inherited.connectionRef:
+                    raise ValueError(
+                        "child cannot change the admitted repository connection"
+                    )
+                connection_ref = inherited.connectionRef
+                mode = AccessMode.EXPLICIT
+            if connection_ref:
+                selected_connection = await connections.get_connection(
+                    connection_ref,
+                    principal_ref=principal,
+                    principal_scope=("system", None),
+                )
+                if selected_connection is None:
+                    raise ValueError("selected repository connection is unavailable")
+                assignment = await connections.launch_assignment(
+                    selected_connection, repository
+                )
+                identity = assignment.identity
+            else:
+                candidates = await connections.launch_candidates(
+                    repository,
+                    principal_ref=principal,
+                    principal_scope=("system", None),
+                )
+                identities = {
+                    candidate.assignment.identity.route_id() for candidate in candidates
+                }
+                if len(identities) != 1:
+                    raise ValueError(
+                        "repository route is missing or ambiguous; select a connection"
+                    )
+                identity = candidates[0].assignment.identity
+        else:
+            identity = RepositoryIdentity(
+                endpoint="https://github.com",
+                canonicalRemote=f"https://github.com/{repository}.git",
+                displayName=repository,
+            )
+        for slot, (role, operations) in slots.items():
+            if mode == AccessMode.ROUTED:
+                selected_route = admit_scoped_route(
+                    identity=identity,
+                    requested_operations=operations,
+                    candidates=candidates,
+                    principal_ref=principal,
+                    principal_scope=("system", None),
+                )
+                assignment = selected_route.assignment
+                policy_revision = selected_route.connection.policy_revision
+            else:
+                policy_revision = (
+                    selected_connection.policy_revision if selected_connection else 1
+                )
+            snapshot = select_repository_authority(
+                access_mode=mode,
+                principal_ref=principal,
+                principal_scope=("system", None),
+                identity=identity,
+                role=role,
+                requested_operations=operations,
+                policy_revision=policy_revision,
+                explicit_connection=selected_connection,
+                explicit_assignment=assignment if mode == AccessMode.EXPLICIT else None,
+                candidates=candidates,
+            )
+            if parent_plan is not None:
+                parent_access = parent_plan.payload.resolvedTools.get(
+                    "repositoryAccess", {}
+                ).get(slot)
+                if not parent_access:
+                    raise ValueError(
+                        f"child cannot synthesize an unbound repository slot {slot}"
+                    )
+                _artifact, parent_bytes = await artifact_service.read(
+                    artifact_id=parent_access["artifactRef"].removeprefix("artifact:"),
+                    principal=principal,
+                    allow_restricted_raw=True,
+                )
+                if (
+                    "repository-access-snapshot:" + _sha256(parent_bytes)
+                    != parent_access["snapshotRef"]
+                ):
+                    raise ValueError("parent repository snapshot digest mismatch")
+                parent_selection = json.loads(parent_bytes)["selection"]
+                if any(
+                    snapshot.model_dump(by_alias=True, mode="json")[key]
+                    != parent_selection[key]
+                    for key in ("endpoint", "routeId", "connectionId", "role")
+                ) or not set(operations).issubset(parent_selection["operations"]):
+                    raise ValueError(
+                        "child repository authority must preserve or narrow the parent"
+                    )
+            artifact_id, digest = await persist_json_artifact(
+                artifact_service=artifact_service,
+                principal=principal,
+                artifact_class="omnigent.repository_access_snapshot",
+                payload={
+                    "selection": snapshot.model_dump(by_alias=True, mode="json"),
+                    "workflowId": workflow_id,
+                    "repositoryIdentity": identity.model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                    "assignmentRevision": assignment.revision if assignment else None,
+                },
+            )
+            snapshot_ref = "repository-access-snapshot:" + digest
+            result["access"][slot] = {
+                "artifactRef": f"artifact:{artifact_id}",
+                "snapshotRef": snapshot_ref,
+            }
+            if mode == AccessMode.ANONYMOUS:
+                result["sourceKind"] = "anonymous"
+                result["anonymousSnapshotRef"] = snapshot_ref
+                continue
+            binding = {
+                "authorityKind": "repository_connection",
+                "connectionRef": snapshot.connection_id,
+                "repositoryAccessSnapshotRef": snapshot_ref,
+                "materializerRef": "repository-broker@1",
+                "repositoryRole": role,
+            }
+            if parent_plan is not None:
+                binding = attenuate_repository_binding_for_child(
+                    parent_binding=parent_bindings[slot],
+                    child_target_ref=workflow_id,
+                    child_attempt_ref=workflow_id,
+                    child_snapshot_ref=snapshot_ref,
+                ).binding.model_dump(by_alias=True, mode="json")
+            result["bindings"][slot] = binding
+            result["declarations"][slot] = {
+                "allowedRoles": (role,),
+                "allowedMaterializers": ("repository-broker@1",),
+                "expectedConnectionRef": snapshot.connection_id,
+                "allowedSnapshotRefs": (snapshot_ref,),
+            }
+    return result
+
+
 async def compile_and_persist_execution_plan(
     *,
     session_factory: Any,
@@ -708,6 +986,7 @@ async def compile_and_persist_execution_plan(
     # admitted only through ``trusted_repository_declarations``; entries
     # without a declaration are rejected by the planner.
     repository_bindings: Mapping[str, Mapping[str, Any]] | None = None,
+    parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1066,6 +1345,31 @@ async def compile_and_persist_execution_plan(
     mounted_skill_tools = tuple(
         sorted(set(required_capabilities).intersection(deployment_mounted_tool_names()))
     )
+    resolved_profile = _build_v2_profile(
+        snapshot=agent_profile_snapshot,
+        catalog_ref=catalog.catalogRef,
+        implementation_ref=implementation.implementation_ref(),
+        harness_id=harness_id,
+        auth_model=config["authModel"],
+        additional_tools=mounted_skill_tools,
+    )
+    repository_access = {}
+    if repository_bindings is None:
+        repository_inputs = await _admit_repository_plan_inputs(
+            session_factory=session_factory,
+            db_session=db_session,
+            artifact_service=artifact_service,
+            principal=principal,
+            workflow_id=workflow_id,
+            initial_parameters=initial_parameters,
+            requires_github="gh" in resolved_profile.tools,
+            parent_plan=parent_repository_plan,
+        )
+        repository_bindings = repository_inputs["bindings"]
+        trusted_repository_declarations = repository_inputs["declarations"]
+        workspace_source_kind = workspace_source_kind or repository_inputs["sourceKind"]
+        workspace_access_snapshot_ref = repository_inputs.get("anonymousSnapshotRef")
+        repository_access = repository_inputs["access"]
     bridge_capabilities = {
         "repository.read": True,
         "repository.write": True,
@@ -1197,14 +1501,7 @@ async def compile_and_persist_execution_plan(
         trusted_repository_declarations=trusted_repository_declarations,
     )
     plan = compile_execution_plan(
-        agent_profile=_build_v2_profile(
-            snapshot=agent_profile_snapshot,
-            catalog_ref=catalog.catalogRef,
-            implementation_ref=implementation.implementation_ref(),
-            harness_id=harness_id,
-            auth_model=config["authModel"],
-            additional_tools=mounted_skill_tools,
-        ),
+        agent_profile=resolved_profile,
         harness_catalog=catalog,
         freshness_catalog=freshness_catalog,
         trust_record=trust,
@@ -1259,6 +1556,20 @@ async def compile_and_persist_execution_plan(
         execution_authority=authority,
         agent_profile_snapshot_ref=f"artifact:{profile_snapshot_ref}",
     )
+    if repository_access:
+        # Compact artifact/digest references travel in the existing tool and
+        # transport delivery projection. Selection bytes remain artifact-owned;
+        # issuance, paths and cleanup generations remain runtime-owned (#4009).
+        plan = create_execution_plan_envelope(
+            plan.payload.model_copy(
+                update={
+                    "resolvedTools": {
+                        **plan.payload.resolvedTools,
+                        "repositoryAccess": repository_access,
+                    },
+                }
+            )
+        )
     # A client may name an exact rollout row, but only the compiled Profile,
     # policy and harness can establish it. Validate before persisting the plan.
     runtime = workflow_mapping.get("runtime") or {}
@@ -1417,6 +1728,7 @@ async def compile_and_persist_execution_plan(
             profile_snapshot_ref,
             *_evidence_refs,
             *skill_content_refs,
+            *(access["artifactRef"] for access in repository_access.values()),
             skill_ref,
             plan_artifact_ref,
         ),

@@ -94,7 +94,9 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
         # Execute the real policy compiler and dispatch identity gate. The
         # artifact transport is replaced by a compact persisted binding here.
         observed_launches.append(await dispatch_authority(kwargs["agent_profile_snapshot"]))
+        assert kwargs["principal"] == "original-task-principal"
         assert kwargs["task_input_snapshot_ref"] == binding.task_input_snapshot_ref
+        assert kwargs["task_input_snapshot_digest"] == binding.task_input_snapshot_digest
         assert kwargs["initial_parameters"]["model"] == historical_input["initialParameters"]["model"]
         # Reproduce a second deployment during artifact persistence, after
         # compilation validated its inputs and released its initial locks.

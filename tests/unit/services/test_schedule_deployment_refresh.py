@@ -11,6 +11,7 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentAgentProfileVersion,
     OmnigentUpstreamAgentProjection,
+    TemporalArtifact,
 )
 from api_service.services import omnigent_agent_profile_selection as selection
 from api_service.services.omnigent_policies import OmnigentPolicyService
@@ -58,10 +59,18 @@ class DeploymentSession(_GenericV2Session):
             host["serverImageRef"] = "ghcr.io/example/server@sha256:" + str(v) * 64
             host["hostImageRef"] = "ghcr.io/example/host@sha256:" + str(v) * 64
         self.policy_states = {ref: "active" for ref in self.policies}
+        self.task_inputs = {
+            artifact_id: SimpleNamespace(
+                created_by_principal="original-task-principal", sha256="a" * 64,
+            )
+            for artifact_id in ("art_original_task", "task-input")
+        }
 
     async def get(self, model, key):
         if model is ManagedAgentProviderProfile:
             return self.provider
+        if model is TemporalArtifact:
+            return self.task_inputs.get(key)
         return await super().get(model, key)
 
     async def scalar(self, statement):
@@ -355,6 +364,7 @@ async def test_failed_plan_compilation_cannot_commit_new_schedule_usage(
     async def failing_compile(**_kwargs):
         # Artifact repositories may commit independently before the compiler
         # fails. There must be no new usage in that transaction to publish.
+        assert _kwargs["principal"] == "original-task-principal"
         assert session.usage.version == 1
         raise RuntimeError("qualification unavailable")
 

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from moonmind.auth.bound_acquisition import AcquiredCredential
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
@@ -106,6 +108,7 @@ def expected_omnigent_host_id(host_lease_ref: str, host_lease_generation: int) -
     seed = f"{host_lease_ref}:{int(host_lease_generation)}"
     return _uuid.uuid5(_uuid.NAMESPACE_URL, seed).hex
 
+
 @runtime_checkable
 class OmnigentWorkspaceMaterializationPort(Protocol):
     """Materialize the run-owned workspace attachment and its cleanup ref."""
@@ -117,6 +120,9 @@ class OmnigentWorkspaceMaterializationPort(Protocol):
         mutation: Any,
         runtime_uid: int,
         runtime_gid: int,
+        plan: OmnigentExecutionPlanEnvelope,
+        repository_owner_ref: str,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -143,12 +149,63 @@ class OmnigentMountedToolPort(Protocol):
 
 
 @runtime_checkable
+class AdmittedRepositoryIdentity(Protocol):
+    """Read-only repository metadata needed by host credential consumers."""
+
+    @property
+    def endpoint(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def canonical_remote(self) -> str | None:
+        raise NotImplementedError
+
+    @property
+    def display_name(self) -> str:
+        raise NotImplementedError
+
+
+@runtime_checkable
 class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
+
+    async def admitted_repository_identity(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None = None,
+    ) -> AdmittedRepositoryIdentity:
+        raise NotImplementedError
+
+    async def acquire_repository_use(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        role: str,
+        operation: str,
+        repository: str | None = None,
+        execution_owner: str | None = None,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> AcquiredCredential | None:
+        raise NotImplementedError
 
     def anticipated_attachment(
         self, resolved_tools: Any, *, owner_ref: str
     ) -> dict[str, Any] | None: ...
+
+    async def anticipated_attachment_for_request(
+        self,
+        resolved_tools: Any,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        request: AgentExecutionRequest,
+        owner_ref: str,
+    ) -> dict[str, Any] | None:
+        raise NotImplementedError
 
     async def materialize(
         self,
@@ -160,6 +217,8 @@ class OmnigentGithubCredentialPort(Protocol):
         runtime_uid: int,
         runtime_gid: int,
         expected_omnigent_version: str = "",
+        plan: OmnigentExecutionPlanEnvelope,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...
@@ -327,6 +386,7 @@ class OmnigentHostReclamationPorts(
 
 
 __all__ = [
+    "AdmittedRepositoryIdentity",
     "HostLaunchSpec",
     "OmnigentEgressAttestationPort",
     "OmnigentGithubCredentialPort",

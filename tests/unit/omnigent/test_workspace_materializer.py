@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import stat
+import subprocess
 import tarfile
 from types import SimpleNamespace
 
 import pytest
 
+from moonmind.auth.bound_acquisition import EphemeralCredential
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_services.workspace import (
     OmnigentWorkspaceMaterializer,
@@ -25,6 +28,27 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_sandbox_workspace_locator,
 )
+from moonmind.workflows.executions.repository_contract import RepositoryIdentity
+
+
+class _SelectedRepositoryCredentials:
+    """Isolate clone transport/retry tests from acquisition (covered in #4009 journeys)."""
+
+    def __init__(self, resolve):
+        self._resolve = resolve
+
+    async def admitted_repository_identity(self, *, repository, **_kwargs):
+        return RepositoryIdentity(
+            endpoint="https://github.com",
+            canonicalRemote=normalize_github_clone_source(repository),
+            displayName=repository,
+        )
+
+    async def acquire_repository_use(self, *, role, operation, **_kwargs):
+        assert role == "source_read" and operation == "read"
+        return SimpleNamespace(
+            credential=EphemeralCredential((await self._resolve()).encode())
+        )
 
 
 def _request(spec: dict) -> SimpleNamespace:
@@ -156,6 +180,62 @@ def test_daemon_git_clone_argv_rejects_credentialed_source():
         )
 
 
+@pytest.mark.parametrize("github_host", ["github.com", "github.enterprise.test"])
+def test_clone_helper_delivers_credentials_only_to_selected_host_and_path(
+    tmp_path, monkeypatch, github_host
+):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", github_host)
+    result_file = tmp_path / "credentials.json"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    queries = [
+        f"protocol=https\nhost={github_host}\npath=owner/repo.git\n\n",
+        "protocol=https\nhost=another.host\npath=owner/repo.git\n\n",
+        f"protocol=https\nhost={github_host}\npath=another/repo.git\n\n",
+        f"protocol=http\nhost={github_host}\npath=owner/repo.git\n\n",
+    ]
+    fake_git.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "if 'clone' in sys.argv:\n"
+        " helper = next(argument for argument in sys.argv if argument.startswith('credential.helper=!'))\n"
+        " command = helper.removeprefix('credential.helper=!') + ' get'\n"
+        f" queries = {queries!r}\n"
+        " results = [subprocess.run(['sh', '-c', command], input=query, text=True, "
+        "capture_output=True, check=True).stdout for query in queries]\n"
+        f" Path({str(result_file)!r}).write_text(json.dumps(results))\n"
+    )
+    fake_git.chmod(0o755)
+    argv = build_daemon_git_clone_argv(
+        volume="agent_workspaces",
+        target_in_volume="ws-1/repo",
+        source=f"https://{github_host}/owner/repo.git",
+        endpoint=f"https://{github_host}",
+        branch="main",
+        image="git-image",
+        git_user_name="Test Operator",
+        git_user_email="operator@example.test",
+    )
+    script = argv[argv.index("-ceu") + 1]
+    subprocess.run(
+        ["sh", "-ceu", script, "--", *argv[-5:]],
+        input=b"selected-canary",
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(result_file.read_text()) == [
+        "username=x-access-token\npassword=selected-canary\n",
+        "",
+        "",
+        "",
+    ]
+
+
 def test_daemon_workspace_chown_argv_pins_target_and_runtime_owner():
     argv = build_daemon_workspace_chown_argv(
         volume="agent_workspaces",
@@ -206,14 +286,12 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     async def fake_token(*args, **kwargs):
         return "tok" + "e" * 10
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    repository_credentials = _SelectedRepositoryCredentials(fake_token)
 
     materializer = OmnigentWorkspaceMaterializer(
-        command_runner=runner, workspace_root=tmp_path
+        command_runner=runner,
+        workspace_root=tmp_path,
+        repository_credential_service=repository_credentials,
     )
     workspace_id = _workspace_id()
     workspace = await materializer.materialize(
@@ -227,7 +305,8 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
                 "repository": "MoonLadderStudios/MoonMind",
                 "branch": "dependabot/npm_and_yarn/multi-2181bdc769",
             }
-        )
+        ),
+        plan=object(),
     )
 
     assert workspace["kind"] == "bind"
@@ -310,14 +389,12 @@ async def test_materializer_provisions_commit_identity_for_the_clone(
     async def fake_token(*args, **kwargs):
         return "tok" + "e" * 10
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    repository_credentials = _SelectedRepositoryCredentials(fake_token)
 
     materializer = OmnigentWorkspaceMaterializer(
-        command_runner=runner, workspace_root=tmp_path
+        command_runner=runner,
+        workspace_root=tmp_path,
+        repository_credential_service=repository_credentials,
     )
     await materializer.materialize(
         _request(
@@ -330,7 +407,8 @@ async def test_materializer_provisions_commit_identity_for_the_clone(
                 "repository": "MoonLadderStudios/MoonMind",
                 "branch": "codex/automated-verification-handoffs",
             }
-        )
+        ),
+        plan=object(),
     )
 
     clone_argv = captured[0]
@@ -742,7 +820,9 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
     # (MoonLadderStudios/MoonMind#4014); an existing workspace needs a
     # server-issued ownership/use grant instead of a bare path.
     with pytest.raises(HarnessPlatformError, match="workspacePath"):
-        await materializer.materialize(_request({"workspacePath": "/tmp/nowhere"}))
+        await materializer.materialize(
+            _request({"workspacePath": "/tmp/nowhere"}), plan=object()
+        )
 
     calls: list[list[str]] = []
 
@@ -756,11 +836,7 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
     async def fake_token(*args, **kwargs):
         return "tok" * 5
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    materializer._repository_credentials = _SelectedRepositoryCredentials(fake_token)
     with pytest.raises(HarnessPlatformError, match="clone failed"):
         await materializer.materialize(
             _request(
@@ -773,7 +849,8 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
                     "repository": "MoonLadderStudios/MoonMind",
                     "branch": "does-not-exist",
                 }
-            )
+            ),
+            plan=object(),
         )
     assert len(calls) == 1
 
@@ -828,11 +905,7 @@ async def test_materializer_retries_transient_clone_dns_failure(
     async def fake_token(*args, **kwargs):
         return "tok" * 5
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    materializer._repository_credentials = _SelectedRepositoryCredentials(fake_token)
     workspace = await materializer.materialize(
         _request(
             {
@@ -844,7 +917,8 @@ async def test_materializer_retries_transient_clone_dns_failure(
                 "repository": "MoonLadderStudios/MoonMind",
                 "branch": "main",
             }
-        )
+        ),
+        plan=object(),
     )
 
     assert workspace["kind"] == "bind"
@@ -893,11 +967,7 @@ async def test_materializer_gives_up_after_repeated_transient_clone_failures(
     async def fake_token(*args, **kwargs):
         return "tok" * 5
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    materializer._repository_credentials = _SelectedRepositoryCredentials(fake_token)
     with pytest.raises(HarnessPlatformError, match="Could not resolve host"):
         await materializer.materialize(
             _request(
@@ -910,7 +980,8 @@ async def test_materializer_gives_up_after_repeated_transient_clone_failures(
                     "repository": "MoonLadderStudios/MoonMind",
                     "branch": "main",
                 }
-            )
+            ),
+            plan=object(),
         )
     # Bounded retries: more than one attempt, but not unbounded.
     clone_attempts = len([c for c in calls if c[0] == "docker"])
@@ -970,11 +1041,7 @@ async def test_materializer_reuses_overlapping_completed_checkout(
     async def fake_token(*args, **kwargs):
         return "tok" * 5
 
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_github_token_for_launch",
-        fake_token,
-    )
+    materializer._repository_credentials = _SelectedRepositoryCredentials(fake_token)
     workspace = await materializer.materialize(
         _request(
             {
@@ -989,6 +1056,7 @@ async def test_materializer_reuses_overlapping_completed_checkout(
         ),
         runtime_uid=os.getuid(),
         runtime_gid=os.getgid(),
+        plan=object(),
     )
 
     assert workspace["kind"] == "bind"

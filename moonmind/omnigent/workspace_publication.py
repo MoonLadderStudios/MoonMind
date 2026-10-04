@@ -132,8 +132,17 @@ _PRE_CONNECTION_FAILURE = re.compile(
 class OmnigentWorkspacePublicationService:
     """Publish and remotely verify one typed Omnigent sandbox workspace."""
 
-    def __init__(self, workspace_root: str | Path | None = None, *, artifact_gateway=None) -> None:
+    def __init__(
+        self,
+        workspace_root: str | Path | None = None,
+        *,
+        artifact_gateway=None,
+        repository_credential_service=None,
+        execution_plan_store=None,
+    ) -> None:
         self._artifacts = artifact_gateway
+        self._repository_credentials = repository_credential_service
+        self._plans = execution_plan_store
         self._workspace_root = Path(
             workspace_root or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         ).resolve()
@@ -454,6 +463,8 @@ class OmnigentWorkspacePublicationService:
         github_token: str | None,
         accepted_published_head: Mapping[str, Any] | None = None,
         bound_credential: Any | None = None,
+        github_endpoint: str = "https://github.com",
+        admitted_remote: str | None = None,
     ) -> dict[str, Any]:
         normalized_mode = str(publish_mode or "none").strip().lower()
         if normalized_mode not in {"branch", "pr"}:
@@ -481,7 +492,17 @@ class OmnigentWorkspacePublicationService:
         )
         safe_workspace = workspace.resolve(strict=True)
         token = str(github_token or "").strip()
-        command_env = build_github_token_git_environment(token, base_env=os.environ)
+        from moonmind.omnigent.host_services.github_credentials import (
+            github_host_from_endpoint,
+            normalize_github_repository_remote,
+        )
+
+        github_host = github_host_from_endpoint(github_endpoint)
+        command_env = build_github_token_git_environment(
+            token, base_env=os.environ, host=github_host
+        )
+        if token:
+            command_env["GH_TOKEN"] = token
         git_user_name, git_user_email = resolve_git_identity()
         command_env.update(
             {
@@ -513,7 +534,10 @@ class OmnigentWorkspacePublicationService:
             selected_env = build_github_token_git_environment(
                 token,
                 base_env=(dict(env) if env is not None else command_env),
+                host=github_host,
             )
+            if token:
+                selected_env["GH_TOKEN"] = token
             # Retry the read in place, never the agent turn or publication as a
             # whole. Pushes and local mutations retain their existing authority.
             for attempt in range(1, _REMOTE_READ_ATTEMPTS + 1):
@@ -553,6 +577,18 @@ class OmnigentWorkspacePublicationService:
         # Remediation workspaces may be single-branch clones of the candidate.
         # Materialize the authored comparison ref through the same repository
         # credential before the publisher measures or mutates that candidate.
+        if admitted_remote is not None:
+            origin = await run_command(["git", "config", "--get", "remote.origin.url"])
+            if (
+                normalize_github_repository_remote(
+                    origin.stdout.strip(), endpoint=github_endpoint
+                )
+                != admitted_remote
+            ):
+                raise HarnessPlatformError(
+                    "workspace origin conflicts with admitted publication destination",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
         normalized_base = str(base_branch or "").strip()
         if not normalized_base:
             # Clone records the selected repository default in origin/HEAD.
@@ -722,6 +758,11 @@ class OmnigentWorkspacePublicationService:
                 expected_head_sha=result["push_head_sha"],
                 expected_base_branch=normalized_base,
                 expected_draft=False,
+                **(
+                    {"endpoint": github_endpoint}
+                    if github_endpoint != "https://github.com"
+                    else {}
+                ),
             )
             if pull_request.resolved and pull_request.pr_url:
                 result["pull_request_url"] = pull_request.pr_url
@@ -737,6 +778,9 @@ class OmnigentWorkspacePublicationService:
         """Resolve publication inputs at the workspace-owning boundary."""
 
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        publish_mode = str(parameters.get("publishMode") or "none").strip().lower()
+        if publish_mode not in {"branch", "pr"}:
+            return {"push_status": "skipped"}
         workspace_spec = (
             request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
         )
@@ -747,18 +791,139 @@ class OmnigentWorkspacePublicationService:
                 code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
             )
         repository = authored_repository_source(request)
-        github_credential = await resolve_github_credential(repo=repository or None)
-        return await self.publish_workspace(
-            workspace_locator=workspace_locator,
-            current_workflow_id=current_workflow_id,
-            current_step_execution_id=current_step_execution_id,
-            publication_identity=request.idempotency_key,
-            publish_mode=str(parameters.get("publishMode") or "none"),
-            base_branch=authored_starting_branch(request),
-            repository=repository,
-            github_token=str(github_credential.token or "").strip() or None,
-            accepted_published_head=parameters.get("acceptedPublishedHead"),
-        )
+        bound = None
+        identity = None
+        binding = request.omnigent_execution_plan
+        if binding is None and request.step_execution is not None:
+            binding = request.step_execution.omnigent_execution_plan
+        plan_ref = binding.plan_ref if binding else parameters.get("executionPlanRef")
+        if plan_ref:
+            from moonmind.omnigent.harness_platform.credential_bindings import (
+                plan_bindings_have_repository_authority,
+            )
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                verify_execution_plan_envelope,
+            )
+
+            if self._plans is None:
+                raise HarnessPlatformError(
+                    "publication plan reader is unavailable",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
+            stored = await self._plans.load(plan_ref)
+            if stored is None:
+                raise HarnessPlatformError(
+                    "publication execution plan is unavailable",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
+            plan = verify_execution_plan_envelope(stored)
+            if binding and (
+                binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+                or (
+                    plan.payload.authority is not None
+                    and (
+                        binding.task_input_snapshot_ref
+                        != plan.payload.authority.taskInputSnapshotRef
+                        or binding.task_input_snapshot_digest
+                        != plan.payload.authority.taskInputSnapshotDigest
+                    )
+                )
+            ):
+                raise HarnessPlatformError(
+                    "publication binding conflicts with admitted plan",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
+            if (
+                parameters.get("executionPlanRef")
+                and parameters["executionPlanRef"] != plan.planRef
+            ):
+                raise HarnessPlatformError(
+                    "publication request conflicts with admitted plan",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                )
+            if plan.payload.resolvedTools.get(
+                "repositoryAccess"
+            ) or plan_bindings_have_repository_authority(
+                plan.payload.credentialBindings
+            ):
+                from moonmind.omnigent.host_services.github_credentials import (
+                    github_repository_from_request,
+                )
+
+                if self._repository_credentials is None:
+                    raise HarnessPlatformError(
+                        "bound publication acquisition is unavailable",
+                        code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                    )
+                repository = github_repository_from_request(request)
+                identity = (
+                    await self._repository_credentials.admitted_repository_identity(
+                        plan=plan,
+                        request=request,
+                        role="destination_write",
+                        operation=(
+                            "review_request" if publish_mode == "pr" else "branch_write"
+                        ),
+                        repository=repository,
+                    )
+                )
+                bound = await self._repository_credentials.acquire_repository_use(
+                    plan=plan,
+                    request=request,
+                    role="destination_write",
+                    operation="branch_write",
+                    repository=repository,
+                )
+                if bound is None:
+                    raise HarnessPlatformError(
+                        "publication requires destination credential authority",
+                        code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                    )
+        try:
+            if bound is not None:
+                token = bound.credential.use_now(
+                    lambda material: bytes(material).decode("utf-8")
+                )
+                from moonmind.omnigent.host_services.github_credentials import (
+                    github_clone_source_from_identity,
+                )
+                from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+                source = compile_workspace_source(
+                    workspace_spec,
+                    workflow_id=current_workflow_id,
+                    step_execution_id=current_step_execution_id,
+                    runtime="omnigent",
+                )
+                return await self.publish_workspace(
+                    workspace_locator=workspace_locator,
+                    current_workflow_id=current_workflow_id,
+                    current_step_execution_id=current_step_execution_id,
+                    publication_identity=request.idempotency_key,
+                    publish_mode=publish_mode,
+                    base_branch=source.repository_branch,
+                    repository=identity.display_name,
+                    github_token=token,
+                    bound_credential=bound,
+                    github_endpoint=identity.endpoint,
+                    admitted_remote=github_clone_source_from_identity(identity),
+                    accepted_published_head=parameters.get("acceptedPublishedHead"),
+                )
+            github_credential = await resolve_github_credential(repo=repository or None)
+            return await self.publish_workspace(
+                workspace_locator=workspace_locator,
+                current_workflow_id=current_workflow_id,
+                current_step_execution_id=current_step_execution_id,
+                publication_identity=request.idempotency_key,
+                publish_mode=publish_mode,
+                base_branch=authored_starting_branch(request),
+                repository=repository,
+                github_token=str(github_credential.token or "").strip() or None,
+                accepted_published_head=parameters.get("acceptedPublishedHead"),
+            )
+        finally:
+            if bound is not None:
+                bound.credential.clear()
 
 
 __all__ = [

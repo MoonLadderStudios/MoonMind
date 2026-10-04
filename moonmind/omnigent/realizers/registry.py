@@ -64,6 +64,23 @@ class OmnigentExecutionRealizerRegistry:
 _default_registry: OmnigentExecutionRealizerRegistry | None = None
 
 
+def realizer_authority_kinds(ref: str) -> tuple[str, ...]:
+    """Read implementation-owned admission capabilities without runtime setup."""
+
+    from moonmind.omnigent.realizers.codex_profile_bound import (
+        CodexProfileBoundRealizer,
+    )
+    from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
+
+    for implementation in (CodexProfileBoundRealizer, GenericOmnigentHostRealizer):
+        if implementation.ref == ref:
+            return implementation.authority_kinds
+    raise HarnessPlatformError(
+        f"execution realizer {ref} unavailable",
+        code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+    )
+
+
 def get_default_registry() -> OmnigentExecutionRealizerRegistry:
     global _default_registry
     if _default_registry is not None:
@@ -121,6 +138,7 @@ def reset_default_registry() -> None:
 __all__ = [
     "OmnigentExecutionRealizerRegistry",
     "get_default_registry",
+    "realizer_authority_kinds",
     "reset_default_registry",
     "_default_registry",
 ]

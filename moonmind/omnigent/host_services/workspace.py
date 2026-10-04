@@ -7,9 +7,10 @@ import hashlib
 import logging
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
-from typing import Any, Awaitable, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from moonmind.omnigent.git_identity import (
     ensure_workspace_git_identity,
@@ -18,6 +19,11 @@ from moonmind.omnigent.git_identity import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+)
+from moonmind.omnigent.host_services.github_credentials import (
+    github_clone_source_from_identity,
+    github_host_from_endpoint,
+    normalize_github_repository_remote,
 )
 from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
@@ -203,21 +209,11 @@ def resolve_daemon_attachment_source(
     }
 
 
-def normalize_github_clone_source(repo_ref: str) -> str | None:
+def normalize_github_clone_source(
+    repo_ref: str, *, endpoint: str = "https://github.com"
+) -> str | None:
     """Return an HTTPS clone URL for owner/repo or GitHub remote forms."""
-
-    cleaned = str(repo_ref or "").strip().rstrip("/")
-    if not cleaned:
-        return None
-    owner_repo = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", cleaned)
-    if owner_repo:
-        return f"https://github.com/{owner_repo.group(1)}/{owner_repo.group(2)}.git"
-    lowered = cleaned.lower()
-    if lowered.startswith("https://github.com/") and cleaned.endswith(".git"):
-        return cleaned
-    if lowered.startswith("https://github.com/"):
-        return f"{cleaned}.git"
-    return None
+    return normalize_github_repository_remote(repo_ref, endpoint=endpoint)
 
 
 class OmnigentWorkspaceMaterializer:
@@ -228,6 +224,7 @@ class OmnigentWorkspaceMaterializer:
         workspace_root: str | Path | None = None,
         workspace_volume: str | None = None,
         artifact_service: Any | None = None,
+        repository_credential_service: Any | None = None,
     ) -> None:
         self._runner = command_runner
         self._root = Path(
@@ -240,6 +237,7 @@ class OmnigentWorkspaceMaterializer:
             or "agent_workspaces"
         ).strip()
         self._artifact_projector = WorkspaceArtifactProjector(artifact_service)
+        self._repository_credentials = repository_credential_service
 
     async def materialize(
         self,
@@ -248,6 +246,9 @@ class OmnigentWorkspaceMaterializer:
         mutation: str = "allowed",
         runtime_uid: int = 1000,
         runtime_gid: int = 1000,
+        plan: Any | None = None,
+        repository_owner_ref: str | None = None,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         if mutation not in {"allowed", "read_only", "checkpoint_branch"}:
             raise HarnessPlatformError(
@@ -319,6 +320,10 @@ class OmnigentWorkspaceMaterializer:
             owner_step_execution_id=owner_step_execution_id,
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
+            request=request,
+            plan=plan,
+            repository_owner_ref=repository_owner_ref or request.idempotency_key,
+            authority_sink=authority_sink,
         )
         if candidate == self._root or not candidate.is_relative_to(self._root):
             raise HarnessPlatformError(
@@ -456,6 +461,10 @@ class OmnigentWorkspaceMaterializer:
         owner_step_execution_id: str,
         runtime_uid: int,
         runtime_gid: int,
+        request: AgentExecutionRequest,
+        plan: Any | None,
+        repository_owner_ref: str,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> tuple[Path, SandboxWorkspaceRecordStore | None, str | None]:
         """Resolve the attempt-owned directory for the single compiled source."""
 
@@ -530,6 +539,10 @@ class OmnigentWorkspaceMaterializer:
                     source=source,
                     runtime_uid=runtime_uid,
                     runtime_gid=runtime_gid,
+                    request=request,
+                    plan=plan,
+                    repository_owner_ref=repository_owner_ref,
+                    authority_sink=authority_sink,
                 )
             else:
                 candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -652,6 +665,10 @@ class OmnigentWorkspaceMaterializer:
         source: CompiledWorkspaceSource,
         runtime_uid: int,
         runtime_gid: int,
+        request: AgentExecutionRequest,
+        plan: Any | None,
+        repository_owner_ref: str,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         """Clone the requested repository branch into a fresh sandbox dir.
 
@@ -671,40 +688,48 @@ class OmnigentWorkspaceMaterializer:
             candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
             return
 
-        repository_target = (
-            spec.get("repositoryTarget")
-            if isinstance(spec.get("repositoryTarget"), dict)
-            else {}
-        )
-        repo_ref = str(
-            repository_target.get("repository", {}).get("name")
-            if isinstance(repository_target.get("repository"), dict)
-            else ""
-        ) or str(spec.get("repository") or spec.get("repo") or "")
-        branch = str(
-            (repository_target.get("branch") or {}).get("name")
-            if isinstance(repository_target.get("branch"), dict)
-            else ""
-        ) or str(
-            spec.get("startingBranch")
-            or spec.get("branch")
-            or spec.get("headBranch")
-            or ""
-        ).strip()
-        clone_source = normalize_github_clone_source(repo_ref)
-        if clone_source is None or not branch or len(branch) > 400:
+        branch = source.repository_branch or ""
+        if not source.repository_ref or not branch or len(branch) > 400:
             raise HarnessPlatformError(
                 "sandbox workspace preparation needs a GitHub repository and safe branch ref",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         rel = candidate.relative_to(self._root)
-        await self._clone_into_volume(
-            rel=rel,
-            source=clone_source,
-            branch=branch,
-            runtime_uid=runtime_uid,
-            runtime_gid=runtime_gid,
+        if self._repository_credentials is None or plan is None:
+            raise HarnessPlatformError(
+                "sandbox workspace clone requires admitted repository authority",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        identity = await self._repository_credentials.admitted_repository_identity(
+            plan=plan,
+            request=request,
+            role="source_read",
+            operation="read",
+            repository=source.repository_ref,
         )
+        clone_source = github_clone_source_from_identity(identity)
+        acquired = await self._repository_credentials.acquire_repository_use(
+            plan=plan,
+            request=request,
+            role="source_read",
+            operation="read",
+            repository=clone_source,
+            execution_owner=repository_owner_ref,
+            authority_sink=authority_sink,
+        )
+        try:
+            await self._clone_into_volume(
+                rel=rel,
+                source=clone_source,
+                branch=branch,
+                token=acquired.credential.use_now(bytes) if acquired else b"",
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+                endpoint=identity.endpoint,
+            )
+        finally:
+            if acquired is not None:
+                acquired.credential.clear()
 
     async def _clone_into_volume(
         self,
@@ -712,8 +737,10 @@ class OmnigentWorkspaceMaterializer:
         rel: Path,
         source: str,
         branch: str,
+        token: bytes,
         runtime_uid: int,
         runtime_gid: int,
+        endpoint: str = "https://github.com",
     ) -> None:
         """Clone into the agent-workspaces volume through the Docker daemon.
 
@@ -722,16 +749,6 @@ class OmnigentWorkspaceMaterializer:
         performs the authenticated clone inside a disposable container.
         """
 
-        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-            resolve_github_token_for_launch,
-        )
-
-        token = await resolve_github_token_for_launch()
-        if not token:
-            raise HarnessPlatformError(
-                "sandbox workspace clone requires GitHub credentials",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            )
         image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
         git_user_name, git_user_email = resolve_git_identity()
         argv = build_daemon_git_clone_argv(
@@ -742,6 +759,8 @@ class OmnigentWorkspaceMaterializer:
             image=image,
             git_user_name=git_user_name,
             git_user_email=git_user_email,
+            authenticated=bool(token),
+            endpoint=endpoint,
         )
         # The one-shot container reads the token on stdin and exposes it to Git
         # through an ephemeral credential helper. The clean source URL is the
@@ -757,7 +776,7 @@ class OmnigentWorkspaceMaterializer:
         last_stderr = ""
         target = self._root / rel
         for attempt in range(1, _CLONE_MAX_ATTEMPTS + 1):
-            code, _stdout, stderr = await self._runner(argv, token.encode("utf-8"))
+            code, _stdout, stderr = await self._runner(argv, token)
             last_stderr = stderr or ""
             if code == 0:
                 break
@@ -840,6 +859,8 @@ def build_daemon_git_clone_argv(
     image: str,
     git_user_name: str,
     git_user_email: str,
+    authenticated: bool = True,
+    endpoint: str = "https://github.com",
 ) -> list[str]:
     """Build a stdin-authenticated Docker argv for an in-volume git clone.
 
@@ -854,11 +875,12 @@ def build_daemon_git_clone_argv(
             "agent workspace volume name is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    if normalize_github_clone_source(source) != source:
+    if normalize_github_clone_source(source, endpoint=endpoint) != source:
         raise HarnessPlatformError(
             "sandbox workspace clone source is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
+    host = github_host_from_endpoint(endpoint)
     identity_name = str(git_user_name or "").strip()
     identity_email = str(git_user_email or "").strip()
     if not identity_name or not identity_email:
@@ -866,19 +888,43 @@ def build_daemon_git_clone_argv(
             "sandbox workspace commit identity is incomplete",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    script = (
-        "set -eu; umask 077; token_file=$(mktemp); "
-        "trap 'rm -f \"$token_file\"' EXIT HUP INT TERM; "
-        "cat > \"$token_file\"; "
-        "git check-ref-format --branch \"$1\" >/dev/null; "
-        "credential_helper='!f() { test \"$1\" = get || exit 0; "
-        "printf \"username=x-access-token\\npassword=\"; "
-        "cat \"$MM_GIT_TOKEN_FILE\"; printf \"\\n\"; }; f'; "
-        "MM_GIT_TOKEN_FILE=\"$token_file\" git "
-        "-c \"credential.helper=$credential_helper\" clone "
-        "--branch \"$1\" --single-branch -- \"$2\" \"$3\"; "
-        "git -C \"$3\" config --local user.name \"$4\"; "
-        "git -C \"$3\" config --local user.email \"$5\""
+    # A clean process environment and disabled inherited Git configuration
+    # prevent ambient credentials, headers, helpers, and .netrc from winning.
+    git_environment = (
+        'env -i PATH="$PATH" HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 '
+        "GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "
+    )
+    script = 'set -eu; umask 077; git check-ref-format --branch "$1" >/dev/null; '
+    helper_option = ""
+    credential_environment = ""
+    if authenticated:
+        script += (
+            "token_file=$(mktemp); "
+            "trap 'rm -f \"$token_file\"' EXIT HUP INT TERM; "
+            'cat > "$token_file"; '
+            'credential_helper=\'!f() { test "$1" = get || exit 0; '
+            "protocol=; host=; path=; while IFS= read -r field; do "
+            'case "$field" in protocol=*) protocol=${field#*=};; '
+            "host=*) host=${field#*=};; path=*) path=${field#*=};; esac; done; "
+            'test "$protocol" = https && test "$host" = "$MM_GIT_HOST" && '
+            'test "$path" = "$MM_GIT_REPOSITORY_PATH" || exit 0; '
+            'printf "username=x-access-token\\npassword="; '
+            'cat "$MM_GIT_TOKEN_FILE"; printf "\\n"; }; f\'; '
+        )
+        credential_environment = (
+            'MM_GIT_TOKEN_FILE="$token_file" '
+            f"MM_GIT_HOST={shlex.quote(host)} "
+            'MM_GIT_REPOSITORY_PATH="${2#https://*/}" '
+        )
+        helper_option = '-c "credential.helper=$credential_helper" '
+    script += (
+        git_environment + credential_environment + "git "
+        "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
+        + helper_option
+        + "clone "
+        '--branch "$1" --single-branch -- "$2" "$3"; '
+        'git -C "$3" config --local user.name "$4"; '
+        'git -C "$3" config --local user.email "$5"'
     )
     return [
         "docker",

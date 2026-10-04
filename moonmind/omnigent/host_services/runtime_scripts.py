@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
 
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
@@ -69,10 +70,14 @@ _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
     "GIT_CONFIG_VALUE_0": f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
     "GH_CONFIG_DIR": "/home/app/.config/gh",
+    "GH_HOST": "github.com",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
 }
+_GITHUB_TOKEN_ENV_UNSET = (
+    "unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN"
+)
 _MOONMIND_RUNTIME_ENV_FILES = {
     "MOONMIND_URL": "moonmind-url",
     "MOONMIND_AGENT_RUN_ID": "agent-run-id",
@@ -179,13 +184,26 @@ class OmnigentRuntimeScriptService:
         if opencode_runtime:
             environment["MOONMIND_OPENCODE_RUNTIME"] = "1"
             environment.update(_OPENCODE_RUNTIME_ENV)
+        github_host = "github.com"
         if github_credential_attachment is not None:
             if (
                 str(github_credential_attachment.get("targetPath") or "")
                 != "/run/mm-credentials/github"
             ):
                 raise ValueError("GitHub credential attachment target is unsupported")
-            environment.update(_GITHUB_RUNTIME_ENV)
+            # The credential service admits and canonicalizes this non-secret
+            # authority before issuing the attachment. This portable builder
+            # only renders that metadata; it does not load application config.
+            github_host = str(
+                github_credential_attachment.get("githubHost") or "github.com"
+            )
+            environment.update(
+                {
+                    **_GITHUB_RUNTIME_ENV,
+                    "GH_HOST": github_host,
+                    "GIT_CONFIG_KEY_0": f"credential.https://{github_host}.helper",
+                }
+            )
         passthrough_names = {
             "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
@@ -223,12 +241,18 @@ class OmnigentRuntimeScriptService:
             + runtime_context_exports
             + f"'export PATH={':'.join(tool_bins)}:$PATH' "
             + "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
+            + f"'  {_GITHUB_TOKEN_ENV_UNSET}' "
             "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
+            + shlex.quote(f"  export GH_HOST={shlex.quote(github_host)}")
+            + " "
             "'  export GH_PROMPT_DISABLED=1' "
             "'  export GH_NO_UPDATE_NOTIFIER=1' "
             "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
             "'  export GIT_CONFIG_COUNT=1' "
-            "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
+            + shlex.quote(
+                f"  export GIT_CONFIG_KEY_0={shlex.quote(f'credential.https://{github_host}.helper')}"
+            )
+            + " "
             f"'  export GIT_CONFIG_VALUE_0=\"!{_RUNTIME_BIN_DIR}/gh auth git-credential\"' "
             f"'fi' > {context_profile}; "
             f"chmod 0600 {runtime_context_dir}/*; "
@@ -252,7 +276,9 @@ class OmnigentRuntimeScriptService:
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
             "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
-            "oldifs=$IFS; IFS=,; "
+            + _GITHUB_TOKEN_ENV_UNSET
+            + "; "
+            + "oldifs=$IFS; IFS=,; "
             "for check in ${MOONMIND_CREDENTIAL_GENERATION_CHECKS:-}; do "
             "path=${check%:*}; generation=${check##*:}; "
             'test -r "$path"; test "$(cat "$path")" = "$generation"; done; '
@@ -317,7 +343,10 @@ class OmnigentRuntimeScriptService:
             "/home/app/.config/gh/config.yml; "
             "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
+            f"'{_GITHUB_TOKEN_ENV_UNSET}' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "
+            + shlex.quote(f"export GH_HOST={shlex.quote(github_host)}")
+            + " "
             "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
             "> " + _RUNTIME_BIN_DIR + "/gh; "
             "chmod 0700 " + _RUNTIME_BIN_DIR + "/gh; fi; "
