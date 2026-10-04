@@ -8221,6 +8221,38 @@ def test_serialize_execution_projects_observability_from_finish_summary() -> Non
     }
 
 
+@pytest.mark.parametrize(
+    ("state", "close_status"),
+    [
+        (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED),
+        (MoonMindWorkflowState.COMPLETED, None),
+        (MoonMindWorkflowState.EXECUTING, TemporalExecutionCloseStatus.COMPLETED),
+    ],
+)
+def test_serialize_completed_idle_execution_recommends_review_without_finish_summary(
+    state: MoonMindWorkflowState,
+    close_status: TemporalExecutionCloseStatus | None,
+) -> None:
+    record = _build_execution_record(state=state)
+    record.close_status = close_status
+    record.memo.update(
+        objectiveOutcome="idle",
+        summary="Search deferred: provider capacity is occupied. No issue was claimed.",
+    )
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["finishSummary"] is None
+    assert payload["recommendedNextAction"] == "Review the completed execution summary."
+    assert payload["memo"]["objectiveOutcome"] == "idle"
+    assert payload["summary"] == record.memo["summary"]
+    assert payload["runMetrics"]["success"] is None
+    assert payload["runMetrics"]["successRateSample"] == {
+        "success": 0,
+        "sampleSize": 0,
+    }
+
+
 def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
 
@@ -8231,6 +8263,9 @@ def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
         "success": 0,
         "sampleSize": 0,
     }
+    assert payload["recommendedNextAction"] == (
+        "Monitor execution until a terminal outcome is available."
+    )
 
 
 @pytest.mark.parametrize(
@@ -8282,6 +8317,7 @@ def test_execution_projection_exposes_bounded_objective_outcome(
         (MoonMindWorkflowState.COMPLETED, TemporalExecutionCloseStatus.COMPLETED, "cancelled", False, 1),
         (MoonMindWorkflowState.NO_COMMIT, TemporalExecutionCloseStatus.COMPLETED, "succeeded", True, 1),
         (MoonMindWorkflowState.NO_COMMIT, TemporalExecutionCloseStatus.COMPLETED, "active", True, 1),
+        (MoonMindWorkflowState.NO_COMMIT, TemporalExecutionCloseStatus.COMPLETED, "idle", True, 1),
         (MoonMindWorkflowState.NO_COMMIT, None, "succeeded", True, 1),
         (MoonMindWorkflowState.FAILED, TemporalExecutionCloseStatus.FAILED, "failed", False, 1),
         (MoonMindWorkflowState.FAILED, TemporalExecutionCloseStatus.FAILED, "idle", False, 1),
@@ -8290,7 +8326,9 @@ def test_execution_projection_exposes_bounded_objective_outcome(
         (MoonMindWorkflowState.CANCELED, TemporalExecutionCloseStatus.COMPLETED, "idle", False, 1),
         (MoonMindWorkflowState.EXECUTING, None, "active", False, 0),
         (MoonMindWorkflowState.EXECUTING, None, "idle", False, 0),
+        (MoonMindWorkflowState.EXECUTING, TemporalExecutionCloseStatus.COMPLETED, "idle", None, 0),
         (MoonMindWorkflowState.AWAITING_SLOT, None, "active", False, 0),
+        (MoonMindWorkflowState.AWAITING_SLOT, TemporalExecutionCloseStatus.COMPLETED, "idle", None, 0),
     ],
 )
 def test_execution_metrics_exclude_idle_without_hiding_terminal_outcomes(
