@@ -65,9 +65,12 @@ async def _run_native_search_stage(
     wait,
     retry_enabled=True,
     failure_mode="FAIL_FAST",
+    independent_after_search=False,
 ):
     """Exercise the production plan loop and tool, replacing only its boundaries."""
     nodes = [_node(), _node("after-search", tool_name="repo.noop")]
+    if independent_after_search:
+        nodes.append(_node("z-independent-after-search", tool_name="repo.noop"))
     plan = json.loads(integration._mock_plan_payload(nodes))
     plan["policy"]["failure_mode"] = failure_mode
     plan["edges"] = [{"from": NODE_ID, "to": "after-search"}]
@@ -452,16 +455,20 @@ async def test_native_capacity_exhaustion_blocks_objective_success_even_with_con
         service,
         wait=still_occupied,
         failure_mode="CONTINUE",
+        independent_after_search=True,
     )
     assert waits, "Capacity must be retried before the run is failed"
     assert sum(waits, timedelta()) == timedelta(minutes=30)
     assert github["posts"] == 0
     assert await tools.IssueClaimStore().get(OWNER) is None
+    assert [row["status"] for row in mock_run_workflow._step_ledger_rows] == [
+        "failed",
+        "skipped",
+        "skipped",
+    ]
     assert all(
         call["invocation_payload"]["tool"]["name"] == TOOL_NAME for call in calls
     )
-    assert mock_run_workflow._step_ledger_rows[0]["status"] == "failed"
-    assert mock_run_workflow._step_ledger_rows[1]["status"] != "completed"
     assert mock_run_workflow._publish_context["objectiveOutcome"] == "failed"
     outcome, summary, failed = mock_run_workflow._determine_publish_completion(
         parameters={"publishMode": "none"}

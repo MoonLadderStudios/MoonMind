@@ -14471,6 +14471,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 break
 
             if not accepted_execution:
+                if self._issue_search_capacity_retry_enabled and self._publish_context.get(
+                    "capacityWait", {}
+                ).get("exhausted"):
+                    # Even CONTINUE cannot implement an issue that was never
+                    # selected. Keep the failed objective and skip remaining work.
+                    self._mark_remaining_plan_steps_skipped(
+                        ordered_nodes=ordered_nodes,
+                        completed_index=index - 1,
+                        summary=self._plan_blocked_message,
+                    )
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    break
                 if (
                     workflow.patched(RUN_WORKSPACE_BLOCK_FAILURE_POLICY_PATCH)
                     and failure_mode == "FAIL_FAST"
@@ -14591,19 +14604,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 node_id=node_id,
                 execution_result=execution_result,
             )
-            if self._issue_search_capacity_retry_enabled and self._publish_context.get(
-                "capacityWait", {}
-            ).get("exhausted"):
-                # Even CONTINUE cannot implement an issue that was never
-                # selected. Keep the failed objective and skip dependent work.
-                self._mark_remaining_plan_steps_skipped(
-                    ordered_nodes=ordered_nodes,
-                    completed_index=index - 1,
-                    summary=self._plan_blocked_message,
-                )
-                self._refresh_step_readiness(updated_at=workflow.now())
-                self._update_memo()
-                break
             if self._gated_continuation_request and workflow.patched(
                 RUN_GATED_STEP_CONTINUATION_PATCH
             ):
@@ -16550,6 +16550,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     timeout=min(interval, remaining),
                 )
             except asyncio.TimeoutError:
+                # Timeout is the expected path for periodic capacity rechecks.
                 pass
             if self._cancel_requested:
                 return current_result
