@@ -464,6 +464,14 @@ def test_local_build_rejects_release_inputs(tmp_path, extra):
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
             "Docker daemon is unreachable",
         ),
+        (
+            "Error response from daemon: write /var/lib/desktop-containerd/daemon/io.containerd.metadata.v1.bolt/meta.db: read-only file system",
+            "Docker storage is not writable",
+        ),
+        (
+            "failed to register layer: no space left on device",
+            "Docker storage is not writable",
+        ),
     ],
 )
 def test_run_reports_actionable_docker_pull_diagnostics(tmp_path, monkeypatch, daemon_output, hint):
@@ -477,7 +485,6 @@ def test_run_reports_actionable_docker_pull_diagnostics(tmp_path, monkeypatch, d
     assert "ghcr.io/moonladderstudios/moonmind:sha-abc123" in message
     assert daemon_output in message
     assert hint in message
-    assert "deployment remains owned by its recorded release job" in message
 
 
 def test_run_redacts_credentials_in_diagnostics(tmp_path, monkeypatch):
@@ -556,6 +563,8 @@ def _init_two_commit_repo(repo):
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
             "daemon",
         ),
+        ("write /var/lib/desktop-containerd/meta.db: read-only file system", "storage"),
+        ("failed to register layer: no space left on device", "storage"),
         ("Error: something entirely unexpected", "unknown"),
     ],
 )
@@ -660,7 +669,17 @@ def test_select_exhaustion_keeps_branch_and_tip_context(tmp_path, monkeypatch):
     assert "manifest unknown" in message
 
 
-def test_select_auth_failure_fails_fast_without_wait_or_fallback(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("diagnostic", "hint"),
+    [
+        ("unauthorized: authentication required", "docker login"),
+        ("write /var/lib/desktop-containerd/meta.db: read-only file system", "Docker storage is not writable"),
+        ("failed to register layer: no space left on device", "Docker storage is not writable"),
+    ],
+)
+def test_select_non_publish_failure_fails_fast_without_wait_or_fallback(
+    tmp_path, monkeypatch, diagnostic, hint
+):
     repo = tmp_path / "installed"
     repo.mkdir()
     _parent, tip = _init_two_commit_repo(repo)
@@ -670,11 +689,11 @@ def test_select_auth_failure_fails_fast_without_wait_or_fallback(tmp_path, monke
         if args[0] != "docker":
             return original_run(args, **kwargs)
         pulls.append(args[2])
-        return _pull_failure("unauthorized: authentication required")
+        return _pull_failure(diagnostic)
     sleeps = []
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
-    with pytest.raises(RuntimeError, match="docker login"):
+    with pytest.raises(RuntimeError, match=hint):
         update._select_release_image(
             repo=repo,
             branch="main",

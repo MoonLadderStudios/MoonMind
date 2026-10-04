@@ -3,7 +3,7 @@
 Status: Proposed design  
 Document Class: System / Feature Design View
 Owners: MoonMind Platform  
-Last updated: 2026-09-05
+Last updated: 2026-10-04
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -716,6 +716,16 @@ Provider frames are redacted and copied into:
 ```text
 runtime.omnigent.sse.raw.jsonl
 ```
+
+Raw and normalized journals default to seven-day troubleshooting retention.
+During execution, the bridge commits both complete accumulated journal refs
+before reclaiming the preceding numbered snapshots. It refuses an incomplete
+replacement or a shorter prefix that would discard verified progress. Current
+canonical refs, operator pins and live artifact use claims remain protected;
+the current pair of a non-terminal bridge session survives ordinary expiry.
+The artifact service records recoverable deletion intents for failed physical
+cleanup, which the existing hourly lifecycle sweep reconciles. Final journals
+retain the full event history without keeping a separate growing copy per event.
 
 ### 10.2 Normalized event shape
 

@@ -1,8 +1,10 @@
-"""Bounded Docker image/cache reclamation under data-volume pressure."""
+"""Periodic Docker cache expiry with bounded escalation under disk pressure."""
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,6 +12,10 @@ from pathlib import Path
 
 _TRUEY = frozenset({"1", "true", "yes", "on"})
 _FALSEY = frozenset({"0", "false", "no", "off"})
+_BUILDX_INSPECT_FORMAT = (
+    '{"name":{{json .Name}},"running":{{json .State.Running}},'
+    '"entrypoint":{{json .Config.Entrypoint}},"mounts":{{json .Mounts}}}'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +31,7 @@ class DockerStorageMaintenanceConfig:
     data_path: Path = Path("/work/agent_jobs")
     high_watermark_percent: int = 80
     critical_watermark_percent: int = 90
-    image_min_age_hours: int = 168
+    image_min_age_hours: int = 24
     build_cache_min_age_hours: int = 24
 
     @classmethod
@@ -52,7 +58,7 @@ class DockerStorageMaintenanceConfig:
             image_min_age_hours=_required_int(
                 source,
                 "MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS",
-                168,
+                24,
             ),
             build_cache_min_age_hours=_required_int(
                 source,
@@ -118,15 +124,17 @@ async def reclaim_docker_storage_under_pressure(
     disk_usage: DiskUsageProvider | None = None,
     docker_binary: str = "docker",
 ) -> DockerStorageMaintenanceResult:
-    """Prune only unused image/cache state after crossing configured watermarks."""
+    """Expire unused cache every pass, then escalate under critical pressure.
+
+    Docker Desktop's sparse VM disk can report free space after the host disk
+    fills. Routine expiry must therefore work independently of that reading.
+    Docker protects images referenced by containers and active build cache.
+    """
 
     config.validate()
     usage_provider = disk_usage or _disk_usage
     before = usage_provider(config.data_path)
-    if not config.enabled or not _at_or_above(
-        before,
-        config.high_watermark_percent,
-    ):
+    if not config.enabled:
         return _result(
             config=config,
             before=before,
@@ -138,11 +146,12 @@ async def reclaim_docker_storage_under_pressure(
     commands_attempted: list[str] = []
     errors: list[str] = []
 
-    async def run(label: str, command: tuple[str, ...]) -> None:
+    async def run(label: str, command: tuple[str, ...]) -> tuple[int, str]:
         commands_attempted.append(label)
-        code, _stdout, _stderr = await command_runner(command)
+        code, stdout, _stderr = await command_runner(command)
         if code:
             errors.append(f"{label} exited with code {code}")
+        return code, stdout
 
     await run(
         "age-bounded image prune",
@@ -167,6 +176,64 @@ async def reclaim_docker_storage_under_pressure(
         ),
     )
 
+    # Buildx's docker-container driver owns a separate cache that the daemon's
+    # builder prune cannot reach. Discover it from Docker, since the runtime
+    # worker does not share the operator's ~/.docker/buildx configuration.
+    code, builder_ids = await run(
+        "Buildx builder discovery",
+        (
+            docker_binary,
+            "ps",
+            "--no-trunc",
+            "--filter",
+            "name=buildx_buildkit_",
+            "--format",
+            "{{.ID}}",
+        ),
+    )
+    verified_builders: list[str] = []
+    if not code:
+        for builder_id in dict.fromkeys(builder_ids.split()):
+            if not re.fullmatch(r"[0-9a-f]{64}", builder_id):
+                errors.append("Buildx discovery returned an invalid container ID")
+                continue
+            code, details = await run(
+                f"Buildx builder inspection {builder_id}",
+                (
+                    docker_binary,
+                    "inspect",
+                    "--format",
+                    _BUILDX_INSPECT_FORMAT,
+                    builder_id,
+                ),
+            )
+            if code:
+                continue
+            try:
+                builder = json.loads(details)
+            except (TypeError, ValueError):
+                errors.append(f"Buildx builder {builder_id} inspection was unreadable")
+                continue
+            if not _is_buildx_builder(builder):
+                errors.append(
+                    f"Buildx builder {builder_id} ownership could not be verified"
+                )
+                continue
+            verified_builders.append(builder_id)
+            await run(
+                f"age-bounded Buildx cache prune {builder_id}",
+                (
+                    docker_binary,
+                    "exec",
+                    builder_id,
+                    "buildctl",
+                    "prune",
+                    "--all",
+                    "--keep-duration",
+                    f"{config.build_cache_min_age_hours}h",
+                ),
+            )
+
     after_aged = usage_provider(config.data_path)
     critical_pressure_detected = _at_or_above(
         after_aged,
@@ -182,16 +249,46 @@ async def reclaim_docker_storage_under_pressure(
             "critical builder prune",
             (docker_binary, "builder", "prune", "-af"),
         )
+        for builder_id in verified_builders:
+            await run(
+                f"critical Buildx cache prune {builder_id}",
+                (docker_binary, "exec", builder_id, "buildctl", "prune", "--all"),
+            )
         after = usage_provider(config.data_path)
 
     return _result(
         config=config,
         before=before,
         after=after,
-        pressure_detected=True,
+        pressure_detected=_at_or_above(before, config.high_watermark_percent),
         critical_pressure_detected=critical_pressure_detected,
         commands_attempted=tuple(commands_attempted),
         errors=tuple(errors),
+    )
+
+
+def _is_buildx_builder(value: object) -> bool:
+    if not isinstance(value, Mapping) or value.get("running") is not True:
+        return False
+    name = str(value.get("name") or "").removeprefix("/")
+    if not re.fullmatch(r"buildx_buildkit_[a-zA-Z0-9_.-]+", name):
+        return False
+    entrypoint = value.get("entrypoint")
+    if not isinstance(entrypoint, list) or not entrypoint:
+        return False
+    if Path(str(entrypoint[0])).name not in {
+        "buildkitd",
+        "buildkitd-entrypoint",
+        "buildkitd-entrypoint.sh",
+    }:
+        return False
+    mounts = value.get("mounts")
+    return isinstance(mounts, list) and any(
+        isinstance(mount, Mapping)
+        and mount.get("Type") == "volume"
+        and mount.get("Name") == f"{name}_state"
+        and mount.get("Destination") == "/var/lib/buildkit"
+        for mount in mounts
     )
 
 

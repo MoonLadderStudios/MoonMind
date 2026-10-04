@@ -19,13 +19,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import secrets
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
@@ -42,6 +44,35 @@ from moonmind.utils.logging import redact_sensitive_payload
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
 # first-message idempotency state machine onto it from the superseded mapping.
 BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
+
+logger = logging.getLogger(__name__)
+_ACTIVE_JOURNAL_NAME = re.compile(
+    r"runtime\.omnigent\.sse\.(raw|normalized)\.(\d+)\.jsonl"
+)
+
+
+def _journal_artifact_id(ref: str | None) -> str | None:
+    value = (ref or "").removeprefix("artifact:")
+    return value if value.startswith("art_") else None
+
+
+def _journal_prefix(artifact: Any) -> tuple[str, int, str] | None:
+    metadata = artifact.metadata_json or {}
+    match = _ACTIVE_JOURNAL_NAME.fullmatch(str(metadata.get("name", "")))
+    correlation = str(metadata.get("correlation_id", ""))
+    if match is None or not correlation:
+        return None
+    return match[1], int(match[2]), correlation
+
+
+def _journal_artifact_service(session: AsyncSession) -> Any:
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    return TemporalArtifactService(TemporalArtifactRepository(session))
+
 
 FIRST_MESSAGE_NOT_PREPARED = "not_prepared"
 FIRST_MESSAGE_PREPARED = "prepared"
@@ -3137,7 +3168,10 @@ class OmnigentBridgeSessionStore:
     async def attach_active_journal_refs(
         self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
     ) -> None:
-        """Atomically switch both active journal refs after artifacts exist."""
+        """Commit a complete journal pair before reclaiming superseded prefixes."""
+        from api_service.db.models import TemporalArtifactStatus
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -3145,9 +3179,106 @@ class OmnigentBridgeSessionStore:
                 .with_for_update()
             )
             row = result.scalar_one()
+            previous = (row.raw_events_ref, row.normalized_events_ref)
+            replacements = (raw_ref, normalized_ref)
+            repository = TemporalArtifactRepository(session)
+            for old_ref, replacement_ref in zip(previous, replacements):
+                replacement_id = _journal_artifact_id(replacement_ref)
+                if replacement_id is None:
+                    continue
+                artifact = await repository.get_artifact_for_update(replacement_id)
+                if artifact.status is not TemporalArtifactStatus.COMPLETE:
+                    raise OmnigentIdempotencyError(
+                        "Journal replacement must be complete"
+                    )
+                old_id = _journal_artifact_id(old_ref)
+                if old_id is None:
+                    continue
+                old_artifact = await repository.get_artifact(old_id)
+                old_prefix, new_prefix = _journal_prefix(old_artifact), _journal_prefix(
+                    artifact
+                )
+                if (
+                    old_prefix
+                    and new_prefix
+                    and (old_prefix[0], old_prefix[2]) == (new_prefix[0], new_prefix[2])
+                    and new_prefix[1] < old_prefix[1]
+                ):
+                    raise OmnigentIdempotencyError(
+                        "Journal replacement would discard verified progress"
+                    )
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
             await session.commit()
+        for old_ref, replacement_ref in zip(previous, replacements):
+            if old_ref and old_ref != replacement_ref:
+                try:
+                    await self._reclaim_superseded_journal(old_ref, replacement_ref)
+                except Exception as exc:
+                    # The replacement is already durable. Reporting/cleanup
+                    # cannot erase it, and artifact deletion intents retain
+                    # failed physical deletes for the existing sweeper.
+                    logger.warning(
+                        "Superseded Omnigent journal reclamation failed: artifact=%s error=%s",
+                        old_ref,
+                        type(exc).__name__,
+                    )
+
+    async def _reclaim_superseded_journal(
+        self, old_ref: str, replacement_ref: str
+    ) -> None:
+        from api_service.db.models import (
+            TemporalArtifactRetentionClass,
+            TemporalArtifactStatus,
+        )
+
+        old_id = _journal_artifact_id(old_ref)
+        replacement_id = _journal_artifact_id(replacement_ref)
+        if old_id is None or replacement_id is None:
+            return
+        async with self._session_factory() as session:
+            service = _journal_artifact_service(session)
+            repository = service._repository
+            previous = await repository.get_artifact_for_update(old_id)
+            replacement = await repository.get_artifact(replacement_id)
+            old_prefix, new_prefix = _journal_prefix(previous), _journal_prefix(
+                replacement
+            )
+            if (
+                old_prefix is None
+                or new_prefix is None
+                or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
+                or old_prefix[1] >= new_prefix[1]
+                or replacement.status is not TemporalArtifactStatus.COMPLETE
+                or previous.retention_class is TemporalArtifactRetentionClass.PINNED
+                or await repository.get_pin(old_id) is not None
+                or await repository.has_live_use_claim(old_id, now=datetime.now(UTC))
+            ):
+                return
+            # Another canonical owner may still need this exact immutable ref.
+            aliases = (old_ref, old_id, f"artifact:{old_id}")
+            current_owner = await session.scalar(
+                select(OmnigentBridgeSession.bridge_session_id)
+                .where(
+                    or_(
+                        OmnigentBridgeSession.raw_events_ref.in_(aliases),
+                        OmnigentBridgeSession.normalized_events_ref.in_(aliases),
+                    )
+                )
+                .limit(1)
+            )
+            if current_owner is not None:
+                return
+            previous.metadata_json = {
+                **(previous.metadata_json or {}),
+                "supersededByArtifactRef": replacement_ref,
+            }
+            await service.soft_delete(
+                artifact_id=old_id, principal="service:omnigent-journal-maintenance"
+            )
+            await service.hard_delete(
+                artifact_id=old_id, principal="service:omnigent-journal-maintenance"
+            )
 
     async def attach_capture_evidence(
         self,

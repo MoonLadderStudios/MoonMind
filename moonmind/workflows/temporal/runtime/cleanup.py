@@ -91,8 +91,8 @@ def _bounded_cleanup_errors(errors: Sequence[str]) -> tuple[str, ...]:
 class ManagedRuntimeCleanupConfig:
     enabled: bool = True
     dry_run: bool = False
-    workspace_retention: timedelta = timedelta(days=10)
-    artifact_retention: timedelta = timedelta(days=90)
+    workspace_retention: timedelta = timedelta(days=7)
+    artifact_retention: timedelta = timedelta(days=7)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(hours=1)
     max_delete_paths: int = 100
@@ -130,12 +130,12 @@ class ManagedRuntimeCleanupConfig:
             ),
             workspace_retention=timedelta(
                 days=_env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 10
+                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 7
                 )
             ),
             artifact_retention=timedelta(
                 days=_env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS", 90
+                    source, "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS", 7
                 )
             ),
             record_retention=_env_optional_days(

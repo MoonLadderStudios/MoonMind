@@ -5,12 +5,63 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_updater_reports_storage_failure_without_a_traceback(tmp_path: Path) -> None:
+    bash = shutil.which("bash")
+    assert bash is not None
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    commands = tmp_path / "commands.log"
+    (fake_bin / "python3").symlink_to(sys.executable)
+    dirname = shutil.which("dirname")
+    assert dirname is not None
+    (fake_bin / "dirname").symlink_to(dirname)
+    revision = "a" * 40
+    git = fake_bin / "git"
+    git.write_text(
+        f"#!{bash}\n"
+        'printf "git %s\\n" "$*" >> "$COMMAND_LOG"\n'
+        f'case "$1" in rev-parse|rev-list) printf "%s\\n" "{revision}";; esac\n'
+    )
+    git.chmod(0o755)
+    docker = fake_bin / "docker"
+    docker.write_text(
+        f"#!{bash}\n"
+        'printf "docker %s\\n" "$*" >> "$COMMAND_LOG"\n'
+        'if [[ "$1 $2" == "compose version" ]]; then exit 0; fi\n'
+        'printf "%s\\n" "Error response from daemon: write /var/lib/desktop-containerd/meta.db: read-only file system" >&2\n'
+        "exit 1\n"
+    )
+    docker.chmod(0o755)
+    env = dict(os.environ, PATH=str(fake_bin), COMMAND_LOG=str(commands))
+    result = subprocess.run(
+        [bash, str(ROOT / "tools/update-moonmind.sh")],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    assert "Docker storage is not writable" in result.stderr
+    assert "read-only file system" in result.stderr
+    assert f"sha-{revision}" in result.stderr
+    assert "recorded release job" not in result.stderr
+    assert not (tmp_path / "deploy/state/release-submissions").exists()
+    assert commands.read_text().splitlines()[-1] == (
+        f"docker pull ghcr.io/moonladderstudios/moonmind:sha-{revision}"
+    )
 
 
 @pytest.mark.parametrize(
