@@ -518,6 +518,29 @@ def select_execution_realizer(
     return GENERIC_REALIZER_REF
 
 
+def selected_realizer_consumes_repository_authority(*, harness_id: str) -> bool:
+    """Return whether new work for ``harness_id`` selects a repository-capable realizer.
+
+    Typed repository bindings are admitted only for a realizer that consumes
+    them. While the deployment policy keeps Codex on the model-only
+    profile-bound realizer (generic Codex unqualified, or a restored legacy
+    default), Codex repository work keeps that realizer's existing credential
+    path rather than becoming unrunnable.
+    """
+
+    from moonmind.omnigent.realizers.registry import realizer_authority_kinds
+
+    try:
+        realizer = select_execution_realizer(
+            harness_id=harness_id,
+            is_codex=(harness_id == "codex-native"),
+            required_authority_kinds=("model", "repository"),
+        )
+    except HarnessPlatformError:
+        return False
+    return "repository" in realizer_authority_kinds(realizer)
+
+
 def _configured_legacy_rollback_generation() -> str | None:
     """Read the operator-selected rollback generation for legacy re-admission.
 
