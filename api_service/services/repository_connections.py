@@ -30,6 +30,7 @@ from api_service.db.models import (
     RepositoryRouteDefault,
 )
 from moonmind.workflows.executions.repository_contract import (
+    DEFAULT_GIT_CONNECTION_REF,
     REPOSITORY_DENIED,
     REPOSITORY_ID_REUSE,
     REPOSITORY_POLICY_CONFLICT,
@@ -41,6 +42,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryIdentity,
     RepositoryRouteError,
     authorize_connection_use,
+    github_repository_name_from_value,
     normalize_endpoint,
     normalize_scope,
     scope_key_for,
@@ -1254,7 +1256,41 @@ class RepositoryConnectionService:
     async def launch_assignment(
         self, connection: RepositoryConnection, repository: str | None
     ) -> RepositoryAssignment:
-        """Return the verified assignment that admits a launch's repository.
+        """Return the assignment that admits an explicitly selected connection.
+
+        A recorded assignment always decides. The default connection is the
+        classified legacy exception: migration 391 maps the deployment's
+        pre-#4023 credential, whose scope predates assignments, so without a
+        recorded match it serves the named GitHub repository with the
+        connection's own operations. That scope is never routed authority
+        (``launch_candidates`` reads recorded assignments only).
+        """
+
+        try:
+            return await self._recorded_launch_assignment(connection, repository)
+        except RepositoryRouteError as exc:
+            name = github_repository_name_from_value(repository)
+            if (
+                exc.code != REPOSITORY_SETUP_REQUIRED
+                or connection.id != DEFAULT_GIT_CONNECTION_REF
+                or not name
+            ):
+                raise
+        endpoint = connection.endpoint_ref
+        return RepositoryAssignment(
+            connectionId=connection.id,
+            identity=RepositoryIdentity(
+                endpoint=endpoint,
+                canonicalRemote=f"{endpoint.rstrip('/')}/{name}.git",
+                displayName=name,
+            ),
+            operations=connection.allowed_operations,
+        )
+
+    async def _recorded_launch_assignment(
+        self, connection: RepositoryConnection, repository: str | None
+    ) -> RepositoryAssignment:
+        """Return the verified recorded assignment for a launch's repository.
 
         A launch names its repository (``owner/name`` or a remote URL), not a
         provider ID, so it is matched against each assignment's recorded name
@@ -1319,7 +1355,7 @@ class RepositoryConnectionService:
             if connection.lifecycle != "active":
                 continue
             try:
-                assignment = await self.launch_assignment(connection, repository)
+                assignment = await self._recorded_launch_assignment(connection, repository)
             except RepositoryRouteError as exc:
                 if exc.code == REPOSITORY_SETUP_REQUIRED:
                     continue
