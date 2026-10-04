@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -168,6 +168,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
     FailedRunRecoveryManifestModel,
+    ObjectiveOutcomeValue,
     RecoverExecutionResponse,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
@@ -4304,6 +4305,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         title=title,
         status=dashboard_status,
         dashboard_status=dashboard_status,
+        objective_outcome=_objective_outcome_from_memo(memo),
         completion_disposition=(
             "gated_continuation"
             if state_value == "completed"
@@ -4709,6 +4711,7 @@ def _serialize_execution(
         finish_summary=finish_summary,
         close_status=close_status,
         state_value=state_value,
+        objective_outcome=_objective_outcome_from_memo(memo),
     )
     improvement_signals = _improvement_signals_from_summary(
         finish_summary=finish_summary,
@@ -4794,6 +4797,7 @@ def _serialize_execution(
         task_instructions=_derive_full_workflow_instructions(task_payload),
         status=dashboard_status,
         dashboard_status=dashboard_status,
+        objective_outcome=_objective_outcome_from_memo(memo),
         completion_disposition=(
             "gated_continuation"
             if state_value == "completed"
@@ -4961,12 +4965,22 @@ def _int_or_none(value: object) -> int | None:
         return None
 
 
+def _objective_outcome_from_memo(
+    memo: Mapping[str, Any],
+) -> ObjectiveOutcomeValue | None:
+    value = memo.get("objectiveOutcome")
+    if isinstance(value, str) and value in get_args(ObjectiveOutcomeValue):
+        return cast(ObjectiveOutcomeValue, value)
+    return None
+
+
 def _run_metrics_from_summary(
     *,
     record: Any,
     finish_summary: Mapping[str, Any] | None,
     close_status: str | None,
     state_value: str,
+    objective_outcome: ObjectiveOutcomeValue | None = None,
 ) -> dict[str, Any]:
     timestamps = (
         finish_summary.get("timestamps")
@@ -4996,10 +5010,16 @@ def _run_metrics_from_summary(
         "canceled",
         "terminated",
         "timed_out",
-    } or state_value in {"completed", "failed", "canceled"}
-    success = normalized_close_status == "completed" or (
-        not normalized_close_status and state_value == "completed"
+    } or state_value in {"completed", "no_commit", "failed", "canceled"}
+    success: bool | None = normalized_close_status == "completed" or (
+        not normalized_close_status and state_value in {"completed", "no_commit"}
     )
+    if state_value in {"failed", "canceled"} or objective_outcome in {
+        "failed", "verification_blocked", "cancelled"
+    }:
+        success = False
+    elif success and objective_outcome == "idle" and state_value != "no_commit":
+        success = None
     duration_ms = _int_or_none(timestamps.get("durationMs"))
     if duration_ms is None:
         started_at = getattr(record, "started_at", None)
@@ -5015,7 +5035,7 @@ def _run_metrics_from_summary(
                 duration_ms = None
     success_rate_sample = (
         {"success": 1 if success else 0, "sampleSize": 1}
-        if terminal
+        if terminal and success is not None
         else {"success": 0, "sampleSize": 0}
     )
     return {

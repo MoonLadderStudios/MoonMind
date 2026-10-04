@@ -8298,6 +8298,8 @@ export interface components {
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
             /** Completiondisposition */
             completionDisposition?: "gated_continuation" | null;
+            /** Objectiveoutcome */
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -8685,6 +8687,8 @@ export interface components {
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
             /** Completiondisposition */
             completionDisposition?: "gated_continuation" | null;
+            /** Objectiveoutcome */
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
             /**
              * Dashboardstatus
              * @enum {string}

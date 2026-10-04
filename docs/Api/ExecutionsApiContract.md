@@ -143,7 +143,7 @@ Publication policy, actual publication outcome, and lifecycle state are differen
 
 ### 8.1 ExecutionModel
 
-Create, describe, signal, and cancel return this materialized shape; list nests it.
+Create, describe, signal, and cancel return this materialized shape. List returns the bounded `ExecutionListItemModel`, without detail-only memo, parameters, or summaries.
 
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -154,6 +154,7 @@ Create, describe, signal, and cancel return this materialized shape; list nests 
 | state | string | yes | Domain lifecycle state |
 | temporalStatus | running/completed/failed/canceled | yes | Simplified Temporal status |
 | closeStatus | string/null | no | Terminal close disposition |
+| objectiveOutcome | bounded string/null | no | Existing objective outcome from memo, separately from execution lifecycle; also included in list rows |
 | agentRunId | string/null | no | Top-level observability binding when applicable |
 | progress | object/null | no | Bounded current-run progress |
 | searchAttributes | object | yes | Indexed safe metadata |
@@ -163,6 +164,10 @@ Create, describe, signal, and cancel return this materialized shape; list nests 
 | queuedAt | datetime/null | no | Stable queued ordering fallback |
 | updatedAt | datetime | yes | Meaningful progress/lifecycle update |
 | closedAt | datetime/null | no | Terminal time |
+
+`objectiveOutcome` accepts the existing values `active`, `succeeded`, `failed`, `cancelled`, `idle`, and `verification_blocked`. Missing, unknown, or malformed memo values project as null without changing the retained memo or lifecycle fields. A completed execution with an idle objective is displayed as neutral **Idle**, with its explanation retained; it does not establish that issue implementation succeeded. Completed closures with failed, verification-blocked, or cancelled objectives display **Failed**, **Verification blocked**, or **Cancelled** respectively. These presentation labels preserve the execution lifecycle and filter values. A valid `no_commit` lifecycle still represents successful work that needed no repository commit, rather than capacity unavailability or a no-target scan.
+
+For a completed idle execution, `runMetrics.success` is null and `successRateSample` is `{ "success": 0, "sampleSize": 0 }`, excluding it from success-rate samples. Exact failed/canceled states and explicit failed, verification-blocked, or cancelled objectives remain unsuccessful even when Temporal closed cleanly; an eligible terminal sample records zero successes and a sample size of one. Active executions keep a zero-size sample. A valid `no_commit` outcome remains successful, including historical records whose memo still says active. `/metrics` retains its exact execution lifecycle counts and execution completion rate; its separate bounded `objectiveMetrics` sample describes objective outcomes and excludes idle scans from the objective success denominator.
 
 The optional `recommendedNextAction` uses available outcome evidence and lifecycle state. A completed run without an inline finish summary recommends reviewing its completed summary; active runs retain monitoring guidance. Publication-specific recommendations take precedence when their outcome evidence is available.
 

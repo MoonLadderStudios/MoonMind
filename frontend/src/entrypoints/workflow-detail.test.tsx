@@ -2364,6 +2364,113 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it.each([
+    ['completed', 'idle', 'Idle', 'Search found no eligible issue.'],
+    ['completed', 'succeeded', 'Completed', 'Workflow completed successfully. Search found no eligible issue.'],
+    ['completed', 'failed', 'Failed', 'Search found no eligible issue.'],
+    ['completed', 'verification_blocked', 'Verification blocked', 'Search found no eligible issue.'],
+    ['completed', 'cancelled', 'Cancelled', 'Search found no eligible issue.'],
+    ['failed', 'idle', 'Failed', 'Workflow completed successfully. Search found no eligible issue.'],
+    ['canceled', 'idle', 'Canceled', 'Workflow completed successfully. Search found no eligible issue.'],
+    ['executing', 'idle', 'Executing', 'Workflow completed successfully. Search found no eligible issue.'],
+    ['no_commit', 'idle', 'No commit', 'Workflow completed successfully. Search found no eligible issue.'],
+  ])('presents %s/%s without rewriting its recorded summary', async (state, objectiveOutcome, label, displayedSummary) => {
+    window.history.pushState({}, 'Objective Outcome Test', '/workflows/test-123/overview?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    const recordedSummary = 'Workflow completed successfully. Search found no eligible issue.';
+    let rawExecution: Record<string, unknown> | undefined;
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
+      const response = await originalFetch(input) as Response;
+      if (/^\/api\/executions\/test-123(?:\?|$)/.test(String(input))) {
+        rawExecution = { ...await response.json(), state, rawState: state, status: state, objectiveOutcome, summary: recordedSummary };
+        return { ok: true, json: async () => rawExecution } as Response;
+      }
+      return response;
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText(displayedSummary);
+    const header = document.querySelector('.toolbar-identity-row') as HTMLElement;
+    expect(label === 'Executing' ? within(header).getByLabelText(label) : within(header).getByText(label)).toBeTruthy();
+    if (state === 'completed' && objectiveOutcome !== 'succeeded') {
+      expect(screen.queryByText(recordedSummary)).toBeNull();
+    }
+    if (label === 'Idle') expect(within(header).getByText('Idle').className).toContain('status-neutral');
+    expect(rawExecution?.summary).toBe(recordedSummary);
+  });
+
+  it.each([
+    ['idle', 'Workflow completed successfully. No eligible issue was found.\nNo issue was claimed.', 'No eligible issue was found.\nNo issue was claimed.'],
+    ['idle', 'Workflow completed successfully.\n  No eligible issue.\n', '\n  No eligible issue.\n'],
+    ['idle', 'Workflow completed successfully', 'Execution ended with an idle outcome.'],
+    ['failed', 'Workflow completed successfully. Requested work failed.', 'Requested work failed.'],
+    ['failed', 'Workflow completed successfully', 'The requested objective failed.'],
+    ['verification_blocked', 'Workflow completed successfully. Verification did not finish.', 'Verification did not finish.'],
+    ['verification_blocked', 'Workflow completed successfully', 'Verification remains blocked.'],
+    ['cancelled', 'Workflow completed successfully. Requested work was cancelled.', 'Requested work was cancelled.'],
+    ['cancelled', 'Workflow completed successfully', 'The requested objective was cancelled.'],
+    ['idle', '  Recorded explanation mentions Workflow completed successfully inside the text.\n', '  Recorded explanation mentions Workflow completed successfully inside the text.\n'],
+  ])('presents completed %s summary artifacts without success boilerplate: %s', async (objectiveOutcome, recordedSummary, displayedSummary) => {
+    window.history.pushState({}, 'Idle Summary Test', '/workflows/test-123/overview?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    const summaryArtifact = {
+      operatorSummary: recordedSummary,
+      finishOutcome: { code: 'PUBLISH_DISABLED', reason: recordedSummary },
+      lastStep: { summary: recordedSummary },
+    };
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/artifacts/art-idle-summary/download')) {
+        return { ok: true, text: async () => JSON.stringify(summaryArtifact) } as Response;
+      }
+      const response = await originalFetch(input) as Response;
+      if (/^\/api\/executions\/test-123(?:\?|$)/.test(String(input))) {
+        return {
+          ok: true,
+          json: async () => ({ ...await response.json(), status: 'completed', state: 'completed', rawState: 'completed',
+            objectiveOutcome, summary: 'Execution fallback summary', summaryArtifactRef: 'art-idle-summary' }),
+        } as Response;
+      }
+      return response;
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText((_content, element) => element?.tagName === 'P' && element.textContent === displayedSummary);
+    if (recordedSummary.startsWith('Workflow completed successfully')) {
+      expect(document.body.textContent).not.toContain('Workflow completed successfully');
+    }
+    expect(screen.queryByText('Execution fallback summary')).toBeNull();
+    expect(screen.queryByText(/^Outcome:/)).toBeNull();
+    expect(summaryArtifact.operatorSummary).toBe(recordedSummary);
+    expect(summaryArtifact.finishOutcome.reason).toBe(recordedSummary);
+    expect(summaryArtifact.lastStep.summary).toBe(recordedSummary);
+  });
+
+  it.each(['idle', 'failed', 'verification_blocked', 'cancelled'])('preserves gated %s handoff presentation and recorded explanation', async (objectiveOutcome) => {
+    window.history.pushState({}, 'Gated Outcome Test', '/workflows/test-123/overview?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+    const originalFetch = fetchSpy.getMockImplementation()!;
+    const recordedSummary = 'Workflow completed successfully. Durable continuation was handed off.';
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
+      const response = await originalFetch(input) as Response;
+      if (/^\/api\/executions\/test-123(?:\?|$)/.test(String(input))) {
+        return { ok: true, json: async () => ({ ...await response.json(), status: 'completed', state: 'completed', rawState: 'completed',
+          objectiveOutcome, completionDisposition: 'gated_continuation', summary: recordedSummary }) } as Response;
+      }
+      return response;
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText(recordedSummary);
+    const header = document.querySelector('.toolbar-identity-row') as HTMLElement;
+    expect(within(header).getByText('Handed off').className).toContain('status-neutral');
+    expect(within(header).queryByText('Idle')).toBeNull();
+  });
+
   it('keeps a zero step count badge instead of falling back to run count', async () => {
     window.history.pushState({}, 'Zero Step Badge Test', '/workflows/test-123/execution?source=temporal');
     mockWorkflowDetailSubrouteFetch({
