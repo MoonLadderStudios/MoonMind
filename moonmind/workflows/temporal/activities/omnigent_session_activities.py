@@ -138,7 +138,9 @@ async def _write_json_artifact(
         return str(completed.artifact_id)
 
 
-async def _read_json_artifact(ref: str) -> dict[str, Any]:
+async def _read_json_artifact(
+    ref: str, *, admitted_principal: str | None = None
+) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
     from moonmind.workflows.temporal.artifacts import (
         TemporalArtifactRepository,
@@ -150,6 +152,7 @@ async def _read_json_artifact(ref: str) -> dict[str, Any]:
         _artifact, body = await service.read(
             artifact_id=_artifact_id(ref),
             principal=_ARTIFACT_PRINCIPAL,
+            admitted_principal=admitted_principal,
             allow_restricted_raw=True,
         )
     value = json.loads(body)
@@ -288,7 +291,11 @@ async def omnigent_evaluate_session_admission_activity(
     request = OmnigentSessionAdmissionRequest.model_validate(payload)
     plan = None
     if request.omnigent_execution_plan is not None:
-        plan = await _load_verified_execution_plan(request.omnigent_execution_plan)
+        plan = await _load_verified_execution_plan(
+            request.omnigent_execution_plan,
+            workflow_id=request.workflow_id,
+            step_execution_id=request.step_execution_id,
+        )
         selected_profiles = {
             binding.providerProfileRef
             for binding in model_bindings_of(
@@ -1164,7 +1171,13 @@ async def _migrate_stranded_pre_upgrade_plan(
     return migrated
 
 
-async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
+async def _load_verified_execution_plan(
+    binding: OmnigentExecutionPlanBinding,
+    *,
+    workflow_id: str | None = None,
+    step_execution_id: str | None = None,
+    admitted_principal: str | None = None,
+):
     """Load the DB and artifact copies and verify one exact plan envelope.
 
     A pre-upgrade strict plan whose historical certificate is expired or
@@ -1183,10 +1196,56 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     persisted = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
     if persisted is None:
         raise ValueError("persisted Omnigent execution plan is unavailable")
+    persisted = verify_execution_plan_envelope(persisted)
     expected_digest = "sha256:" + persisted.planRef.rsplit(":", 1)[-1]
     if expected_digest != binding.plan_digest:
         raise ValueError("persisted Omnigent execution plan digest mismatch")
-    artifact_payload = await _read_json_artifact(binding.plan_artifact_ref)
+    authority = persisted.payload.authority
+    if authority is not None and (
+        authority.taskInputSnapshotRef != binding.task_input_snapshot_ref
+        or authority.taskInputSnapshotDigest != binding.task_input_snapshot_digest
+    ):
+        raise ValueError(
+            "execution plan binding conflicts with task-input snapshot authority"
+        )
+    if persisted.payload.resolvedTools.get("repositoryAccess") and workflow_id:
+        # The normal Step identity carries the actual parent Temporal run.
+        # Legacy unstructured identifiers do not synthesize an execution link.
+        prefix = f"{workflow_id}:"
+        step_id = str(step_execution_id or "")
+        if step_id.startswith(prefix):
+            execution_identity, separator, ordinal = step_id[len(prefix) :].rpartition(
+                ":execution:"
+            )
+            run_id, logical_separator, logical_step_id = execution_identity.partition(
+                ":"
+            )
+            if (
+                separator
+                and ordinal.isdigit()
+                and int(ordinal) > 0
+                and logical_separator
+                and logical_step_id
+            ):
+                from moonmind.omnigent.bridge_artifacts import (
+                    link_verified_execution_plan_inputs,
+                )
+
+                await link_verified_execution_plan_inputs(
+                    session_factory=async_session_maker,
+                    plan=persisted,
+                    binding=binding,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                )
+                admitted_principal = f"workflow:{workflow_id}"
+
+    async def read_plan_json(ref):
+        if admitted_principal is None:
+            return await _read_json_artifact(ref)
+        return await _read_json_artifact(ref, admitted_principal=admitted_principal)
+
+    artifact_payload = await read_plan_json(binding.plan_artifact_ref)
     artifact_plan = verify_execution_plan_envelope(artifact_payload)
     if artifact_plan != persisted:
         raise ValueError("execution plan artifact conflicts with durable plan authority")
@@ -1211,9 +1270,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     profile_ref = str(persisted.payload.agentProfileSnapshotRef or "").strip()
     if not profile_ref.startswith("artifact:"):
         raise ValueError("execution plan lacks Agent Profile artifact authority")
-    profile_snapshot = await _read_json_artifact(
-        profile_ref.removeprefix("artifact:")
-    )
+    profile_snapshot = await read_plan_json(profile_ref.removeprefix("artifact:"))
     profile_document = profile_snapshot.get("document")
     if not isinstance(profile_document, Mapping):
         raise ValueError("Agent Profile snapshot artifact is invalid")
@@ -1286,9 +1343,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         policy_ref = str(persisted.payload.policySnapshotRef or "").strip()
         if not policy_ref.startswith("artifact:"):
             raise ValueError("execution plan lacks launch-policy artifact authority")
-        policy_snapshot = await _read_json_artifact(
-            policy_ref.removeprefix("artifact:")
-        )
+        policy_snapshot = await read_plan_json(policy_ref.removeprefix("artifact:"))
         if _digest_bytes(_json_bytes(policy_snapshot)) != (
             persisted.payload.policySnapshotDigest
         ):
@@ -1313,9 +1368,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         ).strip()
         if not effective_ref.startswith("artifact:"):
             raise ValueError("execution plan lacks effective-launch artifact authority")
-        effective_launch = await _read_json_artifact(
-            effective_ref.removeprefix("artifact:")
-        )
+        effective_launch = await read_plan_json(effective_ref.removeprefix("artifact:"))
         if _digest_bytes(_json_bytes(effective_launch)) != (
             persisted.payload.effectiveLaunchSnapshotDigest
         ):
@@ -1354,7 +1407,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     skill_ref = str(planned_skills.get("resolvedSkillSetRef") or "").strip()
     if not skill_ref.startswith("artifact:"):
         raise ValueError("execution plan lacks resolved Skill artifact authority")
-    skill_manifest = await _read_json_artifact(skill_ref.removeprefix("artifact:"))
+    skill_manifest = await read_plan_json(skill_ref.removeprefix("artifact:"))
     skill_manifest_digest = "sha256:" + hashlib.sha256(
         json.dumps(
             skill_manifest,

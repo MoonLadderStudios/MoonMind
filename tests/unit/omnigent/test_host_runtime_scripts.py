@@ -273,15 +273,29 @@ def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_
     module.exercise_projection(tmp_path)
 
 
-def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(tmp_path):
+@pytest.mark.parametrize("github_host", ["github.com", "github.enterprise.test"])
+def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(
+    tmp_path, monkeypatch, github_host
+):
     import json
     import os
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", github_host)
 
     script, environment = OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[],
         skill_attachment={"targetPath": "/opt/moonmind-skills"},
         step_execution_id="workflow:run:node-1:execution:1",
-        github_credential_attachment={"targetPath": "/run/mm-credentials/github"},
+        github_credential_attachment={
+            "targetPath": "/run/mm-credentials/github",
+            "githubHost": github_host,
+        },
+    )
+    assert environment["GH_HOST"] == github_host
+    assert environment["GIT_CONFIG_KEY_0"] == (
+        f"credential.https://{github_host}.helper"
     )
     home = tmp_path / "home"
     credentials = tmp_path / "credentials"
@@ -291,14 +305,14 @@ def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(tmp_p
     for directory in (home, credentials / "github", tools / "bin", binaries, skills):
         directory.mkdir(parents=True)
     (credentials / "github" / "hosts.yml").write_text(
-        "github.com:\n  oauth_token: selected-canary\n"
+        f"{github_host}:\n  oauth_token: selected-canary\n"
     )
     gh = tools / "bin" / "gh"
     gh.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os\n"
         "from pathlib import Path\n"
-        "print(json.dumps({'ambient': [name for name in "
+        "print(json.dumps({'host': os.environ['GH_HOST'], 'ambient': [name for name in "
         "('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN') "
         "if os.getenv(name)], 'config': Path(os.environ['GH_CONFIG_DIR'], 'hosts.yml').read_text()}))\n"
     )
@@ -306,6 +320,7 @@ def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(tmp_p
     omnigent = binaries / "omnigent"
     omnigent.write_text(
         f"#!/bin/sh\nGH_TOKEN=ambient-again; export GH_TOKEN; "
+        "GH_HOST=ambient-host; export GH_HOST; "
         f'exec "{home}/.omnigent/moonmind/bin/gh" "$@"\n'
     )
     omnigent.chmod(0o755)
@@ -332,4 +347,5 @@ def test_projected_github_cli_isolates_selected_config_from_ambient_tokens(tmp_p
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
     assert observed["ambient"] == []
+    assert observed["host"] == github_host
     assert "selected-canary" in observed["config"]

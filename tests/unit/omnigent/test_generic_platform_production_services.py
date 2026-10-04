@@ -1132,7 +1132,10 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     async def acquire(**kwargs):
         assert kwargs["role"] == "collaboration" and kwargs["operation"] == "read"
         assert kwargs["execution_owner"] == "lease-owner-1"
-        return SimpleNamespace(credential=EphemeralCredential(secret.encode()))
+        return SimpleNamespace(
+            credential=EphemeralCredential(secret.encode()),
+            binding=SimpleNamespace(endpoint="https://github.com"),
+        )
 
     class Backend:
         def __init__(self) -> None:
@@ -2042,11 +2045,21 @@ async def test_writer_ref_rejects_unqualified_same_repo_fallback(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "github_failure", [None, "denied", "diagnostics_unavailable", "rate_limited"]
+    "github_failure,github_host",
+    [
+        (None, "github.com"),
+        ("denied", "github.com"),
+        ("diagnostics_unavailable", "github.com"),
+        ("rate_limited", "github.com"),
+        (None, "github.enterprise.test"),
+    ],
 )
 async def test_sha_drift_replay_advances_digest_through_full_handoff(
-    tmp_path, monkeypatch, github_failure
+    tmp_path, monkeypatch, github_failure, github_host
 ) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", github_host)
     """Minimized replay of an escaped stale-digest dispatch failure.
 
     Advances the deployed digest in real resolved state, then runs the
@@ -2358,6 +2371,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
                     "",
                 )
             if "credential.helper" in rest:
+                assert rest[-1] == f"https://{github_host}"
                 return 0, "!/home/app/.omnigent/moonmind/bin/gh auth git-credential", ""
             if rest == ["/opt/venv/bin/omnigent", "--version"]:
                 return 0, "omnigent 0.13.1 (built 2026-09-14T00:00:00Z)\n", ""
@@ -2436,6 +2450,7 @@ async def test_sha_drift_replay_advances_digest_through_full_handoff(
             "githubCredentialAttachment": {
                 "sourceRef": "github-vol",
                 "targetPath": "/run/mm-credentials/github",
+                "githubHost": github_host,
             },
             "stateAttachment": {
                 "kind": "volume",

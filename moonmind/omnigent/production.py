@@ -46,7 +46,10 @@ from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
     OmnigentPlannedHostResolver,
 )
-from moonmind.omnigent.harness_platform.stores import DbExecutionPlanUsageStore
+from moonmind.omnigent.harness_platform.stores import (
+    DbExecutionPlanStore,
+    DbExecutionPlanUsageStore,
+)
 from moonmind.omnigent.host_leases import DbOmnigentHostLeaseRepository
 from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
 from moonmind.omnigent.host_services import (
@@ -311,7 +314,10 @@ def build_generic_omnigent_execution_services(
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),
         workspace_publisher=OmnigentWorkspacePublicationService(
-            workspace_root, artifact_gateway=artifacts
+            workspace_root,
+            artifact_gateway=artifacts,
+            repository_credential_service=repository_credentials,
+            execution_plan_store=DbExecutionPlanStore(session_factory),
         ),
         artifact_gateway=artifacts,
         turn_command_service=CanonicalTurnCommandService(

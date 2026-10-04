@@ -26,6 +26,7 @@ from api_service.db.models import (
     RecurringWorkflowRunOutcome,
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
+    TemporalArtifact,
     TemporalExecutionRecord,
     User,
 )
@@ -855,10 +856,28 @@ class RecurringWorkflowsService:
         # Single-user (#4351): execution-plan refresh is bound to the
         # schedule's frozen snapshot, not a present-day user row.
         actor = None
-        principal = "system"
         if initial_parameters.get("agentProfileSnapshot") != snapshot:
             raise RecurringWorkflowValidationError(
                 "scheduled Agent Profile snapshot identities conflict"
+            )
+        # The original task input survives every plan refresh. Its creator
+        # records the admitted principal even when the deployment refresh is
+        # run by a service or a legacy schedule owner no longer exists.
+        task_artifact = await self._session.get(
+            TemporalArtifact,
+            current_binding.task_input_snapshot_ref.removeprefix(
+                "artifact://"
+            ).removeprefix("artifact:"),
+        )
+        principal = str(
+            getattr(task_artifact, "created_by_principal", None) or ""
+        ).strip()
+        if not principal or getattr(
+            task_artifact, "sha256", None
+        ) != current_binding.task_input_snapshot_digest.removeprefix("sha256:"):
+            raise RecurringWorkflowValidationError(
+                "scheduled original task-input principal authority is unavailable "
+                "or does not match the frozen snapshot"
             )
         initial_parameters = await refresh_schedule_deployment_snapshot(
             self._session,

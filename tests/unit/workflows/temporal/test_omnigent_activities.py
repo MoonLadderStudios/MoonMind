@@ -69,12 +69,14 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
     provider_profile = SimpleNamespace(profile_id="opencode-zen-free")
     observed: dict[str, Any] = {}
 
-    async def fake_load_verified(binding):
+    async def fake_load_verified(binding, *, admitted_principal=None):
         assert binding == OmnigentExecutionPlanBinding.model_validate(parent_binding)
+        assert admitted_principal == "user-1"
         return parent_plan
 
-    async def fake_read_json(ref):
+    async def fake_read_json(ref, *, admitted_principal=None):
         assert ref == "art-agent-profile"
+        assert admitted_principal == "user-1"
         return {"document": {"harness": {"id": "opencode-native"}}}
 
     async def fake_persist_json_artifact(**kwargs):

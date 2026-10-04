@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
@@ -18,6 +19,11 @@ from moonmind.omnigent.git_identity import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+)
+from moonmind.omnigent.host_services.github_credentials import (
+    github_clone_source_from_identity,
+    github_host_from_endpoint,
+    normalize_github_repository_remote,
 )
 from moonmind.omnigent.workspace_artifacts import (
     WorkspaceArtifactProjectionError,
@@ -203,21 +209,11 @@ def resolve_daemon_attachment_source(
     }
 
 
-def normalize_github_clone_source(repo_ref: str) -> str | None:
+def normalize_github_clone_source(
+    repo_ref: str, *, endpoint: str = "https://github.com"
+) -> str | None:
     """Return an HTTPS clone URL for owner/repo or GitHub remote forms."""
-
-    cleaned = str(repo_ref or "").strip().rstrip("/")
-    if not cleaned:
-        return None
-    owner_repo = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", cleaned)
-    if owner_repo:
-        return f"https://github.com/{owner_repo.group(1)}/{owner_repo.group(2)}.git"
-    lowered = cleaned.lower()
-    if lowered.startswith("https://github.com/") and cleaned.endswith(".git"):
-        return cleaned
-    if lowered.startswith("https://github.com/"):
-        return f"{cleaned}.git"
-    return None
+    return normalize_github_repository_remote(repo_ref, endpoint=endpoint)
 
 
 class OmnigentWorkspaceMaterializer:
@@ -692,9 +688,8 @@ class OmnigentWorkspaceMaterializer:
             candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
             return
 
-        clone_source = normalize_github_clone_source(source.repository_ref or "")
         branch = source.repository_branch or ""
-        if clone_source is None or not branch or len(branch) > 400:
+        if not source.repository_ref or not branch or len(branch) > 400:
             raise HarnessPlatformError(
                 "sandbox workspace preparation needs a GitHub repository and safe branch ref",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
@@ -705,6 +700,14 @@ class OmnigentWorkspaceMaterializer:
                 "sandbox workspace clone requires admitted repository authority",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        identity = await self._repository_credentials.admitted_repository_identity(
+            plan=plan,
+            request=request,
+            role="source_read",
+            operation="read",
+            repository=source.repository_ref,
+        )
+        clone_source = github_clone_source_from_identity(identity)
         acquired = await self._repository_credentials.acquire_repository_use(
             plan=plan,
             request=request,
@@ -722,6 +725,7 @@ class OmnigentWorkspaceMaterializer:
                 token=acquired.credential.use_now(bytes) if acquired else b"",
                 runtime_uid=runtime_uid,
                 runtime_gid=runtime_gid,
+                endpoint=identity.endpoint,
             )
         finally:
             if acquired is not None:
@@ -736,6 +740,7 @@ class OmnigentWorkspaceMaterializer:
         token: bytes,
         runtime_uid: int,
         runtime_gid: int,
+        endpoint: str = "https://github.com",
     ) -> None:
         """Clone into the agent-workspaces volume through the Docker daemon.
 
@@ -755,6 +760,7 @@ class OmnigentWorkspaceMaterializer:
             git_user_name=git_user_name,
             git_user_email=git_user_email,
             authenticated=bool(token),
+            endpoint=endpoint,
         )
         # The one-shot container reads the token on stdin and exposes it to Git
         # through an ephemeral credential helper. The clean source URL is the
@@ -854,6 +860,7 @@ def build_daemon_git_clone_argv(
     git_user_name: str,
     git_user_email: str,
     authenticated: bool = True,
+    endpoint: str = "https://github.com",
 ) -> list[str]:
     """Build a stdin-authenticated Docker argv for an in-volume git clone.
 
@@ -868,11 +875,12 @@ def build_daemon_git_clone_argv(
             "agent workspace volume name is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    if normalize_github_clone_source(source) != source:
+    if normalize_github_clone_source(source, endpoint=endpoint) != source:
         raise HarnessPlatformError(
             "sandbox workspace clone source is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
+    host = github_host_from_endpoint(endpoint)
     identity_name = str(git_user_name or "").strip()
     identity_email = str(git_user_email or "").strip()
     if not identity_name or not identity_email:
@@ -898,14 +906,15 @@ def build_daemon_git_clone_argv(
             "protocol=; host=; path=; while IFS= read -r field; do "
             'case "$field" in protocol=*) protocol=${field#*=};; '
             "host=*) host=${field#*=};; path=*) path=${field#*=};; esac; done; "
-            'test "$protocol" = https && test "$host" = github.com && '
+            'test "$protocol" = https && test "$host" = "$MM_GIT_HOST" && '
             'test "$path" = "$MM_GIT_REPOSITORY_PATH" || exit 0; '
             'printf "username=x-access-token\\npassword="; '
             'cat "$MM_GIT_TOKEN_FILE"; printf "\\n"; }; f\'; '
         )
         credential_environment = (
             'MM_GIT_TOKEN_FILE="$token_file" '
-            'MM_GIT_REPOSITORY_PATH="${2#https://github.com/}" '
+            f"MM_GIT_HOST={shlex.quote(host)} "
+            'MM_GIT_REPOSITORY_PATH="${2#https://*/}" '
         )
         helper_option = '-c "credential.helper=$credential_helper" '
     script += (

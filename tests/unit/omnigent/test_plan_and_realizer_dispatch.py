@@ -741,6 +741,138 @@ def test_codex_generic_plan_when_qualified(monkeypatch):
     assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
 
 
+def _codex_repository_plan_inputs():
+    inputs = _codex_plan_inputs()
+    inputs["credential_binding_set"] = create_binding_set(
+        bindingSetId="codex-repository",
+        version=1,
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+        bindings={
+            "primary-model": {
+                "providerProfileRef": "p1",
+                "materializerRef": "codex-oauth-home@1",
+            },
+            "source": {
+                "authorityKind": "repository_connection",
+                "connectionRef": "selected-repository",
+                "repositoryAccessSnapshotRef": "repository-access-snapshot:sha256:"
+                + "1" * 64,
+                "materializerRef": "repository-broker@1",
+                "repositoryRole": "source_read",
+            },
+        },
+    )
+    inputs["repository_slot_requirements"] = {
+        "source": {
+            "allowedRoles": ("source_read",),
+            "allowedMaterializers": ("repository-broker@1",),
+        }
+    }
+    inputs["workspace_source_kind"] = "repository"
+    return inputs
+
+
+def test_repository_codex_default_rejects_before_persisting_unrunnable_plan():
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_provider_rollout import (
+        default_runtime_provider_rollout_policy,
+    )
+
+    async def compile_candidate():
+        store = InMemoryExecutionPlanStore()
+        inputs = _codex_repository_plan_inputs()
+        inputs["rollout_policy"] = default_runtime_provider_rollout_policy(env={})
+        with pytest.raises(HarnessPlatformError, match="realizer.*repository"):
+            await store.load_or_compile(
+                compile_fn=compile_execution_plan,
+                compile_kwargs=inputs,
+            )
+        assert store._plans == {}
+
+    asyncio.run(compile_candidate())
+
+
+def test_repository_codex_default_selects_admitted_capable_realizer():
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RolloutState,
+        default_runtime_provider_rollout_policy,
+    )
+
+    policy = default_runtime_provider_rollout_policy(env={_GATE_ENV: "true"})
+    # This deployment retains the model-only default but also admits generic
+    # Codex for new authored work. Repository work needs that capable path.
+    policy = policy.model_copy(
+        update={
+            "rules": tuple(
+                (
+                    rule.model_copy(
+                        update={
+                            "state": (
+                                RolloutState.explicit_only
+                                if rule.target_id == "codex.generic-omnigent"
+                                else RolloutState.new_work_default
+                            )
+                        }
+                    )
+                    if rule.harness_id == "codex-native"
+                    else rule
+                )
+                for rule in policy.rules
+            )
+        }
+    )
+    inputs = _codex_repository_plan_inputs()
+    inputs["rollout_policy"] = policy
+    plan = compile_execution_plan(**inputs)
+    assert plan.payload.executionRealizerRef == GenericOmnigentHostRealizer.ref
+    assert plan.payload.runtimeProviderRollout.targetId == "codex.generic-omnigent"
+    assert (
+        plan.payload.credentialBindings["source"].connectionRef == "selected-repository"
+    )
+    assert plan.payload.credentialBindings["primary-model"].providerProfileRef == "p1"
+
+
+def test_repository_codex_explicit_model_only_realizer_cannot_gain_authority():
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_provider_rollout import (
+        default_runtime_provider_rollout_policy,
+    )
+
+    inputs = _codex_repository_plan_inputs()
+    inputs.update(
+        rollout_policy=default_runtime_provider_rollout_policy(env={_GATE_ENV: "true"}),
+        execution_realizer_ref=CodexProfileBoundRealizer.ref,
+    )
+    with pytest.raises(HarnessPlatformError, match="authority kinds"):
+        compile_execution_plan(**inputs)
+
+
+def test_unknown_realizer_cannot_declare_admission_authority():
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.realizers.registry import realizer_authority_kinds
+
+    with pytest.raises(HarnessPlatformError, match="execution realizer.*unavailable"):
+        realizer_authority_kinds("unregistered@1")
+
+
+@pytest.mark.parametrize(
+    "control", ["stop_new_generic_codex_admission", "restore_legacy_or_direct_default"]
+)
+def test_repository_codex_default_preserves_deployment_rollback(control):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_provider_rollout import (
+        RUNTIME_PROVIDER_ROLLBACK_ENV,
+        default_runtime_provider_rollout_policy,
+    )
+
+    inputs = _codex_repository_plan_inputs()
+    inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
+        env={_GATE_ENV: "true", RUNTIME_PROVIDER_ROLLBACK_ENV: control}
+    )
+    with pytest.raises(HarnessPlatformError, match="realizer"):
+        compile_execution_plan(**inputs)
+
+
 def test_generic_codex_gate_env_is_explicit_only(monkeypatch):
     from moonmind.omnigent.settings import generic_codex_qualified
 

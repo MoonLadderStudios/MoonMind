@@ -20,6 +20,47 @@ from moonmind.omnigent.mounted_tool_preflight import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "https://github.enterprise.test/owner/repo.git",
+        "https://github.enterprise.test:443/owner/repo.git",
+    ],
+)
+async def test_enterprise_preflight_uses_only_the_selected_trusted_host(
+    monkeypatch, repository
+):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.github, "github_trusted_api_hosts", "github.enterprise.test"
+    )
+    calls = []
+
+    async def runner(command):
+        calls.append(command)
+        if command.startswith("gh repo view"):
+            return (
+                0,
+                json.dumps({"nameWithOwner": "owner/repo", "viewerPermission": "READ"}),
+                "",
+            )
+        return 0, "", ""
+
+    result = await preflight_github_access(
+        repository=repository,
+        github_host="github.enterprise.test",
+        boundaries={"host": runner, "runner": runner},
+    )
+    assert result["status"] == "ready"
+    assert sum(command.startswith("gh repo view owner/repo ") for command in calls) == 2
+    assert (
+        calls.count("gh auth token --hostname github.enterprise.test >/dev/null") == 2
+    )
+    assert not any("github.com" in command for command in calls)
+
+
+@pytest.mark.asyncio
 async def test_repository_access_does_not_require_unrelated_account_probe():
     calls = []
 

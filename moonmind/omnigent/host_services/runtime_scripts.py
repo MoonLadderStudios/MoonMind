@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
 from typing import Any
+
+from moonmind.omnigent.host_services.github_credentials import github_host_from_endpoint
 
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
@@ -69,6 +72,7 @@ _GITHUB_RUNTIME_ENV = {
     "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
     "GIT_CONFIG_VALUE_0": f"!{_RUNTIME_BIN_DIR}/gh auth git-credential",
     "GH_CONFIG_DIR": "/home/app/.config/gh",
+    "GH_HOST": "github.com",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
@@ -182,13 +186,24 @@ class OmnigentRuntimeScriptService:
         if opencode_runtime:
             environment["MOONMIND_OPENCODE_RUNTIME"] = "1"
             environment.update(_OPENCODE_RUNTIME_ENV)
+        github_host = "github.com"
         if github_credential_attachment is not None:
             if (
                 str(github_credential_attachment.get("targetPath") or "")
                 != "/run/mm-credentials/github"
             ):
                 raise ValueError("GitHub credential attachment target is unsupported")
-            environment.update(_GITHUB_RUNTIME_ENV)
+            github_host = github_host_from_endpoint(
+                "https://"
+                + str(github_credential_attachment.get("githubHost") or "github.com")
+            )
+            environment.update(
+                {
+                    **_GITHUB_RUNTIME_ENV,
+                    "GH_HOST": github_host,
+                    "GIT_CONFIG_KEY_0": f"credential.https://{github_host}.helper",
+                }
+            )
         passthrough_names = {
             "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
@@ -228,11 +243,16 @@ class OmnigentRuntimeScriptService:
             + "'if [ -r /home/app/.config/gh/hosts.yml ]; then' "
             + f"'  {_GITHUB_TOKEN_ENV_UNSET}' "
             "'  export GH_CONFIG_DIR=/home/app/.config/gh' "
+            + shlex.quote(f"  export GH_HOST={shlex.quote(github_host)}")
+            + " "
             "'  export GH_PROMPT_DISABLED=1' "
             "'  export GH_NO_UPDATE_NOTIFIER=1' "
             "'  export GH_NO_EXTENSION_UPDATE_NOTIFIER=1' "
             "'  export GIT_CONFIG_COUNT=1' "
-            "'  export GIT_CONFIG_KEY_0=credential.https://github.com.helper' "
+            + shlex.quote(
+                f"  export GIT_CONFIG_KEY_0={shlex.quote(f'credential.https://{github_host}.helper')}"
+            )
+            + " "
             f"'  export GIT_CONFIG_VALUE_0=\"!{_RUNTIME_BIN_DIR}/gh auth git-credential\"' "
             f"'fi' > {context_profile}; "
             f"chmod 0600 {runtime_context_dir}/*; "
@@ -325,6 +345,8 @@ class OmnigentRuntimeScriptService:
             "printf '%s\\n' '#!/bin/sh' "
             f"'{_GITHUB_TOKEN_ENV_UNSET}' "
             "'export GH_CONFIG_DIR=/home/app/.config/gh' "
+            + shlex.quote(f"export GH_HOST={shlex.quote(github_host)}")
+            + " "
             "'exec /opt/moonmind-tools/bin/gh \"$@\"' "
             "> " + _RUNTIME_BIN_DIR + "/gh; "
             "chmod 0700 " + _RUNTIME_BIN_DIR + "/gh; fi; "
