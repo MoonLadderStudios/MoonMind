@@ -51,7 +51,7 @@ async def journals(tmp_path, monkeypatch):
         target_metadata={},
     )
 
-    async def publish(count, *, complete=True):
+    async def publish(count, *, complete=True, embedded=False):
         refs = []
         async with sessions() as session:
             artifacts = service(session)
@@ -65,7 +65,11 @@ async def journals(tmp_path, monkeypatch):
                         "link_type": f"runtime.omnigent.sse.{kind}",
                     },
                     metadata_json={
-                        "name": f"runtime.omnigent.sse.{kind}.{count:08d}.jsonl",
+                        "name": (
+                            f"runtime.omnigent.embedded.sse.{kind}/{count}.jsonl"
+                            if embedded
+                            else f"runtime.omnigent.sse.{kind}.{count:08d}.jsonl"
+                        ),
                         "correlation_id": "journal-test",
                     },
                 )
@@ -86,10 +90,13 @@ async def journals(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_committed_journal_replacement_reclaims_superseded_prefix(journals):
+@pytest.mark.parametrize("embedded", [False, True])
+async def test_committed_journal_replacement_reclaims_superseded_prefix(
+    journals, embedded
+):
     store, session_id, sessions, service, blobs, publish = journals
-    previous = await publish(1)
-    replacement = await publish(2)
+    previous = await publish(1, embedded=embedded)
+    replacement = await publish(2, embedded=embedded)
     await store.attach_active_journal_refs(
         session_id, raw_ref=previous[0], normalized_ref=previous[1]
     )

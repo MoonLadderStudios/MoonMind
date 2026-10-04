@@ -47,7 +47,7 @@ BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
 
 logger = logging.getLogger(__name__)
 _ACTIVE_JOURNAL_NAME = re.compile(
-    r"runtime\.omnigent\.sse\.(raw|normalized)\.(\d+)\.jsonl"
+    r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./](\d+)\.jsonl"
 )
 
 
