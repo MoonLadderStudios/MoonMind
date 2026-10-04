@@ -72,13 +72,18 @@ def _progress(revision: int, state: str, reason: str, wait: str = "none") -> dic
     ).canonical_dict()
 
 
-def _next_request_lease(parent: MoonMindUserWorkflow) -> dict:
-    request = parent._build_agent_execution_request(
+def _build_request(parent: MoonMindUserWorkflow):
+    return parent._build_agent_execution_request(
         node_inputs={"runtime": {"mode": "omnigent"}},
         node_id="step-2",
         tool_name="auto",
         workflow_parameters={},
     )
+
+
+def _next_request_lease(parent: MoonMindUserWorkflow) -> dict:
+    """The lease an AgentRun dispatched now would receive."""
+    request = parent._with_issue_claim_work_started(_build_request(parent))
     return request.parameters["issueClaimLease"]
 
 
@@ -93,6 +98,17 @@ def test_later_agent_run_learns_the_claim_already_held_capacity(monkeypatch):
 
     assert lease["workStarted"] is True
     assert {key: lease[key] for key in LEASE} == LEASE
+
+
+def test_request_cached_before_the_claim_started_is_stamped_at_dispatch(monkeypatch):
+    # Publish repair and blocker rechecks re-dispatch requests built earlier.
+    parent = _parent(monkeypatch)
+    cached = _build_request(parent)
+    parent.agent_run_progress(_progress(1, "running", "running"))
+
+    dispatched = parent._with_issue_claim_work_started(cached)
+
+    assert dispatched.parameters["issueClaimLease"]["workStarted"] is True
 
 
 def test_claim_still_waiting_for_its_first_slot_keeps_the_fast_backoff(monkeypatch):

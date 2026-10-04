@@ -10655,7 +10655,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         try:
             child_result = await workflow.execute_child_workflow(
                 "MoonMind.AgentRun",
-                repair_request,
+                self._with_issue_claim_work_started(repair_request),
                 id=child_workflow_id,
                 task_queue=self._workflow_child_task_queue(),
             )
@@ -13524,7 +13524,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 else:
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.AgentRun",
-                                        request,
+                                        self._with_issue_claim_work_started(request),
                                         id=child_workflow_id,
                                         task_queue=self._workflow_child_task_queue(),
                                     )
@@ -16407,7 +16407,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             try:
                 child_result = await workflow.execute_child_workflow(
                     "MoonMind.AgentRun",
-                    request,
+                    self._with_issue_claim_work_started(request),
                     id=child_workflow_id,
                     task_queue=self._workflow_child_task_queue(),
                 )
@@ -16700,7 +16700,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         self._active_agent_id = getattr(agent_request, "agent_id", None)
                         child_result = await workflow.execute_child_workflow(
                             "MoonMind.AgentRun",
-                            agent_request,
+                            self._with_issue_claim_work_started(agent_request),
                             id=child_workflow_id,
                             task_queue=self._workflow_child_task_queue(),
                         )
@@ -21816,11 +21816,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         lease = (self._trusted_issue_context or {}).get("issueClaimLease")
         if isinstance(lease, Mapping):
             parameters["issueClaimLease"] = dict(lease)
-            if (
-                self._issue_claim_work_started_attempt
-                and lease.get("attemptId") == self._issue_claim_work_started_attempt
-            ):
-                parameters["issueClaimLease"]["workStarted"] = True
         if repository_operation:
             if repository_operation not in {"read", "write"}:
                 raise ValueError(
@@ -25758,6 +25753,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         lease = (self._trusted_issue_context or {}).get("issueClaimLease")
         if isinstance(lease, Mapping) and lease.get("attemptId"):
             self._issue_claim_work_started_attempt = str(lease["attemptId"])
+
+    def _with_issue_claim_work_started(self, request: Any) -> Any:
+        """Stamp a started issue claim onto an AgentRun request at dispatch.
+
+        Applied at every AgentRun dispatch rather than at request construction,
+        because retries, publish repair, and blocker rechecks can dispatch a
+        request built before the claim's first child passed capacity admission.
+        """
+
+        parameters = getattr(request, "parameters", None)
+        if not isinstance(parameters, Mapping):
+            return request
+        lease = parameters.get("issueClaimLease")
+        if (
+            isinstance(lease, Mapping)
+            and self._issue_claim_work_started_attempt
+            and lease.get("attemptId") == self._issue_claim_work_started_attempt
+            and lease.get("workStarted") is not True
+        ):
+            request.parameters = {
+                **parameters,
+                "issueClaimLease": {**lease, "workStarted": True},
+            }
+        return request
 
     @workflow.signal(name="agent_run_progress")
     def agent_run_progress(self, payload: dict) -> None:
