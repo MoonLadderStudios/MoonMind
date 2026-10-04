@@ -181,6 +181,42 @@ async def test_explicit_and_search_share_normalized_stage_behavior(tmp_path):
         assert final["tool"]["inputs"]["requireVerification"] is True
 
 
+@pytest.mark.parametrize(
+    "constraints", ["", "  Preserve prior work.\nKeep target.  ", "false"]
+)
+@pytest.mark.parametrize(
+    "slug,issue_inputs",
+    [
+        (SEARCH, {}),
+        (EXPLICIT, {"github_issue": {"repository": REPOSITORY, "number": 4010}}),
+        (
+            "github-issue-orchestrate",
+            {"github_issue": {"repository": REPOSITORY, "number": 4010}},
+        ),
+        ("jira-implement", {"jira_issue_key": "MM-657"}),
+        ("jira-orchestrate", {"jira_issue_key": "MM-657"}),
+    ],
+)
+async def test_original_constraints_reach_trusted_brief_loader(
+    tmp_path, slug, issue_inputs, constraints
+):
+    async with catalog_service(tmp_path) as service:
+        expanded = await service.expand_template(
+            slug=slug,
+            scope="global",
+            scope_ref=None,
+            inputs={**issue_inputs, "constraints": constraints},
+            context={"repository": REPOSITORY},
+        )
+    loader = next(
+        step["tool"]
+        for step in expanded["steps"]
+        if (step.get("tool") or {}).get("id")
+        in {"github.load_issue_preset_brief", "jira.load_preset_brief"}
+    )
+    assert loader["inputs"]["constraints"] == constraints
+
+
 async def test_shared_stage_inputs_allow_runtime_bound_identity(tmp_path):
     async with catalog_service(tmp_path) as service:
         for slug, inputs in (
