@@ -264,18 +264,22 @@ _RESTORE_STREAM_CHUNK_BYTES = 1024 * 1024
 
 # Run as ``python3 -c <probe> <codex home>`` inside a network-less, read-only
 # host-image container. It prints exactly one verdict word and never token
-# material: ``expired``/``current`` from the stored ChatGPT access token's
-# ``exp`` claim, or ``unknown`` for anything else (API-key auth, unreadable or
-# unexpected layouts).
-CODEX_ACCESS_TOKEN_EXPIRY_PROBE = """\
+# material. ``ended`` means OpenAI minted the stored ChatGPT access token with
+# no lifetime (``exp <= iat``): the login session itself is over and no
+# refresh can extend it. ``active`` covers every other readable token,
+# including one that merely aged out and may still refresh. ``unknown`` covers
+# API-key auth and unreadable or unexpected layouts.
+CODEX_LOGIN_SESSION_PROBE = """\
 import base64, json, sys, time
 try:
     with open(sys.argv[1] + "/auth.json", encoding="utf-8") as handle:
         token = json.load(handle)["tokens"]["access_token"]
     claims = token.split(".")[1]
     claims += "=" * (-len(claims) % 4)
-    expires_at = float(json.loads(base64.urlsafe_b64decode(claims))["exp"])
-    print("expired" if expires_at <= time.time() else "current")
+    claims = json.loads(base64.urlsafe_b64decode(claims))
+    expires_at = float(claims["exp"])
+    ended = expires_at <= float(claims["iat"]) and expires_at <= time.time()
+    print("ended" if ended else "active")
 except Exception:
     print("unknown")
 """
@@ -607,21 +611,21 @@ class OmnigentOAuthHostRuntime:
         }
 
     @classmethod
-    async def probe_credential_expiry(
+    async def probe_login_session(
         cls,
         *,
         binding: OmnigentOAuthHostBinding,
         effective_launch: Mapping[str, Any] | None,
     ) -> str:
-        """Report whether the profile's stored Codex access token is expired.
+        """Report whether the profile's stored Codex login session has ended.
 
         ``codex login status`` only checks that tokens are present, so a
-        ChatGPT login whose refresh token has expired still reports signed in
-        while the TUI parks on its sign-in screen. Call this only after the
-        harness failed to start: Codex refreshes an expired access token on
-        startup and writes the result back to the profile-owned home, so a
-        token still expired afterwards means the refresh failed. Returns
-        ``expired``, ``current``, or ``unknown``; the network-less, read-only
+        ChatGPT login whose session has ended still reports signed in while
+        the TUI parks on its sign-in screen. An access token that merely aged
+        out proves nothing (Codex may refresh it once started), but OpenAI
+        refreshing an ended session mints a token with no lifetime, which is
+        provider-issued proof that only a new sign-in can help. Returns
+        ``ended``, ``active``, or ``unknown``; the network-less, read-only
         container prints only that verdict, never token material.
         """
 
@@ -650,7 +654,7 @@ class OmnigentOAuthHostRuntime:
                     "python3",
                     str(launch["hostImageRef"]),
                     "-c",
-                    CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+                    CODEX_LOGIN_SESSION_PROBE,
                     str(adapter["home"]),
                     check=False,
                 ),
@@ -660,13 +664,13 @@ class OmnigentOAuthHostRuntime:
             # Best effort: an unavailable probe must not replace the original
             # startup failure with a credential verdict it could not prove.
             logger.warning(
-                "Codex credential expiry probe unavailable for profile %s",
+                "Codex login session probe unavailable for profile %s",
                 binding.provider_profile_id,
                 exc_info=True,
             )
             return "unknown"
         verdict = stdout.strip()
-        if returncode != 0 or verdict not in {"expired", "current"}:
+        if returncode != 0 or verdict not in {"ended", "active"}:
             return "unknown"
         return verdict
 

@@ -905,7 +905,7 @@ async def omnigent_execute_activity(
     from moonmind.omnigent.execute import omnigent_activity_heartbeat
 
     async with omnigent_activity_heartbeat():
-        return await _classify_expired_codex_login(
+        return await _classify_ended_codex_login(
             await _omnigent_execute_activity(request)
         )
 
@@ -953,16 +953,17 @@ _HARNESS_NEVER_STARTED_CODES = frozenset(
 )
 
 
-async def _classify_expired_codex_login(result: AgentRunResult) -> AgentRunResult:
-    """Report a never-started Codex turn on an expired login as reauthentication.
+async def _classify_ended_codex_login(result: AgentRunResult) -> AgentRunResult:
+    """Report a never-started Codex turn on an ended login as reauthentication.
 
-    A ChatGPT login whose refresh token has expired still passes ``codex login
+    A ChatGPT login whose session has ended still passes ``codex login
     status``, so Codex parks on its sign-in screen and Omnigent reports only
     that the harness never started. A fresh host cannot fix that; the operator
-    must re-authenticate the Provider Profile. When the profile-owned
-    credential home proves the expiry, the result takes the canonical
-    ``codex_reauth_required``/``reauthenticate`` classification, which the
-    workflow does not retry. Without that proof the original failure stands.
+    must re-authenticate the Provider Profile. Only when the credential home
+    of the exact binding and generation that ran proves the session ended does
+    the result take the canonical ``codex_reauth_required``/``reauthenticate``
+    classification, which the workflow does not retry. Without that proof, or
+    after the binding or generation moved on, the original failure stands.
     """
 
     from moonmind.omnigent.failure_classification import (
@@ -974,11 +975,9 @@ async def _classify_expired_codex_login(result: AgentRunResult) -> AgentRunResul
         return result
     metadata = dict(result.metadata or {})
     capture = metadata.get("omnigentCheckpointCapture")
-    profile_id = (
-        str(capture.get("providerProfileId") or "").strip()
-        if isinstance(capture, Mapping)
-        else ""
-    )
+    if not isinstance(capture, Mapping):
+        return result
+    profile_id = str(capture.get("providerProfileId") or "").strip()
     if not profile_id:
         return result
     from api_service.db.base import async_session_maker
@@ -991,28 +990,33 @@ async def _classify_expired_codex_login(result: AgentRunResult) -> AgentRunResul
         ).get_binding_for_profile(profile_id)
     except Exception:
         logger.warning(
-            "Codex login expiry check could not load the host binding for %s",
+            "Codex login session check could not load the host binding for %s",
             profile_id,
             exc_info=True,
         )
         return result
-    if binding is None:
+    if (
+        binding is None
+        or binding.binding_ref != capture.get("hostBindingRef")
+        or binding.credential_mount_ref.auth_volume_ref.credential_generation
+        != capture.get("credentialGeneration")
+    ):
         return result
-    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+    verdict = await OmnigentOAuthHostRuntime.probe_login_session(
         binding=binding, effective_launch=binding.effective_launch_snapshot
     )
-    if verdict != "expired":
+    if verdict != "ended":
         return result
-    metadata["credentialExpiry"] = {
-        "verdict": "expired",
+    metadata["codexLoginSession"] = {
+        "verdict": "ended",
         "harnessStartFailureCode": result.provider_error_code,
     }
     return result.model_copy(
         update={
             "summary": (
                 f"The ChatGPT login stored for Provider Profile {profile_id} has "
-                "expired and Codex could not refresh it, so Codex is waiting for "
-                "a sign-in; re-authenticate the Provider Profile, then rerun."
+                "ended and cannot be refreshed, so Codex is waiting for a "
+                "sign-in; re-authenticate the Provider Profile, then rerun."
             ),
             "failure_class": classify_omnigent_failure(
                 OmnigentFailureReason.AUTH_FAILURE
