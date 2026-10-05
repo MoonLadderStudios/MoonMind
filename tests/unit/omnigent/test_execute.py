@@ -29,7 +29,6 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
-    PromptContextResolution,
     _agent_items,
     _await_marked_turn_terminal,
     _build_capture_bundle,
@@ -6197,3 +6196,166 @@ def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:
         assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
     finally:
         loop.close()
+
+
+def _codex_native_snapshot(
+    status: str, marker: str, *work: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "harness": "codex-native",
+        "status": status,
+        "active_response_id": None,
+        "items": [_marked_user_item(marker), *work],
+    }
+
+
+_CODEX_COMMENTARY = {
+    "id": "assistant-commentary",
+    "type": "message",
+    "status": "completed",
+    "data": {
+        "role": "assistant",
+        "content": [
+            {"type": "output_text", "text": "Tests pass. I'm wiring removal next."}
+        ],
+    },
+}
+_CODEX_PATCH_CALL = {
+    "id": "patch-call",
+    "type": "function_call",
+    "status": "completed",
+    "data": {"name": "apply_patch", "call_id": "patch-1"},
+}
+_CODEX_PATCH_OUTPUT = {
+    "id": "patch-output",
+    "type": "function_call_output",
+    "status": "completed",
+    "data": {"call_id": "patch-1", "output": "updated"},
+}
+_CODEX_FINAL = {
+    "id": "assistant-final",
+    "type": "message",
+    "status": "completed",
+    "data": {
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Done."}],
+    },
+}
+
+
+def test_running_codex_native_turn_is_not_a_terminal_candidate() -> None:
+    """Replay mm:337458ba remediation: Codex turn status stays authoritative.
+
+    The native Codex injection response completes immediately, so a running
+    turn projects no active response id. A commentary message followed by a
+    long reasoning pause must not look like a finished turn.
+    """
+
+    marker = "MoonMind-Omnigent-Run: remediation-1"
+
+    assert not _snapshot_confirms_current_turn_terminal(
+        _codex_native_snapshot("running", marker, _CODEX_COMMENTARY),
+        marker=marker,
+    )
+    assert _snapshot_confirms_current_turn_terminal(
+        _codex_native_snapshot("idle", marker, _CODEX_COMMENTARY),
+        marker=marker,
+    )
+
+
+def test_running_codex_native_turn_uses_the_stall_recovery_budget() -> None:
+    from moonmind.omnigent.execute import _MarkedTurnStalledError
+
+    loop = asyncio.new_event_loop()
+    try:
+        marker = "MoonMind-Omnigent-Run: stalled-native-turn"
+        snapshot = _codex_native_snapshot("running", marker, _CODEX_COMMENTARY)
+        turn_state = _marked_turn_item_state(snapshot, marker=marker)
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300, stall_timeout_seconds=60
+        )
+        observed_at = loop.time()
+        watchdog.observe(snapshot, turn_state, observation_started_at=observed_at)
+        assert watchdog.currently_active is True
+        with pytest.raises(_MarkedTurnStalledError):
+            watchdog.observe(
+                snapshot, turn_state, observation_started_at=observed_at + 61
+            )
+        # Completion clears live turn authority without restarting the budget.
+        watchdog.observe(
+            _codex_native_snapshot("idle", marker, _CODEX_COMMENTARY),
+            turn_state,
+            observation_started_at=observed_at + 62,
+        )
+        assert watchdog.currently_active is False
+    finally:
+        loop.close()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_polling_waits_for_codex_native_turn_to_leave_running() -> None:
+    marker = "MoonMind-Omnigent-Run: remediation-1"
+    commentary_only = _codex_native_snapshot("running", marker, _CODEX_COMMENTARY)
+    finished = _codex_native_snapshot(
+        "idle",
+        marker,
+        _CODEX_COMMENTARY,
+        _CODEX_PATCH_CALL,
+        _CODEX_PATCH_OUTPUT,
+        _CODEX_FINAL,
+    )
+
+    class Client:
+        calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            # Stay quiet on the commentary far longer than the quiet period.
+            return commentary_only if self.calls <= 40 else finished
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=2,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+    )
+
+    assert status == "completed"
+    assert snapshot is finished
+
+
+@pytest.mark.asyncio
+async def test_running_codex_native_tool_output_does_not_request_continuation() -> None:
+    marker = "MoonMind-Omnigent-Run: remediation-1"
+    tool_only = _codex_native_snapshot(
+        "running", marker, _CODEX_PATCH_CALL, _CODEX_PATCH_OUTPUT
+    )
+    finished = _codex_native_snapshot(
+        "idle", marker, _CODEX_PATCH_CALL, _CODEX_PATCH_OUTPUT, _CODEX_FINAL
+    )
+
+    class Client:
+        calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, Any]:
+            self.calls += 1
+            return tool_only if self.calls <= 40 else finished
+
+    status, snapshot = await _await_marked_turn_terminal(
+        client=Client(),
+        session_id="session-1",
+        marker=marker,
+        event_count=2,
+        terminal_status="completed",
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+        allow_same_session_continuation=True,
+    )
+
+    assert status == "completed"
+    assert snapshot is finished

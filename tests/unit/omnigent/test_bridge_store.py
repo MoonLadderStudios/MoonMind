@@ -2326,3 +2326,79 @@ async def test_ensure_chat_binding_returns_persisted_winner_on_concurrent_alloca
         assert persisted.chat_binding_id == winner
     finally:
         await engine.dispose()
+
+
+def test_event_rows_replace_nul_that_postgres_text_cannot_store() -> None:
+    """Replay mm:337458ba 2026-10-05T02:50: binary tool output carried NUL.
+
+    PostgreSQL rejects ``\\x00`` in text and JSONB parameters, so one binary
+    ``function_call_output.delta`` preview failed the whole dispatch.
+    """
+    from moonmind.omnigent.bridge_store import _build_event_rows
+
+    [row] = _build_event_rows(
+        "brs_1",
+        [
+            {
+                "sequence": 501,
+                "eventType": "response.function_call_output.delta",
+                "normalizedStatus": "running",
+                "textPreview": "\x1f\x8b\x00binary\x00",
+                "metadata": {"delta": ["a\x00b", {"k\x00": "v\x00"}], "n": 1},
+            }
+        ],
+    )
+
+    assert "\x00" not in row.text_preview
+    assert row.text_preview.endswith("binary�")
+    assert row.metadata_ == {"delta": ["a�b", {"k�": "v�"}], "n": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_identity", [False, True])
+async def test_append_events_keeps_nul_identity_out_of_lookup_and_insert(
+    store, provider_identity
+) -> None:
+    from sqlalchemy import event as sqlalchemy_event
+
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    async with store._session_factory() as session:
+        engine = session.bind.sync_engine
+
+    @sqlalchemy_event.listens_for(engine, "before_cursor_execute")
+    def reject_postgres_nul(_conn, _cursor, statement, parameters, _context, many):
+        if "omnigent_bridge_session_events" not in statement:
+            return
+        batches = parameters if many else [parameters]
+        for batch in batches:
+            assert all("\x00" not in value for value in batch if isinstance(value, str))
+
+    def indexed_event(identity):
+        result = {"eventType": "response.delta", "textPreview": "progress"}
+        if provider_identity:
+            result["metadata"] = {"reconciliation": {"providerEventId": identity}}
+        else:
+            result["deduplicationKey"] = identity
+        return result
+
+    original = indexed_event("event\x00identity")
+    [appended] = await store.append_events(row.bridge_session_id, [original])
+    assert "\x00" not in appended.deduplication_key
+    assert original == indexed_event("event\x00identity")
+    assert await store.append_events(row.bridge_session_id, [original]) == []
+    # A replacement character in a distinct upstream ID must not collapse
+    # into the same identity as the NUL-bearing event.
+    assert (
+        len(
+            await store.append_events(
+                row.bridge_session_id, [indexed_event("event�identity")]
+            )
+        )
+        == 1
+    )
