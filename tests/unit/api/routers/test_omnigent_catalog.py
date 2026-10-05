@@ -2162,3 +2162,54 @@ def test_support_reasons_flag_unversioned_projection(monkeypatch, tmp_path):
     )
     codes = {reason.code for reason in catalog._support_reasons()}
     assert "live_verification_stale" in codes
+
+
+@pytest.mark.parametrize("evidence", [None, {"telemetry": []}, "nested-malformed"])
+def test_catalog_optional_remediation_observation_preserves_admission(
+    monkeypatch, tmp_path, evidence
+):
+    evidence_path = tmp_path / "remediation-release.json"
+    if evidence == "nested-malformed":
+        import hashlib
+
+        from tests.unit.omnigent.test_remediation_matrix import (
+            _artifact_bytes,
+            _stage_release,
+        )
+
+        release, evidence_path = _stage_release(tmp_path)
+        manifest = release["evidenceManifest"][0]
+        artifact_path = tmp_path / manifest["ref"]
+        artifact = json.loads(artifact_path.read_bytes())
+        artifact["rows"][0]["evidenceManifest"][0]["type"] = {}
+        content = _artifact_bytes(artifact)
+        artifact_path.write_bytes(content)
+        manifest["sha256"] = hashlib.sha256(content).hexdigest()
+        evidence_path.write_text(json.dumps(release), encoding="utf-8")
+        monkeypatch.setenv(
+            "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF", str(evidence_path)
+        )
+    elif evidence is None:
+        monkeypatch.delenv(
+            "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF", raising=False
+        )
+    else:
+        evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+        monkeypatch.setenv(
+            "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF", str(evidence_path)
+        )
+    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    response = client.get("/api/omnigent/codex-catalog-readiness")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is True
+    assert body["admissionReadiness"]["blocking"] == []
+    observation = body["remediationRelease"]
+    assert observation["advisory"] is True
+    assert observation["rollbackRequired"] is False
+    assert observation["requiredRows"] == []
+    assert observation["manualDiagnosisSupported"] is False
+    assert observation["manualMutationSupported"] is False
+    assert observation["autonomousRolloutAuthorized"] is False
+    assert observation["blockers"]
+    assert all(alert["severity"] == "warning" for alert in observation["alerts"])
