@@ -86,6 +86,12 @@ FORCE_FULL_EXACT = {
     "tools/test_unit.sh",
     "tools/test_unit_docker.sh",
     "tools/test_integration.sh",
+    # The host updater must qualify its child Docker transport against real
+    # Compose, including stale socket recovery and healthy proxy preservation.
+    "tools/update-moonmind.sh",
+    ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
+    ".agents/skills/update-moonmind/scripts/update_release.py",
+    "tests/unit/test_update_moonmind_transport.py",
     "tools/select_test_suites.py",
     "tests/conftest.py",
     "tests/unit/conftest.py",
