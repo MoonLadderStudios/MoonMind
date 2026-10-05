@@ -6,12 +6,6 @@ This module implements the workflow type catalog and lifecycle contract describe
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflow_registry import (
-    is_historical_workflow_type,
-    product_read_workflow_types,
-    require_product_projection,
-)
-
 import asyncio
 import base64
 import binascii
@@ -56,30 +50,39 @@ from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
 )
 from moonmind.config.settings import settings
-from moonmind.security import scan_outbound_text
-from moonmind.statuses.compat import (
-    canonicalize_finish_outcome_code_alias,
-    canonicalize_workflow_state_alias,
-    normalize_no_commit_finish_summary,
-)
 from moonmind.schemas.temporal_models import (
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
     USER_WORKFLOW_PLAN_SOURCE_ERROR,
     DependencyResolvedSignalPayload,
-    AGENT_RUN_ID_MEMO_KEYS,
-    AGENT_RUN_ID_PARAM_KEYS,
-    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     FailedRunRecoveryManifestModel,
     RecoveryCheckpointModel,
     RecoverySourceModel,
     has_user_workflow_plan_source,
 )
 from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
+from moonmind.security import scan_outbound_text
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
-from moonmind.security.outbound_scan import scan_outbound_text
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+    normalize_no_commit_finish_summary,
+)
+from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
+    repository_name_from_value,
+)
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityCatalogError,
+    build_default_activity_catalog,
+)
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
@@ -89,20 +92,16 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
 )
 from moonmind.workflows.temporal.checkpoint_policy import resolve_checkpoint_policy
-from moonmind.workflows.temporal.activity_catalog import (
-    TemporalActivityCatalogError,
-    build_default_activity_catalog,
-)
-from moonmind.workflows.executions.runtime_capabilities import (
-    resolve_runtime_execution_capabilities,
-)
-from moonmind.workflows.executions.repository_contract import (
-    repository_branch_from_value,
-    repository_name_from_value,
-)
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
+from moonmind.workflows.temporal.workflow_registry import (
+    is_historical_workflow_type,
+    product_read_workflow_types,
+    require_product_projection,
+)
+
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. Manifest-only update names below are rejected actionably in
 # send_update; the new release never registers or launches ManifestIngest
@@ -112,10 +111,6 @@ RETIRED_MANIFEST_UPDATE_NAMES: frozenset[str] = frozenset(
     {"UpdateManifest", "SetConcurrency", "CancelNodes", "RetryNodes"}
 )
 
-from moonmind.workflows.temporal.runtime.managed_session_store import (
-    ManagedSessionStore,
-    TERMINAL_MANAGED_SESSION_STATUSES,
-)
 from moonmind.schemas.managed_session_models import canonical_managed_session_runtime_id
 from moonmind.statuses.integration import (
     INTEGRATION_STATUS_VALUES,
@@ -129,6 +124,9 @@ from moonmind.statuses.workflow import (
     WORKFLOW_STATE_TO_CLOSE_STATUS,
     coerce_workflow_state,
 )
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    AdmittedCheckpointResumeDecision,
+)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -141,12 +139,13 @@ from moonmind.workflows.executions.title_derivation import (
     normalize_display_title,
     synthesize_execution_title,
 )
-from moonmind.workflows.executions.checkpoint_resume_admission import (
-    AdmittedCheckpointResumeDecision,
-)
 from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
+)
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    TERMINAL_MANAGED_SESSION_STATUSES,
+    ManagedSessionStore,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
 
@@ -905,9 +904,7 @@ class TemporalExecutionService:
     def _autonomous_remediation_release_authorized() -> bool:
         """Read the server-owned gate lazily to avoid workflow import cycles."""
 
-        from moonmind.omnigent.remediation_matrix import (
-            load_remediation_release_status,
-        )
+        from moonmind.omnigent.remediation_matrix import load_remediation_release_status
 
         return load_remediation_release_status().autonomous_rollout_authorized
 
@@ -1999,8 +1996,9 @@ class TemporalExecutionService:
         if not records:
             return []
 
-        from api_service.core.sync import sync_execution_projection
         from temporalio.client import WorkflowExecutionStatus
+
+        from api_service.core.sync import sync_execution_projection
 
         terminal_statuses = {
             WorkflowExecutionStatus.COMPLETED,
@@ -2925,15 +2923,9 @@ class TemporalExecutionService:
             OmnigentDeploymentNotReady,
             assert_plan_matches_deployed_runtime,
         )
-        from moonmind.omnigent.harness_platform.stores import (
-            SessionExecutionPlanStore,
-        )
-        from moonmind.omnigent.harness_platform.failures import (
-            HarnessPlatformError,
-        )
-        from moonmind.schemas.agent_runtime_models import (
-            OmnigentExecutionPlanBinding,
-        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
         try:
             binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
@@ -4070,6 +4062,13 @@ class TemporalExecutionService:
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
                 return record
+            from moonmind.workflows.temporal.remediation_tools import (
+                resume_pending_action_verifications,
+            )
+
+            await resume_pending_action_verifications(
+                self._session, workflow_id=record.workflow_id
+            )
             await self._fan_out_dependency_resolution(record)
             return await self._sync_projection_best_effort(record)
 
@@ -4104,6 +4103,13 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         if isinstance(record, TemporalExecutionRecord):
             return record
+        from moonmind.workflows.temporal.remediation_tools import (
+            resume_pending_action_verifications,
+        )
+
+        await resume_pending_action_verifications(
+            self._session, workflow_id=record.workflow_id
+        )
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
@@ -4684,6 +4690,8 @@ class TemporalExecutionService:
             "applied": "continue_as_new",
             "message": "Rerun requested. Execution continued as new run.",
             "continue_as_new_cause": "manual_rerun",
+            "workflow_id": record.workflow_id,
+            "run_id": record.run_id,
         }
 
     async def _create_fresh_rerun_execution(
@@ -4778,6 +4786,7 @@ class TemporalExecutionService:
             "message": "Rerun requested. New execution created.",
             "continue_as_new_cause": "manual_rerun",
             "workflow_id": created.workflow_id,
+            "run_id": created.run_id,
         }
 
     @staticmethod

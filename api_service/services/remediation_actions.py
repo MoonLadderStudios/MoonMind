@@ -161,10 +161,15 @@ class TemporalRemediationControlPlane:
             "afterEvidenceRefs": [
                 f"execution:{resulting_workflow_id}:rerun-request:{action_id}"
             ],
+            "resultingIdentity": {
+                "workflowId": resulting_workflow_id,
+                "runId": response.get("run_id"),
+            },
             "verificationRequired": accepted,
             "verificationHint": (
                 "Verify the resulting workflow reaches an authoritative terminal state."
-                if accepted else None
+                if accepted
+                else None
             ),
         }
 
@@ -205,9 +210,7 @@ class TemporalRemediationControlPlane:
                     "checkpointRef": checkpoint_ref,
                     "checkpointDigest": params.get("checkpointDigest"),
                 },
-                "label": str(
-                    params.get("label") or "Remediation checkpoint branch"
-                ),
+                "label": str(params.get("label") or "Remediation checkpoint branch"),
                 "branchKind": "root",
                 "workspacePolicy": str(
                     params.get("workspacePolicy")
@@ -263,6 +266,13 @@ class TemporalRemediationControlPlane:
                 "branch is a remediation candidate, not a confirmed repair."
             ),
             "deliveryStage": "branch_turn_dispatched",
+            "resultingIdentity": {
+                "workflowId": target.workflow_id,
+                "runId": target.current_run_id,
+                "branchId": graph.branch.branch_id,
+                "branchTurnId": turn_id,
+                "stepExecutionId": launched.created_step_execution_id,
+            },
             "branchTurnLaunched": True,
             "terminalBranchResultAvailable": False,
         }

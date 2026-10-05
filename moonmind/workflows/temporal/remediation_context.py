@@ -17,15 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
-from moonmind.workflows.temporal.artifacts import (
-    ExecutionRef,
-    TemporalArtifactService,
-)
+from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workflows.temporal.artifacts import ExecutionRef, TemporalArtifactService
 from moonmind.workflows.temporal.remediation_verification import (
     REMEDIATION_VERIFICATION_OUTCOMES,
     VERIFIED_RESOLVED,
 )
-from moonmind.utils.logging import redact_sensitive_text
 
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
 REMEDIATION_CONTEXT_ARTIFACT_NAME = "reports/remediation_context.json"
@@ -734,6 +731,26 @@ class RemediationLifecyclePublisher:
     ) -> None:
         self._session = session
         self._artifact_service = artifact_service
+
+    async def find_published_artifact(
+        self, *, workflow_id: str, artifact_type: str, name: str
+    ):
+        """Recover an exact producer-owned receipt before retrying an action."""
+        record = await self._execution_record_for_update(workflow_id)
+        if record is None:
+            return None
+        artifact = await self._published_artifact(
+            namespace=record.namespace,
+            workflow_id=record.workflow_id,
+            run_id=record.run_id,
+            link_type=artifact_type,
+            label=name,
+        )
+        return artifact or await self._legacy_published_artifact(
+            record=record,
+            link_type=artifact_type,
+            label=name,
+        )
 
     async def publish_json_artifact(
         self,
