@@ -20,14 +20,18 @@ from api_service.db.models import (
     WorkflowCheckpointBranchTurn,
 )
 from moonmind.schemas.checkpoint_branch_models import (
-    CheckpointBranchCreateModel,
     CheckpointBranchContinueModel,
+    CheckpointBranchCreateModel,
     CheckpointBranchForkModel,
     CheckpointBranchGraphCreateModel,
     CheckpointBranchGraphModel,
     CheckpointBranchStateUpdateModel,
     CheckpointBranchTurnCreateModel,
     StepExecutionBranchMetadataModel,
+)
+from moonmind.statuses.checkpoint_branch import (
+    CheckpointBranchState,
+    CheckpointBranchTurnState,
 )
 from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_HEAD_MISMATCH,
@@ -44,10 +48,6 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     authorize_materialization,
     mark_terminal,
     rollback_head,
-)
-from moonmind.statuses.checkpoint_branch import (
-    CheckpointBranchState,
-    CheckpointBranchTurnState,
 )
 
 SOURCE_TRACEABILITY_ISSUES = ("MM-1087", "MM-1088")
@@ -282,6 +282,13 @@ class CheckpointBranchService:
                     REMEDIATION_HEAD_STALE_VERSION,
                     "verification version was reused with different evidence",
                 )
+            from moonmind.workflows.temporal.remediation_tools import (
+                resume_pending_action_verifications,
+            )
+
+            await resume_pending_action_verifications(
+                self._session, workflow_id=workflow_id
+            )
             return head
         result = await self._session.execute(
             update(WorkflowCheckpointBranch)
@@ -312,6 +319,13 @@ class CheckpointBranchService:
             artifact_kind=artifact_kind,
         )
         await self._session.refresh(branch)
+        from moonmind.workflows.temporal.remediation_tools import (
+            resume_pending_action_verifications,
+        )
+
+        await resume_pending_action_verifications(
+            self._session, workflow_id=workflow_id
+        )
         return self._remediation_head(branch)
 
     async def mark_remediation_terminal(
