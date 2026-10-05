@@ -3458,16 +3458,34 @@ def _build_event_rows(
                 deduplication_key=_event_deduplication_key(event),
                 timestamp=now,
                 direction=str(event.get("direction") or "host_to_moonmind"),
-                event_type=str(event.get("eventType") or event.get("event_type") or ""),
+                event_type=_postgres_text(
+                    str(event.get("eventType") or event.get("event_type") or "")
+                ),
                 # Preserve the full, non-lossy normalized status stream (§7.2):
                 # do not coalesce here.
                 normalized_status=_string_or_none(event.get("normalizedStatus")),
-                text_preview=_string_or_none(event.get("textPreview")),
+                text_preview=_postgres_text(_string_or_none(event.get("textPreview"))),
                 artifact_ref=_string_or_none(event.get("artifactRef")),
-                metadata_=dict(event.get("metadata") or {}),
+                metadata_=_postgres_text(dict(event.get("metadata") or {})),
             )
         )
     return rows
+
+
+def _postgres_text(value: Any) -> Any:
+    """Replace NUL, which PostgreSQL text and JSONB values cannot store.
+
+    Provider previews can carry binary tool output; the full bytes remain in
+    the event journal artifact, so the index keeps a visibly lossy preview.
+    """
+
+    if isinstance(value, str):
+        return value.replace("\x00", "\ufffd")
+    if isinstance(value, Mapping):
+        return {_postgres_text(key): _postgres_text(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_postgres_text(item) for item in value]
+    return value
 
 
 def _event_deduplication_key(event: dict[str, Any]) -> str:
