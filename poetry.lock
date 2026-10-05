@@ -235,14 +235,14 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "1.8.0"
+version = "1.11.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anthropic-1.8.0-py3-none-any.whl", hash = "sha256:79a4516a21e64fd7b15be1a49ebf544bd6376c96a971a77365358823a2717bc6"},
-    {file = "anthropic-1.8.0.tar.gz", hash = "sha256:9c1783ed90f409617749a61c5ab98e20624a572626f2e0a15cea03ed8e1401e5"},
+    {file = "anthropic-1.11.0-py3-none-any.whl", hash = "sha256:52f97b2c485cca7ac66058374f5073a3febb7e6849b16989c145d602a3efee21"},
+    {file = "anthropic-1.11.0.tar.gz", hash = "sha256:3906fabac7ad7b5b46c6186040398fc7826885c77ce34e4dd7849de16fc8d0f8"},
 ]
 
 [package.dependencies]
@@ -4497,4 +4497,4 @@ tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-split",
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "57c604525573ecceca842522e03e817567237588adca17839925fcac87597e2e"
+content-hash = "0db22521a698853b29a50d9bf8e4f09b88f255c6afdd57e070d1a884c772b48d"
