@@ -1,0 +1,9 @@
+{
+  "source": "Minimized from workflow mm:20f53104-5635-4463-85ab-49e8a0040b58-2026-10-05T00:00:00Z raw SSE capture; the Codex TUI was parked on its sign-in screen after its OAuth refresh token expired. Identifiers removed.",
+  "events": [
+    {"type": "session.status", "conversation_id": "session-1", "status": "running", "error": null, "response_id": null},
+    {"type": "response.in_progress", "response": {"id": "startup-response", "status": "in_progress", "output": [], "error": null}},
+    {"type": "response.heartbeat", "last_event_seq": 1},
+    {"type": "response.failed", "source": "harness", "response": {"id": "startup-response", "status": "failed", "output": [], "error": {"cause": null, "code": "agent_startup_pending", "message": "Codex is still starting in this session's terminal and may be waiting for a sign-in there. Launch routing: Codex CLI login (subscription provider 'codex'; Codex is logged in).", "remediation": "Finish any sign-in shown in the session terminal, then send your message again.", "title": "Codex is still starting", "undelivered": true}}}
+  ]
+}

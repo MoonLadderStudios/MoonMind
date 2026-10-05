@@ -3,7 +3,7 @@ import inspect
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -756,6 +756,109 @@ def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -
         "recoveryAction": "resume_unavailable",
         "reasonCodes": ["checkpoint_authority_unavailable"],
     }
+
+
+def _never_started_codex_result(code: str) -> AgentRunResult:
+    return AgentRunResult(
+        summary="Codex is still starting in this session's terminal",
+        failureClass="integration_error",
+        providerErrorCode=code,
+        retryRecommendation="retry_step_execution",
+        metadata={
+            "normalizedStatus": "failed",
+            "omnigentCheckpointCapture": {"providerProfileId": "codex_openai_oauth"},
+        },
+    )
+
+
+async def _execute_with_credential_verdict(
+    monkeypatch: pytest.MonkeyPatch, mock_run, *, code: str, verdict: str
+):
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    binding = SimpleNamespace(effective_launch_snapshot={"snapshotRef": "launch-1"})
+    lookups: list[str] = []
+
+    async def get_binding_for_profile(_self, profile_id: str):
+        lookups.append(profile_id)
+        return binding
+
+    probe = AsyncMock(return_value=verdict)
+    monkeypatch.setattr(
+        OmnigentOAuthHostRepository, "get_binding_for_profile", get_binding_for_profile
+    )
+    monkeypatch.setattr(OmnigentOAuthHostRuntime, "probe_credential_expiry", probe)
+    mock_run.return_value = _never_started_codex_result(code)
+    result = await ActivityEnvironment().run(
+        omnigent_execute_activity,
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-expired-login",
+            idempotencyKey="step-expired-login",
+        ),
+    )
+    return result, lookups, probe, binding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code", ["agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"]
+)
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_never_started_codex_turn_on_expired_login_requires_reauthentication(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, code: str
+):
+    """An expired ChatGPT login cannot be fixed by retrying on a fresh host."""
+    result, lookups, probe, binding = await _execute_with_credential_verdict(
+        monkeypatch, mock_run, code=code, verdict="expired"
+    )
+
+    assert lookups == ["codex_openai_oauth"]
+    probe.assert_awaited_once_with(
+        binding=binding, effective_launch={"snapshotRef": "launch-1"}
+    )
+    assert result.provider_error_code == "codex_reauth_required"
+    assert result.retry_recommendation == "reauthenticate"
+    assert result.failure_class == "integration_error"
+    assert "codex_openai_oauth" in result.summary
+    assert "re-authenticate" in result.summary
+    assert result.metadata["credentialExpiry"] == {
+        "verdict": "expired",
+        "harnessStartFailureCode": code,
+    }
+    assert result.metadata["omnigentCheckpointCapture"] == {
+        "providerProfileId": "codex_openai_oauth"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["current", "unknown"])
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_never_started_codex_turn_keeps_retry_without_expiry_proof(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, verdict: str
+):
+    result, _lookups, probe, _binding = await _execute_with_credential_verdict(
+        monkeypatch, mock_run, code="agent_startup_pending", verdict=verdict
+    )
+
+    probe.assert_awaited_once()
+    assert result == _never_started_codex_result("agent_startup_pending")
+
+
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_started_turn_failure_does_not_probe_credentials(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
+):
+    result, lookups, probe, _binding = await _execute_with_credential_verdict(
+        monkeypatch, mock_run, code="codex_turn_error", verdict="expired"
+    )
+
+    assert lookups == []
+    probe.assert_not_awaited()
+    assert result == _never_started_codex_result("codex_turn_error")
 
 
 @pytest.mark.asyncio

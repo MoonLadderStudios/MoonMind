@@ -262,6 +262,24 @@ _ATTACHMENT_ARTIFACT_PRINCIPAL = "service:omnigent_workspace_attachment"
 # payload is rejected mid-stream instead of after full in-memory materialization.
 _RESTORE_STREAM_CHUNK_BYTES = 1024 * 1024
 
+# Run as ``python3 -c <probe> <codex home>`` inside a network-less, read-only
+# host-image container. It prints exactly one verdict word and never token
+# material: ``expired``/``current`` from the stored ChatGPT access token's
+# ``exp`` claim, or ``unknown`` for anything else (API-key auth, unreadable or
+# unexpected layouts).
+CODEX_ACCESS_TOKEN_EXPIRY_PROBE = """\
+import base64, json, sys, time
+try:
+    with open(sys.argv[1] + "/auth.json", encoding="utf-8") as handle:
+        token = json.load(handle)["tokens"]["access_token"]
+    claims = token.split(".")[1]
+    claims += "=" * (-len(claims) % 4)
+    expires_at = float(json.loads(base64.urlsafe_b64decode(claims))["exp"])
+    print("expired" if expires_at <= time.time() else "current")
+except Exception:
+    print("unknown")
+"""
+
 _RUNTIME_ADAPTERS = {
     "codex_cli": {
         "harness": "codex-native",
@@ -587,6 +605,70 @@ class OmnigentOAuthHostRuntime:
             "loginStatus": "authenticated",
             "validationMode": "credential_only",
         }
+
+    @classmethod
+    async def probe_credential_expiry(
+        cls,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        effective_launch: Mapping[str, Any] | None,
+    ) -> str:
+        """Report whether the profile's stored Codex access token is expired.
+
+        ``codex login status`` only checks that tokens are present, so a
+        ChatGPT login whose refresh token has expired still reports signed in
+        while the TUI parks on its sign-in screen. Call this only after the
+        harness failed to start: Codex refreshes an expired access token on
+        startup and writes the result back to the profile-owned home, so a
+        token still expired afterwards means the refresh failed. Returns
+        ``expired``, ``current``, or ``unknown``; the network-less, read-only
+        container prints only that verdict, never token material.
+        """
+
+        if binding.credential_mount_ref.auth_volume_ref.runtime_id != "codex_cli":
+            return "unknown"
+        try:
+            launch = cls._validate_effective_launch(
+                binding=binding, effective_launch=effective_launch
+            )
+            adapter = cls._runtime_adapter(binding)
+            volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
+            returncode, stdout, _stderr = await asyncio.wait_for(
+                cls._run(
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    f"{launch['runtimeUid']}:{launch['runtimeGid']}",
+                    "--network",
+                    "none",
+                    *structured_container_security_args(),
+                    "--read-only",
+                    "--mount",
+                    f"type=volume,src={volume},dst={adapter['home']},readonly",
+                    "--entrypoint",
+                    "python3",
+                    str(launch["hostImageRef"]),
+                    "-c",
+                    CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+                    str(adapter["home"]),
+                    check=False,
+                ),
+                timeout=60,
+            )
+        except Exception:
+            # Best effort: an unavailable probe must not replace the original
+            # startup failure with a credential verdict it could not prove.
+            logger.warning(
+                "Codex credential expiry probe unavailable for profile %s",
+                binding.provider_profile_id,
+                exc_info=True,
+            )
+            return "unknown"
+        verdict = stdout.strip()
+        if returncode != 0 or verdict not in {"expired", "current"}:
+            return "unknown"
+        return verdict
 
     async def prepare_host(
         self,
