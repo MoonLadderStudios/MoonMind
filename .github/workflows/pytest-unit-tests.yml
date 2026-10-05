@@ -874,6 +874,21 @@ jobs:
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=first-run-3938-api-runtime
           cache-to: type=gha,scope=first-run-3938-api-runtime,mode=max
+      - name: Qualify host updater Docker transport recovery
+        timeout-minutes: 8
+        env:
+          MOONMIND_TEST_HOST_UPDATE_TRANSPORT: "1"
+          MOONMIND_TEST_TRANSPORT_APP_IMAGE: moonmind-first-run-3938:ci
+        run: |
+          set -euo pipefail
+          docker pull tecnativa/docker-socket-proxy:0.1.1
+          host_test_env="$(mktemp -d /tmp/moonmind-host-update-tests.XXXXXX)"
+          trap 'rm -rf "$host_test_env"' EXIT
+          python3 -m venv "$host_test_env"
+          "$host_test_env/bin/python" -m pip install 'pytest>=9.0.3,<9.2'
+          "$host_test_env/bin/python" -m pytest \
+            --confcutdir=tests/integration/host_update \
+            tests/integration/host_update/test_transport.py -q
       - name: Set up Node for the dashboard journey
         uses: actions/setup-node@v7
         with:

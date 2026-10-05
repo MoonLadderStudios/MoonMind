@@ -3987,6 +3987,7 @@ def _optional_bool(
 
 
 def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
+    failure_class = _command_failure_class(phase, result)
     if not isinstance(result, Mapping):
         raise ToolFailure(
             error_code="DEPLOYMENT_COMMAND_FAILED",
@@ -3995,7 +3996,7 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
             details={
                 "phase": phase,
                 "result_type": type(result).__name__,
-                "failureClass": _command_failure_class(phase),
+                "failureClass": failure_class,
             },
         )
     for key in ("exitCode", "exit_code", "returncode"):
@@ -4013,7 +4014,7 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                         "phase": phase,
                         "field": key,
                         "value": result[key],
-                        "failureClass": _command_failure_class(phase),
+                        "failureClass": failure_class,
                     },
                 ) from exc
             if code != 0:
@@ -4025,7 +4026,7 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                         "phase": phase,
                         "exit_code": code,
                         "result": dict(result),
-                        "failureClass": _command_failure_class(phase),
+                        "failureClass": failure_class,
                     },
                 )
             return
@@ -4040,7 +4041,7 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                         "phase": phase,
                         "field": key,
                         "result": dict(result),
-                        "failureClass": _command_failure_class(phase),
+                        "failureClass": failure_class,
                     },
                 )
             return
@@ -4055,7 +4056,7 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
                     "phase": phase,
                     "status": status,
                     "result": dict(result),
-                    "failureClass": _command_failure_class(phase),
+                    "failureClass": failure_class,
                 },
             )
         return
@@ -4066,13 +4067,25 @@ def _ensure_command_succeeded(phase: str, result: Mapping[str, Any]) -> None:
         details={
             "phase": phase,
             "result": dict(result),
-            "failureClass": _command_failure_class(phase),
+            "failureClass": failure_class,
         },
     )
 
 
-def _command_failure_class(phase: str) -> str:
-    if phase == "pull":
+def _command_failure_class(phase: str, result: Mapping[str, Any] | None = None) -> str:
+    stderr = (
+        str(result.get("stderr") or "").lower() if isinstance(result, Mapping) else ""
+    )
+    if any(
+        marker in stderr
+        for marker in (
+            "failed to connect to the docker api",
+            "cannot connect to the docker daemon",
+            "error during connect:",
+        )
+    ):
+        return "runner_unavailable"
+    if phase == "pull" or phase.startswith("pull "):
         return "image_pull_failure"
     if phase == "up":
         return "service_recreation_failure"

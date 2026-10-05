@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1506,6 +1505,44 @@ def test_compose_config_validation_failure_has_normalized_class() -> None:
 
     assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
     assert exc_info.value.details["failureClass"] == "compose_config_validation_failure"
+
+
+@pytest.mark.parametrize(
+    ("phase", "stderr", "expected_class"),
+    [
+        (
+            "pull updater",
+            "failed to connect to the docker API at tcp://docker-proxy:2375: "
+            "lookup docker-proxy on 127.0.0.11:53: no such host",
+            "runner_unavailable",
+        ),
+        (
+            "pull",
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+            "Is the docker daemon running?",
+            "runner_unavailable",
+        ),
+        (
+            "pull updater",
+            'Error response from daemon: Head "https://ghcr.io/v2/moonmind/manifests/latest": '
+            "unauthorized: authentication required",
+            "image_pull_failure",
+        ),
+    ],
+)
+def test_updater_pull_failure_reports_its_actual_failure_class(
+    phase: str, stderr: str, expected_class: str
+) -> None:
+    result = {"exitCode": 1, "stdout": "", "stderr": stderr}
+
+    with pytest.raises(ToolFailure) as exc_info:
+        _ensure_command_succeeded(phase, result)
+
+    failure = exc_info.value
+    assert failure.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert failure.details["failureClass"] == expected_class
+    assert failure.details["phase"] == phase
+    assert failure.details["result"] == result
 
 
 def test_one_shot_service_failure_has_normalized_class() -> None:

@@ -34,6 +34,21 @@ The selected image supplies the canonical application code, migrations, and port
 
 The controller records an immutable submission, starts one named updater with durable ownership, pulls and verifies the pinned digest, persists the desired state, recreates the installed fleet in place, verifies readiness for every affected service, and migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests. No parallel candidate or retained fleet is started, so nothing is drained afterwards and recreation has a bounded downtime window. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
 
+Before handing off through the transitional updater, the host verifies Docker
+access from the updater's own rendered environment and networks. If its
+configured `docker-proxy` transport is unavailable, it starts only the proxy
+under the existing deployment kernel lock, without recreating an existing
+container, retries readiness, and if necessary
+recreates only that service once to refresh stale socket binds. A working proxy
+stays intact, and explicit external Docker endpoints never trigger local proxy
+repair. Recovery preserves the selected Compose files and deployment settings.
+It rechecks transport after acquiring the lock and never repairs alongside a
+running deployment owner. The probe and lock holder disable image pulls through
+a service `pull_policy` overlay, preserving support for older Compose V2 releases.
+An explicit worker image is acquired when absent before those checks.
+Exhausted recovery stops before handoff and reports the original redacted
+errors; it does not claim that the release started.
+
 ## Terminal outcomes
 
 Completion requires a terminal release receipt naming the exact source SHA,
