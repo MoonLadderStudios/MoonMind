@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ from temporalio import activity
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+logger = logging.getLogger(__name__)
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
     "instructionDigest",
@@ -902,7 +905,9 @@ async def omnigent_execute_activity(
     from moonmind.omnigent.execute import omnigent_activity_heartbeat
 
     async with omnigent_activity_heartbeat():
-        return await _omnigent_execute_activity(request)
+        return await _classify_ended_codex_login(
+            await _omnigent_execute_activity(request)
+        )
 
 
 def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
@@ -938,6 +943,88 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
         providerErrorCode=typed_code,
         retryRecommendation=remediation_for(typed_code),
         metadata=_capacity_cleanup_receipt(exc),
+    )
+
+
+# Failures of a marked turn the native harness never started: Omnigent's own
+# undelivered startup failure, or MoonMind's turn-start watchdog.
+_HARNESS_NEVER_STARTED_CODES = frozenset(
+    {"agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"}
+)
+
+
+async def _classify_ended_codex_login(result: AgentRunResult) -> AgentRunResult:
+    """Report a never-started Codex turn on an ended login as reauthentication.
+
+    A ChatGPT login whose session has ended still passes ``codex login
+    status``, so Codex parks on its sign-in screen and Omnigent reports only
+    that the harness never started. A fresh host cannot fix that; the operator
+    must re-authenticate the Provider Profile. Only when the credential home
+    of the exact binding and generation that ran proves the session ended does
+    the result take the canonical ``codex_reauth_required``/``reauthenticate``
+    classification, which the workflow does not retry. Without that proof, or
+    after the binding or generation moved on, the original failure stands.
+    """
+
+    from moonmind.omnigent.failure_classification import (
+        OmnigentFailureReason,
+        classify_omnigent_failure,
+    )
+
+    if result.provider_error_code not in _HARNESS_NEVER_STARTED_CODES:
+        return result
+    metadata = dict(result.metadata or {})
+    capture = metadata.get("omnigentCheckpointCapture")
+    if not isinstance(capture, Mapping):
+        return result
+    profile_id = str(capture.get("providerProfileId") or "").strip()
+    if not profile_id:
+        return result
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    try:
+        binding = await OmnigentOAuthHostRepository(
+            async_session_maker
+        ).get_binding_for_profile(profile_id)
+    except Exception:
+        logger.warning(
+            "Codex login session check could not load the host binding for %s",
+            profile_id,
+            exc_info=True,
+        )
+        return result
+    if (
+        binding is None
+        or binding.binding_ref != capture.get("hostBindingRef")
+        or binding.credential_mount_ref.auth_volume_ref.credential_generation
+        != capture.get("credentialGeneration")
+    ):
+        return result
+    verdict = await OmnigentOAuthHostRuntime.probe_login_session(
+        binding=binding, effective_launch=binding.effective_launch_snapshot
+    )
+    if verdict != "ended":
+        return result
+    metadata["codexLoginSession"] = {
+        "verdict": "ended",
+        "harnessStartFailureCode": result.provider_error_code,
+    }
+    return result.model_copy(
+        update={
+            "summary": (
+                f"The ChatGPT login stored for Provider Profile {profile_id} has "
+                "ended and cannot be refreshed, so Codex is waiting for a "
+                "sign-in; re-authenticate the Provider Profile, then rerun."
+            ),
+            "failure_class": classify_omnigent_failure(
+                OmnigentFailureReason.AUTH_FAILURE
+            ),
+            "provider_error_code": "codex_reauth_required",
+            "retry_recommendation": "reauthenticate",
+            "metadata": metadata,
+        }
     )
 
 
