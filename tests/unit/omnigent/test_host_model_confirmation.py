@@ -162,3 +162,48 @@ async def test_non_canonical_claude_selection_is_refused_without_a_probe() -> No
 
     assert present is False
     assert backend.calls == []
+
+
+# Shape reported by a live codex-native host's model-options tunnel: Codex
+# ``model/list`` rows name bare Codex model slugs, never ``provider/model``.
+_CODEX_OPTIONS = {
+    "models": [
+        {"id": "gpt-6.1-sol", "model": "gpt-6.1-sol", "isDefault": True},
+        {"id": "gpt-6-astra", "model": "gpt-6-astra"},
+    ],
+    "routable_models": ["gpt-6.1-sol", "gpt-6-astra"],
+}
+
+
+@pytest.mark.asyncio
+async def test_exact_codex_host_confirms_a_bare_catalog_model() -> None:
+    backend = ServedProbeBackend("served")
+
+    available, present = await confirm_exact_host_model(
+        backend=backend,
+        container_name="mm-host-1",
+        harness_id="codex-native",
+        model_options=_CODEX_OPTIONS,
+        selected_model="gpt-6.1-sol",
+    )
+
+    assert present is True
+    assert available == ["gpt-6-astra", "gpt-6.1-sol"]
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+async def test_exact_codex_host_refuses_a_model_its_catalog_omits() -> None:
+    backend = ServedProbeBackend("served")
+
+    available, present = await confirm_exact_host_model(
+        backend=backend,
+        container_name="mm-host-1",
+        harness_id="codex-native",
+        model_options=_CODEX_OPTIONS,
+        selected_model="gpt-5.6-sol",
+    )
+
+    assert present is False
+    assert available == ["gpt-6-astra", "gpt-6.1-sol"]
+    assert backend.calls == []

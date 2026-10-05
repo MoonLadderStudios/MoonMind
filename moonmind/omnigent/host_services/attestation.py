@@ -307,14 +307,17 @@ async def confirm_exact_host_model(
 ) -> tuple[list[str], bool]:
     """Return the host's advertised model ids and whether it serves the selection.
 
-    Qualified catalogs (``provider/model``) confirm by exact membership. Claude
-    Code rows name picker aliases and bare Anthropic ids (``opus[1m]`` ->
+    Qualified catalogs (``provider/model``) confirm by exact membership. Codex
+    ``model/list`` rows name bare Codex model slugs (``gpt-6.1-sol``) -- the
+    provider is the launch configuration, not part of the id -- so they also
+    confirm by exact membership, of the row spellings. Claude Code rows name
+    picker aliases and bare Anthropic ids (``opus[1m]`` ->
     ``claude-opus-5-5[1m]``), and whether a launch of the selected id is served
     is Claude harness truth, so the exact host answers with its own upstream
     rule for exactly these rows instead of MoonMind re-deriving it.
     """
 
-    if harness_id != "claude-native":
+    if harness_id not in {"claude-native", "codex-native"}:
         available = sorted(_model_ids(model_options))
         return available, selected_model in available
     models = model_options.get("models") if isinstance(model_options, dict) else None
@@ -327,6 +330,8 @@ async def confirm_exact_host_model(
             if isinstance(row.get(key), str) and row[key]
         }
     )
+    if harness_id == "codex-native":
+        return available, selected_model in available
     if not rows:
         return available, False
     # The config-independent clauses of the upstream rule: an exact row (picker

@@ -19,7 +19,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 _DEFAULT_CONTROLLER_URL = os.environ.get(
@@ -40,6 +42,8 @@ _CONTROLLER_SUBMIT_ATTEMPTS = 2
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
 _MAX_PUBLISHED_ANCESTOR_SEARCH = 20
+_LEGACY_TRANSPORT_LEASE_TIMEOUT_SECONDS = 30
+_LEGACY_TRANSPORT_LEASE_READY = "MOONMIND_TRANSPORT_LEASE_READY"
 
 # Bounded wait for the fetched tip's in-flight image publish, tried before
 # selection falls back to a published ancestor so the exact requested commit
@@ -801,11 +805,360 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
         _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
 
 
+@contextmanager
+def _legacy_transport_lease(command, repo, env):
+    """Hold the updater's existing kernel lock independently of its proxy.
+
+    The trusted rendered deployment-control service supplies its state mount and
+    lock directory. Its stdin lifetime holds the same lease used by release
+    jobs, including legacy-owner protection; the host needs no lock algorithm
+    or Docker socket mounted into another container.
+    """
+    name = "moonmind-transport-lease-" + uuid.uuid4().hex
+    script = (
+        "import asyncio, os, sys\n"
+        "from moonmind.workflows.skills.deployment_execution import "
+        "FileDeploymentUpdateLockManager\n"
+        "async def hold():\n"
+        "    manager = FileDeploymentUpdateLockManager("
+        "os.environ.get('MOONMIND_DEPLOYMENT_LOCK_DIR') or "
+        "'/workspace/deployment_state/locks')\n"
+        "    async with await manager.acquire('moonmind'):\n"
+        f"        print({_LEGACY_TRANSPORT_LEASE_READY!r}, flush=True)\n"
+        "        sys.stdin.buffer.read()\n"
+        "asyncio.run(hold())\n"
+    )
+    holder = [
+        *command,
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "--name",
+        name,
+        "--entrypoint",
+        "python",
+        "temporal-worker-deployment-control",
+        "-u",
+        "-c",
+        script,
+    ]
+    # File polling works for attached child output on Windows and Linux;
+    # select() on a subprocess pipe does not work on Windows.
+    with tempfile.TemporaryDirectory(prefix="moonmind-transport-lease-") as temp:
+        log = Path(temp) / "holder.log"
+        with log.open("wb") as output:
+            try:
+                process = subprocess.Popen(
+                    holder,
+                    cwd=repo,
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    "Shared deployment lock holder could not start: "
+                    + _redact_diagnostics(str(exc))
+                ) from None
+            try:
+                deadline = time.monotonic() + _LEGACY_TRANSPORT_LEASE_TIMEOUT_SECONDS
+                while True:
+                    diagnostic = log.read_text(errors="replace")
+                    if (
+                        _LEGACY_TRANSPORT_LEASE_READY in diagnostic.splitlines()
+                        and process.poll() is None
+                    ):
+                        break
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            "Shared deployment lock was not acquired before proxy repair.\n"
+                            + _redact_diagnostics(diagnostic)[-_MAX_DIAGNOSTIC_CHARS:]
+                        )
+                    _sleep(0.1)
+
+                def held():
+                    if process.poll() is not None:
+                        raise RuntimeError(
+                            "Shared deployment lock holder exited before proxy repair.\n"
+                            + _redact_diagnostics(log.read_text(errors="replace"))[
+                                -_MAX_DIAGNOSTIC_CHARS:
+                            ]
+                        )
+
+                yield held
+            finally:
+                # EOF releases the kernel lease before the release handoff.
+                # If that acknowledgment is lost, stop only our named holder.
+                primary_error = sys.exc_info()[0] is not None
+                status = None
+                try:
+                    try:
+                        process.stdin.close()
+                    except OSError:
+                        # A broken pipe can mean the holder already exited;
+                        # its exit or container removal still needs observing.
+                        pass
+                    try:
+                        status = process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        status = None
+                    if status != 0:
+                        try:
+                            result = subprocess.run(
+                                ["docker", "rm", "--force", name],
+                                cwd=repo,
+                                env=env,
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                            )
+                            if result.returncode and "no such container" not in (
+                                f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+                            ):
+                                raise RuntimeError(
+                                    _redact_diagnostics(
+                                        f"{result.stdout or ''}\n{result.stderr or ''}"
+                                    ).strip()[-_MAX_DIAGNOSTIC_CHARS:]
+                                    or "Docker did not confirm lock holder removal"
+                                )
+                        finally:
+                            if process.poll() is None:
+                                process.kill()
+                            process.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
+                    message = (
+                        "Shared deployment lock holder cleanup unavailable: "
+                        + _redact_diagnostics(str(exc))
+                    )
+                    if not primary_error:
+                        raise RuntimeError(message) from None
+                    print(message, flush=True)
+                if status not in (None, 0):
+                    message = (
+                        f"Shared deployment lock holder exited with status {status}.\n"
+                        + _redact_diagnostics(log.read_text(errors="replace"))[
+                            -_MAX_DIAGNOSTIC_CHARS:
+                        ]
+                    )
+                    if not primary_error:
+                        raise RuntimeError(message)
+                    print(message, flush=True)
+
+
+def _ensure_legacy_docker_transport(command, repo, env):
+    service = "temporal-worker-deployment-control"
+    rendered = json.loads(
+        run([*command, "config", "--format", "json"], cwd=repo, env=env)
+    )
+    worker_image = rendered.get("services", {}).get(service, {}).get("image")
+    # The target image was already acquired and verified by the host. A
+    # distinct worker image retains its deployment-owned acquisition policy,
+    # platform and build configuration through Compose, before probes disable
+    # registry access. The client version command needs no Docker API access.
+    if worker_image and worker_image != env.get("MOONMIND_IMAGE"):
+        run(
+            [
+                *command,
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "--entrypoint",
+                "docker",
+                service,
+                "--version",
+            ],
+            cwd=repo,
+            env=env,
+        )
+    # Compose run lacks --pull on supported older V2 releases, so an overlay
+    # disables pulls without altering the deployment-owned service boundary.
+    with tempfile.TemporaryDirectory(prefix="moonmind-transport-policy-") as temp:
+        path = Path(temp) / "compose.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "temporal-worker-deployment-control": {"pull_policy": "never"},
+                    }
+                }
+            )
+        )
+        _check_legacy_docker_transport([*command, "-f", str(path)], repo, env)
+
+
+def _check_legacy_docker_transport(command, repo, env):
+    """Prove the child transport, repairing only its unavailable proxy.
+
+    Host Docker access does not prove that a Compose one-off can reach Docker.
+    In particular, a stopped Desktop proxy can retain a stale WSL socket bind.
+    Keep a working proxy intact; try starting it before one bounded recreation
+    refreshes its mounts and network from the deployment-owned configuration.
+    """
+    service = "temporal-worker-deployment-control"
+    rendered = json.loads(
+        run([*command, "config", "--format", "json"], cwd=repo, env=env)
+    )
+    configured = rendered.get("services", {})
+    endpoint = configured.get(service, {}).get("environment", {}).get("DOCKER_HOST", "")
+    probe = [
+        *command,
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "--entrypoint",
+        "docker",
+        service,
+        "info",
+        "--format",
+        "{{.ServerVersion}}",
+    ]
+    errors = []
+    transport_failed = False
+    probe_timed_out = False
+
+    def attempt(args, phase, *, timeout=30):
+        nonlocal transport_failed, probe_timed_out
+        if phase == "Docker access probe":
+            transport_failed = probe_timed_out = False
+        try:
+            result = subprocess.run(
+                args, cwd=repo, env=env, capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            detail = f"{phase} timed out after {timeout} seconds"
+            probe_timed_out = phase == "Docker access probe"
+        else:
+            if result.returncode == 0 and (
+                phase != "Docker access probe" or result.stdout.strip()
+            ):
+                return True
+            if phase == "Docker access probe":
+                diagnostic = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+                # Compose image-pull/start errors must not authorize proxy
+                # replacement. Identify the child's Docker endpoint or its
+                # direct API error, rather than generic registry DNS/503 text.
+                transport_failed = (
+                    (
+                        "lookup docker-proxy" in diagnostic
+                        and "no such host" in diagnostic
+                    )
+                    or (
+                        "docker-proxy:" in diagnostic
+                        and any(
+                            marker in diagnostic
+                            for marker in (
+                                "failed to connect to the docker api",
+                                "cannot connect to the docker daemon",
+                                "connection refused",
+                                "connection reset by peer",
+                            )
+                        )
+                    )
+                    or bool(
+                        re.search(r"error response from daemon:\s*503\b", diagnostic)
+                    )
+                    or (
+                        result.returncode == 0
+                        and "503 service unavailable" in diagnostic
+                    )
+                )
+            detail = _redact_diagnostics(
+                f"{phase} failed (exit {result.returncode}): "
+                f"{result.stdout or ''}\n{result.stderr or ''}"
+            ).strip()[-_MAX_DIAGNOSTIC_CHARS:]
+        errors.append(detail)
+        print(detail, flush=True)
+        return False
+
+    def ready():
+        for index in range(3):
+            if index:
+                _sleep(1)
+            if attempt(probe, "Docker access probe"):
+                return True
+        return False
+
+    def fail():
+        raise RuntimeError(
+            "Updater Docker transport is unavailable; release handoff did not start.\n"
+            + "\n".join(errors)
+        )
+
+    if attempt(probe, "Docker access probe"):
+        return
+    # A timeout alone does not prove proxy failure. Reconcile it, and never
+    # repair the proxy for a one-off's own image, mount, or startup error.
+    if probe_timed_out and ready():
+        return
+    if not transport_failed:
+        fail()
+    # An explicitly configured external/socket endpoint retains its authority.
+    # Starting the local proxy cannot repair it and must not replace it.
+    if (
+        urlsplit(endpoint or "").hostname == "docker-proxy"
+        and "docker-proxy" in configured
+    ):
+        try:
+            with _legacy_transport_lease(command, repo, env) as held:
+                # Another updater may have restored it while we acquired the
+                # shared lock. Reconcile before any host mutation.
+                if attempt(probe, "Docker access probe"):
+                    held()
+                    return
+                if transport_failed:
+                    print(
+                        "Restoring the updater's Docker proxy before release handoff.",
+                        flush=True,
+                    )
+                    repair = [
+                        *command,
+                        "up",
+                        "-d",
+                        "--no-deps",
+                        "--no-build",
+                        "--pull",
+                        "missing",
+                    ]
+                    held()
+                    attempt(
+                        [*repair, "--no-recreate", "docker-proxy"],
+                        "Start Docker proxy",
+                        timeout=60,
+                    )
+                    held()
+                    # A failed acknowledgment can still have started it.
+                    if ready():
+                        held()
+                        return
+                    if transport_failed:
+                        print(
+                            "Docker proxy is still unavailable; recreating only that service once.",
+                            flush=True,
+                        )
+                        held()
+                        attempt(
+                            [*repair, "--force-recreate", "docker-proxy"],
+                            "Recreate Docker proxy",
+                            timeout=60,
+                        )
+                        held()
+                        if ready():
+                            held()
+                            return
+        except RuntimeError as exc:
+            errors.append(_redact_diagnostics(str(exc)))
+    fail()
+
+
 def _submit_legacy_direct(record, repo):
     """Transitional escape hatch: the old application-owned updater container.
 
-    Requires the target image's worker runtime and Docker proxy to work, so it
-    cannot repair an unhealthy MoonMind. Prefer the standalone controller.
+    Establishes the target image's container Docker transport from the host
+    before handing off. Prefer the independently owned standalone controller.
     """
     compose = run(
         [
@@ -854,6 +1207,12 @@ def _submit_legacy_direct(record, repo):
                 if override.exists():
                     command.extend(["-f", str(override)])
                     break
+        env = {
+            **os.environ,
+            "MOONMIND_IMAGE": record["image"],
+            "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
+        }
+        _ensure_legacy_docker_transport(command, repo, env)
         command.extend(
             [
                 "run",
@@ -882,23 +1241,7 @@ def _submit_legacy_direct(record, repo):
         return subprocess.run(
             command,
             cwd=repo,
-                env={
-                    **os.environ,
-                    "MOONMIND_IMAGE": record["image"],
-                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
-                    # The updater reaches Docker through docker-proxy, and
-                    # postgres/sandbox-egress-proxy are stateful substrate:
-                    # recreating them through a rewritten-bind render on every
-                    # release caused repeated proxy suicide (killing all
-                    # later docker calls) and a postgres removal. Host-
-                    # initiated updates still exclude that substrate from the
-                    # main pull/reconcile/verify stage while leaving it
-                    # running, so the controller never recreates its own
-                    # transport mid-update. The controller then reconciles
-                    # release-owned substrate whose definition drifted in a
-                    # staged pass after the main stack verifies, and fails
-                    # the release when that substrate does not converge.
-                },
+            env=env,
             check=False,
         ).returncode
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -147,25 +148,44 @@ def test_bare_invocation_without_running_controller_uses_application_updater(
     digest = "sha256:" + "c" * 64
     image = f"ghcr.io/moonladderstudios/moonmind@{digest}"
     launched = []
+    transport_ready = False
+    repairs = []
 
     def command(args, **kwargs):
+        nonlocal transport_ready
         if args[0] != "docker":
             return original_run(args, **kwargs)
         if args[1:3] == ["image", "inspect"]:
             output = json.dumps([{"RepoDigests": [image], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
-        elif args[1:3] == ["compose", "config"]:
-            output = json.dumps({"name": "existing-project", "services": {"api": {}}})
+        elif args[1] == "compose" and "config" in args:
+            output = json.dumps({"name": "existing-project", "services": {
+                "api": {}, "docker-proxy": {},
+                "temporal-worker-deployment-control": {
+                    "environment": {"DOCKER_HOST": "tcp://docker-proxy:2375"}
+                },
+            }})
         elif args[1] == "run":
             output = "services: {}"
         elif args[1] == "ps":
             output = ""
         elif args[1] == "compose":
-            launched.append(args)
+            if "up" in args:
+                assert args[-1] == "docker-proxy"
+                assert "--no-recreate" in args
+                repairs.append(args)
+                transport_ready = True
+            elif "info" in args:
+                if not transport_ready:
+                    return SimpleNamespace(returncode=1, stdout="", stderr="lookup docker-proxy: no such host")
+                return SimpleNamespace(returncode=0, stdout="28.0.0\n", stderr="")
+            else:
+                assert transport_ready
+                launched.append(args)
             output = ""
         else:
             assert args[1] == "pull"
             output = ""
-        return SimpleNamespace(returncode=0, stdout=output)
+        return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     def no_controller(request, timeout=None):
         if partial_install:
@@ -176,8 +196,12 @@ def test_bare_invocation_without_running_controller_uses_application_updater(
 
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update.urllib.request, "urlopen", no_controller)
+    monkeypatch.setattr(
+        update, "_legacy_transport_lease", lambda *_args: nullcontext(lambda: None)
+    )
     assert update.main(["--repo", str(repo)]) == 0
     assert len(launched) == 1
+    assert len(repairs) == 1
     assert "moonmind.workflows.skills.deployment_release" in launched[0]
     assert "--project-name" in launched[0] and "existing-project" in launched[0]
     assert "application-owned updater" in capsys.readouterr().out
@@ -915,11 +939,16 @@ def test_legacy_direct_propagates_compose_file_selection(tmp_path, monkeypatch):
     def fake_run(args, **kwargs):
         if args[0] == "docker" and len(args) > 1 and args[1] == "run":
             return "services: {}\n"
+        if "config" in args:
+            assert str(repo / "site.yaml") in args
+            return json.dumps({"services": {"temporal-worker-deployment-control": {
+                "environment": {"DOCKER_HOST": "tcp://docker-proxy:2375"}
+            }}})
         raise AssertionError(f"unexpected host docker command: {args}")
 
     def fake_subprocess_run(command, **kwargs):
         launched.append(command)
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0, stdout="28.0.0\n", stderr="")
 
     monkeypatch.setattr(update, "run", fake_run)
     monkeypatch.setattr(update.subprocess, "run", fake_subprocess_run)
@@ -930,9 +959,10 @@ def test_legacy_direct_propagates_compose_file_selection(tmp_path, monkeypatch):
         "context": {},
     }
     assert update._submit_legacy_direct(record, repo) == 0
-    assert len(launched) == 1
-    command = [str(part) for part in launched[0]]
-    assert str(repo / "site.yaml") in command
+    assert len(launched) == 2
+    assert "info" in launched[0]
+    assert "--submit" in launched[1]
+    assert all(str(repo / "site.yaml") in command for command in launched)
 
 
 def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
