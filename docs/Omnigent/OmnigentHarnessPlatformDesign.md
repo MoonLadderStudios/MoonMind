@@ -1109,7 +1109,10 @@ separated by one and two seconds, using the same
 admitted model, image, credentials, workspace, and egress policy. A successful CLI
 exit alone does not prove model availability: OpenCode can return its bundled
 catalog when a refresh fails. For qualified (`provider/model`) catalogs, only an
-observation containing the exact selected model permits launch. Claude Code
+observation containing the exact selected model permits launch. Codex
+`model/list` rows name bare Codex model slugs (`gpt-6.1-sol`), so only an
+observation whose row `id` or `model` equals the selected model permits launch.
+Claude Code
 catalogs list picker aliases and bare Anthropic ids (`opus[1m]` ->
 `claude-opus-5-5[1m]`), so the exact host evaluates the observed rows with its
 own upstream Claude serving rule and only a `served` answer permits launch.
