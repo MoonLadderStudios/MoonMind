@@ -283,14 +283,18 @@ holds the existing deployment kernel lock while the host repairs the transport.
 The host rechecks access under that lease, then starts only the proxy without
 recreating an existing container and retries readiness. If it remains unavailable (including a
 stale Docker Desktop/WSL socket bind), the host recreates only the proxy once
-and verifies access again. A working proxy stays intact. Explicit external
+and verifies access again. The lease is rechecked after each mutation and before
+accepting readiness; an abnormal holder exit blocks handoff even when cleanup
+confirms its container is gone. A working proxy stays intact. Explicit external
 Docker endpoints retain their settings and never trigger local proxy repair.
 Recovery uses the same selected Compose files, project, and deployment-owned
 settings as the handoff; failure stops before release handoff with the original
 redacted diagnostics. The detached updater continues to exclude its own
-transport from subsequent fleet recreation. Probes and the lease holder use
-`pull_policy: never` after image acquisition, so registry failures cannot trigger
-proxy repair. A workflow caller without an installed controller cannot restore
+transport from subsequent fleet recreation. Compose acquires a distinct worker
+image using the deployment's original pull policy, platform, and build configuration
+before probes and the lease holder use `pull_policy: never`. Acquisition failure
+stops before transport recovery, so registry failures cannot trigger proxy repair.
+A workflow caller without an installed controller cannot restore
 its unavailable Docker transport through that same endpoint; it reports
 `runner_unavailable`, and the independent host entrypoint restores the transport.
 

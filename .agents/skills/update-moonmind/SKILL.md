@@ -45,7 +45,9 @@ repair. Recovery preserves the selected Compose files and deployment settings.
 It rechecks transport after acquiring the lock and never repairs alongside a
 running deployment owner. The probe and lock holder disable image pulls through
 a service `pull_policy` overlay, preserving support for older Compose V2 releases.
-An explicit worker image is acquired when absent before those checks.
+Before those checks, Compose acquires a distinct worker image using the
+deployment's original pull policy, platform, and build configuration.
+Acquisition failure stops before transport recovery.
 Exhausted recovery stops before handoff and reports the original redacted
 errors; it does not claim that the release started.
 

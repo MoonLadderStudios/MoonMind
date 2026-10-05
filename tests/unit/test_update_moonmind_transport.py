@@ -92,11 +92,67 @@ def test_working_transport_preserves_proxy_and_explicit_endpoint(
     assert not Path(probe[probe.index("run") - 1]).exists()
 
 
-@pytest.mark.parametrize("cached", [False, True])
-def test_explicit_worker_image_is_acquired_before_transport_probe(
-    tmp_path, monkeypatch, cached
+@pytest.mark.parametrize("pull_policy", [None, "always", "never", "missing", "build"])
+def test_distinct_worker_acquisition_preserves_compose_policy_and_file_selection(
+    tmp_path, monkeypatch, pull_policy
 ):
     image = "registry.example/worker:operator-selected"
+    selected = [*COMMAND, "-f", str(tmp_path / "operator-override.json")]
+    worker = {
+        "image": image,
+        "platform": "linux/amd64",
+        "build": {"context": "./operator-worker"},
+        "environment": {"DOCKER_HOST": "tcp://operator-docker:2376"},
+    }
+    if pull_policy is not None:
+        worker["pull_policy"] = pull_policy
+    events = []
+    configs = []
+
+    def host_run(args, **kwargs):
+        if "config" in args:
+            configs.append(args)
+            return json.dumps({"services": {SERVICE: worker}})
+        assert args == [
+            *selected,
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "--entrypoint",
+            "docker",
+            SERVICE,
+            "--version",
+        ]
+        assert kwargs == {"cwd": tmp_path, "env": env}
+        events.append("acquire")
+        return "Docker version 28.0.0"
+
+    def subprocess_run(args, **kwargs):
+        if args[:3] == ["docker", "image", "inspect"]:
+            events.append("inspect")
+            return SimpleNamespace(returncode=0, stdout="cached-image", stderr="")
+        assert "run" in args and "info" in args
+        assert args[: len(selected)] == selected
+        overlay = json.loads(Path(args[args.index("run") - 1]).read_text())
+        assert overlay == {"services": {SERVICE: {"pull_policy": "never"}}}
+        events.append("probe")
+        return SimpleNamespace(returncode=0, stdout="28.0.0\n", stderr="")
+
+    monkeypatch.setattr(update, "run", host_run)
+    monkeypatch.setattr(update.subprocess, "run", subprocess_run)
+    env = {"MOONMIND_IMAGE": "registry.example/application@sha256:selected"}
+    update._ensure_legacy_docker_transport(selected, tmp_path, env)
+    assert configs[0] == [*selected, "config", "--format", "json"]
+    assert events == ["acquire", "probe"]
+
+
+@pytest.mark.parametrize(
+    "failure", ["No such image: operator-worker", "Registry refused image acquisition"]
+)
+def test_worker_acquisition_failure_stops_before_transport_probe_or_repair(
+    tmp_path, monkeypatch, failure
+):
     events = []
 
     def host_run(args, **kwargs):
@@ -105,45 +161,63 @@ def test_explicit_worker_image_is_acquired_before_transport_probe(
                 {
                     "services": {
                         SERVICE: {
-                            "image": image,
-                            "environment": {
-                                "DOCKER_HOST": "tcp://operator-docker:2376"
-                            },
-                        }
+                            "image": "registry.example/worker:operator-selected",
+                            "pull_policy": "never",
+                            "environment": {"DOCKER_HOST": "tcp://docker-proxy:2375"},
+                        },
+                        "docker-proxy": {},
                     }
                 }
             )
-        assert args == ["docker", "pull", image]
-        events.append("pull")
-        return ""
+        events.append("acquire")
+        raise RuntimeError(failure)
 
     def subprocess_run(args, **kwargs):
-        if args[:3] == ["docker", "image", "inspect"]:
-            assert args[-1] == image
-            events.append("inspect")
-            return SimpleNamespace(
-                returncode=0 if cached else 1,
-                stdout="image-id" if cached else "",
-                stderr=(
-                    ""
-                    if cached
-                    else f"Error response from daemon: No such image: {image}"
-                ),
-            )
-        assert "run" in args and "info" in args
+        events.append("inspect" if "inspect" in args else "probe")
+        return SimpleNamespace(returncode=0, stdout="cached-image", stderr="")
+
+    monkeypatch.setattr(update, "run", host_run)
+    monkeypatch.setattr(update.subprocess, "run", subprocess_run)
+    monkeypatch.setattr(
+        update, "_legacy_transport_lease", lambda *_args: events.append("lease")
+    )
+    with pytest.raises(RuntimeError, match=failure):
+        update._ensure_legacy_docker_transport(
+            COMMAND,
+            tmp_path,
+            {"MOONMIND_IMAGE": "registry.example/application@sha256:selected"},
+        )
+    assert events == ["acquire"]
+
+
+def test_verified_default_worker_image_does_not_need_another_acquisition(
+    tmp_path, monkeypatch
+):
+    image = "registry.example/application@sha256:selected"
+    events = []
+
+    def host_run(args, **kwargs):
+        assert "config" in args
+        return json.dumps(
+            {
+                "services": {
+                    SERVICE: {
+                        "image": image,
+                        "environment": {"DOCKER_HOST": "tcp://operator-docker:2376"},
+                    }
+                }
+            }
+        )
+
+    def subprocess_run(args, **kwargs):
+        assert "info" in args
         events.append("probe")
         return SimpleNamespace(returncode=0, stdout="28.0.0\n", stderr="")
 
     monkeypatch.setattr(update, "run", host_run)
     monkeypatch.setattr(update.subprocess, "run", subprocess_run)
-    update._ensure_legacy_docker_transport(
-        COMMAND,
-        tmp_path,
-        {
-            "MOONMIND_IMAGE": "registry.example/application@sha256:selected",
-        },
-    )
-    assert events == (["inspect", "probe"] if cached else ["inspect", "pull", "probe"])
+    update._ensure_legacy_docker_transport(COMMAND, tmp_path, {"MOONMIND_IMAGE": image})
+    assert events == ["probe"]
 
 
 def test_proxy_restored_by_concurrent_owner_is_reprobed_under_shared_lease(
@@ -222,6 +296,51 @@ def test_lost_shared_lease_prevents_host_proxy_mutation(tmp_path, monkeypatch):
     assert "holder exited" in str(error.value)
     assert DNS_ERROR in str(error.value)
     assert not any("up" in command for command in commands)
+
+
+@pytest.mark.parametrize(
+    "loss_point",
+    ["locked_probe", "start", "start_probe", "recreate", "recreate_probe"],
+)
+def test_lease_loss_during_recovery_prevents_handoff(tmp_path, monkeypatch, loss_point):
+    outcomes = (
+        [DNS_ERROR, "ok"]
+        if loss_point == "locked_probe"
+        else [DNS_ERROR] * (5 if loss_point.startswith("recreate") else 2) + ["ok"]
+    )
+    commands, env = transport(monkeypatch, outcomes)
+    original_run = update.subprocess.run
+    counts = {"run": 0, "up": 0}
+    lost = False
+
+    def run(args, **kwargs):
+        nonlocal lost
+        result = original_run(args, **kwargs)
+        for operation in counts:
+            if operation in args:
+                counts[operation] += 1
+        lost = lost or (
+            (loss_point == "locked_probe" and counts["run"] == 2)
+            or (loss_point == "start" and counts["up"] == 1)
+            or (loss_point == "start_probe" and counts["run"] == 3)
+            or (loss_point == "recreate" and counts["up"] == 2)
+            or (loss_point == "recreate_probe" and counts["run"] == 6)
+        )
+        return result
+
+    def held():
+        if lost:
+            raise RuntimeError("Shared deployment lock holder exited")
+
+    @contextmanager
+    def lease(*_args):
+        yield held
+
+    monkeypatch.setattr(update.subprocess, "run", run)
+    monkeypatch.setattr(update, "_legacy_transport_lease", lease)
+    with pytest.raises(RuntimeError, match="holder exited"):
+        update._ensure_legacy_docker_transport(COMMAND, tmp_path, env)
+    assert len([command for command in commands if "up" in command]) <= 2
 
 
 def test_missing_or_stopped_proxy_is_started_before_handoff(tmp_path, monkeypatch):
@@ -389,6 +508,24 @@ def test_lease_guard_detects_holder_exit_before_host_mutation(tmp_path, monkeypa
         children[0].returncode = 1
         with pytest.raises(RuntimeError, match="holder exited"):
             held()
+
+
+def test_abnormal_holder_exit_blocks_handoff_even_when_container_is_gone(
+    tmp_path, monkeypatch
+):
+    children, _ = lease_child(monkeypatch, update._LEGACY_TRANSPORT_LEASE_READY + "\n")
+    monkeypatch.setattr(
+        update.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="Error: No such container"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="holder exited"):
+        with update._legacy_transport_lease(COMMAND, tmp_path, {}):
+            children[0].returncode = 137
+            # Closing stdin cannot reset the status of an already exited child.
+            children[0].stdin.close = lambda: None
 
 
 def test_lease_holder_refusal_reports_redacted_diagnostics(tmp_path, monkeypatch):
