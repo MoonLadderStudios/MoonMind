@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -69,7 +71,10 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.oauth_host_runtime import (
+    CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+    OmnigentOAuthHostRuntime,
+)
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
@@ -757,6 +762,152 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
     assert command[-3:] == ("codex", "login", "status")
     assert command[image_index + 1 : image_index + 3] == ("-u", "OPENAI_API_KEY")
     assert all(index > image_index for index, item in enumerate(command) if item == "-u")
+
+
+def _codex_auth_json(*, expires_at: float | None, secret: str) -> dict:
+    def jwt(claims: dict) -> str:
+        def segment(value: dict) -> str:
+            raw = json.dumps(value).encode()
+            return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+        return f"{segment({'alg': 'RS256'})}.{segment(claims)}.{secret}"
+
+    if expires_at is None:
+        return {"auth_mode": "apikey", "OPENAI_API_KEY": secret, "tokens": None}
+    return {
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": jwt({"exp": int(expires_at), "email": "operator@example.com"}),
+            "access_token": jwt({"exp": int(expires_at)}),
+            "refresh_token": f"rt.{secret}",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("auth", "expected"),
+    [
+        ("expired", "expired"),
+        ("current", "current"),
+        ("api-key", "unknown"),
+        ("missing", "unknown"),
+        ("malformed", "unknown"),
+    ],
+)
+def test_codex_access_token_expiry_probe_prints_only_a_verdict(
+    tmp_path, auth: str, expected: str
+) -> None:
+    secret = "never-print-this-token-material"
+    if auth != "missing":
+        expires_at = {
+            "expired": time.time() - 60,
+            "current": time.time() + 3600,
+            "api-key": None,
+            "malformed": None,
+        }[auth]
+        document = (
+            "{not json"
+            if auth == "malformed"
+            else json.dumps(_codex_auth_json(expires_at=expires_at, secret=secret))
+        )
+        (tmp_path / "auth.json").write_text(document)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", CODEX_ACCESS_TOKEN_EXPIRY_PROBE, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+
+    assert completed.stdout == f"{expected}\n"
+    assert secret not in completed.stdout + completed.stderr
+
+
+@pytest.mark.asyncio
+async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch = {
+        "hostImageRef": "example.invalid/omnigent-host@sha256:" + "a" * 64,
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+    }
+    run = AsyncMock(return_value=(0, "expired\n", ""))
+    monkeypatch.setattr(
+        OmnigentOAuthHostRuntime,
+        "_validate_effective_launch",
+        MagicMock(return_value=launch),
+    )
+    monkeypatch.setattr(OmnigentOAuthHostRuntime, "_run", run)
+
+    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+        binding=_binding(), effective_launch=launch
+    )
+
+    assert verdict == "expired"
+    command = run.await_args.args
+    assert command[:3] == ("docker", "run", "--rm")
+    assert command[command.index("--network") + 1] == "none"
+    assert "--read-only" in command
+    assert "type=volume,src=codex_auth_volume,dst=/home/app/.codex,readonly" in command
+    image_index = command.index(launch["hostImageRef"])
+    assert command[image_index - 2 : image_index] == ("--entrypoint", "python3")
+    assert command[image_index + 1 :] == (
+        "-c",
+        CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+        "/home/app/.codex",
+    )
+    assert run.await_args.kwargs == {"check": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", ["exit-nonzero", "unexpected-output", "docker-error", "claude"]
+)
+async def test_credential_expiry_probe_reports_unknown_without_proof(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    launch = {
+        "hostImageRef": "example.invalid/omnigent-host@sha256:" + "a" * 64,
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+    }
+    run = AsyncMock(
+        return_value={
+            "exit-nonzero": (125, "", "Unable to find image"),
+            "unexpected-output": (0, "expired soon\n", ""),
+            "claude": (0, "expired\n", ""),
+        }.get(outcome),
+        side_effect=(
+            OSError("docker unavailable") if outcome == "docker-error" else None
+        ),
+    )
+    monkeypatch.setattr(
+        OmnigentOAuthHostRuntime,
+        "_validate_effective_launch",
+        MagicMock(return_value=launch),
+    )
+    monkeypatch.setattr(OmnigentOAuthHostRuntime, "_run", run)
+    binding = _binding()
+    if outcome == "claude":
+        mount = binding.credential_mount_ref
+        volume = mount.auth_volume_ref.model_copy(update={"runtime_id": "claude_code"})
+        binding = binding.model_copy(
+            update={
+                "credential_mount_ref": mount.model_copy(
+                    update={"auth_volume_ref": volume}
+                )
+            }
+        )
+
+    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+        binding=binding, effective_launch=launch
+    )
+
+    assert verdict == "unknown"
+    if outcome == "claude":
+        run.assert_not_awaited()
 
 
 @pytest.mark.asyncio

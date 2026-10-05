@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ from temporalio import activity
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+logger = logging.getLogger(__name__)
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
     "instructionDigest",
@@ -902,7 +905,9 @@ async def omnigent_execute_activity(
     from moonmind.omnigent.execute import omnigent_activity_heartbeat
 
     async with omnigent_activity_heartbeat():
-        return await _omnigent_execute_activity(request)
+        return await _classify_expired_codex_login(
+            await _omnigent_execute_activity(request)
+        )
 
 
 def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
@@ -938,6 +943,84 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
         providerErrorCode=typed_code,
         retryRecommendation=remediation_for(typed_code),
         metadata=_capacity_cleanup_receipt(exc),
+    )
+
+
+# Failures of a marked turn the native harness never started: Omnigent's own
+# undelivered startup failure, or MoonMind's turn-start watchdog.
+_HARNESS_NEVER_STARTED_CODES = frozenset(
+    {"agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"}
+)
+
+
+async def _classify_expired_codex_login(result: AgentRunResult) -> AgentRunResult:
+    """Report a never-started Codex turn on an expired login as reauthentication.
+
+    A ChatGPT login whose refresh token has expired still passes ``codex login
+    status``, so Codex parks on its sign-in screen and Omnigent reports only
+    that the harness never started. A fresh host cannot fix that; the operator
+    must re-authenticate the Provider Profile. When the profile-owned
+    credential home proves the expiry, the result takes the canonical
+    ``codex_reauth_required``/``reauthenticate`` classification, which the
+    workflow does not retry. Without that proof the original failure stands.
+    """
+
+    from moonmind.omnigent.failure_classification import (
+        OmnigentFailureReason,
+        classify_omnigent_failure,
+    )
+
+    if result.provider_error_code not in _HARNESS_NEVER_STARTED_CODES:
+        return result
+    metadata = dict(result.metadata or {})
+    capture = metadata.get("omnigentCheckpointCapture")
+    profile_id = (
+        str(capture.get("providerProfileId") or "").strip()
+        if isinstance(capture, Mapping)
+        else ""
+    )
+    if not profile_id:
+        return result
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    try:
+        binding = await OmnigentOAuthHostRepository(
+            async_session_maker
+        ).get_binding_for_profile(profile_id)
+    except Exception:
+        logger.warning(
+            "Codex login expiry check could not load the host binding for %s",
+            profile_id,
+            exc_info=True,
+        )
+        return result
+    if binding is None:
+        return result
+    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+        binding=binding, effective_launch=binding.effective_launch_snapshot
+    )
+    if verdict != "expired":
+        return result
+    metadata["credentialExpiry"] = {
+        "verdict": "expired",
+        "harnessStartFailureCode": result.provider_error_code,
+    }
+    return result.model_copy(
+        update={
+            "summary": (
+                f"The ChatGPT login stored for Provider Profile {profile_id} has "
+                "expired and Codex could not refresh it, so Codex is waiting for "
+                "a sign-in; re-authenticate the Provider Profile, then rerun."
+            ),
+            "failure_class": classify_omnigent_failure(
+                OmnigentFailureReason.AUTH_FAILURE
+            ),
+            "provider_error_code": "codex_reauth_required",
+            "retry_recommendation": "reauthenticate",
+            "metadata": metadata,
+        }
     )
 
 
