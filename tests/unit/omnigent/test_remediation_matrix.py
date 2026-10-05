@@ -1784,3 +1784,71 @@ def test_scoped_evidence_marker_is_informational_not_rollback(tmp_path) -> None:
     assert len(marker_alerts) == 1
     assert marker_alerts[0]["severity"] == "warning"
     assert marker_alerts[0]["operatorAction"] == "scoped_evidence_not_full_release"
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_runtime_observation_never_requires_matrix_rollback(tmp_path, missing):
+    if missing:
+        status = evaluate_remediation_release(evidence=None, now=NOW)
+    else:
+        release, release_path = _stage_release(tmp_path)
+        status = evaluate_remediation_release(
+            evidence=release, evidence_document_path=release_path, now=NOW
+        )
+    strict = status.as_dict()
+    observation = status.as_dict(advisory=True)
+    assert observation["advisory"] is True
+    assert observation["requiredRows"] == []
+    assert "catalog" not in observation
+    assert observation["rollbackRequired"] is False
+    assert observation["manualPromotionAllowed"] is False
+    assert observation["manualDiagnosisSupported"] is (not missing)
+    assert observation["manualMutationSupported"] is (not missing)
+    assert observation["autonomousRolloutAuthorized"] is False
+    assert observation["blockers"] == strict["blockers"]
+    assert all(alert["severity"] == "warning" for alert in observation["alerts"])
+    assert strict["requiredRows"] == list(REQUIRED_REMEDIATION_MATRIX_ROWS)
+    assert strict["rollbackRequired"] is missing
+    assert strict["manualPromotionAllowed"] is (not missing)
+
+
+def test_malformed_nested_record_is_unverified_observation(tmp_path):
+    from moonmind.omnigent.remediation_matrix import (
+        REMEDIATION_RELEASE_EVIDENCE_ENV,
+        load_remediation_release_status,
+    )
+
+    release, release_path = _stage_release(tmp_path)
+    manifest = release["evidenceManifest"][0]
+    artifact_path = release_path.parent / manifest["ref"]
+    artifact = json.loads(artifact_path.read_bytes())
+    artifact["rows"][0]["evidenceManifest"][0]["type"] = {}
+    content = _artifact_bytes(artifact)
+    artifact_path.write_bytes(content)
+    manifest["sha256"] = hashlib.sha256(content).hexdigest()
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+    status = load_remediation_release_status(
+        env={REMEDIATION_RELEASE_EVIDENCE_ENV: str(release_path)}, now=NOW
+    )
+    assert status.manual_diagnosis_supported is False
+    assert status.manual_mutation_supported is False
+    assert status.autonomous_rollout_authorized is False
+    assert "remediation_release_evidence_unreadable" in status.blockers
+    assert status.as_dict()["rollbackRequired"] is True
+    assert status.as_dict(advisory=True)["rollbackRequired"] is False
+
+
+@pytest.mark.parametrize("advisory", [False, True])
+def test_unvalidated_summary_never_becomes_published_evidence(advisory):
+    status = evaluate_remediation_release(
+        evidence={
+            "telemetry": {"callerClaim": "passed"},
+            "thresholds": {"withinLimits": True},
+        },
+        now=NOW,
+    )
+    projection = status.as_dict(advisory=advisory)
+    assert projection["telemetry"] == {}
+    assert projection["thresholds"] == {}
+    assert projection["manualDiagnosisSupported"] is False
+    assert projection["manualMutationSupported"] is False
