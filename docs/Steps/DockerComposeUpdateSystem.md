@@ -5,7 +5,7 @@
 **Status:** Desired State
 **Owner:** MoonMind Engineering
 **Authority:** One portable deployment controller, in-place Compose updates, and recoverable local deployment state.
-**Last Updated:** 2026-10-01
+**Last Updated:** 2026-10-04
 
 Related: [Agent Instructions](../../AGENTS.md), [Temporal Architecture](../Temporal/TemporalArchitecture.md), [Provider Profiles](../Security/ProviderProfiles.md), [Secrets System](../Security/SecretsSystem.md).
 
@@ -186,8 +186,8 @@ example a MinIO digest change) is staged while present images are never
 refreshed, and `up --pull never` cannot fail with a missing image. These are semantic commands after resolving
 the correct deployment files, env overlays, project, and service set, not
 permission to operate on an arbitrary project. The deployment-owned Compose file set (including `COMPOSE_FILE` selection) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate the safe shape of project, paths, services, and image references before persistence. Do not use routine
-`docker compose down`, force-recreate, or volume/image pruning; those are
-explicit repair operations only, never automatic escalation. Recreate only
+`docker compose down`, fleet-wide force-recreate, or volume/image pruning;
+destructive cleanup remains an explicit maintenance operation. Recreate only
 changed services by default.
 
 The updater reaches Docker through `docker-proxy`, so the main pass never
@@ -273,6 +273,30 @@ The existing deployment-control worker is a submission/observation adapter where
 ### 11.2 Standalone controller project
 
 The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity, and the API reaches the same port under the controller's alias on `deployment-controller-network`. That network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target (Settings Operations, the workflow adapter) uses the target the controller derives: the MoonMind Compose project bootstrap recorded in the controller identity (else `COMPOSE_PROJECT_NAME` from the deployment `.env`), `COMPOSE_FILE` from that `.env` (else `docker-compose.yaml` plus its override) in its read-only checkout mount, and the services that selection renders minus the Docker transport substrate. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs a working controller, the host entrypoint updates through the application-owned updater when no controller secret exists, or when bootstrap left a secret but no reachable endpoint, operation record, or Compose container. A controller with recorded work retains recovery authority, explicit controller selection is never bypassed, and `--legacy-direct` is refused once a controller owns the deployment. This fallback is removed once the entrypoint can install a published controller image itself.
+
+Before the transitional host path hands off a release, it verifies Docker
+access from a one-off using the updater service's rendered environment and
+networks. Host Docker access alone does not establish that the child can
+reach its transport. When the configured endpoint is `docker-proxy` and the
+probe fails, a trusted one-off using the same rendered deployment state mount
+holds the existing deployment kernel lock while the host repairs the transport.
+The host rechecks access under that lease, then starts only the proxy without
+recreating an existing container and retries readiness. If it remains unavailable (including a
+stale Docker Desktop/WSL socket bind), the host recreates only the proxy once
+and verifies access again. The lease is rechecked after each mutation and before
+accepting readiness; an abnormal holder exit blocks handoff even when cleanup
+confirms its container is gone. A working proxy stays intact. Explicit external
+Docker endpoints retain their settings and never trigger local proxy repair.
+Recovery uses the same selected Compose files, project, and deployment-owned
+settings as the handoff; failure stops before release handoff with the original
+redacted diagnostics. The detached updater continues to exclude its own
+transport from subsequent fleet recreation. Compose acquires a distinct worker
+image using the deployment's original pull policy, platform, and build configuration
+before probes and the lease holder use `pull_policy: never`. Acquisition failure
+stops before transport recovery, so registry failures cannot trigger proxy repair.
+A workflow caller without an installed controller cannot restore
+its unavailable Docker transport through that same endpoint; it reports
+`runner_unavailable`, and the independent host entrypoint restores the transport.
 
 ### 11.3 Runner image policy
 
