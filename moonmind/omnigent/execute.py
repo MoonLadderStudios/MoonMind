@@ -1570,36 +1570,67 @@ def _marked_turn_failure_snapshot(
     matching session, latest marked user message, and absence of an active
     response own this failure together; a replayed edge or unrelated turn does
     not. Preserve the error even if a later idle projection already erased it.
+
+    A native harness that never started (for example Codex parked on its
+    sign-in screen) fails the turn with a ``response.failed`` whose error is
+    marked ``undelivered``: the marked message stays queued in
+    ``pending_inputs`` and is never projected as a user item. That queued
+    message, not an item, then proves the failure belongs to this turn.
     """
-    error = event.get("error")
+    if event.get("type") == "response.failed":
+        response = event.get("response")
+        error = response.get("error") if isinstance(response, Mapping) else None
+        if not isinstance(error, Mapping) or error.get("undelivered") is not True:
+            return None
+        current_turn_field = "pending_inputs"
+    elif (
+        event.get("type") == "session.status"
+        and event.get("status") == "failed"
+        and event.get("conversation_id") == session_id
+    ):
+        error = event.get("error")
+        current_turn_field = "items"
+    else:
+        return None
     if (
         not arrived_after_message_post
-        or event.get("type") != "session.status"
-        or event.get("status") != "failed"
-        or event.get("conversation_id") != session_id
         or not isinstance(error, Mapping)
         or not isinstance(error.get("message"), str)
         or not error["message"].strip()
         or _snapshot_projects_active_response(snapshot)
     ):
         return None
-    items = snapshot.get("items")
-    if not isinstance(items, list):
+    entries = snapshot.get(current_turn_field)
+    if not isinstance(entries, list):
         return None
-    latest_user = next(
-        (
-            item
-            for item in reversed(items)
-            if isinstance(item, Mapping)
-            and item.get("type") == "message"
-            and isinstance(item.get("data"), Mapping)
-            and item["data"].get("role") == "user"
-        ),
-        None,
-    )
-    if latest_user is None or not _nested_value_contains_text(
-        latest_user, needle=marker
-    ):
+    if current_turn_field == "pending_inputs":
+        marked_entry = next(
+            (
+                entry
+                for entry in entries
+                if _nested_value_contains_text(entry, needle=marker)
+            ),
+            None,
+        )
+    else:
+        latest_user = next(
+            (
+                item
+                for item in reversed(entries)
+                if isinstance(item, Mapping)
+                and item.get("type") == "message"
+                and isinstance(item.get("data"), Mapping)
+                and item["data"].get("role") == "user"
+            ),
+            None,
+        )
+        marked_entry = (
+            latest_user
+            if latest_user is not None
+            and _nested_value_contains_text(latest_user, needle=marker)
+            else None
+        )
+    if marked_entry is None:
         return None
     safe_error = redact_raw_events([dict(error)])[0]
     return {

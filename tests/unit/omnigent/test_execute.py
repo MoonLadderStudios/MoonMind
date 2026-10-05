@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -1639,6 +1640,150 @@ def test_native_failure_requires_current_turn_authority(scenario, source):
             arrived_after_message_post=scenario != "replayed",
         )
     assert failure is None
+
+
+def _undelivered_snapshot(marker: str) -> dict[str, Any]:
+    """The marked message is still queued: Codex never accepted it as an item."""
+    return {
+        "status": "idle",
+        "active_response_id": None,
+        "items": [{"id": "terminal-resource", "type": "resource_event"}],
+        "pending_inputs": [{"content": [{"type": "input_text", "text": marker}]}],
+    }
+
+
+def _undelivered_failure_event() -> dict[str, Any]:
+    replay = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/codex_startup_pending_undelivered.json"
+        ).read_text()
+    )
+    return copy.deepcopy(replay["events"][-1])
+
+
+def test_undelivered_response_failure_is_marked_turn_failure():
+    failure = _marked_turn_failure_snapshot(
+        _undelivered_failure_event(),
+        _undelivered_snapshot("current-marker"),
+        session_id="session-1",
+        marker="current-marker",
+        arrived_after_message_post=True,
+    )
+
+    assert failure is not None
+    assert failure["status"] == "failed"
+    assert failure["providerErrorCode"] == "agent_startup_pending"
+    assert failure["last_task_error"]["code"] == "agent_startup_pending"
+    assert "still starting" in failure["summary"]
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["replayed", "delivered", "not-pending", "active", "blank", "no-error"],
+)
+def test_undelivered_response_failure_requires_current_turn_authority(scenario):
+    snapshot = _undelivered_snapshot("current-marker")
+    event = _undelivered_failure_event()
+    error = event["response"]["error"]
+    if scenario == "delivered":
+        del error["undelivered"]
+    elif scenario == "not-pending":
+        snapshot["pending_inputs"] = []
+    elif scenario == "active":
+        snapshot["active_response_id"] = "live-response"
+    elif scenario == "blank":
+        error["message"] = " "
+    elif scenario == "no-error":
+        event["response"]["error"] = None
+
+    assert (
+        _marked_turn_failure_snapshot(
+            event,
+            snapshot,
+            session_id="session-1",
+            marker="current-marker",
+            arrived_after_message_post=scenario != "replayed",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(10)
+async def test_undelivered_startup_failure_does_not_wait_for_turn_start_budget(
+    monkeypatch, tmp_path
+):
+    """Omnigent's undelivered turn failure ends the attempt with its own cause.
+
+    The production turn-start budget (300s) is kept, so only the live failure
+    edge can finish this test inside its timeout.
+    """
+    replay = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/codex_startup_pending_undelivered.json"
+        ).read_text()
+    )
+    marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
+    posts = []
+    posted = asyncio.Event()
+
+    class Client:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self):
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload):
+            return {"id": "session-1"}
+
+        async def post_event(self, session_id, payload):
+            posts.append(session_id)
+            posted.set()
+            return {"pending_id": "pending-1", "queued": True}
+
+        async def stream_events(self, session_id):
+            await posted.wait()
+            for event in replay["events"]:
+                yield event
+                await asyncio.sleep(0)
+            await asyncio.Event().wait()
+
+        async def get_session(self, session_id):
+            if not posted.is_set():
+                return {"status": "idle", "active_response_id": None, "items": []}
+            return _undelivered_snapshot(marker)
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
+    store = _RecordingBridgeStore()
+    request = _request().model_copy(
+        update={
+            "parameters": {
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "assess issue"},
+                }
+            }
+        }
+    )
+
+    result = await run_omnigent_execution(
+        request,
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=store,
+    )
+
+    assert posts == ["session-1"]
+    assert result.provider_error_code == "agent_startup_pending"
+    assert "still starting" in result.summary
+    assert "never started" not in result.summary
+    assert result.diagnostics_ref and result.output_refs
+    assert store.terminal_calls[-1]["status"] == "failed"
 
 
 @pytest.mark.parametrize("index", [None, -1, True, "0", 99])

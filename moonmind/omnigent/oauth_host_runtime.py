@@ -262,6 +262,28 @@ _ATTACHMENT_ARTIFACT_PRINCIPAL = "service:omnigent_workspace_attachment"
 # payload is rejected mid-stream instead of after full in-memory materialization.
 _RESTORE_STREAM_CHUNK_BYTES = 1024 * 1024
 
+# Run as ``python3 -c <probe> <codex home>`` inside a network-less, read-only
+# host-image container. It prints exactly one verdict word and never token
+# material. ``ended`` means OpenAI minted the stored ChatGPT access token with
+# no lifetime (``exp <= iat``): the login session itself is over and no
+# refresh can extend it. ``active`` covers every other readable token,
+# including one that merely aged out and may still refresh. ``unknown`` covers
+# API-key auth and unreadable or unexpected layouts.
+CODEX_LOGIN_SESSION_PROBE = """\
+import base64, json, sys, time
+try:
+    with open(sys.argv[1] + "/auth.json", encoding="utf-8") as handle:
+        token = json.load(handle)["tokens"]["access_token"]
+    claims = token.split(".")[1]
+    claims += "=" * (-len(claims) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(claims))
+    expires_at = float(claims["exp"])
+    ended = expires_at <= float(claims["iat"]) and expires_at <= time.time()
+    print("ended" if ended else "active")
+except Exception:
+    print("unknown")
+"""
+
 _RUNTIME_ADAPTERS = {
     "codex_cli": {
         "harness": "codex-native",
@@ -587,6 +609,70 @@ class OmnigentOAuthHostRuntime:
             "loginStatus": "authenticated",
             "validationMode": "credential_only",
         }
+
+    @classmethod
+    async def probe_login_session(
+        cls,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        effective_launch: Mapping[str, Any] | None,
+    ) -> str:
+        """Report whether the profile's stored Codex login session has ended.
+
+        ``codex login status`` only checks that tokens are present, so a
+        ChatGPT login whose session has ended still reports signed in while
+        the TUI parks on its sign-in screen. An access token that merely aged
+        out proves nothing (Codex may refresh it once started), but OpenAI
+        refreshing an ended session mints a token with no lifetime, which is
+        provider-issued proof that only a new sign-in can help. Returns
+        ``ended``, ``active``, or ``unknown``; the network-less, read-only
+        container prints only that verdict, never token material.
+        """
+
+        if binding.credential_mount_ref.auth_volume_ref.runtime_id != "codex_cli":
+            return "unknown"
+        try:
+            launch = cls._validate_effective_launch(
+                binding=binding, effective_launch=effective_launch
+            )
+            adapter = cls._runtime_adapter(binding)
+            volume = binding.credential_mount_ref.auth_volume_ref.volume_ref
+            returncode, stdout, _stderr = await asyncio.wait_for(
+                cls._run(
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    f"{launch['runtimeUid']}:{launch['runtimeGid']}",
+                    "--network",
+                    "none",
+                    *structured_container_security_args(),
+                    "--read-only",
+                    "--mount",
+                    f"type=volume,src={volume},dst={adapter['home']},readonly",
+                    "--entrypoint",
+                    "python3",
+                    str(launch["hostImageRef"]),
+                    "-c",
+                    CODEX_LOGIN_SESSION_PROBE,
+                    str(adapter["home"]),
+                    check=False,
+                ),
+                timeout=60,
+            )
+        except Exception:
+            # Best effort: an unavailable probe must not replace the original
+            # startup failure with a credential verdict it could not prove.
+            logger.warning(
+                "Codex login session probe unavailable for profile %s",
+                binding.provider_profile_id,
+                exc_info=True,
+            )
+            return "unknown"
+        verdict = stdout.strip()
+        if returncode != 0 or verdict not in {"ended", "active"}:
+            return "unknown"
+        return verdict
 
     async def prepare_host(
         self,
