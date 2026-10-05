@@ -892,6 +892,7 @@ def _legacy_transport_lease(command, repo, env):
                 # EOF releases the kernel lease before the release handoff.
                 # If that acknowledgment is lost, stop only our named holder.
                 primary_error = sys.exc_info()[0] is not None
+                status = None
                 try:
                     try:
                         process.stdin.close()
@@ -934,12 +935,46 @@ def _legacy_transport_lease(command, repo, env):
                     if not primary_error:
                         raise RuntimeError(message) from None
                     print(message, flush=True)
+                if status not in (None, 0):
+                    message = (
+                        f"Shared deployment lock holder exited with status {status}.\n"
+                        + _redact_diagnostics(log.read_text(errors="replace"))[
+                            -_MAX_DIAGNOSTIC_CHARS:
+                        ]
+                    )
+                    if not primary_error:
+                        raise RuntimeError(message)
+                    print(message, flush=True)
 
 
 def _ensure_legacy_docker_transport(command, repo, env):
-    # The target image was already acquired and verified by the host. Compose
-    # run lacks --pull on supported older V2 releases, so an overlay disables
-    # registry access without altering the deployment-owned service boundary.
+    service = "temporal-worker-deployment-control"
+    rendered = json.loads(
+        run([*command, "config", "--format", "json"], cwd=repo, env=env)
+    )
+    worker_image = rendered.get("services", {}).get(service, {}).get("image")
+    # The target image was already acquired and verified by the host. A
+    # distinct worker image retains its deployment-owned acquisition policy,
+    # platform and build configuration through Compose, before probes disable
+    # registry access. The client version command needs no Docker API access.
+    if worker_image and worker_image != env.get("MOONMIND_IMAGE"):
+        run(
+            [
+                *command,
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "--entrypoint",
+                "docker",
+                service,
+                "--version",
+            ],
+            cwd=repo,
+            env=env,
+        )
+    # Compose run lacks --pull on supported older V2 releases, so an overlay
+    # disables pulls without altering the deployment-owned service boundary.
     with tempfile.TemporaryDirectory(prefix="moonmind-transport-policy-") as temp:
         path = Path(temp) / "compose.json"
         path.write_text(
@@ -967,27 +1002,6 @@ def _check_legacy_docker_transport(command, repo, env):
         run([*command, "config", "--format", "json"], cwd=repo, env=env)
     )
     configured = rendered.get("services", {})
-    # An explicit deployment-worker image can differ from the application
-    # image acquired during release selection. Preserve that choice and the
-    # previous pull-if-missing behavior before disabling acquisition in probes.
-    worker_image = configured.get(service, {}).get("image")
-    if worker_image and worker_image != env.get("MOONMIND_IMAGE"):
-        inspected = subprocess.run(
-            ["docker", "image", "inspect", worker_image],
-            cwd=repo,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if inspected.returncode:
-            diagnostic = f"{inspected.stdout or ''}\n{inspected.stderr or ''}"
-            if "no such image" not in diagnostic.lower():
-                raise RuntimeError(
-                    "Updater image inspection failed before release handoff:\n"
-                    + _redact_diagnostics(diagnostic)[-_MAX_DIAGNOSTIC_CHARS:]
-                )
-            run(["docker", "pull", worker_image], cwd=repo, env=env)
     endpoint = configured.get(service, {}).get("environment", {}).get("DOCKER_HOST", "")
     probe = [
         *command,
@@ -1093,6 +1107,7 @@ def _check_legacy_docker_transport(command, repo, env):
                 # Another updater may have restored it while we acquired the
                 # shared lock. Reconcile before any host mutation.
                 if attempt(probe, "Docker access probe"):
+                    held()
                     return
                 if transport_failed:
                     print(
@@ -1114,8 +1129,10 @@ def _check_legacy_docker_transport(command, repo, env):
                         "Start Docker proxy",
                         timeout=60,
                     )
+                    held()
                     # A failed acknowledgment can still have started it.
                     if ready():
+                        held()
                         return
                     if transport_failed:
                         print(
@@ -1128,7 +1145,9 @@ def _check_legacy_docker_transport(command, repo, env):
                             "Recreate Docker proxy",
                             timeout=60,
                         )
+                        held()
                         if ready():
+                            held()
                             return
         except RuntimeError as exc:
             errors.append(_redact_diagnostics(str(exc)))

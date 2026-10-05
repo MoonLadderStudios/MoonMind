@@ -320,3 +320,88 @@ asyncio.run(hold())
     )
     assert stack["id"]("docker-proxy")
     assert stack["id"]("sentinel") == sentinel
+
+
+def test_lost_real_lease_holder_blocks_handoff(transport_stack, monkeypatch):
+    stack = transport_stack
+    sentinel = stack["id"]("sentinel")
+    run = subprocess.run
+    killed = []
+
+    def lose_holder_after_proxy_start(args, **kwargs):
+        result = run(args, **kwargs)
+        if "up" in args and "--no-recreate" in args and args[-1] == "docker-proxy":
+            holders = _run(
+                [
+                    "docker",
+                    "ps",
+                    "-q",
+                    "--filter",
+                    "label=com.docker.compose.project="
+                    + stack["command"][stack["command"].index("--project-name") + 1],
+                    "--filter",
+                    "name=moonmind-transport-lease-",
+                ],
+                cwd=stack["repo"],
+                env=stack["env"],
+            ).stdout.split()
+            assert len(holders) == 1
+            _run(
+                ["docker", "kill", holders[0]],
+                cwd=stack["repo"],
+                env=stack["env"],
+            )
+            killed.extend(holders)
+        return result
+
+    monkeypatch.setattr(update.subprocess, "run", lose_holder_after_proxy_start)
+    with pytest.raises(RuntimeError, match="holder exited"):
+        update._ensure_legacy_docker_transport(
+            stack["command"], stack["repo"], stack["env"]
+        )
+    assert killed
+    assert stack["id"]("sentinel") == sentinel
+
+
+@pytest.mark.parametrize("case", ["always_cached", "never_missing", "never_cached"])
+def test_explicit_worker_image_retains_native_pull_policy(transport_stack, case):
+    stack = transport_stack
+    sentinel = stack["id"]("sentinel")
+    worker = stack["config"]["services"]["temporal-worker-deployment-control"]
+    image = "127.0.0.1:9/moonmind-test-updater-worker:" + uuid4().hex
+    cached = case != "never_missing"
+    if cached:
+        _run(
+            ["docker", "image", "tag", worker["image"], image],
+            cwd=stack["repo"],
+            env=stack["env"],
+        )
+    worker["image"] = image
+    worker["pull_policy"] = "always" if case == "always_cached" else "never"
+    stack["write"]()
+    try:
+        if case == "never_cached":
+            stack["compose"]("up", "-d", "--no-deps", "docker-proxy")
+            proxy = stack["id"]("docker-proxy")
+            update._ensure_legacy_docker_transport(
+                stack["command"], stack["repo"], stack["env"]
+            )
+            assert stack["id"]("docker-proxy") == proxy
+            assert stack["probe"]().returncode == 0
+        else:
+            message = "127.0.0.1:9" if cached else "No such image"
+            with pytest.raises(RuntimeError, match=message):
+                update._ensure_legacy_docker_transport(
+                    stack["command"], stack["repo"], stack["env"]
+                )
+            # Failed acquisition cannot authorize unrelated proxy repair.
+            assert stack["id"]("docker-proxy") == ""
+        assert stack["id"]("sentinel") == sentinel
+    finally:
+        if cached:
+            _run(
+                ["docker", "image", "rm", image],
+                cwd=stack["repo"],
+                env=stack["env"],
+                check=False,
+            )
