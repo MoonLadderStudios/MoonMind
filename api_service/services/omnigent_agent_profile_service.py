@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
@@ -114,15 +114,25 @@ async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
     }
     if not generic_host_enabled():
         return launchable
-    rows = list(
-        (
-            await session.execute(
-                select(OmnigentHarnessCatalogSnapshotRecord).order_by(
-                    OmnigentHarnessCatalogSnapshotRecord.observed_at.desc()
-                )
-            )
-        ).scalars()
+    # Execution plans pin their catalog snapshots, so history grows without
+    # bound; read only each endpoint's newest observation, never the history.
+    record = OmnigentHarnessCatalogSnapshotRecord
+    newest = (
+        select(record.endpoint_ref, func.max(record.observed_at).label("observed_at"))
+        .group_by(record.endpoint_ref)
+        .subquery()
     )
+    rows = (
+        await session.execute(
+            select(record).join(
+                newest,
+                and_(
+                    record.endpoint_ref == newest.c.endpoint_ref,
+                    record.observed_at == newest.c.observed_at,
+                ),
+            )
+        )
+    ).scalars()
     latest_by_endpoint: dict[str, Any] = {}
     for row in rows:
         latest_by_endpoint.setdefault(row.endpoint_ref, row)
