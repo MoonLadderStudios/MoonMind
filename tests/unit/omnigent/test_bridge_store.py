@@ -2326,3 +2326,29 @@ async def test_ensure_chat_binding_returns_persisted_winner_on_concurrent_alloca
         assert persisted.chat_binding_id == winner
     finally:
         await engine.dispose()
+
+
+def test_event_rows_replace_nul_that_postgres_text_cannot_store() -> None:
+    """Replay mm:337458ba 2026-10-05T02:50: binary tool output carried NUL.
+
+    PostgreSQL rejects ``\\x00`` in text and JSONB parameters, so one binary
+    ``function_call_output.delta`` preview failed the whole dispatch.
+    """
+    from moonmind.omnigent.bridge_store import _build_event_rows
+
+    [row] = _build_event_rows(
+        "brs_1",
+        [
+            {
+                "sequence": 501,
+                "eventType": "response.function_call_output.delta",
+                "normalizedStatus": "running",
+                "textPreview": "\x1f\x8b\x00binary\x00",
+                "metadata": {"delta": ["a\x00b", {"k\x00": "v\x00"}], "n": 1},
+            }
+        ],
+    )
+
+    assert "\x00" not in row.text_preview
+    assert row.text_preview.endswith("binary�")
+    assert row.metadata_ == {"delta": ["a�b", {"k�": "v�"}], "n": 1}
