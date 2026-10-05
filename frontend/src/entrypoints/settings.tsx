@@ -160,7 +160,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
   const canReadProviderProfiles = permissions.has('provider_profiles.read');
   const canWriteProviderProfiles = permissions.has('provider_profiles.write');
   const canReadSecretMetadata = permissions.has('secrets.metadata.read');
-  const canRunGithubTokenProbe = permissions.has('settings.effective.read');
+  const canReadRepositoryConnections = permissions.has('settings.effective.read');
   const runtimeSystemConfig = settingsInitialData(payload).runtimeConfig?.system ?? {};
   const defaultTaskModelByRuntime = runtimeSystemConfig.defaultTaskModelByRuntime ?? {};
   const supportedRuntimes = runtimeSystemConfig.supportedRuntimes ?? [];
@@ -245,7 +245,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
           isLoading={providerProfilesQuery.isLoading || secretsQuery.isLoading}
           isError={providerProfilesQuery.isError || secretsQuery.isError}
           canWriteProviderProfiles={canWriteProviderProfiles}
-          canRunGithubTokenProbe={canRunGithubTokenProbe}
+          canReadRepositoryConnections={canReadRepositoryConnections}
         />
       ) : (
         <RegionUnavailable>
@@ -310,7 +310,12 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         </RegionUnavailable>
       )}
 
-      <GithubTokenProbePanel canRunProbe={canRunGithubTokenProbe} onNotice={setNotice} />
+      <GithubTokenProbePanel
+        canReadConnections={permissions.has('settings.effective.read')}
+        canWriteConnections={permissions.has('settings.workspace.write')}
+        canRotateCredentials={permissions.has('secrets.rotate')}
+        onNotice={setNotice}
+      />
     </SettingsPageFrame>
   );
 }

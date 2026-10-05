@@ -39,7 +39,7 @@ function renderSummary(props: Partial<ConfigurationHealthSummaryProps> = {}) {
         isLoading={props.isLoading ?? false}
         isError={props.isError ?? false}
         canWriteProviderProfiles={props.canWriteProviderProfiles ?? true}
-        canRunGithubTokenProbe={props.canRunGithubTokenProbe ?? true}
+        canReadRepositoryConnections={props.canReadRepositoryConnections ?? true}
       />
     </QueryClientProvider>,
   );
@@ -180,7 +180,7 @@ describe('ConfigurationHealthSummary', () => {
     renderSummary({
       providerProfiles: [makeProfile({ is_default: true })],
       canWriteProviderProfiles: false,
-      canRunGithubTokenProbe: true,
+      canReadRepositoryConnections: true,
     });
 
     expect(screen.getByText(/Provider profile writes disabled/i)).toBeTruthy();
@@ -188,14 +188,14 @@ describe('ConfigurationHealthSummary', () => {
     expect(screen.getAllByText(/Read-only/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows why the permission-disabled GitHub token probe is unavailable', () => {
+  it('shows why the permission-disabled Repository connections is unavailable', () => {
     renderSummary({
       providerProfiles: [makeProfile({ is_default: true })],
       canWriteProviderProfiles: true,
-      canRunGithubTokenProbe: false,
+      canReadRepositoryConnections: false,
     });
 
-    expect(screen.getByText(/GitHub token probe unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/Repository connections unavailable/i)).toBeTruthy();
     expect(screen.getByText(/settings\.effective\.read/i)).toBeTruthy();
   });
 

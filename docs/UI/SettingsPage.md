@@ -322,12 +322,44 @@ This page contains:
 - Provider Profiles as the durable Harness/Provider connection and launch contract;
 - model and effort tier policy editing inside the normal Provider Profile editor;
 - Managed Secrets and secret-health surfaces;
+- Source Control connections, with their own names, GitHub accounts and explicit repository assignments;
 - SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
 - provider credential health and readiness; and
 - Harness and Provider binding diagnostics, with Backend provenance in execution details.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
+
+Source Control remains separate from model Provider Profiles. Its current form
+lists named connections, shows the recorded GitHub account and App installation,
+and accepts explicit `owner/repository` assignments. PAT submission verifies the
+account server-side and transfers plaintext once to the existing Secrets
+service. Edit fields never contain a masked or retained token. Name-only edits
+remain available during a repository-discovery outage; an incomplete discovery
+does not remove saved assignments.
+
+Create, save, credential replacement and disable preserve the operation ID and
+expected revisions. An uncertain acknowledgment uses **Check saved result** to
+read the original committed receipt. The form preserves the safe draft and
+blocks another create or save until that operation is reconciled, including
+after a page refresh. Disable retains credentials and assignments for active
+work cleanup. Permanent removal still requires integration with the existing
+active-binding authority; disable is the currently implemented action.
+
+The ordinary App action selects an already configured App connection. Its
+signing reference, App identity and endpoint are read server-side, and GitHub
+verifies the App slug and installation through the existing begin/callback
+operations. An instance without an App configuration shows the setup
+prerequisite. Initial App signing configuration remains owned by the App setup
+surface rather than being invented by this form.
+
+Selected-connection **Test Connection** remains unavailable until the shared
+probe contract from MoonMind#4008 is exposed. The Settings form sends no global
+token probe. The required integration must report backend observations and the
+remote default branch, distinguish successful reads from verified writes and
+transport outages from denied access, and invalidate results when connection,
+revision, target or request changes. Current connection persistence and Settings
+form tests do not certify those future probe scenarios.
 
 A page-local Harness filter offers **All harnesses** and backend-supported Harness choices. It narrows the visible Provider Profile collection while global readiness counts use the complete collection unless explicitly labeled as filtered. Existing `runtime` URL parameters and `runtime_id` API values remain compatibility inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) owns this vocabulary and authoring defaults.
 

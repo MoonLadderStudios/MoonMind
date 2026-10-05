@@ -234,7 +234,7 @@ export interface ConfigurationHealthSummaryProps {
   isLoading?: boolean;
   isError?: boolean;
   canWriteProviderProfiles: boolean;
-  canRunGithubTokenProbe: boolean;
+  canReadRepositoryConnections: boolean;
 }
 
 export function ConfigurationHealthSummary({
@@ -243,7 +243,7 @@ export function ConfigurationHealthSummary({
   isLoading = false,
   isError = false,
   canWriteProviderProfiles,
-  canRunGithubTokenProbe,
+  canReadRepositoryConnections,
 }: ConfigurationHealthSummaryProps) {
   if (isLoading) {
     return (
@@ -360,14 +360,14 @@ export function ConfigurationHealthSummary({
             <code>provider_profiles.write</code> permission.
           </span>
         )}
-        {canRunGithubTokenProbe ? (
+        {canReadRepositoryConnections ? (
           <span className="text-xs text-slate-600 dark:text-slate-400">
-            GitHub token probe available
+            Repository connections available
           </span>
         ) : (
           <span className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-            <ReadOnlyBadge reason="The GitHub token probe requires the settings.effective.read permission." />
-            GitHub token probe unavailable — requires the{' '}
+            <ReadOnlyBadge reason="The Repository connections requires the settings.effective.read permission." />
+            Repository connections unavailable — requires the{' '}
             <code>settings.effective.read</code> permission.
           </span>
         )}

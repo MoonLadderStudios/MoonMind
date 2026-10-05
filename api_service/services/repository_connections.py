@@ -16,14 +16,15 @@ SecretRef locators or App refs, and raw PAT-looking values are rejected.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
+    ManagedSecret,
     RepositoryConnectionAssignment,
     RepositoryConnectionAuditEvent,
     RepositoryConnectionRecord,
@@ -65,7 +66,11 @@ def _forbidden_secret_shapes(config: Mapping[str, Any]) -> str | None:
         if isinstance(item, Mapping):
             for key, value in item.items():
                 lowered = str(key).strip().lower()
-                if lowered in forbidden_keys and isinstance(value, str) and len(value) >= 8:
+                if (
+                    lowered in forbidden_keys
+                    and isinstance(value, str)
+                    and len(value) >= 8
+                ):
                     return str(key)
                 stack.append(value)
         elif isinstance(item, (list, tuple)):
@@ -121,6 +126,7 @@ def _check_credential_revision(
     new_config: Mapping[str, Any],
     new_revision: int,
     endpoint_changed: bool,
+    material_changed: bool = False,
 ) -> None:
     """Fence credential changes with an atomic monotonic revision advance.
 
@@ -133,7 +139,7 @@ def _check_credential_revision(
     """
 
     cred_changed = dict(new_config) != dict(stored_config)
-    if cred_changed or endpoint_changed:
+    if cred_changed or endpoint_changed or material_changed:
         if new_revision != stored_revision + 1:
             raise RepositoryRouteError(
                 REPOSITORY_POLICY_CONFLICT,
@@ -235,7 +241,9 @@ class RepositoryConnectionService:
 
     # -- internal helpers -------------------------------------------------
 
-    async def _get_record(self, connection_id: str) -> RepositoryConnectionRecord | None:
+    async def _get_record(
+        self, connection_id: str
+    ) -> RepositoryConnectionRecord | None:
         result = await self._session.execute(
             select(RepositoryConnectionRecord).where(
                 RepositoryConnectionRecord.connection_id == connection_id
@@ -333,7 +341,9 @@ class RepositoryConnectionService:
         dialect_name = getattr(getattr(bind, "dialect", None), "name", "") or ""
         if dialect_name not in {"", "sqlite"}:
             stmt = stmt.with_for_update()
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        return (
+            await self._session.execute(stmt.execution_options(populate_existing=True))
+        ).scalar_one_or_none()
 
     @staticmethod
     def _stored_assignment(
@@ -354,6 +364,84 @@ class RepositoryConnectionService:
             verified=row.verified,
         )
 
+    async def _finish_write(self, commit: bool) -> None:
+        """Compose Settings credentials, policy and assignments in one transaction."""
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
+
+    async def list_assignments(
+        self,
+        connection_id: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> list[RepositoryAssignment]:
+        connection = await self.get_connection(
+            connection_id,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            include_disabled=True,
+        )
+        if connection is None:
+            return []
+        rows = (
+            (
+                await self._session.execute(
+                    select(RepositoryConnectionAssignment).where(
+                        RepositoryConnectionAssignment.connection_id == connection_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            self._stored_assignment(row, endpoint=connection.endpoint_ref)
+            for row in rows
+        ]
+
+    async def get_mutation_receipt(
+        self,
+        connection_id: str,
+        request_id: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> dict[str, Any] | None:
+        """Read the original committed operation without repeating a mutation."""
+        row = (
+            await self._session.execute(
+                select(RepositoryConnectionAuditEvent).where(
+                    RepositoryConnectionAuditEvent.request_id == request_id,
+                    RepositoryConnectionAuditEvent.action.in_(
+                        [
+                            "connection.create",
+                            "connection.update",
+                            "connection.disable",
+                            "connection.delete",
+                        ]
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        if row.connection_id != connection_id or row.actor_ref != principal_ref:
+            raise RepositoryRouteError(REPOSITORY_DENIED, "operation is not admitted")
+        await self.get_connection(
+            connection_id,
+            principal_ref=principal_ref,
+            principal_scope=principal_scope,
+            include_disabled=True,
+        )
+        return {
+            "requestId": request_id,
+            "action": row.action,
+            "policyRevision": row.policy_revision,
+        }
+
     # -- connections ------------------------------------------------------
 
     async def create_connection(
@@ -364,6 +452,7 @@ class RepositoryConnectionService:
         request_id: str,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        commit: bool = True,
     ) -> RepositoryConnection:
         """Create one scoped connection with its audit record, atomically."""
 
@@ -379,7 +468,8 @@ class RepositoryConnectionService:
                 REPOSITORY_DENIED, "system connections require a system principal"
             )
         if await self._replayed_action(
-            request_id=request_id, action="connection.create",
+            request_id=request_id,
+            action="connection.create",
             connection_id=connection.id,
         ):
             existing = await self._get_record(connection.id)
@@ -405,7 +495,8 @@ class RepositoryConnectionService:
         if existing is not None:
             if existing.tombstone:
                 raise RepositoryRouteError(
-                    REPOSITORY_ID_REUSE, "connection id was deleted and cannot be reused"
+                    REPOSITORY_ID_REUSE,
+                    "connection id was deleted and cannot be reused",
                 )
             raise RepositoryRouteError(
                 REPOSITORY_ROUTE_CONFLICT, "connection id already exists"
@@ -455,7 +546,7 @@ class RepositoryConnectionService:
             policy_revision=connection.policy_revision,
         )
         try:
-            await self._session.commit()
+            await self._finish_write(commit)
         except IntegrityError as exc:
             await self._session.rollback()
             raise RepositoryConnectionConflict(
@@ -538,6 +629,7 @@ class RepositoryConnectionService:
         *,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        include_disabled: bool = False,
     ) -> RepositoryConnection | None:
         """Return one recorded connection the principal may discover."""
 
@@ -548,7 +640,11 @@ class RepositoryConnectionService:
             record=record,
             principal_ref=principal_ref,
             principal_scope=principal_scope,
-            action="discover",
+            action=(
+                "edit"
+                if include_disabled and record.lifecycle == "disabled"
+                else "discover"
+            ),
         )
 
     async def update_connection(
@@ -560,13 +656,15 @@ class RepositoryConnectionService:
         expected_policy_revision: int | None,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        commit: bool = True,
         explicit_endpoint_revision: bool = False,
     ) -> RepositoryConnection:
         """Replace connection policy transactionally with revision compare."""
 
         validate_scoped_connection_for_write(connection)
         if await self._replayed_action(
-            request_id=request_id, action="connection.update",
+            request_id=request_id,
+            action="connection.update",
             connection_id=connection.id,
         ):
             record = await self._get_record(connection.id)
@@ -585,7 +683,9 @@ class RepositoryConnectionService:
             return _record_to_connection(record)
         record = await self._lock_record(connection.id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
@@ -602,17 +702,36 @@ class RepositoryConnectionService:
             current_endpoint=record.endpoint_normalized,
             proposed_endpoint=connection.endpoint_ref,
             explicit_revision_path=explicit_endpoint_revision
-            or record.endpoint_normalized == normalize_endpoint(connection.endpoint_ref),
+            or record.endpoint_normalized
+            == normalize_endpoint(connection.endpoint_ref),
         )
         endpoint_normalized = normalize_endpoint(connection.endpoint_ref)
         endpoint_changed = endpoint_normalized != record.endpoint_normalized
         new_credential_config = _credential_config(connection)
+        # Same-ref managed-secret rotation changes material, not the locator.
+        # Only the authoritative secret revision can admit that advance.
+        material_changed = False
+        if (
+            new_credential_config == dict(record.credential_config or {})
+            and connection.credential_revision != record.credential_revision
+            and connection.credential.source == "secret_ref"
+            and connection.credential.credential_ref.provider == "managed"
+        ):
+            revision = (
+                await self._session.execute(
+                    select(ManagedSecret.credential_revision).where(
+                        ManagedSecret.slug == connection.credential.credential_ref.key
+                    )
+                )
+            ).scalar_one_or_none()
+            material_changed = revision == connection.credential_revision
         _check_credential_revision(
             stored_config=dict(record.credential_config or {}),
             stored_revision=record.credential_revision,
             new_config=new_credential_config,
             new_revision=connection.credential_revision,
             endpoint_changed=endpoint_changed,
+            material_changed=material_changed,
         )
         new_policy_revision = record.policy_revision + 1
         if connection.ownership is not None:
@@ -698,7 +817,7 @@ class RepositoryConnectionService:
                 "concurrent policy change; retry with the current revision",
             )
         try:
-            await self._session.commit()
+            await self._finish_write(commit)
         except IntegrityError as exc:
             await self._session.rollback()
             raise RepositoryConnectionConflict(
@@ -715,11 +834,14 @@ class RepositoryConnectionService:
         request_id: str,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        commit: bool = True,
+        expected_policy_revision: int | None = None,
     ) -> RepositoryConnection:
         """Disable without breaking active cleanup (bindings stay, use denied)."""
 
         if await self._replayed_action(
-            request_id=request_id, action="connection.disable",
+            request_id=request_id,
+            action="connection.disable",
             connection_id=connection_id,
         ):
             record = await self._get_record(connection_id)
@@ -734,17 +856,39 @@ class RepositoryConnectionService:
                 action="disable",
             )
             return _record_to_connection(record)
-        record = await self._get_record(connection_id)
+        record = await self._lock_record(connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
             principal_scope=principal_scope,
             action="disable",
         )
-        record.lifecycle = "disabled"
-        record.policy_revision = record.policy_revision + 1
+        if (
+            expected_policy_revision is not None
+            and record.policy_revision != expected_policy_revision
+        ):
+            raise RepositoryRouteError(
+                REPOSITORY_POLICY_CONFLICT, "stale policy revision"
+            )
+        new_revision = record.policy_revision + 1
+        changed = await self._session.execute(
+            update(RepositoryConnectionRecord)
+            .where(
+                RepositoryConnectionRecord.connection_id == connection_id,
+                RepositoryConnectionRecord.policy_revision == record.policy_revision,
+                RepositoryConnectionRecord.tombstone.is_(False),
+            )
+            .values(lifecycle="disabled", policy_revision=new_revision)
+        )
+        if changed.rowcount != 1:
+            await self._session.rollback()
+            raise RepositoryRouteError(
+                REPOSITORY_POLICY_CONFLICT, "concurrent policy change"
+            )
         await self._audit(
             request_id=request_id,
             actor_ref=actor_ref,
@@ -752,9 +896,9 @@ class RepositoryConnectionService:
             connection_id=connection_id,
             scope_type=record.scope_type,
             scope_ref=record.scope_ref,
-            policy_revision=record.policy_revision,
+            policy_revision=new_revision,
         )
-        await self._session.commit()
+        await self._finish_write(commit)
         await self._session.refresh(record)
         return _record_to_connection(record)
 
@@ -781,7 +925,8 @@ class RepositoryConnectionService:
                 REPOSITORY_SETUP_REQUIRED, "binding authority unavailable"
             )
         if await self._replayed_action(
-            request_id=request_id, action="connection.delete",
+            request_id=request_id,
+            action="connection.delete",
             connection_id=connection_id,
         ):
             record = await self._get_record(connection_id)
@@ -798,7 +943,9 @@ class RepositoryConnectionService:
             return
         record = await self._get_record(connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
@@ -810,23 +957,31 @@ class RepositoryConnectionService:
                 REPOSITORY_ROUTE_CONFLICT, "active bindings block deletion"
             )
         remaining = (
-            await self._session.execute(
-                select(RepositoryConnectionAssignment).where(
-                    RepositoryConnectionAssignment.connection_id == connection_id
+            (
+                await self._session.execute(
+                    select(RepositoryConnectionAssignment).where(
+                        RepositoryConnectionAssignment.connection_id == connection_id
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if remaining:
             raise RepositoryRouteError(
                 REPOSITORY_ROUTE_CONFLICT, "assignments block deletion"
             )
         defaults = (
-            await self._session.execute(
-                select(RepositoryRouteDefault).where(
-                    RepositoryRouteDefault.connection_id == connection_id
+            (
+                await self._session.execute(
+                    select(RepositoryRouteDefault).where(
+                        RepositoryRouteDefault.connection_id == connection_id
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if defaults:
             raise RepositoryRouteError(
                 REPOSITORY_ROUTE_CONFLICT, "route defaults block deletion"
@@ -855,11 +1010,13 @@ class RepositoryConnectionService:
         request_id: str,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        commit: bool = True,
     ) -> RepositoryAssignment:
         """Create or replace one assignment atomically with audit."""
 
         if await self._replayed_action(
-            request_id=request_id, action="assignment.set",
+            request_id=request_id,
+            action="assignment.set",
             connection_id=assignment.connection_id,
         ):
             record = await self._get_record(assignment.connection_id)
@@ -898,7 +1055,9 @@ class RepositoryConnectionService:
             )
         record = await self._lock_record(assignment.connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
@@ -977,7 +1136,7 @@ class RepositoryConnectionService:
             },
         )
         try:
-            await self._session.commit()
+            await self._finish_write(commit)
         except IntegrityError as exc:
             await self._session.rollback()
             raise RepositoryConnectionConflict(
@@ -994,11 +1153,13 @@ class RepositoryConnectionService:
         request_id: str,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        commit: bool = True,
     ) -> None:
         """Remove one assignment; never leaves a dangling default binding."""
 
         if await self._replayed_action(
-            request_id=request_id, action="assignment.remove",
+            request_id=request_id,
+            action="assignment.remove",
             connection_id=connection_id,
         ):
             record = await self._get_record(connection_id)
@@ -1012,7 +1173,9 @@ class RepositoryConnectionService:
             return
         record = await self._lock_record(connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
@@ -1049,7 +1212,7 @@ class RepositoryConnectionService:
             policy_revision=record.policy_revision,
             detail={"repo_key": repo_key},
         )
-        await self._session.commit()
+        await self._finish_write(commit)
 
     # -- route defaults ---------------------------------------------------
 
@@ -1069,7 +1232,8 @@ class RepositoryConnectionService:
         """Replace the default for one route key transactionally."""
 
         if await self._replayed_action(
-            request_id=request_id, action="route_default.set",
+            request_id=request_id,
+            action="route_default.set",
             connection_id=connection_id,
         ):
             record = await self._get_record(connection_id)
@@ -1083,11 +1247,7 @@ class RepositoryConnectionService:
             return
         bundle = ",".join(
             sorted(
-                {
-                    str(op).strip().lower()
-                    for op in capability_bundle
-                    if str(op).strip()
-                }
+                {str(op).strip().lower() for op in capability_bundle if str(op).strip()}
             )
         )
         if not bundle:
@@ -1110,7 +1270,9 @@ class RepositoryConnectionService:
         scope_key = scope_key_for(scope_type, scope_ref)
         record = await self._lock_record(connection_id)
         if record is None or record.tombstone:
-            raise RepositoryRouteError(REPOSITORY_SETUP_REQUIRED, "connection not found")
+            raise RepositoryRouteError(
+                REPOSITORY_SETUP_REQUIRED, "connection not found"
+            )
         self._check_use(
             record=record,
             principal_ref=principal_ref,
@@ -1215,14 +1377,18 @@ class RepositoryConnectionService:
         endpoint_normalized = normalize_endpoint(identity.endpoint)
         repo_key = _repo_key_for(identity)
         rows = (
-            await self._session.execute(
-                select(RepositoryConnectionAssignment).where(
-                    RepositoryConnectionAssignment.endpoint_normalized
-                    == endpoint_normalized,
-                    RepositoryConnectionAssignment.repo_key == repo_key,
+            (
+                await self._session.execute(
+                    select(RepositoryConnectionAssignment).where(
+                        RepositoryConnectionAssignment.endpoint_normalized
+                        == endpoint_normalized,
+                        RepositoryConnectionAssignment.repo_key == repo_key,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         admitted: list[tuple[RepositoryConnection, RepositoryAssignment]] = []
         for row in rows:
             record = await self._get_record(row.connection_id)
@@ -1340,13 +1506,17 @@ class RepositoryConnectionService:
 
         wanted = _github_repository_key(repository)
         rows = (
-            await self._session.execute(
-                select(RepositoryConnectionAssignment).where(
-                    RepositoryConnectionAssignment.connection_id == connection.id,
-                    RepositoryConnectionAssignment.verified.is_(True),
+            (
+                await self._session.execute(
+                    select(RepositoryConnectionAssignment).where(
+                        RepositoryConnectionAssignment.connection_id == connection.id,
+                        RepositoryConnectionAssignment.verified.is_(True),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         matches = [
             row
             for row in rows
@@ -1394,7 +1564,9 @@ class RepositoryConnectionService:
             if connection.lifecycle != "active":
                 continue
             try:
-                assignment = await self._recorded_launch_assignment(connection, repository)
+                assignment = await self._recorded_launch_assignment(
+                    connection, repository
+                )
             except RepositoryRouteError as exc:
                 if exc.code == REPOSITORY_SETUP_REQUIRED:
                     continue
@@ -1417,12 +1589,16 @@ class RepositoryConnectionService:
         if not wanted:
             return None
         rows = (
-            await self._session.execute(
-                select(RepositoryConnectionRecord).where(
-                    RepositoryConnectionRecord.provider == "lore"
+            (
+                await self._session.execute(
+                    select(RepositoryConnectionRecord).where(
+                        RepositoryConnectionRecord.provider == "lore"
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for record in rows:
             projection = dict(record.projection_policy or {})
             if (
@@ -1439,12 +1615,15 @@ class RepositoryConnectionService:
         *,
         principal_ref: str,
         principal_scope: tuple[str, str | None],
+        include_disabled: bool = False,
     ) -> list[RepositoryConnection]:
         """Export metadata-only connections the principal may discover."""
 
         rows = (
-            await self._session.execute(select(RepositoryConnectionRecord))
-        ).scalars().all()
+            (await self._session.execute(select(RepositoryConnectionRecord)))
+            .scalars()
+            .all()
+        )
         visible: list[RepositoryConnection] = []
         for record in rows:
             if record.tombstone:
@@ -1455,7 +1634,11 @@ class RepositoryConnectionService:
                         record=record,
                         principal_ref=principal_ref,
                         principal_scope=principal_scope,
-                        action="discover",
+                        action=(
+                            "edit"
+                            if include_disabled and record.lifecycle == "disabled"
+                            else "discover"
+                        ),
                     )
                 )
             except RepositoryRouteError:
