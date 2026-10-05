@@ -73,6 +73,17 @@ _COMMON_REASON_INPUT = {
     "reason": {"type": "string", "required": False},
     "expectedRunId": {"type": "string", "required": False},
 }
+_SESSION_CONTROL_INPUT = {
+    **_COMMON_REASON_INPUT,
+    "bridgeSessionId": {"type": "string", "required": False},
+    "stepExecutionId": {"type": "string", "required": False},
+    "expectedSessionEpoch": {"type": "integer", "required": False},
+    "expectedActiveTurn": {"type": "string", "required": False},
+    "expectedProviderProfileGeneration": {"type": "integer", "required": False},
+    "expectedAgentProfileDigest": {"type": "string", "required": False},
+    "expectedLaunchSnapshotRef": {"type": "string", "required": False},
+    "expectedPolicyDigest": {"type": "string", "required": False},
+}
 _COMMON_AUDIT_PAYLOAD_SHAPE = {
     "actor": "string",
     "executionPrincipal": "string",
@@ -192,7 +203,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": _SESSION_CONTROL_INPUT,
         "preconditions": ("target_visible", "active_managed_turn"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": (
@@ -212,7 +223,7 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
         "risk": "medium",
         "enabled": True,
         "target_type": "managed_session",
-        "input_metadata": _COMMON_REASON_INPUT,
+        "input_metadata": _SESSION_CONTROL_INPUT,
         "preconditions": ("target_visible", "session_cancelable"),
         "idempotency": "same target/action/reason key returns the prior decision",
         "verification_hint": "verify session cancellation state and target run status",
@@ -327,7 +338,11 @@ _ACTION_CATALOG: dict[str, dict[str, Any]] = {
             "hostLeaseRef": {"type": "string", "required": True},
             "expectedHostState": {"type": "string", "required": True},
         },
-        "preconditions": ("target_visible", "host_lease_owned", "host_removal_approved"),
+        "preconditions": (
+            "target_visible",
+            "host_lease_owned",
+            "host_removal_approved",
+        ),
         "idempotency": "same target/action/host-lease key returns the prior decision",
         "verification_hint": "verify the lease-owned host and binding are absent",
     },
@@ -436,11 +451,14 @@ class RemediationCapabilityContext:
     target_runtime: str | None = None
     host_mode: str | None = None
     target_state_eligible: bool = True
+    target_state: str | None = None
+    target_paused: bool | None = None
     current_evidence_classes: Sequence[str] = field(default_factory=tuple)
     require_current_evidence: bool = False
     policy_allowed_action_kinds: Sequence[str] | None = None
     caller_allowed_action_kinds: Sequence[str] | None = None
     execution_backend_readiness: Mapping[str, bool] | None = None
+    action_blocked_reasons: Mapping[str, Sequence[str]] | None = None
     approval_backend_ready: bool = True
     verification_backend_readiness: Mapping[str, bool] | None = None
 
@@ -479,7 +497,11 @@ def remediation_action_capability(
                 context.verification_backend_readiness.get(normalized, False)
             )
         approval_ready = catalog_enabled and context.approval_backend_ready
-    blocked: list[str] = []
+    blocked: list[str] = (
+        list((context.action_blocked_reasons or {}).get(normalized, ()))
+        if context is not None
+        else []
+    )
     if not catalog_enabled:
         blocked.append("action_not_in_enabled_catalog")
     if not execution_ready:
@@ -497,6 +519,24 @@ def remediation_action_capability(
             blocked.append("caller_permission_denied")
         if not context.target_state_eligible:
             blocked.append("target_state_ineligible")
+        elif context.target_state is not None:
+            terminal = context.target_state.lower() in {
+                "failed",
+                "completed",
+                "canceled",
+                "no_commit",
+            }
+            ineligible = (
+                (
+                    normalized
+                    in {"execution.pause", "execution.resume", "execution.cancel"}
+                    and terminal
+                )
+                or (normalized == "execution.pause" and context.target_paused is True)
+                or (normalized == "execution.resume" and context.target_paused is False)
+            )
+            if ineligible:
+                blocked.append("target_state_ineligible")
         if context.target_runtime and context.target_runtime not in supported_runtimes:
             blocked.append("target_runtime_unsupported")
         if (

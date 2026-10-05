@@ -311,11 +311,19 @@ _VERIFICATION_CONTRACTS: dict[str, VerificationContract] = {
         automatically_verifiable=True,
         verifier="checkpoint_branch",
     ),
-    "session.interrupt_turn": _unavailable_contract(
-        "session.interrupt_turn",
-        evidence_owner="managed_session_control_plane",
-        resource_kind="managed_session",
-        expected="turn_interrupted",
+    "session.interrupt_turn": VerificationContract(
+        action_kind="session.interrupt_turn",
+        evidence_owner="canonical_session_turn_command",
+        target_resource_kind="managed_session",
+        immediate_expected_state="turn_interrupted",
+        stabilization_seconds=0.0,
+        poll_interval_seconds=0.0,
+        terminal_timeout_seconds=30.0,
+        before_evidence_classes=("execution_and_steps",),
+        after_evidence_classes=("canonical_session_turn_command",),
+        verifier_kind="targeted_health_check",
+        automatically_verifiable=True,
+        verifier="session_control",
     ),
     "session.clear": _unavailable_contract(
         "session.clear",
@@ -323,11 +331,19 @@ _VERIFICATION_CONTRACTS: dict[str, VerificationContract] = {
         resource_kind="managed_session",
         expected="session_cleared",
     ),
-    "session.cancel": _unavailable_contract(
-        "session.cancel",
-        evidence_owner="managed_session_control_plane",
-        resource_kind="managed_session",
-        expected="session_canceled",
+    "session.cancel": VerificationContract(
+        action_kind="session.cancel",
+        evidence_owner="canonical_session_turn_command",
+        target_resource_kind="managed_session",
+        immediate_expected_state="session_canceled",
+        stabilization_seconds=0.0,
+        poll_interval_seconds=0.0,
+        terminal_timeout_seconds=30.0,
+        before_evidence_classes=("execution_and_steps",),
+        after_evidence_classes=("canonical_session_turn_command",),
+        verifier_kind="targeted_health_check",
+        automatically_verifiable=True,
+        verifier="session_control",
     ),
     "session.terminate": _unavailable_contract(
         "session.terminate",
@@ -524,6 +540,14 @@ class CanonicalRecordEvidenceReader:
     ) -> TargetEvidenceSnapshot:
         """Read only the persisted result, including the exact branch turn head."""
         identity = action_result.get("resultingIdentity") or {}
+        if contract.verifier == "session_control":
+            return await self._read_session_control_result(
+                contract=contract,
+                workflow_id=workflow_id,
+                stage=stage,
+                pinned_run_id=pinned_run_id,
+                identity=identity,
+            )
         if contract.verifier != "checkpoint_branch":
             if contract.verifier == "execution_rerun" and not pinned_run_id:
                 return _unavailable_snapshot(
@@ -637,6 +661,119 @@ class CanonicalRecordEvidenceReader:
         )
         return TargetEvidenceSnapshot(
             stage=stage, available=True, state="completed", identities=exact
+        )
+
+    async def _read_session_control_result(
+        self, *, contract, workflow_id, stage, pinned_run_id, identity
+    ):
+        bridge = (
+            await self._session.get(
+                db_models.OmnigentBridgeSession,
+                identity.get("bridgeSessionId"),
+                populate_existing=True,
+            )
+            if identity.get("bridgeSessionId")
+            else None
+        )
+        session = (
+            await self._session.get(
+                db_models.OmnigentSession,
+                identity.get("sessionId"),
+                populate_existing=True,
+            )
+            if identity.get("sessionId")
+            else None
+        )
+        command = (
+            await self._session.get(
+                db_models.OmnigentCommand,
+                identity.get("commandId"),
+                populate_existing=True,
+            )
+            if identity.get("commandId")
+            else None
+        )
+        turn = (
+            await self._session.get(
+                db_models.OmnigentTurnAttempt,
+                identity.get("turnAttemptId"),
+                populate_existing=True,
+            )
+            if identity.get("turnAttemptId")
+            else None
+        )
+        expected_type = (
+            "interrupt"
+            if contract.action_kind == "session.interrupt_turn"
+            else "stop_session"
+        )
+        if (
+            bridge is None
+            or session is None
+            or command is None
+            or turn is None
+            or bridge.moonmind_workflow_id != workflow_id
+            or bridge.moonmind_run_id != pinned_run_id
+            or session.moonmind_workflow_id != workflow_id
+            or session.provider_session_ref != identity.get("providerSessionId")
+            or bridge.omnigent_session_id != identity.get("providerSessionId")
+            or bridge.credential_generation != identity.get("providerProfileGeneration")
+            or session.fencing_generation != identity.get("fencingGeneration")
+            or command.fencing_generation != identity.get("fencingGeneration")
+            or command.session_id != session.session_id
+            or command.turn_attempt_id != turn.turn_attempt_id
+            or turn.session_id != session.session_id
+            or command.command_type != expected_type
+            or turn.parent_turn_attempt_id != identity.get("targetTurnAttemptId")
+        ):
+            return _unavailable_snapshot(
+                stage,
+                "Session/turn/command evidence does not match the admitted result.",
+            )
+        effect_ref = None
+        effect_failed = False
+        if expected_type == "interrupt":
+            original = (
+                await self._session.get(
+                    db_models.OmnigentTurnAttempt,
+                    identity.get("targetTurnAttemptId"),
+                    populate_existing=True,
+                )
+                if identity.get("targetTurnAttemptId")
+                else None
+            )
+            if original is None or original.session_id != session.session_id:
+                return _unavailable_snapshot(
+                    stage, "The admitted interrupted turn is unavailable."
+                )
+            if original.state == "terminal" and original.terminal_evidence_ref:
+                effect_ref = (
+                    original.terminal_evidence_ref
+                    if original.terminal_state in {"interrupted", "canceled"}
+                    else None
+                )
+                effect_failed = effect_ref is None
+        elif session.terminal_state and session.terminal_evidence_ref:
+            effect_ref = (
+                session.terminal_evidence_ref
+                if session.terminal_state in {"canceled", "stopped", "terminated"}
+                else None
+            )
+            effect_failed = effect_ref is None
+        # Command application proves delivery, never the requested effect. A
+        # canonical terminal evidence owner must confirm the exact turn/session.
+        exact = {**dict(identity), "controlEffectEvidenceRef": effect_ref}
+        return TargetEvidenceSnapshot(
+            stage=stage,
+            available=True,
+            workflow_id=workflow_id,
+            run_id=pinned_run_id,
+            state=(
+                "completed"
+                if effect_ref
+                else "failed" if effect_failed else "executing"
+            ),
+            identities=exact,
         )
 
 
@@ -923,6 +1060,21 @@ def _classify_checkpoint_branch(
     )
 
 
+def _classify_session_control(before, immediate, stabilized):
+    final = _stabilized(immediate, stabilized)
+    if final is None or not final.available:
+        return (
+            EVIDENCE_UNAVAILABLE,
+            "Canonical session control evidence is unavailable.",
+        )
+    if final.state == "completed":
+        return (
+            VERIFIED_RESOLVED,
+            "The admitted session control effect is confirmed; workflow objective success is separate.",
+        )
+    return STILL_FAILED, "The admitted session control effect is not yet confirmed."
+
+
 _CLASSIFIERS: dict[
     str,
     Callable[
@@ -940,6 +1092,7 @@ _CLASSIFIERS: dict[
     "execution_force_terminate": _classify_execution_force_terminate,
     "execution_rerun": _classify_execution_rerun,
     "checkpoint_branch": _classify_checkpoint_branch,
+    "session_control": _classify_session_control,
 }
 
 
@@ -1017,9 +1170,11 @@ def resolve_verification_target(
     """
 
     identity = action_result.get("resultingIdentity")
-    if contract.verifier in {"execution_rerun", "checkpoint_branch"} and isinstance(
-        identity, Mapping
-    ):
+    if contract.verifier in {
+        "execution_rerun",
+        "checkpoint_branch",
+        "session_control",
+    } and isinstance(identity, Mapping):
         return str(identity.get("workflowId") or default_workflow_id), identity.get(
             "runId"
         )
@@ -1104,14 +1259,16 @@ class RemediationVerificationPhase:
             final = _stabilized(immediate, stabilized)
             waiting = bool(
                 delivery_status not in _NON_DELIVERED_STATUSES
-                and contract.verifier in {"execution_rerun", "checkpoint_branch"}
+                and contract.verifier
+                in {"execution_rerun", "checkpoint_branch", "session_control"}
                 and final is not None
                 and final.available
                 and _is_active(final)
                 and outcome not in {CANCELED, VERIFICATION_FAILED}
             )
             pending = waiting or bool(
-                contract.verifier in {"execution_rerun", "checkpoint_branch"}
+                contract.verifier
+                in {"execution_rerun", "checkpoint_branch", "session_control"}
                 and delivery_status
                 not in _NON_DELIVERED_STATUSES | {"approval_required"}
                 and outcome in {EVIDENCE_UNAVAILABLE, VERIFICATION_FAILED, CANCELED}
