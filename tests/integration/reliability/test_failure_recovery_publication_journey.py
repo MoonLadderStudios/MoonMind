@@ -93,7 +93,6 @@ from tests.unit.workflows.temporal.workflows.test_run_recover_from_failed_step i
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 
