@@ -510,7 +510,8 @@ class _MarkedTurnStartWatchdog:
             active_response_id and active_response_id in self._terminal_response_ids
         )
         self.currently_active = bool(
-            active_response_id and not self.active_response_known_terminal
+            (active_response_id and not self.active_response_known_terminal)
+            or _snapshot_projects_live_native_turn(snapshot)
         )
         if self.currently_active:
             self.ever_active = True
