@@ -136,6 +136,10 @@ class BridgeEventNormalization:
 def bounded_deduplication_key(key: str) -> str:
     """Fit a durable event identity without discarding distinguishing suffixes."""
 
+    if "\x00" in key:
+        # PostgreSQL rejects NUL even in lookup parameters. Hash the original
+        # identity so replacement characters cannot collapse distinct events.
+        return "sha256:" + hashlib.sha256(key.encode()).hexdigest()
     if len(key) <= BRIDGE_EVENT_DEDUPLICATION_KEY_MAX_LENGTH:
         return key
     digest = hashlib.sha256(key.encode()).hexdigest()

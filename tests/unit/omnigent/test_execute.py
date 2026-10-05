@@ -29,7 +29,6 @@ from moonmind.omnigent.execute import (
     OmnigentContractError,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
-    PromptContextResolution,
     _agent_items,
     _await_marked_turn_terminal,
     _build_capture_bundle,
@@ -6262,6 +6261,35 @@ def test_running_codex_native_turn_is_not_a_terminal_candidate() -> None:
         _codex_native_snapshot("idle", marker, _CODEX_COMMENTARY),
         marker=marker,
     )
+
+
+def test_running_codex_native_turn_uses_the_stall_recovery_budget() -> None:
+    from moonmind.omnigent.execute import _MarkedTurnStalledError
+
+    loop = asyncio.new_event_loop()
+    try:
+        marker = "MoonMind-Omnigent-Run: stalled-native-turn"
+        snapshot = _codex_native_snapshot("running", marker, _CODEX_COMMENTARY)
+        turn_state = _marked_turn_item_state(snapshot, marker=marker)
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300, stall_timeout_seconds=60
+        )
+        observed_at = loop.time()
+        watchdog.observe(snapshot, turn_state, observation_started_at=observed_at)
+        assert watchdog.currently_active is True
+        with pytest.raises(_MarkedTurnStalledError):
+            watchdog.observe(
+                snapshot, turn_state, observation_started_at=observed_at + 61
+            )
+        # Completion clears live turn authority without restarting the budget.
+        watchdog.observe(
+            _codex_native_snapshot("idle", marker, _CODEX_COMMENTARY),
+            turn_state,
+            observation_started_at=observed_at + 62,
+        )
+        assert watchdog.currently_active is False
+    finally:
+        loop.close()
 
 
 @pytest.mark.asyncio
