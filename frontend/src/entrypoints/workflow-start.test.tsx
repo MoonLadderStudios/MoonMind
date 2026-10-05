@@ -744,8 +744,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       manualDiagnosisSupported: true,
       manualMutationSupported: true,
       autonomousRolloutAuthorized: false,
+      advisory: true,
       promotionAllowed: false,
-      manualPromotionAllowed: true,
+      manualPromotionAllowed: false,
       rollbackRequired: false,
       generatedAt: "2026-08-13T00:00:00Z",
       expiresAt: "2026-08-20T00:00:00Z",
@@ -1666,10 +1667,10 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
-    fireEvent.click(await screen.findByText("Operator remediation release status"));
-    expect(screen.getAllByText("Supported")).toHaveLength(2);
-    expect(screen.getByText("Allowed")).toBeTruthy();
-    expect(screen.getByText("Not required")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Live remediation observations"));
+    expect(screen.getAllByText("Observed")).toHaveLength(2);
+    expect(screen.getByText(/Each action checks its own capability, policy, and approval/)).toBeTruthy();
+    expect((screen.getByRole("option", { name: "Administrator automatic (disabled)" }) as HTMLOptionElement).disabled).toBe(true);
     expect(screen.getByText("moonmind.operator-remediation-telemetry/v1")).toBeTruthy();
     expect(screen.getByText(/warning: autonomous_rollout_gate_closed/)).toBeTruthy();
     const start = screen.getByRole("button", { name: "Start Workflow" });
