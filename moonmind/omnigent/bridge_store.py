@@ -3482,7 +3482,9 @@ def _postgres_text(value: Any) -> Any:
     if isinstance(value, str):
         return value.replace("\x00", "\ufffd")
     if isinstance(value, Mapping):
-        return {_postgres_text(key): _postgres_text(item) for key, item in value.items()}
+        return {
+            _postgres_text(key): _postgres_text(item) for key, item in value.items()
+        }
     if isinstance(value, list | tuple):
         return [_postgres_text(item) for item in value]
     return value
