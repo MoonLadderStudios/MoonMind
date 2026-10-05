@@ -390,9 +390,9 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
             if record_store is not None and workspace_id is not None:
                 record_store.mark_ready(workspace_id, fingerprint)
-        elif named_refs:
-            # A ready repository is not evidence that current verifier inputs
-            # exist. Re-admit only attachments, preserving all candidate edits.
+        elif attachment_refs:
+            # A ready repository is not evidence that current inputs exist or
+            # remain admitted. Re-project only attachments, preserving candidate edits.
             try:
                 attachment_evidence = await self._artifact_projector.project_attachments(
                     candidate,

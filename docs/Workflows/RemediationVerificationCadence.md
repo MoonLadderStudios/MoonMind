@@ -133,6 +133,8 @@ Use an explicitly named canonical remediation Skill, not `auto` selection that m
 
 Other admitted `inputRefs`, including the original objective and a corrected instruction brief, use the same attachment projector. Their `inputPath<n>` entries join the existing first-message path handoff so explicit repair instructions retain access to the complete source material.
 
+Ready-workspace retries re-admit and project ordinary attachments as well as named verifier inputs. They retain readable input paths and candidate edits without cloning or replaying the saved implementation.
+
 Instruct remediation to consume all safe current gaps, exercise the actual production boundary requested by the verifier, record per-gap decisions and targeted checks, and stop without mutation when the input verdict is terminal. A test-only dictionary, fabricated success field, or helper mock does not satisfy a requirement about real workflow/Activity/adapter/persistence wiring.
 
 Runtime prompt preparation forwards the existing workflow-owned remediation
