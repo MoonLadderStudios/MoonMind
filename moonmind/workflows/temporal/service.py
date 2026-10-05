@@ -488,6 +488,12 @@ class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
 
 
+class TemporalExecutionTargetRunChangedError(
+    TemporalExecutionValidationError, ValueError
+):
+    """The requested run changed before a control crossed its effect boundary."""
+
+
 class TemporalExecutionRerunSkillSnapshotError(TemporalExecutionValidationError):
     """Raised when an exact rerun cannot prove immutable Skill authority."""
 
@@ -3164,13 +3170,19 @@ class TemporalExecutionService:
         *,
         workflow_id: str,
         idempotency_key: str,
+        expected_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a distinct rerun execution through the canonical service boundary."""
 
         record = await self._require_source_execution(workflow_id)
-        if (
-            idempotency_key == record.last_update_idempotency_key
-            and isinstance(record.last_update_response, dict)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+            if record.run_id != expected_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "Target run changed before rerun dispatch"
+                )
+        if idempotency_key == record.last_update_idempotency_key and isinstance(
+            record.last_update_response, dict
         ):
             return dict(record.last_update_response)
         response = await self._create_fresh_rerun_execution(
@@ -3202,12 +3214,20 @@ class TemporalExecutionService:
         signal_name: str,
         payload: dict[str, Any] | None,
         payload_artifact_ref: str | None,
+        expected_run_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if signal_name not in ALLOWED_SIGNAL_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported signal name: {signal_name}"
             )
         record = await self._require_source_execution(workflow_id)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+            if record.run_id != expected_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "Target run changed before control dispatch"
+                )
         if signal_name == "Resume":
             self._validate_execution_targets(record.parameters or {})
             if self._integration_state(record) is not None:
@@ -3247,13 +3267,18 @@ class TemporalExecutionService:
             elif operator_message is not None:
                 update_arg = {"message": operator_message}
             try:
+                control_options = {}
+                if expected_run_id is not None:
+                    control_options["run_id"] = expected_run_id
+                if idempotency_key is not None:
+                    control_options["idempotency_key"] = idempotency_key
                 if update_arg:
                     await self._client_adapter.update_workflow(
-                        record.workflow_id, signal_name, update_arg
+                        record.workflow_id, signal_name, update_arg, **control_options
                     )
                 else:
                     await self._client_adapter.update_workflow(
-                        record.workflow_id, signal_name
+                        record.workflow_id, signal_name, **control_options
                     )
             except Exception as exc:
                 raise TemporalExecutionValidationError(
@@ -3731,7 +3756,9 @@ class TemporalExecutionService:
             self._supported_integration_name(integration_name)
         return correlation, record
 
-    async def _require_processable_graceful_cancellation(self, workflow_id: str) -> bool:
+    async def _require_processable_graceful_cancellation(
+        self, workflow_id: str, *, run_id: str | None = None
+    ) -> bool:
         """Refuse to report a cancel the execution cannot currently process.
 
         Graceful cancellation is delivered through a workflow task: Temporal
@@ -3751,7 +3778,9 @@ class TemporalExecutionService:
         """
 
         try:
-            description = await self._client_adapter.describe_workflow(workflow_id)
+            description = await self._client_adapter.describe_workflow(
+                workflow_id, **({"run_id": run_id} if run_id is not None else {})
+            )
         except Exception:
             # This check only decides how the outcome is reported. A describe
             # failure must not turn an accepted cancellation request into an
@@ -3856,10 +3885,17 @@ class TemporalExecutionService:
         reason: str | None,
         graceful: bool,
         action: str = "cancel",
+        expected_run_id: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_cancel_target_execution(
             workflow_id, include_orphaned=not graceful
         )
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+            if record.run_id != expected_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "Target run changed before control dispatch"
+                )
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -3895,7 +3931,12 @@ class TemporalExecutionService:
                 # Cancel the execution itself so Temporal propagates
                 # cancellation through child-workflow ownership and runs the
                 # AgentRun cleanup path that releases provider leases.
-                await self._client_adapter.cancel_workflow(record.workflow_id)
+                if expected_run_id is None:
+                    await self._client_adapter.cancel_workflow(record.workflow_id)
+                else:
+                    await self._client_adapter.cancel_workflow(
+                        record.workflow_id, run_id=expected_run_id
+                    )
             else:
                 # A local terminal flag can be an old cancellation acceptance,
                 # not a Temporal close. Always reach Temporal for force cancel,
@@ -3912,8 +3953,15 @@ class TemporalExecutionService:
         cancellation_confirmed = False
         if graceful:
             # The request is now durable in Temporal whatever this reports.
-            cancellation_confirmed = await self._require_processable_graceful_cancellation(
-                record.workflow_id
+            cancellation_confirmed = (
+                await self._require_processable_graceful_cancellation(
+                    record.workflow_id,
+                    **(
+                        {"run_id": expected_run_id}
+                        if expected_run_id is not None
+                        else {}
+                    ),
+                )
             )
 
         if cancellation_confirmed or not graceful:

@@ -129,7 +129,11 @@ Existing inbound/outbound remediation reads project authorized links and compact
 
 ### 8.6 Approval and Workflow operator APIs
 
-Reuse current approval and Workflow control endpoints. Pause/Resume of orchestration is not failed-step recovery or physical host quiescence. Invoke the supported Update/Signal/command protocol of the actual target, not an inferred managed-session ID.
+Reuse current approval and Workflow control endpoints. Remediation pause/resume and cancellation use `TemporalExecutionService`, preserving its canonical state, intervention audit, cleanup, and saved-content owners. Controls re-read the pinned run at dispatch; Temporal Updates carry the same action ID and exact run on retries. Pause/resume of orchestration remains separate from failed-step recovery or physical host quiescence.
+
+Canonical session interrupt/cancel resolves the persisted bridge binding for the target workflow/run. A unique binding can be derived; concurrent bindings require a bridge or Step Execution selector. Session epoch, active turn, Provider Profile generation, profile digest, launch snapshot, and policy digest preconditions use the native capability authority. The existing canonical turn-command owner fences the claim and the native control owner performs interrupt or stop. An occupied command is reconciled without another provider forward; changed parameters conflict. Retained host modes keep their recorded control owner and unsupported interrupts stay unavailable.
+
+Session command application proves delivery. The verifier reads the exact canonical command, session, control turn, and interrupted turn with their run and generation pins. Only durable terminal effect evidence confirms interruption/cancellation; absent or delayed evidence remains pending in the existing action-verification continuation. Neither effect rewrites the failed source or proves its original objective. Fresh reruns and corrective branches hand off the exact workflow/run or branch/turn/Step Execution identity to that verifier; they retain their existing recovery and checkpoint owners.
 
 ## 9. Evidence and context model
 
@@ -151,7 +155,7 @@ Apply existing count/byte/token/time/page/retry limits before expanding evidence
 
 ### 9.5 Evidence access surface for remediation Workflow Executions
 
-Reuse existing context/read tools and typed action dispatch. UI and tools consume the same readiness projection. A registered action/classifier is not proof of actual execution and verification wiring. Do not add another capability catalog or promote an unsupported mutation.
+Reuse existing context/read tools and typed action dispatch. UI and tools consume the same fresh persisted target and native session readiness projection from `remediation_capabilities`. The normal action summary lists requestable controls with useful labels; collapsed diagnostics retain unavailable catalog actions and bounded reasons. Optional context enrichment failures do not disable controls whose canonical identity/state evidence is freshly available. A registered action/classifier is not proof of actual execution and verification wiring. Do not add another capability catalog or promote an unsupported mutation.
 
 ### 9.6 Live follow semantics
 
