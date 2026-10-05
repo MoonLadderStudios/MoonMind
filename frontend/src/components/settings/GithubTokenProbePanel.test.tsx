@@ -1,263 +1,502 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GithubTokenProbePanel } from './GithubTokenProbePanel';
 
-import { GithubTokenProbePanel, type GithubTokenProbePanelProps } from './GithubTokenProbePanel';
-
-interface RenderOptions {
-  canRunProbe?: boolean;
-  onNotice?: GithubTokenProbePanelProps['onNotice'];
-  initialRepo?: string;
+const ROOT = '/api/v1/repository-connections';
+const first = {
+  id: 'connection-a',
+  displayName: 'First account',
+  credentialKind: 'pat',
+  account: 'alice',
+  installation: null,
+  repositories: ['owner/first'],
+  allowedOperations: ['read', 'write'],
+  lifecycle: 'active',
+  policyRevision: 1,
+  credentialRevision: 1,
+};
+const second = {
+  ...first,
+  id: 'connection-b',
+  displayName: 'Second account',
+  account: 'bob',
+  repositories: ['owner/second'],
+};
+function response(body: unknown, status = 200): Response {
+  return {
+    ok: status < 400,
+    status,
+    statusText: String(status),
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as Response;
 }
-
-function renderPanel(props: RenderOptions = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => {
+    resolve = yes;
   });
-  const onNotice = props.onNotice ?? vi.fn();
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
+  return { promise, resolve };
+}
+function stubApi(items: unknown[] = []) {
+  const mock = vi.fn().mockImplementation((url: string) => {
+    if (url === ROOT) return Promise.resolve(response({ items }));
+    if (url === `${ROOT}/setup-options`)
+      return Promise.resolve(response({ apps: [] }));
+    return Promise.resolve(response({}, 404));
+  });
+  vi.stubGlobal('fetch', mock);
+  return mock;
+}
+function panel() {
+  const onNotice = vi.fn();
+  return {
+    ...render(
       <GithubTokenProbePanel
-        canRunProbe={props.canRunProbe ?? true}
+        canReadConnections
+        canWriteConnections
+        canRotateCredentials
         onNotice={onNotice}
-        {...(props.initialRepo !== undefined ? { initialRepo: props.initialRepo } : {})}
-      />
-    </QueryClientProvider>,
+      />,
+    ),
+    onNotice,
+  };
+}
+async function createDraft() {
+  fireEvent.change(await screen.findByLabelText('Connection name'), {
+    target: { value: 'My account' },
+  });
+  fireEvent.change(
+    screen.getByLabelText('Repositories (one owner/repo per line)'),
+    { target: { value: 'owner/first' } },
   );
-  return { ...utils, onNotice };
-}
-
-const PUBLISH_RESPONSE = {
-  repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'settings_token_ref',
-    sourceName: 'MOONMIND_GITHUB_TOKEN_REF',
-    resolved: true,
-  },
-  repositoryAccessible: true,
-  defaultBranchAccessible: true,
-  pullRequestAccessible: true,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'passed' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'passed' },
-    { permission: 'Workflows', level: 'write', required: false, status: 'not_checked' },
-    { permission: 'Commit statuses', level: 'read', required: false, status: 'not_checked' },
-    { permission: 'Checks', level: 'read', required: false, status: 'not_checked' },
-    { permission: 'Issues', level: 'read', required: false, status: 'not_checked' },
-  ],
-  diagnostics: [],
-  limitations: [
-    'Fine-grained personal access tokens must target the repository resource owner and include the selected repository.',
-  ],
-};
-
-const PENDING_ORG_RESPONSE = {
-  repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'settings_token_ref',
-    sourceName: 'MOONMIND_GITHUB_TOKEN_REF',
-    resolved: true,
-  },
-  repositoryAccessible: false,
-  defaultBranchAccessible: false,
-  pullRequestAccessible: false,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'failed' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'failed' },
-  ],
-  diagnostics: [
-    {
-      operation: 'repository',
-      httpStatus: 403,
-      message: 'Resource not accessible by integration — organization approval pending for the selected token.',
-      retryable: false,
-    },
-    {
-      operation: 'branch',
-      httpStatus: 404,
-      message: 'Branch main is not visible to this token; the repository may belong to a different owner or not be selected in the PAT.',
-      retryable: false,
-    },
-  ],
-  limitations: [],
-};
-
-const MISSING_CREDENTIAL_RESPONSE = {
-  repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'missing',
-    sourceName: null,
-    resolved: false,
-  },
-  repositoryAccessible: null,
-  defaultBranchAccessible: null,
-  pullRequestAccessible: null,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'not_checked' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'not_checked' },
-  ],
-  diagnostics: [
-    {
-      operation: 'resolve_github_credential',
-      message:
-        'GitHub auth is not configured for owner/repo; set GITHUB_TOKEN, GH_TOKEN, WORKFLOW_GITHUB_TOKEN, GITHUB_TOKEN_SECRET_REF, WORKFLOW_GITHUB_TOKEN_SECRET_REF, or MOONMIND_GITHUB_TOKEN_REF.',
-      retryable: false,
-    },
-  ],
-  limitations: [],
-};
-
-function stubFetch(response: unknown, init: { ok?: boolean; status?: number } = {}) {
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: init.ok ?? true,
-    status: init.status ?? 200,
-    json: async () => response,
+  fireEvent.change(screen.getByLabelText('Personal access token'), {
+    target: { value: 'github_pat_4019_transient_sentinel' },
   });
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
 }
 
-describe('GithubTokenProbePanel', () => {
+describe('MoonMind#4019 Source Control Settings', () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    sessionStorage.clear();
   });
-
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
-
-  it('AC-1: renders the per-mode permission checklist and repo/branch/PR accessibility for a successful publish probe', async () => {
-    const fetchMock = stubFetch(PUBLISH_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.change(screen.getByLabelText(/MoonMind mode/i), {
-      target: { value: 'publish' },
+  it('creates the first connection with one protected credential transfer and displays the saved account', async () => {
+    const mock = stubApi();
+    panel();
+    await createDraft();
+    mock.mockImplementation((url, init) => {
+      if (url === ROOT && init?.method === 'POST') {
+        const body = JSON.parse(init.body);
+        return Promise.resolve(
+          response(
+            { ...first, id: body.connectionId, displayName: body.displayName },
+            201,
+          ),
+        );
+      }
+      return Promise.resolve(response({}, 404));
     });
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/v1/settings/github/token-probe',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-        }),
+    fireEvent.click(screen.getByRole('button', { name: 'Create connection' }));
+    expect(
+      (screen.getByLabelText('Personal access token') as HTMLInputElement)
+        .value,
+    ).toBe('');
+    await screen.findByText('alice');
+    const posts = mock.mock.calls.filter(([, init]) => init?.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0]![1].body)).toMatchObject({
+      displayName: 'My account',
+      repositories: ['owner/first'],
+      plaintext: 'github_pat_4019_transient_sentinel',
+    });
+    expect(document.body.textContent).not.toContain('sentinel');
+    expect(window.location.href).not.toContain('sentinel');
+    expect(JSON.stringify(sessionStorage)).not.toContain('sentinel');
+  });
+  it('selects two connections without a global-token fallback when the selected probe contract is unavailable', async () => {
+    const mock = stubApi([first, second]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Repository connection'), {
+      target: { value: second.id },
+    });
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe(second.displayName);
+    expect(
+      (
+        screen.getByLabelText(
+          'Repositories (one owner/repo per line)',
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe('owner/second');
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Test Connection',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(mock.mock.calls.some(([url]) => url.includes('token-probe'))).toBe(
+      false,
+    );
+  });
+  it('reconciles a lost save acknowledgment with the same request without another POST', async () => {
+    const mock = stubApi();
+    panel();
+    await createDraft();
+    let operation!: { connectionId: string; requestId: string };
+    mock.mockImplementation((url, init) => {
+      if (init?.method === 'POST') {
+        operation = JSON.parse(init.body);
+        return Promise.reject(new TypeError('Lost acknowledgment'));
+      }
+      if (url.includes('/operations/'))
+        return Promise.resolve(
+          response({
+            committed: true,
+            requestId: operation.requestId,
+            connection: { ...first, id: operation.connectionId },
+          }),
+        );
+      return Promise.resolve(response({}, 404));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create connection' }));
+    await screen.findByText('alice');
+    expect(
+      mock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(1);
+    expect(
+      mock.mock.calls.some(
+        ([url]) =>
+          url ===
+          `${ROOT}/${encodeURIComponent(operation.connectionId)}/operations/${encodeURIComponent(operation.requestId)}`,
+      ),
+    ).toBe(true);
+    expect(
+      screen.queryByRole('button', { name: 'Create connection' }),
+    ).toBeNull();
+    expect(
+      (
+        screen.getByLabelText(
+          'Replacement personal access token',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('');
+  });
+  it('retains a safe draft and prevents a duplicate create until an uncertain operation is reconciled, including refresh', async () => {
+    const mock = stubApi();
+    const { unmount } = panel();
+    await createDraft();
+    mock.mockImplementation((_url, init) =>
+      init?.method === 'POST'
+        ? Promise.reject(new TypeError('outage'))
+        : Promise.resolve(response({ committed: false })),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create connection' }));
+    await screen.findByRole('button', { name: 'Check saved result' });
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('My account');
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Create connection',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText('Personal access token') as HTMLInputElement)
+        .value,
+    ).toBe('');
+    const pending = sessionStorage.getItem(
+      'moonmind.repository-connection.pending',
+    );
+    expect(pending).toBeTruthy();
+    expect(pending).not.toContain('sentinel');
+    unmount();
+    stubApi();
+    panel();
+    await screen.findByRole('button', { name: 'Check saved result' });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Create connection',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+  it('ignores an A-to-B-to-A stale save error, notice and loading completion', async () => {
+    const mock = stubApi([first, second]);
+    const { onNotice } = panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Draft A' },
+    });
+    const old = deferred<Response>();
+    mock.mockReturnValue(old.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+    fireEvent.change(screen.getByLabelText('Repository connection'), {
+      target: { value: second.id },
+    });
+    fireEvent.change(screen.getByLabelText('Repository connection'), {
+      target: { value: first.id },
+    });
+    onNotice.mockClear();
+    await act(async () => {
+      old.resolve(response({ detail: 'old error' }, 409));
+    });
+    expect(screen.queryByText(/old error/)).toBeNull();
+    expect(onNotice).not.toHaveBeenCalled();
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe(first.displayName);
+  });
+  it('retains draft, assignments and original revisions on rotation conflict', async () => {
+    const mock = stubApi([first]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Safe draft' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Replacement personal access token'),
+      { target: { value: 'github_pat_4019_conflict_sentinel' } },
+    );
+    mock.mockResolvedValue(response({ detail: 'stale revision' }, 409));
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+    await screen.findByRole('alert');
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('Safe draft');
+    expect(
+      (
+        screen.getByLabelText(
+          'Repositories (one owner/repo per line)',
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe('owner/first');
+    expect(
+      (
+        screen.getByLabelText(
+          'Replacement personal access token',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('');
+    const patch = JSON.parse(
+      mock.mock.calls.find(([, init]) => init?.method === 'PATCH')![1].body,
+    );
+    expect(patch).toMatchObject({
+      expectedPolicyRevision: 1,
+      expectedCredentialRevision: 1,
+    });
+  });
+  it('ignores an older refresh and retains the draft when a new revision arrives', async () => {
+    const mock = stubApi([first]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Current draft' },
+    });
+    const old = deferred<Response>();
+    mock.mockImplementation((url) =>
+      url === ROOT ? old.promise : Promise.resolve(response({ apps: [] })),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh connections' }),
+    );
+    mock.mockImplementation((url) =>
+      Promise.resolve(
+        response(
+          url === ROOT
+            ? { items: [{ ...first, policyRevision: 3 }] }
+            : { apps: [] },
+        ),
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh connections' }),
+    );
+    await waitFor(() => expect(screen.getByText('Revision 3')).toBeTruthy());
+    await act(async () => {
+      old.resolve(response({ items: [{ ...first, policyRevision: 2 }] }));
+    });
+    expect(screen.getByText('Revision 3')).toBeTruthy();
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('Current draft');
+  });
+  it('clears credentials on cancellation and lost admission while retaining the safe draft', async () => {
+    stubApi();
+    const { rerender } = panel();
+    await createDraft();
+    rerender(
+      <GithubTokenProbePanel
+        canReadConnections
+        canWriteConnections={false}
+        canRotateCredentials={false}
+      />,
+    );
+    expect(
+      (screen.getByLabelText('Personal access token') as HTMLInputElement)
+        .value,
+    ).toBe('');
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('My account');
+    rerender(
+      <GithubTokenProbePanel
+        canReadConnections
+        canWriteConnections
+        canRotateCredentials
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Personal access token'), {
+      target: { value: 'temporary-token' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel changes' }));
+    expect(
+      (screen.getByLabelText('Personal access token') as HTMLInputElement)
+        .value,
+    ).toBe('');
+  });
+  it('does not let a delayed save downgrade a refreshed revision or replace newer loading', async () => {
+    const mock = stubApi([first]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Saved draft' },
+    });
+    const saved = deferred<Response>();
+    mock.mockImplementation((url, init) =>
+      init?.method === 'PATCH'
+        ? saved.promise
+        : Promise.resolve(
+            response(
+              url === ROOT
+                ? { items: [{ ...first, policyRevision: 3 }] }
+                : { apps: [] },
+            ),
+          ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh connections' }),
+    );
+    await screen.findByText('Revision 3');
+    await act(async () => {
+      saved.resolve(
+        response({ ...first, displayName: 'Saved draft', policyRevision: 2 }),
       );
     });
-    const firstCall = fetchMock.mock.calls[0];
-    const init = (firstCall?.[1] ?? {}) as RequestInit;
-    const body = JSON.parse(String(init.body ?? '{}'));
-    expect(body).toMatchObject({ repo: 'owner/repo', mode: 'publish' });
-
-    // Checklist rows present with status badges
-    expect(await screen.findByText('Contents')).toBeTruthy();
-    expect(screen.getByText('Pull requests')).toBeTruthy();
-    expect(screen.getByText('Workflows')).toBeTruthy();
-    expect(screen.getAllByText(/required/i).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(/optional/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(/passed/i).length).toBeGreaterThanOrEqual(2);
-
-    // Repo/branch/PR-endpoint pills
-    expect(screen.getByText(/Repository accessible/i)).toBeTruthy();
-    expect(screen.getByText(/Default branch accessible/i)).toBeTruthy();
-    expect(screen.getByText(/Pull request endpoint accessible/i)).toBeTruthy();
-  });
-
-  it('AC-2: renders specific diagnostics for pending org approval / wrong owner / unselected repo without collapsing to a generic message', async () => {
-    stubFetch(PENDING_ORG_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
+    expect(screen.getByText('Revision 3')).toBeTruthy();
     expect(
-      await screen.findByText(/organization approval pending/i),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/repository may belong to a different owner or not be selected in the PAT/i),
-    ).toBeTruthy();
-    expect(screen.getByText(/HTTP 403/)).toBeTruthy();
-    expect(screen.getByText(/HTTP 404/)).toBeTruthy();
-    expect(screen.queryByText(/invalid token/i)).toBeNull();
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('Saved draft');
   });
-
-  it('AC-2b: surfaces missing-credential diagnostics from resolve_github_credential', async () => {
-    stubFetch(MISSING_CREDENTIAL_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    expect(
-      await screen.findByText(/GitHub auth is not configured for owner\/repo/i),
-    ).toBeTruthy();
-    expect(screen.queryByText(/invalid token/i)).toBeNull();
-  });
-
-  it('AC-3: never renders raw token material — only the credentialSource kind + name', async () => {
-    stubFetch(PUBLISH_RESPONSE);
-    const { container } = renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    await screen.findByText(/MOONMIND_GITHUB_TOKEN_REF/);
-    expect(container.querySelector('input[type="password"]')).toBeNull();
-    expect(screen.queryByLabelText(/token/i)).toBeNull();
-    expect(screen.queryByText(/ghp_/)).toBeNull();
-    expect(screen.queryByText(/github_pat_/)).toBeNull();
-  });
-
-  it('AC-4: documents the SecretRef alias precedence in user-facing copy', () => {
-    renderPanel();
-
-    // Either rendered inline or behind a stable accessible label.
-    const helpRegion = screen.getByLabelText(/SecretRef alias precedence/i);
-    const text = helpRegion.textContent ?? '';
-    expect(text).toMatch(/GITHUB_TOKEN/);
-    expect(text).toMatch(/GH_TOKEN/);
-    expect(text).toMatch(/WORKFLOW_GITHUB_TOKEN/);
-    expect(text).toMatch(/GITHUB_TOKEN_SECRET_REF/);
-    expect(text).toMatch(/WORKFLOW_GITHUB_TOKEN_SECRET_REF/);
-    expect(text).toMatch(/MOONMIND_GITHUB_TOKEN_REF/);
-    expect(text).toMatch(/settings\.github\.github_token_secret_ref/);
-  });
-
-  it('AC-5: disables Run probe when canRunProbe is false', () => {
-    renderPanel({ canRunProbe: false, initialRepo: 'owner/repo' });
-
-    const runButton = screen.getByRole('button', { name: /Run probe/i });
-    expect((runButton as HTMLButtonElement).disabled).toBe(true);
-    expect(
-      screen.getByText(/Workspace admin permission required to run the GitHub token probe/i),
-    ).toBeTruthy();
-  });
-
-  it('contains the permission checklist table in a scrollable region on narrow viewports', async () => {
-    stubFetch(PUBLISH_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    const permissionCell = await screen.findByText('Contents');
-    const table = permissionCell.closest('table');
-    expect(table).toBeTruthy();
-    expect(table?.parentElement?.className).toContain('overflow-x-auto');
-  });
-
-  it('renders backend error responses with their detail and surfaces a notice', async () => {
-    stubFetch({ detail: 'Permission denied' }, { ok: false, status: 403 });
-    const onNotice = vi.fn();
-    renderPanel({ initialRepo: 'owner/repo', onNotice });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    await waitFor(() => {
-      expect(onNotice).toHaveBeenCalledWith(
-        expect.objectContaining({ level: 'error' }),
-      );
+  it('preserves the draft and clears credentials when refresh loses admission to the selected connection', async () => {
+    const mock = stubApi([first]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Retained draft' },
     });
-    expect(screen.getByText(/Permission denied/)).toBeTruthy();
+    fireEvent.change(
+      screen.getByLabelText('Replacement personal access token'),
+      { target: { value: 'github_pat_4019_lost_admission_sentinel' } },
+    );
+    mock.mockImplementation((url) =>
+      Promise.resolve(response(url === ROOT ? { items: [] } : { apps: [] })),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh connections' }),
+    );
+    await screen.findByText(/Selected connection is no longer available/);
+    expect(
+      (screen.getByLabelText('Connection name') as HTMLInputElement).value,
+    ).toBe('Retained draft');
+    expect(
+      (
+        screen.getByLabelText(
+          'Replacement personal access token',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe('');
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Save connection',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(
+      false,
+    );
+  });
+  it('retains partial-discovery assignments and allows a name-only edit after an advisory outage', async () => {
+    const mock = stubApi([first]);
+    panel();
+    await screen.findByLabelText('Repository connection');
+    fireEvent.change(
+      screen.getByLabelText('Repositories (one owner/repo per line)'),
+      { target: { value: 'owner/first\nowner/new' } },
+    );
+    mock.mockResolvedValue(
+      response(
+        {
+          detail: {
+            code: 'repository_verification_unavailable',
+            mutationCommitted: false,
+          },
+        },
+        503,
+      ),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+    await screen.findByRole('alert');
+    expect(
+      (
+        screen.getByLabelText(
+          'Repositories (one owner/repo per line)',
+        ) as HTMLTextAreaElement
+      ).value,
+    ).toBe('owner/first\nowner/new');
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Save connection',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    expect(
+      sessionStorage.getItem('moonmind.repository-connection.pending'),
+    ).toBeNull();
+    fireEvent.change(
+      screen.getByLabelText('Repositories (one owner/repo per line)'),
+      { target: { value: 'owner/first' } },
+    );
+    fireEvent.change(screen.getByLabelText('Connection name'), {
+      target: { value: 'Name only' },
+    });
+    mock.mockResolvedValue(
+      response({ ...first, displayName: 'Name only', policyRevision: 2 }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+    await screen.findByText('Revision 2');
+    const request = JSON.parse(
+      mock.mock.calls.filter(([, init]) => init?.method === 'PATCH').at(-1)![1]
+        .body,
+    );
+    expect(request.displayName).toBe('Name only');
+    expect(request.repositories).toBeUndefined();
   });
 });

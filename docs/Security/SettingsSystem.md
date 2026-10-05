@@ -1806,40 +1806,28 @@ OperationsPanel
 10. UI refreshes descriptor showing source `workspace_override`.
 11. Future workflow creation uses the new effective default.
 
-### 27.2 Add GitHub Token
+### 27.2 Connect a GitHub account and repository
 
-1. User opens Settings → Providers & Secrets → Managed Secrets.
-2. User creates secret `github-pat-main` with plaintext value.
-3. Backend encrypts and stores the value through the Secrets System.
-4. UI clears plaintext input.
-5. UI shows metadata and `db://github-pat-main`.
-6. User opens User / Workspace integration setting.
-7. User selects `db://github-pat-main` from SecretRef picker.
-8. Backend stores only the SecretRef.
-9. GitHub integration resolves the secret only when needed.
+1. Operator opens Settings → Providers & Secrets → Source Control.
+2. Operator names a repository connection and selects PAT or a configured GitHub App.
+3. Operator assigns explicit `owner/repository` targets and allowed operations.
+4. PAT plaintext is transferred through protected submission and immediately cleared from the form. The server verifies account and repository identity before atomically storing the secret, connection and assignments with their original request ID.
+5. App setup reuses the existing begin/callback service. Configuration comes from the selected admitted App connection; provider state and installation identity are verified server-side.
+6. The saved record shows the account, installation when applicable, lifecycle and revision. Connection credentials remain separate from model Provider Profiles.
+7. Edits compare the saved policy and credential revisions. An uncertain save acknowledgment reads the same operation receipt rather than resubmitting a create. Safe draft fields remain available when saving fails.
 
-The SecretRef is accepted by the same resolver as `GITHUB_TOKEN`, `GH_TOKEN`,
-`WORKFLOW_GITHUB_TOKEN`, `GITHUB_TOKEN_SECRET_REF`,
-`WORKFLOW_GITHUB_TOKEN_SECRET_REF`, and `MOONMIND_GITHUB_TOKEN_REF`.
+An empty repository assignment list grants no repository authority. Incomplete
+repository verification preserves the saved assignments, and an advisory
+provider outage does not block a name-only edit. Disabling a connection keeps
+its credentials and assignments for cleanup; permanent removal still needs the
+existing active-binding check wired into this Settings surface.
 
-For a fine-grained PAT, the token must target the repository resource owner and
-include the selected repository. Minimum permission profiles are:
-
-- Repository indexing: `Contents: Read`.
-- Branch/PR publishing: `Contents: Read and write` and
-  `Pull requests: Read and write`.
-- PR readiness: `Pull requests: Read`, `Commit statuses: Read`,
-  `Checks: Read`, and `Issues: Read` when reaction fallback is enabled.
-- Workflow file edits: add `Workflows: Write` when agents may modify
-  `.github/workflows/*`.
-
-The GitHub token probe validates the exact selected repository rather than
-classic OAuth scopes. It reports repository, branch, and pull-request endpoint
-access plus a mode-specific permission checklist without exposing the token.
-Fine-grained PATs that are pending organization approval, created for the wrong
-resource owner, excluded from the selected repository, or used for
-multi-organization/outside-collaborator automation can still fail; long-lived
-organization automation should prefer a GitHub App.
+The selected probe/default-branch contract is owned by MoonMind#4008 and is not
+yet exposed in this API revision. **Test Connection** is visibly unavailable;
+the ordinary Settings page performs no global-token fallback. Future probe
+integration must consume observed read access, unverified writes and unknown
+transport outcomes directly from that shared contract. Connection setup does
+not certify write permission or restore repository indexing.
 
 ### 27.3 Reset User Override
 

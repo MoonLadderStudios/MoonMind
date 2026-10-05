@@ -83,6 +83,8 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       requestedUrls.push(url);
       if (url === '/api/v1/provider-profiles') return Promise.resolve(response([]));
       if (url === '/api/v1/secrets') return Promise.resolve(response({ items: [] }));
+      if (url === '/api/v1/repository-connections') return Promise.resolve(response({ items: [] }));
+      if (url === '/api/v1/repository-connections/setup-options') return Promise.resolve(response({ apps: [] }));
       if (url === '/me') return Promise.resolve(response({ id: 'user-1', email: 'user@example.com' }));
       if (url.startsWith('/api/v1/settings/audit')) {
         return Promise.resolve(response({ items: [] }));
@@ -138,6 +140,8 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(await screen.findByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
     await waitFor(() => expect(requestedUrls).toContain('/api/v1/provider-profiles'));
     expect(requestedUrls).toContain('/api/v1/secrets');
+    await waitFor(() => expect(requestedUrls).toContain('/api/v1/repository-connections'));
+    expect(screen.getByLabelText('Connection name')).toBeTruthy();
     expect(requestedUrls.some((url) => url.startsWith('/api/v1/settings/catalog'))).toBe(false);
     expect(requestedUrls).not.toContain('/me');
     expect(requestedUrls).not.toContain('/api/system/worker-pause');

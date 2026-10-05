@@ -1309,6 +1309,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/repository-connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Settings Connections */
+        get: operations["list_settings_connections_api_v1_repository_connections_get"];
+        put?: never;
+        /** Create Settings Connection */
+        post: operations["create_settings_connection_api_v1_repository_connections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/setup-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settings Setup Options */
+        get: operations["settings_setup_options_api_v1_repository_connections_setup_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/operations/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Settings Saved Result */
+        get: operations["settings_saved_result_api_v1_repository_connections__connection_id__operations__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings Connection */
+        get: operations["get_settings_connection_api_v1_repository_connections__connection_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Settings Connection */
+        patch: operations["update_settings_connection_api_v1_repository_connections__connection_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/repository-connections/{connection_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable Settings Connection */
+        post: operations["disable_settings_connection_api_v1_repository_connections__connection_id__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/github/events": {
         parameters: {
             query?: never;
@@ -6805,6 +6892,101 @@ export interface components {
             /** Resultrefs */
             resultRefs?: string[];
         };
+        /** ConnectionAppChoice */
+        ConnectionAppChoice: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** ConnectionSettingsCreate */
+        ConnectionSettingsCreate: {
+            /** Connectionid */
+            connectionId: string;
+            /** Requestid */
+            requestId: string;
+            /** Displayname */
+            displayName: string;
+            /**
+             * Plaintext
+             * Format: password
+             */
+            plaintext: string;
+            /** Repositories */
+            repositories?: string[];
+            /** Allowedoperations */
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
+        };
+        /** ConnectionSettingsItem */
+        ConnectionSettingsItem: {
+            /** Id */
+            id: string;
+            /** Displayname */
+            displayName: string;
+            /**
+             * Credentialkind
+             * @enum {string}
+             */
+            credentialKind: "pat" | "github_app";
+            /** Account */
+            account?: string | null;
+            /** Installation */
+            installation?: string | null;
+            /** Repositories */
+            repositories: string[];
+            /** Allowedoperations */
+            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
+            /** Lifecycle */
+            lifecycle: string;
+            /** Policyrevision */
+            policyRevision: number;
+            /** Credentialrevision */
+            credentialRevision: number;
+        };
+        /** ConnectionSettingsList */
+        ConnectionSettingsList: {
+            /** Items */
+            items: components["schemas"]["ConnectionSettingsItem"][];
+        };
+        /** ConnectionSettingsReceipt */
+        ConnectionSettingsReceipt: {
+            /** Requestid */
+            requestId: string;
+            /** Committed */
+            committed: boolean;
+            connection?: components["schemas"]["ConnectionSettingsItem"] | null;
+        };
+        /** ConnectionSettingsRevision */
+        ConnectionSettingsRevision: {
+            /** Requestid */
+            requestId: string;
+            /** Expectedpolicyrevision */
+            expectedPolicyRevision: number;
+            /** Expectedcredentialrevision */
+            expectedCredentialRevision: number;
+        };
+        /** ConnectionSettingsUpdate */
+        ConnectionSettingsUpdate: {
+            /** Requestid */
+            requestId: string;
+            /** Expectedpolicyrevision */
+            expectedPolicyRevision: number;
+            /** Expectedcredentialrevision */
+            expectedCredentialRevision: number;
+            /** Displayname */
+            displayName?: string | null;
+            /** Plaintext */
+            plaintext?: string | null;
+            /** Repositories */
+            repositories?: string[] | null;
+            /** Allowedoperations */
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[] | null;
+        };
+        /** ConnectionSetupOptions */
+        ConnectionSetupOptions: {
+            /** Apps */
+            apps: components["schemas"]["ConnectionAppChoice"][];
+        };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
             /**
@@ -9408,13 +9590,27 @@ export interface components {
          * @description Operator configuration bound to one GitHub App enrollment.
          */
         GitHubAppBeginRequest: {
-            /** Appslug */
+            /** Appconnectionid */
+            appConnectionId?: string | null;
+            /**
+             * Appslug
+             * @default
+             */
             appSlug: string;
-            /** Expectedappref */
+            /**
+             * Expectedappref
+             * @default
+             */
             expectedAppRef: string;
-            /** Appid */
+            /**
+             * Appid
+             * @default
+             */
             appId: string;
-            /** Keysecretref */
+            /**
+             * Keysecretref
+             * @default
+             */
             keySecretRef: string;
             /** Requestid */
             requestId: string;
@@ -16843,6 +17039,212 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubAppCallbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_settings_connections_api_v1_repository_connections_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsList"];
+                };
+            };
+        };
+    };
+    create_settings_connection_api_v1_repository_connections_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionSettingsCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    settings_setup_options_api_v1_repository_connections_setup_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSetupOptions"];
+                };
+            };
+        };
+    };
+    settings_saved_result_api_v1_repository_connections__connection_id__operations__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_connection_api_v1_repository_connections__connection_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_settings_connection_api_v1_repository_connections__connection_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disable_settings_connection_api_v1_repository_connections__connection_id__disable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionSettingsRevision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionSettingsItem"];
                 };
             };
             /** @description Validation Error */
