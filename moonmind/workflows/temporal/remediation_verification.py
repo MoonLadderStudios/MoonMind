@@ -86,7 +86,7 @@ _SNAPSHOT_STAGES: frozenset[str] = frozenset(
 # side effect that could change the target. Verification of these reads fresh
 # evidence and truthfully reports that the target's original outcome stands.
 _NON_DELIVERED_STATUSES: frozenset[str] = frozenset(
-    {"denied", "rejected", "precondition_failed"}
+    {"denied", "rejected", "precondition_failed", "no_op"}
 )
 
 # Canonical lifecycle vocabulary (mirrors moonmind.statuses.*). Kept as literal

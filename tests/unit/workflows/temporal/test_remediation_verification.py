@@ -195,6 +195,17 @@ async def test_accepted_rerun_waits_when_run_identity_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_confirmed_rerun_no_op_has_no_pending_obligation():
+    before = _snap("before", state="executing", run_id="r0")
+    after = _snap(state="executing", run_id="r0")
+    result = await _run(
+        "execution.request_rerun_same_workflow", before, [after], delivery="no_op"
+    )
+    assert result.outcome == VERIFIED_NO_CHANGE
+    assert not result.pending
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_still_failed_when_target_objective_unresolved():
     # Branch runtime "completes" (delivery applied) but the target objective is
     # still failed — this is the exact defect the issue fixes.
