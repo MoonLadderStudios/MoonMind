@@ -981,7 +981,7 @@ def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
         ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
         ".agents/skills/update-moonmind/scripts/update_release.py",
         "tests/unit/test_update_moonmind_transport.py",
-        "tests/integration/host_update/test_transport.py",
+        "tests/integration/host_update/test_host_updater_transport.py",
     ],
 )
 def test_host_updater_transport_changes_select_real_docker_qualification(
