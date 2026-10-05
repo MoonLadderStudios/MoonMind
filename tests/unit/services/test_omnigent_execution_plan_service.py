@@ -1843,6 +1843,10 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    monkeypatch.setenv(
         "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
     )
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)

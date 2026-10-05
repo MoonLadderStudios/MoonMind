@@ -888,7 +888,7 @@ jobs:
           "$host_test_env/bin/python" -m pip install 'pytest>=9.0.3,<9.2'
           "$host_test_env/bin/python" -m pytest \
             --confcutdir=tests/integration/host_update \
-            tests/integration/host_update/test_transport.py -q
+            tests/integration/host_update/test_host_updater_transport.py -q
       - name: Set up Node for the dashboard journey
         uses: actions/setup-node@v7
         with:
