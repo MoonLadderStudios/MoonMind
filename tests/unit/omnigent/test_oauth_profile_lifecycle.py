@@ -72,7 +72,7 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import (
-    CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+    CODEX_LOGIN_SESSION_PROBE,
     OmnigentOAuthHostRuntime,
 )
 from moonmind.omnigent.oauth_hosts import (
@@ -764,7 +764,7 @@ async def test_credential_mount_preflight_runs_provider_login_without_execution_
     assert all(index > image_index for index, item in enumerate(command) if item == "-u")
 
 
-def _codex_auth_json(*, expires_at: float | None, secret: str) -> dict:
+def _codex_auth_json(*, issued_at: float, expires_at: float, secret: str) -> dict:
     def jwt(claims: dict) -> str:
         def segment(value: dict) -> str:
             raw = json.dumps(value).encode()
@@ -772,13 +772,12 @@ def _codex_auth_json(*, expires_at: float | None, secret: str) -> dict:
 
         return f"{segment({'alg': 'RS256'})}.{segment(claims)}.{secret}"
 
-    if expires_at is None:
-        return {"auth_mode": "apikey", "OPENAI_API_KEY": secret, "tokens": None}
+    claims = {"iat": int(issued_at), "exp": int(expires_at)}
     return {
         "auth_mode": "chatgpt",
         "tokens": {
-            "id_token": jwt({"exp": int(expires_at), "email": "operator@example.com"}),
-            "access_token": jwt({"exp": int(expires_at)}),
+            "id_token": jwt({**claims, "email": "operator@example.com"}),
+            "access_token": jwt(claims),
             "refresh_token": f"rt.{secret}",
         },
     }
@@ -787,33 +786,40 @@ def _codex_auth_json(*, expires_at: float | None, secret: str) -> dict:
 @pytest.mark.parametrize(
     ("auth", "expected"),
     [
-        ("expired", "expired"),
-        ("current", "current"),
+        # OpenAI refreshed an ended session: the token has no lifetime.
+        ("zero-lifetime", "ended"),
+        # A token that merely aged out may still refresh once Codex starts.
+        ("aged-out", "active"),
+        ("current", "active"),
         ("api-key", "unknown"),
         ("missing", "unknown"),
         ("malformed", "unknown"),
     ],
 )
-def test_codex_access_token_expiry_probe_prints_only_a_verdict(
+def test_codex_login_session_probe_prints_only_a_verdict(
     tmp_path, auth: str, expected: str
 ) -> None:
     secret = "never-print-this-token-material"
-    if auth != "missing":
-        expires_at = {
-            "expired": time.time() - 60,
-            "current": time.time() + 3600,
-            "api-key": None,
-            "malformed": None,
-        }[auth]
-        document = (
-            "{not json"
-            if auth == "malformed"
-            else json.dumps(_codex_auth_json(expires_at=expires_at, secret=secret))
-        )
-        (tmp_path / "auth.json").write_text(document)
+    now = time.time()
+    documents = {
+        "zero-lifetime": _codex_auth_json(
+            issued_at=now - 60, expires_at=now - 60, secret=secret
+        ),
+        "aged-out": _codex_auth_json(
+            issued_at=now - 864000, expires_at=now - 60, secret=secret
+        ),
+        "current": _codex_auth_json(
+            issued_at=now - 60, expires_at=now + 864000, secret=secret
+        ),
+        "api-key": {"auth_mode": "apikey", "OPENAI_API_KEY": secret, "tokens": None},
+    }
+    if auth == "malformed":
+        (tmp_path / "auth.json").write_text("{not json")
+    elif auth != "missing":
+        (tmp_path / "auth.json").write_text(json.dumps(documents[auth]))
 
     completed = subprocess.run(
-        [sys.executable, "-c", CODEX_ACCESS_TOKEN_EXPIRY_PROBE, str(tmp_path)],
+        [sys.executable, "-c", CODEX_LOGIN_SESSION_PROBE, str(tmp_path)],
         capture_output=True,
         text=True,
         check=True,
@@ -825,7 +831,7 @@ def test_codex_access_token_expiry_probe_prints_only_a_verdict(
 
 
 @pytest.mark.asyncio
-async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
+async def test_login_session_probe_reads_the_home_without_network_or_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launch = {
@@ -833,7 +839,7 @@ async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
         "runtimeUid": 1000,
         "runtimeGid": 1000,
     }
-    run = AsyncMock(return_value=(0, "expired\n", ""))
+    run = AsyncMock(return_value=(0, "ended\n", ""))
     monkeypatch.setattr(
         OmnigentOAuthHostRuntime,
         "_validate_effective_launch",
@@ -841,11 +847,11 @@ async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
     )
     monkeypatch.setattr(OmnigentOAuthHostRuntime, "_run", run)
 
-    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+    verdict = await OmnigentOAuthHostRuntime.probe_login_session(
         binding=_binding(), effective_launch=launch
     )
 
-    assert verdict == "expired"
+    assert verdict == "ended"
     command = run.await_args.args
     assert command[:3] == ("docker", "run", "--rm")
     assert command[command.index("--network") + 1] == "none"
@@ -855,7 +861,7 @@ async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
     assert command[image_index - 2 : image_index] == ("--entrypoint", "python3")
     assert command[image_index + 1 :] == (
         "-c",
-        CODEX_ACCESS_TOKEN_EXPIRY_PROBE,
+        CODEX_LOGIN_SESSION_PROBE,
         "/home/app/.codex",
     )
     assert run.await_args.kwargs == {"check": False}
@@ -865,7 +871,7 @@ async def test_credential_expiry_probe_reads_the_home_without_network_or_writes(
 @pytest.mark.parametrize(
     "outcome", ["exit-nonzero", "unexpected-output", "docker-error", "claude"]
 )
-async def test_credential_expiry_probe_reports_unknown_without_proof(
+async def test_login_session_probe_reports_unknown_without_proof(
     monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     launch = {
@@ -876,8 +882,8 @@ async def test_credential_expiry_probe_reports_unknown_without_proof(
     run = AsyncMock(
         return_value={
             "exit-nonzero": (125, "", "Unable to find image"),
-            "unexpected-output": (0, "expired soon\n", ""),
-            "claude": (0, "expired\n", ""),
+            "unexpected-output": (0, "ended soon\n", ""),
+            "claude": (0, "ended\n", ""),
         }.get(outcome),
         side_effect=(
             OSError("docker unavailable") if outcome == "docker-error" else None
@@ -901,7 +907,7 @@ async def test_credential_expiry_probe_reports_unknown_without_proof(
             }
         )
 
-    verdict = await OmnigentOAuthHostRuntime.probe_credential_expiry(
+    verdict = await OmnigentOAuthHostRuntime.probe_login_session(
         binding=binding, effective_launch=launch
     )
 

@@ -766,18 +766,36 @@ def _never_started_codex_result(code: str) -> AgentRunResult:
         retryRecommendation="retry_step_execution",
         metadata={
             "normalizedStatus": "failed",
-            "omnigentCheckpointCapture": {"providerProfileId": "codex_openai_oauth"},
+            "omnigentCheckpointCapture": {
+                "providerProfileId": "codex_openai_oauth",
+                "hostBindingRef": "omnigent-oauth:codex_openai_oauth",
+                "credentialGeneration": 3,
+            },
         },
     )
 
 
-async def _execute_with_credential_verdict(
-    monkeypatch: pytest.MonkeyPatch, mock_run, *, code: str, verdict: str
+async def _execute_with_login_session_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_run,
+    *,
+    code: str,
+    verdict: str,
+    binding_ref: str = "omnigent-oauth:codex_openai_oauth",
+    credential_generation: int = 3,
 ):
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
-    binding = SimpleNamespace(effective_launch_snapshot={"snapshotRef": "launch-1"})
+    binding = SimpleNamespace(
+        binding_ref=binding_ref,
+        credential_mount_ref=SimpleNamespace(
+            auth_volume_ref=SimpleNamespace(
+                credential_generation=credential_generation
+            )
+        ),
+        effective_launch_snapshot={"snapshotRef": "launch-1"},
+    )
     lookups: list[str] = []
 
     async def get_binding_for_profile(_self, profile_id: str):
@@ -788,15 +806,15 @@ async def _execute_with_credential_verdict(
     monkeypatch.setattr(
         OmnigentOAuthHostRepository, "get_binding_for_profile", get_binding_for_profile
     )
-    monkeypatch.setattr(OmnigentOAuthHostRuntime, "probe_credential_expiry", probe)
+    monkeypatch.setattr(OmnigentOAuthHostRuntime, "probe_login_session", probe)
     mock_run.return_value = _never_started_codex_result(code)
     result = await ActivityEnvironment().run(
         omnigent_execute_activity,
         AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
-            correlationId="workflow-expired-login",
-            idempotencyKey="step-expired-login",
+            correlationId="workflow-ended-login",
+            idempotencyKey="step-ended-login",
         ),
     )
     return result, lookups, probe, binding
@@ -807,12 +825,12 @@ async def _execute_with_credential_verdict(
     "code", ["agent_startup_pending", "OMNIGENT_CURRENT_TURN_NOT_STARTED"]
 )
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_never_started_codex_turn_on_expired_login_requires_reauthentication(
+async def test_never_started_codex_turn_on_ended_login_requires_reauthentication(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, code: str
 ):
-    """An expired ChatGPT login cannot be fixed by retrying on a fresh host."""
-    result, lookups, probe, binding = await _execute_with_credential_verdict(
-        monkeypatch, mock_run, code=code, verdict="expired"
+    """An ended ChatGPT login cannot be fixed by retrying on a fresh host."""
+    result, lookups, probe, binding = await _execute_with_login_session_verdict(
+        monkeypatch, mock_run, code=code, verdict="ended"
     )
 
     assert lookups == ["codex_openai_oauth"]
@@ -824,22 +842,23 @@ async def test_never_started_codex_turn_on_expired_login_requires_reauthenticati
     assert result.failure_class == "integration_error"
     assert "codex_openai_oauth" in result.summary
     assert "re-authenticate" in result.summary
-    assert result.metadata["credentialExpiry"] == {
-        "verdict": "expired",
+    assert result.metadata["codexLoginSession"] == {
+        "verdict": "ended",
         "harnessStartFailureCode": code,
     }
-    assert result.metadata["omnigentCheckpointCapture"] == {
-        "providerProfileId": "codex_openai_oauth"
-    }
+    assert (
+        result.metadata["omnigentCheckpointCapture"]
+        == _never_started_codex_result(code).metadata["omnigentCheckpointCapture"]
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verdict", ["current", "unknown"])
+@pytest.mark.parametrize("verdict", ["active", "unknown"])
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
-async def test_never_started_codex_turn_keeps_retry_without_expiry_proof(
+async def test_never_started_codex_turn_keeps_retry_without_ended_login_proof(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, verdict: str
 ):
-    result, _lookups, probe, _binding = await _execute_with_credential_verdict(
+    result, _lookups, probe, _binding = await _execute_with_login_session_verdict(
         monkeypatch, mock_run, code="agent_startup_pending", verdict=verdict
     )
 
@@ -848,12 +867,33 @@ async def test_never_started_codex_turn_keeps_retry_without_expiry_proof(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "moved_on",
+    [
+        {"binding_ref": "omnigent-oauth:replacement"},
+        {"credential_generation": 4},
+    ],
+)
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_login_session_probe_is_fenced_to_the_attempted_credential(
+    mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, moved_on
+):
+    """A reconnected profile's new credential cannot classify the old attempt."""
+    result, _lookups, probe, _binding = await _execute_with_login_session_verdict(
+        monkeypatch, mock_run, code="agent_startup_pending", verdict="ended", **moved_on
+    )
+
+    probe.assert_not_awaited()
+    assert result == _never_started_codex_result("agent_startup_pending")
+
+
+@pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_started_turn_failure_does_not_probe_credentials(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
 ):
-    result, lookups, probe, _binding = await _execute_with_credential_verdict(
-        monkeypatch, mock_run, code="codex_turn_error", verdict="expired"
+    result, lookups, probe, _binding = await _execute_with_login_session_verdict(
+        monkeypatch, mock_run, code="codex_turn_error", verdict="ended"
     )
 
     assert lookups == []
