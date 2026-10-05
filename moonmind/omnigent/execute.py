@@ -510,7 +510,8 @@ class _MarkedTurnStartWatchdog:
             active_response_id and active_response_id in self._terminal_response_ids
         )
         self.currently_active = bool(
-            active_response_id and not self.active_response_known_terminal
+            (active_response_id and not self.active_response_known_terminal)
+            or _snapshot_projects_live_native_turn(snapshot)
         )
         if self.currently_active:
             self.ever_active = True
@@ -1511,10 +1512,27 @@ def _snapshot_projects_active_response(snapshot: Mapping[str, Any]) -> bool:
     return _snapshot_active_response_id(snapshot) is not None
 
 
+def _snapshot_projects_live_native_turn(snapshot: Mapping[str, Any]) -> bool:
+    """Return whether a native harness reports its own turn as still running.
+
+    Native Codex mirrors its turn lifecycle into session status: ``running``
+    from ``turn/started`` until ``turn/completed`` posts ``idle``. Its message
+    injection response completes immediately, so an empty active response id
+    is not evidence that the Codex turn ended (mm:337458ba remediation).
+    """
+
+    return (
+        str(snapshot.get("harness") or "").strip() == "codex-native"
+        and normalize_omnigent_observation(dict(snapshot)) == "running"
+    )
+
+
 def _snapshot_projects_inactive_turn(snapshot: Mapping[str, Any]) -> bool:
     normalized = normalize_omnigent_observation(dict(snapshot))
     if normalized in {"completed", "failed", "canceled", "timed_out", "idle"}:
         return True
+    if _snapshot_projects_live_native_turn(snapshot):
+        return False
     active_response_is_projected = (
         "active_response_id" in snapshot or "activeResponseId" in snapshot
     )
@@ -1898,6 +1916,7 @@ async def _await_marked_turn_terminal(
         )
         terminal_event_tool_only_candidate = bool(
             not inactive
+            and not _snapshot_projects_live_native_turn(snapshot)
             and terminal_status == "completed"
             and progress
             and not turn_state["terminalAssistantAfterWork"]
