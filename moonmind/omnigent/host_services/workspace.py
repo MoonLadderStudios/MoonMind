@@ -405,6 +405,17 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
         paths_by_ref = {item["ref"]: item["path"] for item in attachment_evidence}
         named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
+        # Ordinary inputs (for example the original issue brief/objective) are
+        # admitted and projected by the same owner as verifier evidence. Expose
+        # their existing paths to the first-message consumer even when explicit
+        # repair instructions replace the default task prompt.
+        named_paths.update(
+            {
+                f"inputPath{index}": paths_by_ref[ref]
+                for index, ref in enumerate(attachment_refs, start=1)
+                if ref not in named_refs.values()
+            }
+        )
         # Clone-time commit identity does not survive workspace reconciliation:
         # retries reuse the attempt workspace so no clone runs, an
         # authoritative restore replaces ``.git/config``, and an additive

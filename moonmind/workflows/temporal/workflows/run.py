@@ -976,6 +976,12 @@ RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH = (
 RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH = (
     "run-remediation-attempt-context-inputs-v1"
 )
+# Current controller evidence replaces inherited runtime defaults, including
+# an explicit absence of remaining work. Retained histories keep their original
+# AgentRun payloads when this patch is absent.
+RUN_REMEDIATION_CURRENT_EVIDENCE_INPUTS_PATCH = (
+    "run-remediation-current-evidence-inputs-v1"
+)
 # Explicit cutover from the legacy, statically expanded remediation history to
 # the compact controller-owned continuation schema.  Keep this separate from
 # the controller patch so histories that never authored a loop never record the
@@ -21751,6 +21757,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         remediation_context_enabled = self._workflow_patch_enabled(
             RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH
         )
+        if node_inputs.get("remediationLoopId") and self._workflow_patch_enabled(
+            RUN_REMEDIATION_CURRENT_EVIDENCE_INPUTS_PATCH
+        ):
+            for evidence_key in ("gateResultRef", "remainingWorkRef"):
+                if evidence_key in node_inputs:
+                    parameters.pop(evidence_key, None)
+                    if node_inputs[evidence_key] is not None:
+                        parameters[evidence_key] = node_inputs[evidence_key]
         if remediation_context_enabled:
             # Materialized node inputs carry the current controller-owned loop
             # and candidate. Runtime defaults and workflow inputs may be stale.
