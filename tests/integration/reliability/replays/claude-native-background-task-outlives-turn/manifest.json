@@ -1,0 +1,18 @@
+{
+  "incidentWorkflowId": "mm:f2ae7fd5-a708-46fd-b941-1a7c3629609c-2026-10-06T16:35:03Z",
+  "failureShapeId": "claude-native-background-task-outlives-turn",
+  "boundary": "generic Omnigent Claude host launch to step settlement at turn end",
+  "harnessId": "claude-native",
+  "hostClassId": "omnigent-claude",
+  "selectedSkill": "moonspec-assess",
+  "declaredOutput": "artifacts/github-issue-implement-assessment.json",
+  "transcript": [
+    {"tool": "Agent", "result": "Async agent launched successfully."},
+    {"role": "assistant", "text": "The code trace is still running. Once it finishes I'll write the assessment artifact."}
+  ],
+  "sessionTerminalStatus": "idle",
+  "escapedFailure": {
+    "message": "Declared assessment verdict artifact was not produced: artifacts/github-issue-implement-assessment.json",
+    "cause": "Claude Code ran a subagent in the background and ended its turn waiting for it; MoonMind settled the step at turn end and removed the host, so no owner resumed the session to write the declared output."
+  }
+}

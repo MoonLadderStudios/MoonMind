@@ -14,6 +14,7 @@ def _build(
     target_path: str,
     github_attachment=None,
     enable_opencode_runtime: bool = False,
+    enable_claude_runtime: bool = False,
     runtime_environment=None,
 ):
     return OmnigentRuntimeScriptService().build_entrypoint(
@@ -27,6 +28,7 @@ def _build(
         step_execution_id="workflow:run:node-1:execution:1",
         github_credential_attachment=github_attachment,
         enable_opencode_runtime=enable_opencode_runtime,
+        enable_claude_runtime=enable_claude_runtime,
         runtime_environment=runtime_environment,
     )
 
@@ -97,6 +99,29 @@ def test_non_opencode_materializer_does_not_inject_opencode_runtime_flags():
         "MOONMIND_ACTIVE_SKILLS_DIR",
         "MOONMIND_STEP_EXECUTION_ID",
     } | _EGRESS_PROXY_NAMES
+
+
+def test_claude_runtime_keeps_background_tasks_in_the_foreground():
+    # MoonMind settles a Claude step when its turn ends and then removes the
+    # host. A background subagent or shell has no owner to resume the session
+    # with its result, so the step finishes without the outputs that work was
+    # meant to produce (escaped as a missing assessment verdict artifact).
+    _script, environment = _build(
+        target_path="/run/mm-credentials/claude", enable_claude_runtime=True
+    )
+
+    assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+    # Omnigent filters the host environment before spawning a runner; the
+    # Claude Code TUI only inherits names that survive that hop.
+    assert "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" in set(
+        environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
+    )
+
+
+def test_claude_background_task_restriction_is_scoped_to_claude_hosts():
+    _script, environment = _build(target_path="/run/mm-credentials/other")
+
+    assert not any(name.startswith("CLAUDE_CODE_") for name in environment)
 
 
 @pytest.mark.parametrize("target_path", ["/home/app/.claude", "/home/app/.codex"])
