@@ -4755,8 +4755,6 @@ class TestCanonicalTurnLineage(unittest.TestCase):
 
         remediation, _verification = materialize_attempt_nodes(
             spec=self._spec(),
-            workflow_id=self.WORKFLOW_ID,
-            run_id=self.RUN_ID,
             ordinal=ordinal,
             workspace_head_ref="artifact://loop-head/1",
             runtime={"mode": "omnigent", "executionProfileRef": "codex-profile"},
