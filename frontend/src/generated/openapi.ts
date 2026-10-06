@@ -7855,6 +7855,8 @@ export interface components {
             rollbackSourceActionId?: string | null;
             /** Confirmation */
             confirmation?: string | null;
+            /** Operationid */
+            operationId?: string | null;
         };
         /**
          * DeploymentUpdateResponse
@@ -7882,7 +7884,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIALLY_VERIFIED" | "FAILED" | "SUPERSEDED";
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIALLY_VERIFIED" | "FAILED" | "SUPERSEDED" | "UNKNOWN";
         };
         /** DeploymentVerificationCheckModel */
         DeploymentVerificationCheckModel: {

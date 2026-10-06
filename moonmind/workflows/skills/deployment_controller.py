@@ -56,8 +56,16 @@ CONTROLLER_RECENT_LIMIT = 10
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
+# ``UNKNOWN`` is a missing or unrecognized controller status: it is neither
+# queued nor finished, so readers keep observing instead of guessing.
 ControllerStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 _CONTROLLER_STATUS_MAP: dict[str, ControllerStatus] = {
     "pending": "QUEUED",
@@ -419,4 +427,4 @@ def list_controller_operations(
 
 def controller_action_status(controller_status: str) -> ControllerStatus:
     """Map a controller operation status onto the Operations action status."""
-    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "QUEUED")
+    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "UNKNOWN")

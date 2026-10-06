@@ -24,6 +24,7 @@ from api_service.api.routers.deployment_operations import (
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.services.deployment_operations import recent_action_from_controller
 from moonmind.workflows.skills import deployment_controller as controller_client
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -283,6 +284,77 @@ def test_explicit_retry_after_exhaustion_preserves_the_first_failure(
     # The original failure stays visible after the fresh attempt succeeds.
     assert recovered["errorSummary"].startswith("attempt 1: pull failed")
     assert temporal.calls == []
+
+
+def test_resubmitting_one_request_identity_observes_its_failed_operation(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    def failing(controller: InProcessController, operation: dict) -> None:
+        controller.store.record_attempt_error(
+            operation["operationId"], error="pull failed: manifest unknown"
+        )
+        raise controller.engine.StageError("pull", 1, "manifest unknown")
+
+    controller = controller_factory(failing)
+    client, temporal = _client()
+    request = {**_update(), "operationId": "ui-request-1"}
+
+    first = client.post("/api/v1/operations/deployment/update", json=request)
+    assert first.status_code == 202, first.text
+    assert (first.json()["operationId"], first.json()["status"]) == (
+        "ui-request-1",
+        "FAILED",
+    )
+    exhausted = list(controller.applied)
+    assert set(exhausted) == {"ui-request-1"}
+
+    # The browser lost that response and resubmits the same request: it
+    # observes the exhausted operation instead of starting another apply.
+    again = client.post("/api/v1/operations/deployment/update", json=request)
+    assert again.status_code == 202, again.text
+    assert (again.json()["operationId"], again.json()["status"]) == (
+        "ui-request-1",
+        "FAILED",
+    )
+    assert controller.applied == exhausted
+
+    # A changed target under the same identity is refused, not reinterpreted.
+    changed = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update("sha256:" + "c" * 64), "operationId": "ui-request-1"},
+    )
+    assert changed.status_code == 409, changed.text
+    assert changed.json()["detail"]["code"] == "deployment_controller_conflict"
+    assert controller.applied == exhausted
+    assert temporal.calls == []
+
+
+def test_update_rejects_an_unsafe_request_identity_before_the_controller(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    controller = controller_factory()
+    client, _temporal = _client()
+
+    response = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "operationId": "../escape"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert controller.applied == []
+
+
+@pytest.mark.parametrize("controller_status", ["", "restarting", None])
+def test_unrecognized_controller_status_is_unknown_not_queued(
+    controller_status: str | None,
+) -> None:
+    assert controller_client.controller_action_status(controller_status) == "UNKNOWN"
+    action = recent_action_from_controller(
+        {"operationId": "op-1", "status": controller_status, "updatedAt": "2026-10-06"}
+    )
+    assert action.status == "UNKNOWN"
+    assert action.completed_at is None
+    assert action.retry_allowed is False
 
 
 def test_failed_postcheck_is_partially_verified_with_the_failed_check(
