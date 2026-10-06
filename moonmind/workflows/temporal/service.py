@@ -408,6 +408,8 @@ def _recovery_plan_digest_from_record(record: TemporalExecutionRecord) -> str | 
         resume_block.get("sourcePlanDigest"),
         resume_block.get("source_plan_digest"),
     )
+
+
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
 PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
     {"awaiting_approval", "approval_required"}
@@ -417,6 +419,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def _get_managed_session_store_root() -> str:
     import os
 
@@ -424,6 +427,7 @@ def _get_managed_session_store_root() -> str:
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_sessions",
     )
+
 
 NON_TERMINAL_STATES: set[MoonMindWorkflowState] = set(NON_TERMINAL_WORKFLOW_STATES)
 OPERATOR_SIGNAL_ALLOWED_STATES: set[MoonMindWorkflowState] = set(
@@ -479,11 +483,14 @@ _TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS: tuple[str, ...] = (
     "workflow execution already closed",
 )
 
+
 class TemporalExecutionError(RuntimeError):
     """Base class for temporal execution service errors."""
 
+
 class TemporalExecutionNotFoundError(TemporalExecutionError):
     """Raised when a workflow execution cannot be located."""
+
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
@@ -582,6 +589,7 @@ class TemporalExecutionListResult:
     next_page_token: str | None
     count: int
 
+
 @dataclass(slots=True)
 class ExecutionDependencySummary:
     """Compact execution metadata for dependency UI and reconciliation."""
@@ -593,6 +601,7 @@ class ExecutionDependencySummary:
     close_status: str | None
     workflow_type: str | None
     attention_required: bool = False
+
 
 def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) -> None:
     """Reject a publish mode the authored plan can never satisfy."""
@@ -909,11 +918,13 @@ class TemporalExecutionService:
 
     @staticmethod
     def _autonomous_remediation_release_authorized() -> bool:
-        """Read the server-owned gate lazily to avoid workflow import cycles."""
+        """Keep autonomous authority closed independently of optional live proof.
 
-        from moonmind.omnigent.remediation_matrix import load_remediation_release_status
+        Operator certification never authorizes autonomous mutation. A future
+        change must deliberately implement that authority through this owner.
+        """
 
-        return load_remediation_release_status().autonomous_rollout_authorized
+        return False
 
     async def _validate_remediation_link(
         self,
@@ -1019,8 +1030,8 @@ class TemporalExecutionService:
         ):
             raise TemporalExecutionValidationError(
                 "workflow.remediation.authorityMode 'admin_auto' is disabled until "
-                "the server-owned MoonLadderStudios/MoonMind#3626 operator "
-                "remediation release gate authorizes autonomous rollout."
+                "the server-owned remediation authority policy separately "
+                "authorizes autonomous mutation (MoonLadderStudios/MoonMind#3626)."
             )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
@@ -3038,6 +3049,7 @@ class TemporalExecutionService:
         parameters_patch: dict[str, Any] | None = None,
         title: str | None = None,
         idempotency_key: str | None = None,
+        expected_run_id: str | None = None,
     ) -> dict[str, Any]:
         if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
@@ -3051,6 +3063,8 @@ class TemporalExecutionService:
             )
 
         record = await self._require_source_execution(workflow_id)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
 
         if (
             record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
@@ -3068,6 +3082,11 @@ class TemporalExecutionService:
             cached = record.last_update_response
             if isinstance(cached, dict):
                 return dict(cached)
+
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
 
         if update_name == "RequestRerun":
             if (
@@ -3124,13 +3143,22 @@ class TemporalExecutionService:
             }
             update_arg = {k: v for k, v in update_arg.items() if v is not None}
             try:
+                control_options = {}
+                if expected_run_id is not None:
+                    control_options["run_id"] = expected_run_id
+                    if idempotency_key is not None:
+                        control_options["idempotency_key"] = idempotency_key
                 await self._client_adapter.update_workflow(
-                    record.workflow_id, update_name, update_arg
+                    record.workflow_id, update_name, update_arg, **control_options
                 )
             except Exception as exc:
                 if update_name == "RequestRerun" and self._is_terminal_update_error(
                     exc
                 ):
+                    if expected_run_id is not None:
+                        raise TemporalExecutionTargetRunChangedError(
+                            "The admitted target run closed before rerun dispatch"
+                        ) from exc
                     logger.info(
                         "Temporal rerun update found closed workflow %s; creating fresh rerun: %s",
                         record.workflow_id,
@@ -3233,14 +3261,14 @@ class TemporalExecutionService:
         record = await self._require_source_execution(workflow_id)
         if expected_run_id is not None:
             await self._session.refresh(record)
-            if record.run_id != expected_run_id:
-                raise TemporalExecutionTargetRunChangedError(
-                    "Target run changed before rerun dispatch"
-                )
         if idempotency_key == record.last_update_idempotency_key and isinstance(
             record.last_update_response, dict
         ):
             return dict(record.last_update_response)
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
         response = await self._create_fresh_rerun_execution(
             record,
             input_artifact_ref=None,
@@ -4166,15 +4194,7 @@ class TemporalExecutionService:
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
                 return record
-            from moonmind.workflows.temporal.remediation_tools import (
-                resume_pending_action_verifications,
-            )
-
-            await resume_pending_action_verifications(
-                self._session, workflow_id=record.workflow_id
-            )
-            await self._fan_out_dependency_resolution(record)
-            return await self._sync_projection_best_effort(record)
+            return await self._propagate_terminal_result(record)
 
         self._set_state(record, target_state, close_status=target_close_status)
         self._record_finish_summary(
@@ -4207,15 +4227,30 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         if isinstance(record, TemporalExecutionRecord):
             return record
+        return await self._propagate_terminal_result(record)
+
+    async def _propagate_terminal_result(self, record):
         from moonmind.workflows.temporal.remediation_tools import (
             resume_pending_action_verifications,
         )
 
-        await resume_pending_action_verifications(
-            self._session, workflow_id=record.workflow_id
-        )
+        resume_error = None
+        try:
+            await resume_pending_action_verifications(
+                self._session, workflow_id=record.workflow_id
+            )
+        except Exception as exc:
+            # The canonical terminal effect is already committed. Preserve the
+            # observation failure for Activity retry without starving unrelated
+            # dependents or leaving a failed SQL transaction in their path.
+            resume_error = exc
+            await self._session.rollback()
+            await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
-        return await self._sync_projection_best_effort(record)
+        projection = await self._sync_projection_best_effort(record)
+        if resume_error is not None:
+            raise resume_error
+        return projection
 
     def _attach_terminal_governance_report(
         self,
@@ -6863,6 +6898,7 @@ class TemporalExecutionService:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
 
 def _format_search_attribute_datetime(value: datetime) -> str:
     if value.tzinfo is None:

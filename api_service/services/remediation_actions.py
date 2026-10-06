@@ -118,7 +118,7 @@ class TemporalRemediationControlPlane:
             await self._execution_service.signal_execution(
                 workflow_id=target.workflow_id,
                 signal_name="Pause" if kind == "execution.pause" else "Resume",
-                payload={"message": params["reason"]} if params.get("reason") else None,
+                payload=None,
                 payload_artifact_ref=None,
                 expected_run_id=target.current_run_id,
                 idempotency_key=action_id,
@@ -157,6 +157,7 @@ class TemporalRemediationControlPlane:
                 workflow_id=target.workflow_id,
                 update_name="RequestRerun",
                 idempotency_key=action_id,
+                expected_run_id=target.current_run_id,
             )
         accepted = response.get("accepted") is not False
         status = "accepted" if accepted else "no_op"

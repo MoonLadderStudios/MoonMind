@@ -7204,7 +7204,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
     expect((
       within(screen.getByLabelText('Remediation authority')).getByRole('option', {
-        name: 'Administrator automatic (release gated)',
+        name: 'Administrator automatic (disabled)',
       }) as HTMLOptionElement
     ).disabled).toBe(true);
 
@@ -7465,6 +7465,11 @@ describe('Workflow Detail Entrypoint', () => {
       actions: {},
     };
 
+    const scoped = richOutboundRemediationLink();
+    scoped.actionCapabilities.push({
+      ...scoped.actionCapabilities[0], actionKind: 'session.cancel',
+      targetSelectorRequired: true, targetSelectorOptions: ['bridgeSessionId', 'stepExecutionId'],
+    } as typeof scoped.actionCapabilities[number]);
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-remediation-rich/remediations?direction=inbound')) {
@@ -7475,7 +7480,7 @@ describe('Workflow Detail Entrypoint', () => {
           ok: true,
           json: async () => ({
             direction: 'outbound',
-            items: [richOutboundRemediationLink()],
+            items: [scoped],
           }),
         } as Response);
       }
@@ -7495,7 +7500,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('collect-context, repair-runtime')).toBeTruthy();
     expect(screen.getByText('awaiting_external')).toBeTruthy();
     const available = screen.getByText('Available Actions:').parentElement!;
-    expect(within(available).getByText('Pause workflow')).toBeTruthy();
+    expect(within(available).getByText(/Cancel session \(select a session\)/)).toBeTruthy();
+    expect(within(available).getByText(/Pause workflow/)).toBeTruthy();
     expect(within(available).queryByText('host.restart')).toBeNull();
     const diagnostics = screen.getByText(/Action diagnostics/).closest('details')!;
     expect(within(diagnostics).getByText('host.restart')).toBeTruthy();

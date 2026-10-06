@@ -1677,7 +1677,7 @@ async def get_omnigent_codex_catalog_readiness(
         supportGateReasons=support_reasons,
         compatibilityDiagnostics=diagnostics,
         cutover=cutover_status.as_dict(),
-        remediationRelease=remediation_release.as_dict(),
+        remediationRelease=remediation_release.as_dict(advisory=True),
         admissionReadiness=admission.to_dict(),
     )
 

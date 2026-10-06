@@ -112,3 +112,14 @@ async def test_recorded_policy_retains_remediation_child_identity(
             node["id"]
             == f"workflow:{expected_run}:issue-implementation-remediation:{kind}:1"
         )
+    assert parent._remediation_legacy_id_scope() == f"workflow:{expected_run}"
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == run_module.RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH,
+    )
+    remediation, verification = parent._materialize_remediation_attempt(ordinal=1)
+    for node, kind in ((remediation, "remediation"), (verification, "verification")):
+        assert node["id"] == f"issue-implementation-remediation:{kind}:1"

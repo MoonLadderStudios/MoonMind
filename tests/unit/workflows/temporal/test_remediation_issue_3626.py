@@ -211,3 +211,23 @@ def test_operator_initiated_readiness_never_mints_autonomous_authority() -> None
     # authority-mode grant to mistake for autonomous mutation approval.
     assert "authorityMode" not in capability
     assert "admin_auto" not in str(capability)
+
+
+@pytest.mark.parametrize("report_ready", [True, False])
+def test_autonomous_authority_does_not_read_optional_certification(
+    monkeypatch, report_ready
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from moonmind.omnigent import remediation_matrix
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+
+    reader = Mock(
+        return_value=SimpleNamespace(autonomous_rollout_authorized=report_ready)
+    )
+    monkeypatch.setattr(remediation_matrix, "load_remediation_release_status", reader)
+    assert (
+        TemporalExecutionService._autonomous_remediation_release_authorized() is False
+    )
+    reader.assert_not_called()
