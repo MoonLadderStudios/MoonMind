@@ -24,16 +24,19 @@ from tests.unit.workflows.temporal.test_remediation_context import (
     _fast_verification_phase,
     temporal_db,
 )
-from tests.unit.workflows.temporal.test_remediation_issue_3622 import (  # noqa: F401
-    mock_client_adapter as imported_client_adapter,
-)
 from tests.unit.workflows.temporal.test_remediation_issue_3622 import (
     AcceptedEffect,
     _prepare,
 )
+from tests.unit.workflows.temporal.test_remediation_issue_3622 import (  # noqa: F401
+    mock_client_adapter as imported_client_adapter,
+)
+
 
 @pytest.fixture
-def mock_client_adapter(imported_client_adapter):  # noqa: F811 -- pytest fixture dependency
+def mock_client_adapter(
+    imported_client_adapter,  # noqa: F811 -- pytest fixture dependency
+):
     return imported_client_adapter
 
 
@@ -207,6 +210,7 @@ async def test_concurrent_pending_observation_cannot_suppress_terminal(
         retained_owner = await session.get(
             models.TemporalExecutionCanonicalRecord, remediation.workflow_id
         )
+        assert retained_owner is not None
         candidate = models.TemporalExecutionCanonicalRecord(
             workflow_id="concurrent-candidate",
             run_id="candidate-run",
