@@ -93,11 +93,12 @@ SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
 _SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
     {SCHEDULE_TARGET_PINNED, SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT}
 )
-# Execution plans this process compiled for schedules. What a compile reads
-# from the image or process environment (built-in Skills, rollout policy,
-# evidence settings) is fixed for the process lifetime, so such a plan stays
-# current until a database-held authority it was compiled from moves.
-_SCHEDULE_PLANS_COMPILED_IN_PROCESS: set[str] = set()
+# Per schedule: the reusable plan this process last compiled for it and the
+# digest of the inputs it was compiled from. What a compile reads from the
+# image or process environment (built-in Skills, rollout policy, evidence
+# settings) is fixed for the process lifetime, so the plan stays current until
+# one of the fingerprinted inputs moves. One entry per schedule.
+_SCHEDULE_PLAN_INPUTS: dict[str, tuple[str, str]] = {}
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. MoonMind.ManifestIngest is intentionally absent from the live
 # recurring catalog: new recurring targets carrying it are rejected
@@ -828,61 +829,68 @@ class RecurringWorkflowsService:
         await self._session.flush()
         return True
 
-    async def _schedule_plan_is_current(
+    async def _schedule_plan_inputs_digest(
         self,
-        binding: Any,
         *,
-        snapshot: Mapping[str, Any],
-        previous_snapshot: Any,
-    ) -> bool:
-        """Whether recompiling would only re-persist the schedule's plan.
+        target: Mapping[str, Any],
+        initial_parameters: Mapping[str, Any],
+        provider_profile: Any,
+        binding: Any,
+    ) -> str | None:
+        """Digest what a schedule's plan is compiled from, or None if unknown.
 
         Compilation writes new artifacts, so a recompiled binding never equals
-        the stored one. The plan stays current while this process compiled it
-        and the Agent Profile, launch policy and deployed server it was
-        compiled against have not moved. Strict support evidence is
-        time-limited and repository authority is admitted from mutable
-        connections, so those plans are still recompiled every pass.
+        the stored one; this digest decides currency instead. It covers the
+        authored target (task, model, Skills, refreshed Agent Profile
+        snapshot), the original task input, the Provider Profile identity that
+        selects the credential materializer, the selected launch policy's
+        runtime snapshot, and the exact deployed Omnigent server build.
         """
 
-        if (
-            binding.plan_ref not in _SCHEDULE_PLANS_COMPILED_IN_PROCESS
-            or snapshot != previous_snapshot
-        ):
-            return False
         from api_service.services.omnigent_execution_plan_service import (
             json_artifact_digest,
         )
-        from api_service.services.omnigent_policies import OmnigentPolicyService
+        from api_service.services.omnigent_policies import (
+            OmnigentPolicyService,
+            PolicyConflict,
+            PolicyNotFound,
+        )
         from moonmind.omnigent.deployment_identity import (
-            assert_plan_matches_deployed_runtime,
+            resolve_deployed_server_build_digest,
         )
-        from moonmind.omnigent.harness_platform.stores import (
-            SessionExecutionPlanStore,
-        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
+        snapshot = initial_parameters.get("agentProfileSnapshot") or {}
         try:
-            plan = await SessionExecutionPlanStore(self._session).load(
-                binding.plan_ref
-            )
-            if plan is None:
-                return False
-            payload = plan.payload
-            admission = payload.admissionAuthority
-            if (
-                admission is not None and admission.admissionMode == "strict"
-            ) or payload.resolvedTools.get("repositoryAccess"):
-                return False
-            if payload.launchPolicyRef != snapshot.get("launchPolicyRef"):
-                return False
             policy_snapshot = await OmnigentPolicyService(
                 self._session
-            ).resolve_runtime_snapshot(payload.launchPolicyRef)
-            await assert_plan_matches_deployed_runtime(payload)
-        except Exception:
-            # Recompilation reports why the stored authority is unusable.
-            return False
-        return json_artifact_digest(policy_snapshot) == payload.policySnapshotDigest
+            ).resolve_runtime_snapshot(str(snapshot.get("launchPolicyRef") or ""))
+            server_build = resolve_deployed_server_build_digest()
+        except (PolicyConflict, PolicyNotFound, HarnessPlatformError):
+            # Compilation reports why this authority is not ready.
+            return None
+        return json_artifact_digest(
+            {
+                "initialParameters": {
+                    key: value
+                    for key, value in initial_parameters.items()
+                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef"}
+                },
+                "runtimeProviderTarget": target.get("runtimeProviderTarget"),
+                "runtimeProviderTargetUpdatePolicy": str(
+                    target.get("runtimeProviderTargetUpdatePolicy")
+                    or SCHEDULE_TARGET_PINNED
+                ).strip(),
+                "taskInputSnapshotDigest": binding.task_input_snapshot_digest,
+                "providerProfile": {
+                    "profileId": getattr(provider_profile, "profile_id", None),
+                    "runtimeId": getattr(provider_profile, "runtime_id", None),
+                    "providerId": getattr(provider_profile, "provider_id", None),
+                },
+                "policySnapshotDigest": json_artifact_digest(policy_snapshot),
+                "serverBuildDigest": server_build,
+            }
+        )
 
     async def _refresh_omnigent_execution_plan_target(
         self,
@@ -965,11 +973,15 @@ class RecurringWorkflowsService:
             user=actor,
         )
         snapshot = initial_parameters["agentProfileSnapshot"]
-        if await self._schedule_plan_is_current(
-            current_binding,
-            snapshot=snapshot,
-            previous_snapshot=target.get("agentProfileSnapshot"),
-        ):
+        inputs_digest = await self._schedule_plan_inputs_digest(
+            target=target,
+            initial_parameters=initial_parameters,
+            provider_profile=provider_profile,
+            binding=current_binding,
+        )
+        if inputs_digest is not None and _SCHEDULE_PLAN_INPUTS.get(
+            str(definition.id)
+        ) == (current_binding.plan_ref, inputs_digest):
             return False
         artifact_service = self._artifact_service or TemporalArtifactService(
             TemporalArtifactRepository(self._session)
@@ -1001,7 +1013,24 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 f"could not refresh scheduled Omnigent authority: {exc}"
             ) from exc
-        _SCHEDULE_PLANS_COMPILED_IN_PROCESS.add(persisted_plan.binding.plan_ref)
+        # Strict support evidence is time-limited and admitted repository
+        # authority comes from mutable connections, so those plans are
+        # recompiled every pass instead of being reused.
+        compiled_payload = persisted_plan.envelope.payload
+        admission = getattr(compiled_payload, "admissionAuthority", None)
+        if (
+            inputs_digest is None
+            or getattr(admission, "admissionMode", None) == "strict"
+            or (getattr(compiled_payload, "resolvedTools", None) or {}).get(
+                "repositoryAccess"
+            )
+        ):
+            _SCHEDULE_PLAN_INPUTS.pop(str(definition.id), None)
+        else:
+            _SCHEDULE_PLAN_INPUTS[str(definition.id)] = (
+                persisted_plan.binding.plan_ref,
+                inputs_digest,
+            )
         # MoonLadderStudios/MoonMind#3833: a schedule pins its runtime-provider
         # target. Advancing time-limited admission evidence must never silently
         # move the schedule onto a different harness, realizer, or rollout row.
