@@ -81,6 +81,19 @@ def test_slowest_and_durations_snapshot_are_separate_files(tmp_path: Path) -> No
     assert payload["cases"][0]["nodeid"] == "mod::test_a"
 
 
+def test_durations_snapshot_records_one_revision_and_attempt(tmp_path: Path) -> None:
+    """MoonLadderStudios/MoonMind#4629: the per-shard snapshot carries the
+    tested revision, run ID and attempt so the hint refresh can reject a
+    mixed corpus."""
+    args_ns = _args(tmp_path, junit=_junit_file(tmp_path), selected="true", outcome="success")
+    args_ns.revision = "abc123"
+    args_ns.run_id = "37545840801"
+    args_ns.attempt = "2"
+    build_evidence(args_ns)
+    payload = json.loads(Path(args_ns.durations_snapshot).read_text())
+    assert (payload["revision"], payload["run_id"], payload["attempt"]) == ("abc123", "37545840801", "2")
+
+
 def test_hook_never_fails_job_on_bad_xml(tmp_path: Path) -> None:
     bad = tmp_path / "bad.xml"
     bad.write_text("<not-xml", encoding="utf-8")

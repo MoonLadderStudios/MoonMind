@@ -129,16 +129,29 @@ def write_slowest_report(summary: JUnitSummary, path: Path, limit: int = SLOWEST
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_durations_snapshot(suite: str, summary: JUnitSummary, path: Path) -> None:
+def write_durations_snapshot(
+    suite: str,
+    summary: JUnitSummary,
+    path: Path,
+    *,
+    revision: str = "",
+    run_id: str = "",
+    attempt: str = "",
+) -> None:
     """Write the per-shard duration-hints snapshot (separate artifact).
 
     This file is the #4366 maintenance input for the current shard only. It
     must never overwrite a shared/committed selection-hints baseline, and a
     partial failed-shard result must never replace a complete baseline: the
-    caller uploads this snapshot path as its own artifact.
+    caller uploads this snapshot path as its own artifact. The tested
+    revision, run ID and attempt let ``tools/ci/refresh_reliability_durations.py
+    --from-snapshots`` import one coherent measurement (#4629).
     """
     payload = {
         "suite": suite,
+        "revision": revision,
+        "run_id": run_id,
+        "attempt": attempt,
         "tests": summary.tests,
         "failures": summary.failures,
         "errors": summary.errors,
@@ -490,7 +503,14 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         except OSError as exc:
             error = f"slowest-report write failed: {exc}"
         try:
-            write_durations_snapshot(args.suite, junit, Path(args.durations_snapshot))
+            write_durations_snapshot(
+                args.suite,
+                junit,
+                Path(args.durations_snapshot),
+                revision=args.revision or "",
+                run_id=args.run_id or "",
+                attempt=args.attempt or "",
+            )
             durations_available = True
         except OSError as exc:
             note = f"durations-snapshot write failed: {exc}"
