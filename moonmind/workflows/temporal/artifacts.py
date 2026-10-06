@@ -10,11 +10,12 @@ import os
 import re
 import secrets
 import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
@@ -140,6 +141,10 @@ class ArtifactReadPolicy:
     preview_artifact_ref: ArtifactRef | None
     default_read_ref: ArtifactRef
 
+# One hourly lifecycle pass keeps draining pages for at most this long; the
+# activity's start-to-close timeout leaves headroom for the final page.
+LIFECYCLE_SWEEP_TIME_BUDGET = timedelta(minutes=40)
+
 @dataclass(slots=True, frozen=True)
 class LifecycleSweepSummary:
     """Lifecycle sweep results."""
@@ -151,6 +156,10 @@ class LifecycleSweepSummary:
     skipped_in_use_count: int = 0
     reconciled_deletion_count: int = 0
     pruned_claim_count: int = 0
+    hard_delete_candidate_count: int = 0
+    pages: int = 1
+    # False when expired or soft-deleted work remains for the next pass.
+    drained: bool = True
 
 @dataclass(slots=True, frozen=True)
 class _StorageLifecycleConfig:
@@ -3931,6 +3940,53 @@ class TemporalArtifactService:
             skipped_in_use_count=skipped_in_use,
             reconciled_deletion_count=reconciled,
             pruned_claim_count=pruned,
+            hard_delete_candidate_count=len(hard_candidates),
+            drained=len(expired) < page_size and len(hard_candidates) < page_size,
+        )
+
+    async def drain_lifecycle(
+        self,
+        *,
+        principal: str,
+        time_budget: timedelta,
+        run_id: str | None = None,
+        limit: int = 500,
+        on_page: Callable[[LifecycleSweepSummary], None] | None = None,
+    ) -> LifecycleSweepSummary:
+        """Repeat bounded sweep pages until drained or the budget is spent.
+
+        A single page per hourly pass could not keep pace with artifact
+        creation, so expired blobs accumulated until the object store filled.
+        Pages repeat while a full page still made progress; a page whose
+        candidates are all protected stops the pass instead of spinning on
+        them. Remaining work is reported and resumed by the next pass.
+        """
+        lifecycle_run_id = run_id or str(uuid4())
+        deadline = time.monotonic() + max(0.0, time_budget.total_seconds())
+        pages: list[LifecycleSweepSummary] = []
+        while True:
+            page = await self.sweep_lifecycle(
+                principal=principal, run_id=lifecycle_run_id, limit=limit
+            )
+            pages.append(page)
+            if on_page is not None:
+                on_page(page)
+            progressed = page.soft_deleted_count + page.hard_deleted_count > 0
+            if page.drained or not progressed or time.monotonic() >= deadline:
+                break
+        return LifecycleSweepSummary(
+            run_id=lifecycle_run_id,
+            expired_candidate_count=sum(p.expired_candidate_count for p in pages),
+            soft_deleted_count=sum(p.soft_deleted_count for p in pages),
+            hard_deleted_count=sum(p.hard_deleted_count for p in pages),
+            skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
+            reconciled_deletion_count=sum(p.reconciled_deletion_count for p in pages),
+            pruned_claim_count=sum(p.pruned_claim_count for p in pages),
+            hard_delete_candidate_count=sum(
+                p.hard_delete_candidate_count for p in pages
+            ),
+            pages=len(pages),
+            drained=pages[-1].drained,
         )
 
     async def compute_preview(
@@ -5310,7 +5366,23 @@ class TemporalArtifactActivities:
         principal: str,
         run_id: str | None = None,
     ) -> LifecycleSweepSummary:
-        return await self._service.sweep_lifecycle(principal=principal, run_id=run_id)
+        from temporalio import activity
+
+        def heartbeat(page: LifecycleSweepSummary) -> None:
+            if activity.in_activity():
+                activity.heartbeat(
+                    {
+                        "softDeleted": page.soft_deleted_count,
+                        "hardDeleted": page.hard_deleted_count,
+                    }
+                )
+
+        return await self._service.drain_lifecycle(
+            principal=principal,
+            run_id=run_id,
+            time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
+            on_page=heartbeat,
+        )
 
     async def artifact_sweep_lifecycle(
         self,
