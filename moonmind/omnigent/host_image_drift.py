@@ -149,12 +149,47 @@ def _candidate_deployed_refs() -> list[str]:
     return refs
 
 
+def deployed_host_image_refs() -> tuple[str, ...]:
+    """Return every digest-pinned host ref the deployment currently installs."""
+
+    return tuple(_candidate_deployed_refs())
+
+
+def deployed_host_image_ref_for_env(image_env: str) -> str | None:
+    """Return the installed host ref of one host-image family.
+
+    ``image_env`` is a Host Class template's image key (for example
+    ``OMNIGENT_SHARED_HOST_IMAGE_REF``). Bootstrap resolved state records the
+    installed value; an explicit operator pin applies when it records none.
+    """
+
+    key = str(image_env or "").strip()
+    if key not in _HOST_IMAGE_ENV_KEYS:
+        return None
+    attr = _HOST_IMAGE_ATTRS[_HOST_IMAGE_ENV_KEYS.index(key)]
+    values: list[str] = []
+    try:
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        state = load_resolved_state()
+    except Exception:
+        state = None
+    if state is not None:
+        values.append(str(getattr(state, attr, "") or "").strip())
+    values.append(str(os.environ.get(key) or "").strip())
+    for value in values:
+        if value and _is_digest_pinned(value) and not _is_placeholder(value):
+            return value
+    return None
+
+
 def compatible_deployed_fallback(
     requested_ref: str,
     *,
     deployed_refs: list[str] | tuple[str, ...] | None = None,
     expected_omnigent_version: str | None = None,
     provenance: dict[str, dict[str, str | None]] | None = None,
+    preferred_ref: str | None = None,
 ) -> str | None:
     """Return a qualified same-repository image to reuse instead of ``requested``.
 
@@ -163,8 +198,9 @@ def compatible_deployed_fallback(
     version evidence when ``expected_omnigent_version`` is supplied. Returns
     None when nothing qualifies, when only the requested ref matches, or when
     that ref is not digest-pinned (mutable tags keep their existing
-    behavior). Callers must still verify local presence (``docker image
-    inspect``) before use.
+    behavior). ``preferred_ref`` (the installed ref of the requested host's
+    own family) is considered first, under the same qualification. Callers
+    must still verify local presence (``docker image inspect``) before use.
     """
 
     requested = str(requested_ref or "").strip()
@@ -173,6 +209,10 @@ def compatible_deployed_fallback(
     candidates = (
         list(deployed_refs) if deployed_refs is not None else _candidate_deployed_refs()
     )
+    preferred = str(preferred_ref or "").strip()
+    if preferred in candidates:
+        candidates.remove(preferred)
+        candidates.insert(0, preferred)
     try:
         observed = provenance if provenance is not None else _provenance_map()
     except Exception:
@@ -370,6 +410,8 @@ def describe_policy_hostclass_drift(
 
 __all__ = [
     "compatible_deployed_fallback",
+    "deployed_host_image_ref_for_env",
+    "deployed_host_image_refs",
     "describe_policy_hostclass_drift",
     "is_compatible_image_drift",
     "reconcile_effective_launch_to_selected_host",

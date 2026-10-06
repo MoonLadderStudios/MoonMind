@@ -75,7 +75,10 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import (
+    OmnigentOAuthHostError,
+    withheld_successor_fields,
+)
 from moonmind.omnigent.oauth_hosts import (
     HEARTBEAT_HOST_STATES,
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
@@ -2539,6 +2542,35 @@ class OmnigentProfileBoundExecutionCoordinator:
                             "remediationAction": "inspect_cleanup_diagnostics",
                         }
                     )
+            if (
+                authority_result is not None
+                and authority_result.retry_recommendation == "retry_step_execution"
+                and host_lease is not None
+                and not safe_to_release_provider
+            ):
+                # A successor Step Execution may write and publish to the same
+                # target. The static Compose stop or on-demand removal above is
+                # the only confirmation that this attempt's host stopped; an
+                # offline projection or a deferred or failed cleanup is not
+                # (MoonLadderStudios/MoonMind#4627). Withhold the successor and
+                # leave the retained host and capacity to the janitor.
+                cleanup_reason = next(
+                    (
+                        reason
+                        for reason in reversed(authority_reasons)
+                        if reason.get("stage") == "host_cleanup"
+                    ),
+                    {},
+                )
+                for field, value in withheld_successor_fields(
+                    summary=authority_result.summary,
+                    metadata=authority_result.metadata,
+                    cleanup_failure_code=str(
+                        cleanup_reason.get("code") or "host_cleanup_unconfirmed"
+                    ),
+                    cleanup_attempts=1,
+                ).items():
+                    setattr(authority_result, field, value)
             lease_released = provider_lease is None
             workflow_owns_capacity = request.admitted_provider_capacity is not None
             if workflow_owns_capacity:

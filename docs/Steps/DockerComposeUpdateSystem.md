@@ -246,9 +246,10 @@ to block cutover.
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices. This
 includes a fresh host launched from a plan compiled before the update: the
-launcher prefers the qualified installed same-repository image over a cached
-planned digest, unless only the planned image owns the tools the plan
-requires. An attempt already in progress keeps the actual image, session and
+launcher prefers the qualified installed image of the plan's own host family
+over a cached planned digest, unless only the planned image owns the tools the
+plan requires. A plan already pinned to a currently installed host ref keeps
+it. An attempt already in progress keeps the actual image, session and
 history it recorded. That attempt may still end and be followed by a separate
 successor attempt; its process does not have to survive. A version-number
 difference by itself does not block an otherwise compatible release.
@@ -383,8 +384,11 @@ Recreating API, worker, or agent host processes during an update needs no manual
 
 - **Observer replaced, session healthy.** A replacement worker reattaches to the accepted turn under the same operation identity. No second turn or agent starts.
 - **Runtime actually lost.** Once Omnigent projects the session's runner and host offline and not resumable past the host-loss grace, the attempt reports `OMNIGENT_SESSION_HOST_LOST` with `retry_step_execution`. MoonMind.Run then starts a new Step Execution of the same workflow and logical step (`runtime_recovered`) on the installed runtime. That attempt keeps the Harness, Provider Profile, model, publication target and plan. Completed steps are not repeated.
-- **Previous attempt stopped before the successor.** For generic on-demand hosts, the old attempt first saves its workspace. Its fenced cleanup must then confirm that the host container was removed, and only then is `retry_step_execution` returned. Cleanup is checked against the host lease reference and launch generation, so a late cleanup cannot remove a newer host. If removal stays unconfirmed after the bounded retries (for example during a partition), the result is changed to `delegate_to_janitor` with `successorAuthority.established: false`. No successor starts, and the binding stays `cleanup_pending` with its capacity for the independent janitor.
-- **Durable progress versus unsaved work.** Completed predecessor outputs and recorded compute, save and publication receipts are durable. A redelivery resumes only an unfinished save, publication or report, and the publisher reconciles a push whose acknowledgement was lost. Work done inside the interrupted turn after its last durable boundary is not durable: the successor starts in a fresh step workspace built from the admitted step inputs, and may repeat that work. There is no process snapshot or exactly-once shell execution.
+- **Previous attempt stopped before the successor.** The successor may write and publish to the same target, so `retry_step_execution` stands only after the old attempt's host owner confirms the host stopped. An offline projection, expired lease or lost heartbeat is not that confirmation.
+  - *Generic on-demand hosts.* The old attempt first saves its workspace. Its fenced cleanup must then confirm that the host container was removed. Cleanup is checked against the host lease reference and launch generation, so a late cleanup cannot remove a newer host. Unconfirmed removal is retried within a fixed bound.
+  - *Codex profile-bound hosts, static and on-demand.* The coordinator's existing cleanup is the confirmation: the static Compose service stop or the on-demand container and volume removal, each followed by an absence check.
+  - *Unconfirmed stop.* If the stop stays unconfirmed (for example during a partition, or when the janitor holds the cleanup claim), the result changes to `delegate_to_janitor` with `successorAuthority.established: false`. No successor starts, and the host lease and capacity stay with the independent janitor.
+- **Durable progress versus unsaved work.** Completed predecessor outputs and recorded compute, save and publication receipts are durable. A redelivery resumes only an unfinished save, publication or report, and the publisher reconciles a push whose acknowledgement was lost. When the interrupted attempt saved and remotely verified its workspace (`savedWorkspaceCheckpoint`), the successor's fresh sandbox restores that archive through the existing Omnigent checkpoint-restore boundary. After repeated interruptions, the latest verified save is the one restored. Steps whose candidate is owned by a controller (remediation, verification, publication handoff) or by checkpoint recovery restore that owner's checkpoint instead. Without a verified save, the successor starts from the admitted step inputs. Each successor's start manifest records which source it used in `execution.interruptedStepWorkspace`. Work done after the last durable boundary is not durable and may be repeated. There is no process snapshot or exactly-once shell execution.
 - **Bounds.** Repeated interruptions spend the step's single runtime retry budget of three new executions; they never reset it. An exhausted budget fails the step with the original host-loss summary. Cancellation starts no successor.
 
 ## 17. Interaction with Settings information architecture

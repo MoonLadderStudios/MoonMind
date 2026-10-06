@@ -5599,6 +5599,7 @@ async def _run_coordinator_failure_case(
     request: AgentExecutionRequest | None = None,
     injected_error: BaseException | None = None,
     injected_result: AgentRunResult | None = None,
+    results: list[AgentRunResult] | None = None,
 ):
     events: list[tuple[str, dict]] = []
     actions: list[str] = []
@@ -5929,7 +5930,9 @@ async def _run_coordinator_failure_case(
         with pytest.raises(asyncio.CancelledError):
             await coordinator.execute(request)
     elif fail_at in {"none", "host_stop", "host_remove", "release"}:
-        await coordinator.execute(request)
+        result = await coordinator.execute(request)
+        if results is not None:
+            results.append(result)
     else:
         with pytest.raises(type(error)) as captured:
             await coordinator.execute(request)
@@ -6099,6 +6102,146 @@ async def test_never_started_turn_result_releases_host_and_profile_authority() -
     )
     assert harvest["code"] == "OMNIGENT_CURRENT_TURN_NOT_STARTED"
     assert harvest["failure_class"] == "integration_error"
+
+
+def _host_lost_request(policy_ref: str | None) -> AgentExecutionRequest:
+    omnigent: dict = {"session": {"workspace": "https://example.com/repo.git"}}
+    if policy_ref:
+        omnigent["launchPolicyRef"] = policy_ref
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-host-lost",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": hashlib.sha256(
+                    b"workflow-1:idem-host-lost"
+                ).hexdigest()[:24],
+            }
+        },
+        parameters={"omnigent": omnigent},
+    )
+
+
+def _profile_bound_host_lost() -> AgentRunResult:
+    return AgentRunResult(
+        summary="Omnigent session host was lost before the turn finished",
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+        retryRecommendation="retry_step_execution",
+        metadata={"normalizedStatus": "failed"},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy_ref", "stop_owner"),
+    [(None, "host_stop"), ("codex-on-demand@1", "host_remove")],
+    ids=["static", "on_demand"],
+)
+async def test_profile_bound_host_loss_authorizes_successor_after_confirmed_stop(
+    policy_ref, stop_owner
+) -> None:
+    """A static or on-demand Codex host stopped by its owner admits a successor.
+
+    MoonLadderStudios/MoonMind#4627: the coordinator's Compose stop (static)
+    or label-fenced removal (on-demand) confirms the old host is gone before
+    MoonMind.Run may start another attempt of the same step.
+    """
+
+    results: list[AgentRunResult] = []
+    _events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="none",
+        code="OMNIGENT_SESSION_HOST_LOST",
+        request=_host_lost_request(policy_ref),
+        injected_result=_profile_bound_host_lost(),
+        results=results,
+    )
+
+    (result,) = results
+    assert stop_owner in owner_calls
+    assert "host_stopped" in actions
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "successorAuthority" not in result.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy_ref", "stop_owner"),
+    [(None, "host_stop"), ("codex-on-demand@1", "host_remove")],
+    ids=["static", "on_demand"],
+)
+async def test_profile_bound_host_loss_without_confirmed_stop_starts_no_successor(
+    policy_ref, stop_owner
+) -> None:
+    """An unanswered stop leaves the old host possibly writing: no successor.
+
+    The Docker or Compose stop did not complete, so the lost host may still be
+    partitioned with its workspace, credentials and publication target. The
+    attempt keeps its host lease and capacity for the janitor and reports why
+    no new attempt started.
+    """
+
+    results: list[AgentRunResult] = []
+    _events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at=stop_owner,
+        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+        request=_host_lost_request(policy_ref),
+        injected_result=_profile_bound_host_lost(),
+        results=results,
+    )
+
+    (result,) = results
+    assert stop_owner in owner_calls
+    assert "host_stopped" not in actions
+    assert "provider_released" not in actions
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert result.retry_recommendation == "delegate_to_janitor"
+    assert result.metadata["successorAuthority"] == {
+        "established": False,
+        "unfinishedPhase": "cleanup",
+        "cleanupFailureCode": "OmnigentOAuthHostError",
+        "cleanupAttempts": 1,
+    }
+    assert "no new attempt was started" in result.summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fail_at", "retried"), [("none", True), ("host_stop", False)]
+)
+async def test_profile_bound_host_loss_successor_follows_moonmind_run_classifier(
+    monkeypatch, fail_at, retried
+) -> None:
+    """MoonMind.Run's real classifier starts a successor only after the stop."""
+
+    from moonmind.workflows.temporal.workflows import run as run_workflow_module
+
+    results: list[AgentRunResult] = []
+    await _run_coordinator_failure_case(
+        fail_at=fail_at,
+        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+        request=_host_lost_request(None),
+        injected_result=_profile_bound_host_lost(),
+        results=results,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = run_workflow_module.MoonMindRunWorkflow()
+    execution_result = workflow._map_agent_run_result(results[0])
+
+    assert (
+        workflow._activity_result_retryable(
+            execution_result,
+            failure_message=workflow._activity_result_failure_message(
+                execution_result
+            ),
+            tool_type="agent_runtime",
+        )
+        is retried
+    )
 
 
 @pytest.mark.asyncio

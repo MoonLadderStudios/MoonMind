@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupClaim
 from moonmind.omnigent.attempt_completion import complete_skill_turns
+from moonmind.omnigent.host_failures import withheld_successor_fields
 from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
     credential_runtime_identity,
@@ -1370,25 +1371,15 @@ class GenericOmnigentHostRealizer:
         return (
             binding,
             result.model_copy(
-                update={
-                    "retry_recommendation": "delegate_to_janitor",
-                    "summary": (
-                        f"{result.summary} The previous host could not be "
-                        "confirmed stopped, so no new attempt was started."
+                update=withheld_successor_fields(
+                    summary=result.summary,
+                    metadata=result.metadata,
+                    cleanup_failure_code=str(
+                        getattr(cleanup_error, "code", "")
+                        or type(cleanup_error).__name__
                     ),
-                    "metadata": {
-                        **(result.metadata or {}),
-                        "successorAuthority": {
-                            "established": False,
-                            "unfinishedPhase": "cleanup",
-                            "cleanupFailureCode": str(
-                                getattr(cleanup_error, "code", "")
-                                or type(cleanup_error).__name__
-                            ),
-                            "cleanupAttempts": attempts,
-                        },
-                    },
-                }
+                    cleanup_attempts=attempts,
+                )
             ),
             cleanup_error,
         )
