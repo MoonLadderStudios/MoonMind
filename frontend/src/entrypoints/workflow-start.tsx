@@ -11125,49 +11125,31 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   <option value="approval_gated">Approval gated</option>
                   <option
                     value="admin_auto"
-                    disabled={
-                      omnigentCatalogQuery.data?.remediationRelease
-                        ?.autonomousRolloutAuthorized !== true
-                    }
+                    disabled
                   >
-                    Administrator automatic (release gated)
+                    Administrator automatic (disabled)
                   </option>
                 </select>
               </label>
-              {omnigentCatalogQuery.data?.remediationRelease
-                ?.autonomousRolloutAuthorized !== true ? (
-                  <p className="small" role="status">
-                    Autonomous mutation remains disabled until the operator
-                    remediation release matrix passes.
-                  </p>
-                ) : null}
+              <p className="small" role="status">
+                Autonomous mutation remains disabled by the remediation authority policy.
+              </p>
               {omnigentCatalogQuery.data?.remediationRelease ? (
                 <details className="small" data-testid="remediation-release-status">
-                  <summary>Operator remediation release status</summary>
+                  <summary>Live remediation observations</summary>
+                  <p>Optional live observations do not authorize actions or require rollback. Each action checks its own capability, policy, and approval.</p>
                   <dl>
                     <dt>Manual diagnosis</dt>
                     <dd>
                       {omnigentCatalogQuery.data.remediationRelease.manualDiagnosisSupported
-                        ? "Supported"
-                        : "Not qualified"}
+                        ? "Observed"
+                        : "Unverified"}
                     </dd>
                     <dt>Manual mutation</dt>
                     <dd>
                       {omnigentCatalogQuery.data.remediationRelease.manualMutationSupported
-                        ? "Supported"
-                        : "Not qualified"}
-                    </dd>
-                    <dt>Manual promotion</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.manualPromotionAllowed
-                        ? "Allowed"
-                        : "Blocked"}
-                    </dd>
-                    <dt>Rollback</dt>
-                    <dd>
-                      {omnigentCatalogQuery.data.remediationRelease.rollbackRequired
-                        ? "Required"
-                        : "Not required"}
+                        ? "Observed"
+                        : "Unverified"}
                     </dd>
                     <dt>Evidence expiry</dt>
                     <dd>
