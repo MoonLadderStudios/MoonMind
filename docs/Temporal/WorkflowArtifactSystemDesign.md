@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative
 Status: Draft 
 Owners: MoonMind Platform 
-Last updated: 2026-10-04
+Last updated: 2026-10-06
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
@@ -728,6 +728,19 @@ the authority for expiry, pin protection, soft deletion, hard deletion, storage
 mutation, and durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
+
+Each sweep processes bounded pages of expired and soft-deleted artifacts and
+keeps paging for up to 40 minutes while full pages still make progress,
+heartbeating after each page. A page whose candidates are all protected ends
+the pass instead of repeating them. The result reports whether a backlog
+remains; the next hourly pass resumes it, so removal keeps pace with creation
+rather than one page per hour.
+
+Retention class is assigned when an artifact is created or linked. When the
+mapping shortens a link type's class, a migration applies the new class to
+existing rows whose every link carries that type, so previously written
+evidence does not keep its longer expiry. Such migrations only change expiry;
+the sweep still enforces every protection before deleting.
 
 The current raw and normalized journals referenced by a non-terminal Omnigent
 bridge session remain recovery data and are excluded from expiry and destructive

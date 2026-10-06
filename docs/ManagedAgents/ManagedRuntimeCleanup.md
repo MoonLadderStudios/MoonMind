@@ -3,7 +3,7 @@
 - **Document Class:** Canonical declarative
 - **Status:** Canonical desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-10-04
+- **Last updated:** 2026-10-06
 - **Audience:** Contributors, operators, runtime authors, and infrastructure maintainers
 - **Purpose:** Declarative cleanup design for managed-runtime resources, including managed-session orphan reaping and automatic retained workspace/artifact cleanup.
 
@@ -273,6 +273,47 @@ deletionAuthority: ManagedRuntimeWorkspaceJanitor
 schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
 ```
 
+Sandbox, Omnigent and container-job activities materialize workspaces in the
+shared sandbox store. Those workspaces have no run/session record; the owner
+record written beside them names the materializing workflow:
+
+```yaml
+kind: CleanupResourceClass
+name: managed-runtime.sandbox-workspace
+ownerPlane: managed-runtime-workspace-janitor
+lifecycle: retained-state
+candidateSource:
+  filesystem:
+    roots:
+      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/temporal_sandbox/<workspace_id>
+truthSource:
+  stores:
+    - SandboxWorkspaceRecordStore (temporal_sandbox/.workspace_records)
+  temporalWorkflowStatus: true
+  dockerActiveContainers: true
+eligibility:
+  deleteWhen:
+    - Temporal reports the owner workflow closed (or no longer retains its history)
+    - every unexpired existing-workspace claim belongs to a closed workflow
+    - newest activity (owner close time, record files, path mtime) is older than workspace retention
+    - no live container mounts the workspace path or its volume subpath
+  deleteWith:
+    - the owner record, materialization/readiness markers and claim directory
+safety:
+  skipWhenOwnerOpenOrUnknown: true
+  skipWhenOwnerRecordMissing: true
+  skipWhenOwnerRecordUnreadable: true
+  storeIsNeverACandidate: true
+  rescanBeforeDelete: true
+deletionAuthority: ManagedRuntimeWorkspaceJanitor
+schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
+```
+
+A failed or unavailable Temporal lookup keeps every affected workspace and is
+reported as a pass error. Owner close time, not workspace creation, starts the
+retention window, so a long-running workflow keeps its checkout for the full
+window after it finishes.
+
 ### 6.6 Managed runtime artifact directory
 
 ```yaml
@@ -425,14 +466,21 @@ semantics into the workspace janitor. Failure in either adjacent owner is
 reported as degraded maintenance and retried by the next hourly run; it does not
 erase a successful workspace result.
 
-Unused images older than 24 hours and build cache unused for 24 hours expire
-even below the filesystem high watermark. Docker Desktop's sparse VM disk can
-report available capacity while the Mac's backing filesystem is full, so that
-reading must not disable routine expiry. Critical disk pressure still permits
-the existing broader unused-image/cache pass. Docker protects container-referenced
-images and active build cache; this maintenance never prunes deployment volumes.
-Explicit image/cache age settings and the Docker-maintenance opt-out remain
-deployment-owned.
+Unused untagged images older than 24 hours, build cache unused for 24 hours,
+and anonymous volumes no container references expire on every pass, even below
+the filesystem high watermark. Docker Desktop's sparse VM disk can report
+available capacity while the Mac's backing filesystem is full, so that reading
+must not disable routine expiry. Superseded digest-pinned releases are untagged
+and expire routinely. Tagged images are kept by routine expiry: Docker ages an
+image from its build time, not its last use, so a reused tagged image such as a
+deployment-declared container-job base image would otherwise be deleted
+whenever no container held it and re-pulled by the next job. Critical disk
+pressure still permits the broader pass that removes every unused image and
+all unused cache. Docker protects container-referenced images and active build
+cache. An anonymous volume that no container references cannot be reattached,
+so it is garbage; named volumes, including deployment data, caches and builder
+state, are never pruned. Explicit image/cache age settings and the
+Docker-maintenance opt-out remain deployment-owned.
 
 Docker-container Buildx builders keep a separate cache in their state volumes.
 The hourly pass discovers running builders through Docker rather than relying
@@ -468,6 +516,7 @@ The janitor may discover candidates only under canonical managed-runtime roots:
 
 ```text
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/<workspace_key>
+${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/temporal_sandbox/<workspace_id>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/<agent_run_id>
 normalized_managed_runtime_artifact_root()/<job_id>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_runs/<run_id>.json
@@ -489,8 +538,9 @@ Examples:
 - `/work/agent_jobs/<agent_run_id>/repo` belongs to `/work/agent_jobs/<agent_run_id>`.
 - `/work/agent_jobs/<agent_run_id>/session` belongs to `/work/agent_jobs/<agent_run_id>`.
 - `/work/agent_jobs/<agent_run_id>/artifacts` belongs to `/work/agent_jobs/<agent_run_id>`.
+- `/work/agent_jobs/temporal_sandbox/<workspace_id>/repo` belongs to `/work/agent_jobs/temporal_sandbox/<workspace_id>`.
 
-The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention.
+The `workspaces` and `temporal_sandbox` stores are never ownership roots themselves. The workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention, and, for a sandbox workspace, its owner workflow and claim holders are closed.
 
 ### 8.5 Terminal states
 
@@ -672,7 +722,9 @@ Use the newest available timestamp from all owners and the filesystem:
 5. session `updated_at`,
 6. session `last_log_at`,
 7. session `started_at`,
-8. candidate path mtime.
+8. sandbox owner and claim-holder workflow close times,
+9. sandbox owner record, marker and claim mtimes,
+10. candidate path mtime.
 
 A missing timestamp should make a candidate more conservative, not less.
 
