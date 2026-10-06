@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -28,8 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from moonmind.omnigent.policies import without_retired_policy_sections
-
-logger = logging.getLogger(__name__)
 
 # Release-owned desired-state env keys. These live in the release-owned
 # `.env.deploy` file (never the deployment-owned `.env`), so Compose renders
@@ -810,7 +807,6 @@ async def _default_refresh_schedules() -> dict[str, Any]:
             ).refresh_managed_bootstrap_schedules(limit=500)
             await session.commit()
     except Exception as exc:
-        logger.warning("Managed bootstrap schedule refresh deferred: %s", exc)
         return {
             "refreshed": 0,
             "failures": [
@@ -819,6 +815,21 @@ async def _default_refresh_schedules() -> dict[str, Any]:
             ],
         }
     return {"refreshed": outcome.refreshed, "failures": list(outcome.failures)}
+
+
+def _schedule_refresh_receipt(schedules: Mapping[str, Any]) -> dict[str, Any]:
+    """Name a few failed schedules and count the rest.
+
+    The standalone controller recovers the receipt from a 4,000-character log
+    tail, so an unbounded list would cost the receipt itself. The API's
+    bootstrap reconciliation logs every failure as it retries.
+    """
+    failures = [str(failure) for failure in schedules.get("failures") or ()]
+    return {
+        "schedulesRefreshed": int(schedules.get("refreshed") or 0),
+        "scheduleRefreshFailureCount": len(failures),
+        "scheduleRefreshFailures": [failure[:300] for failure in failures[:3]],
+    }
 
 
 async def _default_verify_live_container(server_ref: str) -> str | None:
@@ -1220,8 +1231,7 @@ async def _migrate_omnigent_release_inner(
             "serverImageRef": target.get("server"),
             "policiesCut": policy_outcome["cut"],
             "policiesSkipped": policy_outcome["skipped"],
-            "schedulesRefreshed": schedules["refreshed"],
-            "scheduleRefreshFailures": schedules["failures"],
+            **_schedule_refresh_receipt(schedules),
             "catalogRef": catalog.get("catalogRef"),
             "resolvedRefs": resolved,
         }
@@ -1256,8 +1266,7 @@ async def _migrate_omnigent_release_inner(
         },
         "policiesCut": policy_outcome["cut"],
         "policiesSkipped": policy_outcome["skipped"],
-        "schedulesRefreshed": schedules["refreshed"],
-        "scheduleRefreshFailures": schedules["failures"],
+        **_schedule_refresh_receipt(schedules),
         "catalogRef": catalog.get("catalogRef"),
         "resolvedRefs": resolved,
     }
