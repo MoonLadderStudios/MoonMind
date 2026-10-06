@@ -126,7 +126,18 @@ async def test_checkpoint_branch_record_is_not_repair_proof() -> None:
     assert result.delivery_status == "applied"
     assert reader.after_reads >= 1
 
-    repaired = _snap(state="completed", close_status="completed", run_id="r")
+    completed = _snap(state="completed", close_status="completed", run_id="r")
+    _, coro = _run_phase(
+        "checkpoint_branch.create_from_remediation_context", before, [completed]
+    )
+    assert (await coro).outcome == STILL_FAILED
+
+    repaired = _snap(
+        state="completed",
+        close_status="completed",
+        run_id="r",
+        identities={"objectiveVerdict": "FULLY_IMPLEMENTED"},
+    )
     _, coro = _run_phase(
         "checkpoint_branch.create_from_remediation_context", before, [repaired]
     )

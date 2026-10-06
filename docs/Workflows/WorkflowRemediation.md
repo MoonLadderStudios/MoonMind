@@ -243,6 +243,12 @@ A source can remain failed while its linked candidate verifies successfully. Gra
 
 Use an existing result notification or bounded durable wait. The repair lifetime is not the HTTP/Activity polling window. Browser closure, worker restart, delayed result, or report-upload failure must leave the same obligation recoverable without redelivering the action. Deadline expiry retains actual evidence and a truthful incomplete disposition, not invented completion. No new polling daemon or verifier scheduler is required.
 
+The action/link mutation ledger retains the accepted result artifact, original observation, exact result linkage, and consumed short-poll allowance. An active candidate returns `pending: true` with no terminal outcome. Before collecting evidence, each observer atomically reserves a unique immutable observation identity and the remaining poll allowance on that ledger. A committed terminal result takes precedence over a late pending observation. Lifecycle publication refreshes its locked canonical owner before appending artifact references, preserving peer receipts.
+
+Execution terminal-state notifications, failed/canceled/blocked branch-turn finalization, and checkpoint-head verifier receipts resume this saved obligation through the existing service boundary. These continuations read evidence and persist results without dispatching the accepted action again. An observation failure remains observable and retryable after ordinary terminal dependency fan-out and projection synchronization. Unavailable, denied, or canceled observation retains its diagnostics and an outstanding candidate obligation.
+
+A retry reconciles producer-owned receipts under the relationship's admitted remediation run even if its canonical workflow has advanced to another run. It preserves the committed result and verdict rather than repeating the accepted effect or trusting an unrelated latest run.
+
 Keep before/after observations as actually collected. Never fabricate a missing baseline from later state. Reuse a verdict only for the same candidate/scope/policy. A new candidate needs matching evidence. Cancellation of observation does not undo the underlying effect or discharge its remaining reconciliation.
 
 ## 12. Locking, idempotency, and loop prevention

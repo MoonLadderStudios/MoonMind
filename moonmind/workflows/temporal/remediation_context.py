@@ -17,15 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
-from moonmind.workflows.temporal.artifacts import (
-    ExecutionRef,
-    TemporalArtifactService,
-)
+from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workflows.temporal.artifacts import ExecutionRef, TemporalArtifactService
 from moonmind.workflows.temporal.remediation_verification import (
     REMEDIATION_VERIFICATION_OUTCOMES,
     VERIFIED_RESOLVED,
 )
-from moonmind.utils.logging import redact_sensitive_text
 
 REMEDIATION_CONTEXT_LINK_TYPE = "remediation.context"
 REMEDIATION_CONTEXT_ARTIFACT_NAME = "reports/remediation_context.json"
@@ -153,8 +150,10 @@ SECRET_LIKE_POLICY_KEY_PARTS = (
 )
 SAFE_POLICY_KEYS = frozenset({"authorityMode"})
 
+
 class RemediationContextError(RuntimeError):
     """Raised when a remediation context artifact cannot be generated."""
+
 
 @dataclass(slots=True)
 class RemediationContextBuildResult:
@@ -163,6 +162,7 @@ class RemediationContextBuildResult:
     artifact: db_models.TemporalArtifact
     link: db_models.TemporalExecutionRemediationLink
     payload: dict[str, Any]
+
 
 class RemediationContextBuilder:
     """Build bounded remediation context artifacts from persisted remediation links."""
@@ -723,6 +723,7 @@ class RemediationContextBuilder:
     def _string_or_none(value: Any) -> str | None:
         return _string_or_none(value)
 
+
 class RemediationLifecyclePublisher:
     """Publish bounded remediation lifecycle artifacts for one remediation run."""
 
@@ -735,10 +736,38 @@ class RemediationLifecyclePublisher:
         self._session = session
         self._artifact_service = artifact_service
 
+    async def find_published_artifact(
+        self,
+        *,
+        workflow_id: str,
+        artifact_type: str,
+        name: str,
+        run_id: str | None = None,
+    ):
+        """Recover an exact producer-owned receipt before retrying an action."""
+        record = await self._execution_record_for_update(workflow_id)
+        if record is None:
+            return None
+        run_id = await self._publication_run(record, run_id)
+        artifact = await self._published_artifact(
+            namespace=record.namespace,
+            workflow_id=record.workflow_id,
+            run_id=run_id,
+            link_type=artifact_type,
+            label=name,
+        )
+        return artifact or await self._legacy_published_artifact(
+            record=record,
+            run_id=run_id,
+            link_type=artifact_type,
+            label=name,
+        )
+
     async def publish_json_artifact(
         self,
         *,
         remediation_workflow_id: str,
+        remediation_run_id: str | None = None,
         artifact_type: str,
         name: str,
         payload: Mapping[str, Any],
@@ -763,16 +792,22 @@ class RemediationLifecyclePublisher:
             raise RemediationContextError(
                 f"Remediation execution not found: {workflow_id}"
             )
+        publication_run_id = await self._publication_run(
+            remediation_record, remediation_run_id
+        )
         existing_artifact = await self._published_artifact(
             namespace=remediation_record.namespace,
             workflow_id=remediation_record.workflow_id,
-            run_id=remediation_record.run_id,
+            run_id=publication_run_id,
             link_type=artifact_type,
             label=name,
         )
         if existing_artifact is None:
             existing_artifact = await self._legacy_published_artifact(
-                record=remediation_record, link_type=artifact_type, label=name
+                record=remediation_record,
+                run_id=publication_run_id,
+                link_type=artifact_type,
+                label=name,
             )
         if existing_artifact is not None:
             await self._append_artifact_ref(remediation_record, existing_artifact)
@@ -790,7 +825,7 @@ class RemediationLifecyclePublisher:
             "schemaVersion": REMEDIATION_CONTEXT_SCHEMA_VERSION,
             "namespace": remediation_record.namespace,
             "workflowId": remediation_record.workflow_id,
-            "runId": remediation_record.run_id,
+            "runId": publication_run_id,
         }
         if target_workflow_id := _string_or_none(target_workflow_id):
             metadata_json["targetWorkflowId"] = target_workflow_id
@@ -810,7 +845,7 @@ class RemediationLifecyclePublisher:
             link=ExecutionRef(
                 namespace=remediation_record.namespace,
                 workflow_id=remediation_record.workflow_id,
-                run_id=remediation_record.run_id,
+                run_id=publication_run_id,
                 link_type=artifact_type,
                 label=name,
                 created_by_activity_type="remediation.lifecycle.publish",
@@ -837,6 +872,7 @@ class RemediationLifecyclePublisher:
         self,
         *,
         remediation_workflow_id: str,
+        remediation_run_id: str | None = None,
         target_workflow_id: str,
         target_run_id: str,
         name: str,
@@ -846,6 +882,7 @@ class RemediationLifecyclePublisher:
 
         artifact = await self.publish_json_artifact(
             remediation_workflow_id=remediation_workflow_id,
+            remediation_run_id=remediation_run_id,
             artifact_type="remediation.target_annotation",
             name=name,
             payload=payload,
@@ -885,6 +922,19 @@ class RemediationLifecyclePublisher:
         await self._session.refresh(artifact)
         return artifact
 
+    async def _publication_run(self, record, requested_run_id: str | None) -> str:
+        """Allow a retained action receipt only under its admitted run."""
+        if requested_run_id is None or requested_run_id == record.run_id:
+            return record.run_id
+        link = await self._session.get(
+            db_models.TemporalExecutionRemediationLink, record.workflow_id
+        )
+        if link is None or link.remediation_run_id != requested_run_id:
+            raise RemediationContextError(
+                "Lifecycle run does not match the admitted remediation run"
+            )
+        return requested_run_id
+
     async def _execution_record_for_update(
         self,
         workflow_id: str,
@@ -897,6 +947,7 @@ class RemediationLifecyclePublisher:
                     == workflow_id
                 )
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
 
@@ -960,18 +1011,19 @@ class RemediationLifecyclePublisher:
         self,
         *,
         record: db_models.TemporalExecutionCanonicalRecord,
+        run_id: str | None = None,
         link_type: str,
         label: str,
     ) -> db_models.TemporalArtifact | None:
         """Revalidate retained output without trusting caller-added links."""
-
+        run_id = run_id or record.run_id
         artifact = db_models.TemporalArtifact
         link = db_models.TemporalArtifactLink
         other_link = aliased(db_models.TemporalArtifactLink)
         identity = {
             "namespace": record.namespace,
             "workflowId": record.workflow_id,
-            "runId": record.run_id,
+            "runId": run_id,
         }
         missing_identity = and_(
             *(artifact.metadata_json[key].as_string().is_(None) for key in identity)
@@ -988,7 +1040,7 @@ class RemediationLifecyclePublisher:
             .where(
                 link.namespace == record.namespace,
                 link.workflow_id == record.workflow_id,
-                link.run_id == record.run_id,
+                link.run_id == run_id,
                 link.link_type == link_type,
                 link.label == label,
                 link.created_by_activity_type == "remediation.lifecycle.publish",
@@ -1040,7 +1092,7 @@ class RemediationLifecyclePublisher:
             "remediation.target_annotation": "targetAnnotation",
         }.get(link_type)
         receipt_ref = None
-        if owner_link is not None and owner_link.remediation_run_id == record.run_id:
+        if owner_link is not None and owner_link.remediation_run_id == run_id:
             state = owner_link.approval_state or {}
             state = state if isinstance(state, Mapping) else {}
             refs = state.get("artifactRefs") or {}
@@ -1117,17 +1169,20 @@ class RemediationLifecyclePublisher:
             refs.append(artifact.artifact_id)
             record.artifact_refs = refs
 
+
 def normalize_remediation_phase(value: Any) -> str:
     """Return a bounded remediation phase value."""
 
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_PHASES else "failed"
 
+
 def normalize_remediation_resolution(value: Any) -> str:
     """Return a bounded remediation resolution value."""
 
     normalized = str(value or "").strip()
     return normalized if normalized in REMEDIATION_RESOLUTIONS else "failed"
+
 
 def build_remediation_summary_block(
     *,
@@ -1169,6 +1224,7 @@ def build_remediation_summary_block(
         summary["resultingTargetRunId"] = resulting_target_run_id
     return summary
 
+
 def build_remediation_audit_event(
     *,
     event_id: str,
@@ -1207,6 +1263,7 @@ def build_remediation_audit_event(
         "metadata": _safe_policy_mapping(metadata) or {},
     }
 
+
 def build_remediation_continue_as_new_state(
     *,
     target_workflow_id: str,
@@ -1231,6 +1288,7 @@ def build_remediation_continue_as_new_state(
         "liveFollowCursor": _safe_policy_mapping(live_follow_cursor) or {},
     }
 
+
 def build_non_applicable_remediation_artifact_reason(
     *,
     artifact_type: str,
@@ -1251,6 +1309,7 @@ def build_non_applicable_remediation_artifact_reason(
     if safe_metadata := _safe_policy_mapping(metadata):
         payload["metadata"] = safe_metadata
     return payload
+
 
 def build_remediation_evidence_set(
     *,
@@ -1296,6 +1355,7 @@ def build_remediation_evidence_set(
         "degradedReasons": _safe_string_list(degraded_reasons),
     }
 
+
 def build_remediation_target_annotation(
     *,
     target_workflow_id: str,
@@ -1333,6 +1393,7 @@ def build_remediation_target_annotation(
     if safe_metadata := _safe_policy_mapping(metadata):
         payload["metadata"] = safe_metadata
     return payload
+
 
 def build_remediation_repair_decision(
     *,
@@ -1448,6 +1509,7 @@ def build_remediation_repair_decision(
         payload["metadata"] = safe_metadata
     return payload
 
+
 def build_remediation_prevention_outcome(
     *,
     status: str,
@@ -1520,6 +1582,7 @@ def build_remediation_prevention_outcome(
         payload["metadata"] = safe_metadata
     return payload
 
+
 def build_remediation_decision_log(
     *,
     entries: Sequence[Mapping[str, Any]],
@@ -1562,6 +1625,7 @@ def build_remediation_decision_log(
         raise ValueError("entries must include at least one decision log entry")
     return {"schemaVersion": "v1", "entries": safe_entries}
 
+
 def build_remediation_final_summary(
     *,
     summary: Mapping[str, Any],
@@ -1596,6 +1660,7 @@ def build_remediation_final_summary(
         payload["metadata"] = safe_metadata
     return payload
 
+
 def build_corrected_instruction_retry_provenance(
     *,
     original_input_ref: str,
@@ -1626,6 +1691,7 @@ def build_corrected_instruction_retry_provenance(
         "originalInputMutation": False,
     }
     return {key: value for key, value in payload.items() if value not in ({}, None)}
+
 
 def build_target_remediation_linkage_summary(
     *,
@@ -1660,6 +1726,7 @@ def build_target_remediation_linkage_summary(
         summary["lastUpdatedAt"] = _timestamp_string(last_updated_at)
     return summary
 
+
 def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] | None:
     source_kind = kind
     if isinstance(raw_ref, Mapping):
@@ -1674,6 +1741,7 @@ def _artifact_ref_payload(raw_ref: Any, *, kind: str | None) -> dict[str, str] |
         payload["kind"] = source_kind
     return payload
 
+
 def _artifact_ref_string(value: Any, field_name: str) -> str | None:
     text = _string_or_none(value)
     if text is None:
@@ -1682,11 +1750,13 @@ def _artifact_ref_string(value: Any, field_name: str) -> str | None:
         raise ValueError(f"{field_name} must be an artifact ref")
     return text
 
+
 def _required_artifact_ref_string(value: Any, field_name: str) -> str:
     text = _artifact_ref_string(value, field_name)
     if text is None:
         raise ValueError(f"{field_name} is required")
     return text
+
 
 def _artifact_refs_mapping(value: Any) -> dict[str, str]:
     if not isinstance(value, Mapping):
@@ -1700,6 +1770,7 @@ def _artifact_refs_mapping(value: Any) -> dict[str, str]:
         if ref:
             refs[key] = ref
     return refs
+
 
 def _repair_artifact_refs(
     *,
@@ -1724,6 +1795,7 @@ def _repair_artifact_refs(
         if (ref := _artifact_ref_string(value, key)) is not None
     }
 
+
 def _repair_candidate_payload(
     *,
     action_kind: str | None,
@@ -1736,11 +1808,13 @@ def _repair_candidate_payload(
         payload["reason"] = safe_reason
     return payload
 
+
 def _validated_choice(value: Any, allowed: frozenset[str], field_name: str) -> str:
     normalized = _string_or_none(value)
     if normalized not in allowed:
         raise ValueError(f"{field_name} must be one of {sorted(allowed)}")
     return normalized
+
 
 def _required_lifecycle_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
@@ -1750,17 +1824,20 @@ def _required_lifecycle_string(value: Any, field_name: str) -> str:
         raise ValueError(f"{field_name} is unsafe")
     return normalized
 
+
 def _safe_identifier_string(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if not normalized:
         return None
     return normalized
 
+
 def _required_redacted_text(value: Any, field_name: str) -> str:
     normalized = _redacted_optional_text(value)
     if not normalized:
         raise ValueError(f"{field_name} is required")
     return normalized
+
 
 def _redacted_optional_text(value: Any) -> str | None:
     normalized = _string_or_none(value)
@@ -1773,6 +1850,7 @@ def _redacted_optional_text(value: Any) -> str | None:
     if not redacted or _is_unsafe_context_string(redacted):
         return None
     return redacted
+
 
 def _safe_public_url(value: Any) -> str | None:
     normalized = _string_or_none(value)
@@ -1791,6 +1869,7 @@ def _safe_public_url(value: Any) -> str | None:
     ):
         return None
     return redacted
+
 
 def _validate_repair_payload(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping):
@@ -1816,12 +1895,14 @@ def _validate_repair_payload(value: Mapping[str, Any]) -> None:
                 f"repair.verificationOutcome '{VERIFIED_RESOLVED}'"
             )
 
+
 def _validate_prevention_payload(value: Mapping[str, Any]) -> None:
     if not isinstance(value, Mapping):
         raise ValueError("prevention must be an object")
     _validated_choice(
         value.get("status"), REMEDIATION_PREVENTION_STATUSES, "prevention.status"
     )
+
 
 def _artifact_ref_list(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
@@ -1839,10 +1920,12 @@ def _artifact_ref_list(value: Any) -> list[dict[str, str]]:
         refs.append(ref)
     return refs
 
+
 def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
 
 def _match_step_evidence(
     selector: Mapping[str, Any],
@@ -1870,6 +1953,7 @@ def _match_step_evidence(
         return item
     return None
 
+
 def _has_agent_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
     value = item.get(field_name)
     if field_name == "continuityRefs":
@@ -1877,6 +1961,7 @@ def _has_agent_run_evidence(item: Mapping[str, Any], field_name: str) -> bool:
             value, (str, bytes, bytearray)
         ) and any(isinstance(ref, Mapping) for ref in value)
     return isinstance(value, Mapping)
+
 
 def _durable_fallback_classes(agent_runs: Sequence[Mapping[str, Any]]) -> list[str]:
     classes: list[str] = []
@@ -1890,11 +1975,13 @@ def _durable_fallback_classes(agent_runs: Sequence[Mapping[str, Any]]) -> list[s
             classes.append(class_name)
     return classes
 
+
 def _live_follow_denied_by_policy(evidence_policy: Mapping[str, Any]) -> bool:
     for key in ("allowLiveFollow", "liveFollowAllowed", "includeLiveFollow"):
         if evidence_policy.get(key) is False:
             return True
     return False
+
 
 def _agent_run_supports_live_follow(
     *,
@@ -1914,6 +2001,7 @@ def _agent_run_supports_live_follow(
             )
     return False
 
+
 def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -1926,6 +2014,7 @@ def _safe_policy_mapping(value: Any) -> dict[str, Any] | None:
         if safe_item is not None:
             sanitized[key] = safe_item
     return sanitized
+
 
 def _safe_policy_value(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -1943,6 +2032,7 @@ def _safe_policy_value(value: Any) -> Any:
         return value
     return None
 
+
 def _safe_lifecycle_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         return {}
@@ -1953,6 +2043,7 @@ def _safe_lifecycle_payload(value: Mapping[str, Any]) -> dict[str, Any]:
         else:
             sanitized.pop("pullRequestUrl", None)
     return sanitized
+
 
 def _bounded_action_summaries(
     actions_attempted: Sequence[Mapping[str, Any]],
@@ -1970,6 +2061,7 @@ def _bounded_action_summaries(
             summaries.append(summary)
     return summaries
 
+
 def _safe_string_list(values: Sequence[Any]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -1981,6 +2073,7 @@ def _safe_string_list(values: Sequence[Any]) -> list[str]:
         result.append(item)
     return result
 
+
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
@@ -1989,11 +2082,13 @@ def _required_string(value: Any, field_name: str) -> str:
         raise RemediationContextError(f"{field_name} is unsafe")
     return normalized
 
+
 def _safe_optional_string(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if not normalized or _is_unsafe_context_string(normalized):
         return None
     return normalized
+
 
 def _timestamp_string(value: datetime | str) -> str:
     if isinstance(value, datetime):
@@ -2010,15 +2105,18 @@ def _timestamp_string(value: datetime | str) -> str:
         timestamp = timestamp.replace(tzinfo=UTC)
     return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
+
 def _is_secret_like_key(key: str) -> bool:
     if key in SAFE_POLICY_KEYS:
         return False
     normalized = key.strip().lower().replace("-", "_")
     return any(part in normalized for part in SECRET_LIKE_POLICY_KEY_PARTS)
 
+
 def _is_identifier_field(field_name: str) -> bool:
     normalized = field_name.strip()
     return normalized.endswith("_id") or normalized.endswith("Id")
+
 
 def _is_unsafe_context_string(value: str) -> bool:
     normalized = value.strip().lower()
@@ -2035,11 +2133,13 @@ def _is_unsafe_context_string(value: str) -> bool:
         or ("password=" in normalized and "[redacted]" not in normalized)
     )
 
+
 def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
 
 def _positive_int_or_none(value: Any) -> int | None:
     try:
@@ -2049,6 +2149,7 @@ def _positive_int_or_none(value: Any) -> int | None:
     if parsed < 0:
         return None
     return parsed
+
 
 def _enum_value(value: Any) -> str | None:
     if value is None:
