@@ -372,8 +372,6 @@ def _remediation_node(*, ordinal: int, publish_mode: str) -> dict:
 
     remediation, _verification = materialize_attempt_nodes(
         spec=_loop_spec(),
-        workflow_id=WORKFLOW_ID,
-        run_id=TEMPORAL_RUN_ID,
         ordinal=ordinal,
         workspace_head_ref="artifact://loop-head/1",
         runtime={"mode": "omnigent", "executionProfileRef": PROVIDER_PROFILE_REF},
@@ -706,8 +704,6 @@ async def test_escaped_second_attempt_continues_the_head_its_predecessor_publish
     await realizer.execute(base, plan)
     first_node, first_verifier = materialize_attempt_nodes(
         spec=_loop_spec(),
-        workflow_id=WORKFLOW_ID,
-        run_id=TEMPORAL_RUN_ID,
         ordinal=1,
         workspace_head_ref="artifact://loop-head/1",
         runtime={"mode": "omnigent", "executionProfileRef": PROVIDER_PROFILE_REF},

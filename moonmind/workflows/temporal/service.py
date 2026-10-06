@@ -911,11 +911,13 @@ class TemporalExecutionService:
 
     @staticmethod
     def _autonomous_remediation_release_authorized() -> bool:
-        """Read the server-owned gate lazily to avoid workflow import cycles."""
+        """Keep autonomous authority closed independently of optional live proof.
 
-        from moonmind.omnigent.remediation_matrix import load_remediation_release_status
+        Operator certification never authorizes autonomous mutation. A future
+        change must deliberately implement that authority through this owner.
+        """
 
-        return load_remediation_release_status().autonomous_rollout_authorized
+        return False
 
     async def _validate_remediation_link(
         self,
@@ -1021,8 +1023,8 @@ class TemporalExecutionService:
         ):
             raise TemporalExecutionValidationError(
                 "workflow.remediation.authorityMode 'admin_auto' is disabled until "
-                "the server-owned MoonLadderStudios/MoonMind#3626 operator "
-                "remediation release gate authorizes autonomous rollout."
+                "the server-owned remediation authority policy separately "
+                "authorizes autonomous mutation (MoonLadderStudios/MoonMind#3626)."
             )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(
