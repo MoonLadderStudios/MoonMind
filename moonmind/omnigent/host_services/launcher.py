@@ -13,7 +13,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
+from moonmind.omnigent.harness_platform.host_classes import (
+    DEFAULT_HOST_CLASS_TEMPLATES,
+    HostClass,
+    LaunchPolicy,
+)
 from moonmind.omnigent.host_ports import HostLaunchSpec, host_correlation_identity
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
@@ -63,6 +67,20 @@ def _image_owned_executables(
             if root and relative:
                 paths.add(f"{root}/{relative}")
     return tuple(sorted(paths))
+
+
+def _host_family_image_env(host_class: HostClass | None) -> str:
+    """Return the deployment image key that installs this Host Class."""
+
+    if host_class is None:
+        return ""
+    for template in DEFAULT_HOST_CLASS_TEMPLATES:
+        if (template.host_class_id, template.version) == (
+            host_class.hostClassId,
+            host_class.version,
+        ):
+            return template.image_env
+    return ""
 
 
 class DockerOmnigentHostLauncher:
@@ -184,9 +202,13 @@ class DockerOmnigentHostLauncher:
         reaches that image; attestation re-verifies the series with live
         probes before any session starts.
 
-        The planned image stays when no such installed alternative is present,
-        or when only the planned image owns the image-owned tools the plan
-        requires. Nothing is probed unless an alternative exists.
+        The planned image stays when it is itself currently installed (the
+        OpenCode, shared and Pi families share one repository, so another
+        family's digest is not a newer release of it), when no installed
+        alternative is present, or when only the planned image owns the
+        image-owned tools the plan requires. A stale plan follows its own host
+        family's installed image first. Nothing is probed unless an
+        alternative exists.
         """
 
         requested = str(requested_ref or "").strip()
@@ -197,13 +219,20 @@ class DockerOmnigentHostLauncher:
         try:
             from moonmind.omnigent.host_image_drift import (
                 compatible_deployed_fallback,
+                deployed_host_image_ref_for_env,
+                deployed_host_image_refs,
             )
 
+            if requested in deployed_host_image_refs():
+                return requested
             fallback = compatible_deployed_fallback(
                 requested,
                 expected_omnigent_version=host_class.omnigentVersion
                 if host_class is not None
                 else "",
+                preferred_ref=deployed_host_image_ref_for_env(
+                    _host_family_image_env(host_class)
+                ),
             )
         except Exception:
             fallback = None

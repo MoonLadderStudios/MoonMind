@@ -782,3 +782,119 @@ async def test_current_deployment_host_launches_without_extra_tool_probe(
 
     assert backend.launched_image() == _PRE_TOOLS_HOST
     assert not any("test -x" in " ".join(argv) for argv in backend.calls)
+
+
+_OPENCODE_DEPLOYED_HOST = _HOST_REPO + "@sha256:" + "e" * 64
+_SHARED_DEPLOYED_HOST = _HOST_REPO + "@sha256:" + "f" * 64
+_PI_DEPLOYED_HOST = _HOST_REPO + "@sha256:" + "9" * 64
+
+
+def _record_distinct_deployment_hosts(monkeypatch, tmp_path: Path) -> None:
+    """Each host family installs its own digest of the same repository."""
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
+    )
+    for key in (
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_PI_HOST_IMAGE_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    deployed = (_OPENCODE_DEPLOYED_HOST, _SHARED_DEPLOYED_HOST, _PI_DEPLOYED_HOST)
+    store.save_resolved_state(
+        ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:"
+                + "d" * 64,
+                "opencodeHostImageRef": _OPENCODE_DEPLOYED_HOST,
+                "sharedHostImageRef": _SHARED_DEPLOYED_HOST,
+                "piHostImageRef": _PI_DEPLOYED_HOST,
+                "details": {
+                    "hostImageProvenance": {
+                        ref: {"buildDigest": "sha256:" + "2" * 64, "version": "0.14.1"}
+                        for ref in deployed
+                    }
+                },
+            }
+        )
+    )
+
+
+def _family_host_class(image_ref: str, host_class_id: str, version: int) -> HostClass:
+    return _pinned_host_class(image_ref).model_copy(
+        update={"hostClassId": host_class_id, "version": version}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested", "host_class_id", "version"),
+    [
+        (_SHARED_DEPLOYED_HOST, "omnigent-codex", 1),
+        (_PI_DEPLOYED_HOST, "omnigent-pi", 1),
+        (_OPENCODE_DEPLOYED_HOST, "omnigent-opencode", 1),
+    ],
+)
+async def test_plan_pinned_to_an_installed_host_keeps_it(
+    monkeypatch, tmp_path: Path, requested: str, host_class_id: str, version: int
+) -> None:
+    """An installed digest is never swapped for another family's installed one.
+
+    MoonLadderStudios/MoonMind#4627: the OpenCode, shared and Pi host refs all
+    default to one repository. A plan already pinned to a currently installed
+    ref follows the installed release; launching a different family's digest
+    would change the runtime without any update having happened.
+    """
+
+    _record_distinct_deployment_hosts(monkeypatch, tmp_path)
+    deployed = {_OPENCODE_DEPLOYED_HOST, _SHARED_DEPLOYED_HOST, _PI_DEPLOYED_HOST}
+    backend = _ImageContentsBackend(present=deployed, with_tools=deployed)
+
+    result = await _launcher(backend).launch(
+        spec=_tool_launch_spec(requested),
+        host_class=_family_host_class(requested, host_class_id, version),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == requested
+    assert result["launchImageRef"] == requested
+    assert not any("test -x" in " ".join(argv) for argv in backend.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("host_class_id", "version", "installed"),
+    [
+        ("omnigent-codex", 1, _SHARED_DEPLOYED_HOST),
+        ("omnigent-opencode", 2, _SHARED_DEPLOYED_HOST),
+        ("omnigent-pi", 1, _PI_DEPLOYED_HOST),
+        ("omnigent-opencode", 1, _OPENCODE_DEPLOYED_HOST),
+    ],
+)
+async def test_stale_plan_follows_its_own_host_familys_installed_image(
+    monkeypatch, tmp_path: Path, host_class_id: str, version: int, installed: str
+) -> None:
+    """A plan pinned before an update moves to its family's installed host."""
+
+    _record_distinct_deployment_hosts(monkeypatch, tmp_path)
+    present = {
+        _PRE_TOOLS_HOST,
+        _OPENCODE_DEPLOYED_HOST,
+        _SHARED_DEPLOYED_HOST,
+        _PI_DEPLOYED_HOST,
+    }
+    backend = _ImageContentsBackend(present=present, with_tools=present)
+
+    await _launcher(backend).launch(
+        spec=_tool_launch_spec(_PRE_TOOLS_HOST),
+        host_class=_family_host_class(_PRE_TOOLS_HOST, host_class_id, version),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == installed

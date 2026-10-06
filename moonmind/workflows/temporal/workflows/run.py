@@ -935,6 +935,15 @@ RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH = (
 RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH = (
     "run-explicit-step-retry-recommendation-v1"
 )
+# An update can replace the host of an active agent step after its realizer
+# saved and remotely verified the workspace (MoonLadderStudios/MoonMind#4627).
+# The successor Step Execution restores that archive through the existing
+# Omnigent checkpoint-restore boundary instead of restarting from admitted
+# inputs. The successor request changes, so older histories keep their
+# recorded fresh-input retry.
+RUN_INTERRUPTED_STEP_SAVED_WORKSPACE_RESTORE_PATCH = (
+    "run-interrupted-step-saved-workspace-restore-v1"
+)
 RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v1"
 # MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
 # and emit a single incident reconstruction manifest before terminal failure so
@@ -13050,6 +13059,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
 
                 system_retries = 0
+                # Latest verified workspace saved by an interrupted attempt of
+                # this step; its successor restores it (#4627).
+                interrupted_step_restore_enabled = False
+                interrupted_step_saved_workspace: dict[str, Any] | None = None
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
@@ -13210,6 +13223,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     trusted_remediation_checkpoint_restore_ref
                                 ),
                             )
+                            interrupted_step_workspace = None
+                            if (
+                                interrupted_step_restore_enabled
+                                and attempt_reason == "runtime_recovered"
+                            ):
+                                request, interrupted_step_workspace = (
+                                    self._restore_interrupted_step_workspace(
+                                        request,
+                                        saved_workspace=interrupted_step_saved_workspace,
+                                        controller_restore_ref=(
+                                            trusted_remediation_checkpoint_restore_ref
+                                        ),
+                                        checkpoint_recovery=(
+                                            node_id == self._recovery_failed_step_id
+                                            and self._checkpoint_recovery_state
+                                            is not None
+                                        ),
+                                    )
+                                )
                             agent_request_for_context = request
                             if (
                                 node_id == self._recovery_failed_step_id
@@ -13270,6 +13302,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                             logical_step_id=node_id,
                                             execution_ordinal=current_step_execution,
                                             operation="execute",
+                                        ),
+                                        **(
+                                            {
+                                                "interruptedStepWorkspace": (
+                                                    interrupted_step_workspace
+                                                )
+                                            }
+                                            if interrupted_step_workspace
+                                            else {}
                                         ),
                                     },
                                     budget=(
@@ -13903,6 +13944,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 updated_at=workflow.now(),
                                 summary=self._summary,
                             )
+                            if tool_type == "agent_runtime" and workflow.patched(
+                                RUN_INTERRUPTED_STEP_SAVED_WORKSPACE_RESTORE_PATCH
+                            ):
+                                interrupted_step_restore_enabled = True
+                                saved_workspace = (
+                                    self._verified_saved_workspace_checkpoint(
+                                        execution_result
+                                    )
+                                )
+                                if saved_workspace is not None:
+                                    interrupted_step_saved_workspace = {
+                                        **saved_workspace,
+                                        "savedByExecutionOrdinal": (
+                                            current_step_execution
+                                        ),
+                                    }
                             current_step_execution = self._step_execution_for(
                                 node_id
                             ) or (current_step_execution + 1)
@@ -15690,6 +15747,76 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if isinstance(summary, str) and summary.strip():
             return summary.strip()
         return None
+
+    def _verified_saved_workspace_checkpoint(
+        self,
+        result: Any,
+    ) -> dict[str, str] | None:
+        """Return the remotely verified archive an interrupted attempt saved.
+
+        Omnigent realizers save the step workspace before removing a lost
+        host and record the canonical ``worktree_archive`` evidence on the
+        result. A container path or any other non-artifact value is not a save.
+        """
+
+        outputs = self._get_from_result(result, "outputs")
+        saved = (
+            outputs.get("savedWorkspaceCheckpoint")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        if not isinstance(saved, Mapping) or saved.get("kind") != "worktree_archive":
+            return None
+        archive_ref = str(saved.get("archiveRef") or "").strip()
+        archive_digest = str(saved.get("archiveDigest") or "").strip()
+        if (
+            not archive_ref.startswith("artifact://")
+            or len(archive_ref) > 400
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", archive_digest)
+        ):
+            return None
+        return {"archiveRef": archive_ref, "archiveDigest": archive_digest}
+
+    def _restore_interrupted_step_workspace(
+        self,
+        request: "AgentExecutionRequest",
+        *,
+        saved_workspace: Mapping[str, Any] | None,
+        controller_restore_ref: str | None,
+        checkpoint_recovery: bool,
+    ) -> tuple["AgentExecutionRequest", dict[str, Any]]:
+        """Materialize a host-loss successor from its latest verified save.
+
+        The archive goes through the same Omnigent checkpoint-restore boundary
+        that remediation uses. Controller-owned candidates (remediation,
+        verification, publication) and checkpoint recovery keep their own
+        restore authority. Without a verified save the successor starts from
+        the admitted step inputs, and the returned source says so.
+        """
+
+        if controller_restore_ref is not None:
+            return request, {"source": "controller_candidate"}
+        if checkpoint_recovery:
+            return request, {"source": "checkpoint_recovery"}
+        if saved_workspace is None:
+            return request, {
+                "source": "admitted_inputs",
+                "reason": "no_verified_saved_workspace",
+            }
+        if not (
+            self._agent_kind_for_id(request.agent_id) == "external"
+            and _normalize_agent_runtime_id(request.agent_id) == "omnigent"
+        ):
+            return request, {
+                "source": "admitted_inputs",
+                "reason": "runtime_has_no_checkpoint_restore",
+            }
+        workspace_spec = dict(request.workspace_spec or {})
+        workspace_spec["workspaceCheckpointRestoreRef"] = saved_workspace["archiveRef"]
+        return (
+            request.model_copy(update={"workspace_spec": workspace_spec}),
+            {"source": "saved_workspace", **dict(saved_workspace)},
+        )
 
     def _activity_result_retryable(
         self,

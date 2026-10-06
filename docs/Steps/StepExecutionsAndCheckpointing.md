@@ -440,7 +440,7 @@ Canonical Step Execution reasons should include:
 
 Step Execution reasons must be bounded metadata, not free-form transcripts. Rich explanation belongs in artifacts.
 
-A `runtime_recovered` execution after host loss is a new attempt with its own idempotency key and sandbox workspace. It is not a resumption of the lost process. The previous attempt keeps its recorded image, session and history. The update-time restart contract is in [Docker Compose Deployment Update System §16](DockerComposeUpdateSystem.md#16-interaction-with-workflow-execution).
+A `runtime_recovered` execution after host loss is a new attempt with its own idempotency key and sandbox workspace. That workspace restores the latest verified save of an earlier attempt, or starts from the admitted step inputs when none exists. It is not a resumption of the lost process. The previous attempt keeps its recorded image, session and history. The update-time restart contract is in [Docker Compose Deployment Update System §16](DockerComposeUpdateSystem.md#16-interaction-with-workflow-execution).
 
 ### 7.2 Step Execution statuses
 

@@ -48,3 +48,38 @@ class OmnigentOAuthHostError(RuntimeError):
 
 
 __all__ = ["OmnigentOAuthHostError"]
+
+
+def withheld_successor_fields(
+    *,
+    summary: str | None,
+    metadata: Mapping[str, Any] | None,
+    cleanup_failure_code: str,
+    cleanup_attempts: int,
+) -> dict[str, Any]:
+    """Return the result fields that withhold a successor Step Execution.
+
+    ``retry_step_execution`` lets MoonMind.Run start another attempt of the
+    same logical step with the same publication target. A lost host is only an
+    offline projection: a partitioned host can still write, push or use its
+    credentials until its owner confirms it stopped
+    (MoonLadderStudios/MoonMind#4627). When that confirmation is missing, the
+    attempt keeps its capacity for the janitor and no successor is authorized.
+    """
+
+    return {
+        "retry_recommendation": "delegate_to_janitor",
+        "summary": (
+            f"{summary or 'The Omnigent session host was lost.'} The previous "
+            "host could not be confirmed stopped, so no new attempt was started."
+        ),
+        "metadata": {
+            **dict(metadata or {}),
+            "successorAuthority": {
+                "established": False,
+                "unfinishedPhase": "cleanup",
+                "cleanupFailureCode": cleanup_failure_code,
+                "cleanupAttempts": cleanup_attempts,
+            },
+        },
+    }
