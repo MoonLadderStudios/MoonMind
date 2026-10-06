@@ -333,3 +333,45 @@ def test_required_canonical_session_controls_have_a_result_verifier(action_kind)
     contract = verification_contract_for(action_kind)
     assert contract.automatically_verifiable
     assert contract.evidence_owner == "canonical_session_turn_command"
+
+
+@pytest.mark.asyncio
+async def test_same_workflow_rerun_adapter_pins_admitted_run():
+    owner = AsyncMock()
+    owner.update_execution.return_value = {"accepted": True, "run_id": "result-run"}
+    result = await TemporalRemediationControlPlane(execution_service=owner).handlers()[
+        "execution.request_rerun_same_workflow"
+    ](
+        {
+            "actionKind": "execution.request_rerun_same_workflow",
+            "actionId": "rerun-1",
+            "params": {},
+        },
+        {},
+        _target(),
+    )
+    assert result["status"] == "accepted"
+    owner.update_execution.assert_awaited_once_with(
+        workflow_id="target",
+        update_name="RequestRerun",
+        idempotency_key="rerun-1",
+        expected_run_id="source-run",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_audit_reason_is_not_an_agent_message():
+    owner = AsyncMock()
+    result = await TemporalRemediationControlPlane(execution_service=owner).handlers()[
+        "execution.resume"
+    ](
+        {
+            "actionKind": "execution.resume",
+            "actionId": "resume-1",
+            "params": {"reason": "administrative audit reason"},
+        },
+        {},
+        _target(),
+    )
+    assert result["status"] == "accepted"
+    assert owner.signal_execution.await_args.kwargs["payload"] is None

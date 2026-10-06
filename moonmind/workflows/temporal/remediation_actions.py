@@ -459,6 +459,7 @@ class RemediationCapabilityContext:
     caller_allowed_action_kinds: Sequence[str] | None = None
     execution_backend_readiness: Mapping[str, bool] | None = None
     action_blocked_reasons: Mapping[str, Sequence[str]] | None = None
+    action_target_selector_options: Mapping[str, Sequence[str]] | None = None
     approval_backend_ready: bool = True
     verification_backend_readiness: Mapping[str, bool] | None = None
 
@@ -564,6 +565,15 @@ def remediation_action_capability(
             )
         ),
         "blockedReasons": blocked,
+        "targetSelectorRequired": bool(
+            context is not None
+            and (context.action_target_selector_options or {}).get(normalized)
+        ),
+        "targetSelectorOptions": list(
+            (context.action_target_selector_options or {}).get(normalized, ())
+            if context is not None
+            else ()
+        ),
     }
 
 
