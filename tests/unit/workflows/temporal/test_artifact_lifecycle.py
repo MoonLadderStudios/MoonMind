@@ -213,7 +213,8 @@ async def test_lifecycle_sweep_activity_drains_and_reports_completion(
             )
             await _create_expired_artifacts(service, 2)
 
-            summary = await TemporalArtifactActivities(service).artifact_lifecycle_sweep(
+            activities = TemporalArtifactActivities(service)
+            summary = await activities.artifact_lifecycle_sweep(
                 principal="service:storage-maintenance"
             )
 

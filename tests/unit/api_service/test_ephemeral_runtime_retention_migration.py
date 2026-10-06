@@ -27,9 +27,7 @@ from api_service.db.models import (
     TemporalArtifactStatus,
 )
 
-MIGRATION_MODULE = (
-    "api_service.migrations.versions.392_ephemeral_runtime_retention"
-)
+MIGRATION_MODULE = "api_service.migrations.versions.392_ephemeral_runtime_retention"
 CREATED_AT = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
 
 

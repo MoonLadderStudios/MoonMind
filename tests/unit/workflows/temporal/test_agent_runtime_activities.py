@@ -6166,7 +6166,8 @@ async def test_agent_runtime_cleanup_reclaims_sandbox_workspace_of_closed_workfl
                 relative_path="repo",
             )
         )
-        for path in (workspace, workspace / "repo", *store.record_paths(workspace.name)):
+        owned = (workspace, workspace / "repo", *store.record_paths(workspace.name))
+        for path in owned:
             os.utime(path, (old.timestamp(), old.timestamp()))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
 

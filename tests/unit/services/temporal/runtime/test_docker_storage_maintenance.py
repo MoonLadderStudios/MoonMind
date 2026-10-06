@@ -95,7 +95,9 @@ async def test_routine_expiry_keeps_tagged_images_below_critical_pressure() -> N
         disk_usage=lambda _path: next(usages),
     )
 
-    image_prunes = [command for command in commands if command[1:3] == ("image", "prune")]
+    image_prunes = [
+        command for command in commands if command[1:3] == ("image", "prune")
+    ]
     assert image_prunes == [ROUTINE_IMAGE_PRUNE]
     assert result.critical_pressure_detected is False
 
