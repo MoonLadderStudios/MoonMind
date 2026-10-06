@@ -377,6 +377,11 @@ tasks with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` after profile materializatio
 in addition to denying deferred wakeup tools. This launch-mode restriction cannot
 be relaxed by profile environment overrides. Long waits stay in the foreground
 or return a validated continuation to a durable owner before the process exits.
+The generic Omnigent host applies the same restriction to every host class that
+declares `claude-native`, forwarding the variable through the runner environment
+to the Claude terminal: the step settles when the turn ends and the host is then
+removed, so background work would otherwise finish with no owner to resume the
+session or write its declared outputs.
 
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
