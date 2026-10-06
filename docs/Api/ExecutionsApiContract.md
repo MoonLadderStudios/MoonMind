@@ -179,9 +179,11 @@ Required counts are `total`, `pending`, `executing`, `completed`, and `failed`. 
 
 ### 8.3 Search Attributes and Memo
 
-Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, and `mm_target_skill`.
+Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, `mm_target_skill`, and `mm_provider_profile`.
 
 Runtime/Skill facets are authoritative only after the namespace registers their `KeywordList` types. Before registration, dependent queries degrade without sending invalid Visibility queries. Unknown values are omitted rather than blank. These fields are filters, not sortable scalar strings.
+
+`mm_provider_profile` is a `Text` attribute written at user-workflow start from the recorded Provider Profile selection (`moonmind/workflows/temporal/provider_profile_projection.py`). Its value is a space-separated set of lowercase alphanumeric tokens: one selection-state token and one hex-encoded token per recorded stable profile ID. Admission snapshots the selection, including a small display name and Harness, into the `providerProfileSelection` parameter; the start path mirrors it into memo `providerProfile` for facet labels. Workflows started before this projection have no attribute; that is unavailable coverage, not an absence state.
 
 Memo carries title/summary and optional safe input/manifest refs. Clients tolerate additional documented-safe keys. Projection-authored state is not a second source of truth for publication or terminal evidence.
 
@@ -291,12 +293,19 @@ Domain create validation uses 422 `invalid_execution_request`, with field-addres
 | Parameter | Default/constraint |
 | --- | --- |
 | workflowType, state, ownerType, ownerId, entry, repo, integration | Optional filters |
-| targetRuntime / targetRuntimeIn | Registered canonical runtime facet |
+| targetRuntime / targetRuntimeIn / targetRuntimeNotIn | Legacy registered runtime facet; never a Provider Profile alias |
 | targetSkillIn | Registered primary Skill facet |
+| providerProfileIn / providerProfileNotIn | Recorded stable Provider Profile IDs. Include matches any recorded member; exclude rejects any listed member. |
+| providerProfileStateIn / providerProfileStateNotIn | Absence states `pending`, `not_recorded`, `not_applicable`. Positive IDs and states OR within the column. |
+| providerProfileBlank | `true` matches any absence state; `false` matches a recorded profile. Cannot be combined with other Provider Profile filters. |
 | pageSize | Default 50; range 1–200 |
 | nextPageToken | Opaque continuation token |
 
-Non-admin scope is always the authenticated owner. Runtime/Skill attributes use membership queries over their registered one-item `KeywordList` values. Default ordering is meaningful `updatedAt` descending by one-minute stability bucket, then queued order descending within a bucket, then workflowId descending. Small refresh differences do not reorder otherwise stable queued rows.
+Non-admin scope is always the authenticated owner. Runtime/Skill attributes use membership queries over their registered one-item `KeywordList` values. Provider Profile filters run in the same Visibility query before pagination and counting. Workflows without `mm_provider_profile` coverage never match a positive ID or state and are not rejected by an exclusion. Unknown state tokens, an ID or state both included and excluded, and `providerProfileBlank` combined with other Provider Profile filters return 422 `invalid_execution_query`. When the attribute is not registered, Provider Profile filters return an empty degraded response (`countMode=estimated_or_unknown`, `degradedCount=true`) instead of an unfiltered list.
+
+Each list row includes `providerProfile`: `selectionState` (`recorded`, `pending`, `not_recorded`, `not_applicable`), at most five `profiles` (`id`, optional recorded `label` and `harness`), and `profileCount`. It summarizes recorded selection, never the execution-configuration `agentProfile.profileId`, today's profile inventory, or credential/host material. Historical rows that recorded only IDs show IDs without names.
+
+`GET /api/executions/facets?facet=providerProfile` uses the same filters except all Provider Profile parameters. `items` lists recorded profile IDs with their recorded label (or ID) and a per-workflow count; multi-profile workflows can contribute to several items. `stateItems` always lists the three absence states, including zero counts; `blankCount` is their sum; `unavailableCount` counts workflows without projection coverage. Default ordering is meaningful `updatedAt` descending by one-minute stability bucket, then queued order descending within a bucket, then workflowId descending. Small refresh differences do not reorder otherwise stable queued rows.
 
 A null next token means no further pages. Offset-based implementation details are not public cursor semantics. Count confidence follows section 8.4.
 

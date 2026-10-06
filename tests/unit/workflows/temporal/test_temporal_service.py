@@ -659,6 +659,69 @@ async def test_create_execution_writes_runtime_and_primary_skill_search_attribut
 
 
 @pytest.mark.asyncio
+async def test_create_execution_projects_recorded_provider_profile_for_list_queries(tmp_path):
+    """MoonLadderStudios/MoonMind#4640: the list filters on recorded selection."""
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Profile run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex-work",
+                "providerProfileSelection": {
+                    "state": "recorded",
+                    "profiles": [
+                        {"id": "codex-work", "label": "Work", "harness": "codex_cli"}
+                    ],
+                },
+                "workflow": {"instructions": "Resolve the issue."},
+            },
+            idempotency_key=None,
+        )
+
+        assert record.search_attributes["mm_provider_profile"] == (
+            "ppstaterecorded ppid" + b"codex-work".hex()
+        )
+        assert record.memo["providerProfile"] == {
+            "state": "recorded",
+            "profiles": [{"id": "codex-work", "label": "Work", "harness": "codex_cli"}],
+        }
+
+
+@pytest.mark.asyncio
+async def test_create_execution_projects_pending_provider_profile_state(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Pending run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "providerProfileSelection": {"state": "pending", "profiles": []},
+                "workflow": {"instructions": "Resolve the issue."},
+            },
+            idempotency_key=None,
+        )
+
+        assert record.search_attributes["mm_provider_profile"] == "ppstatepending"
+        assert record.memo["providerProfile"] == {"state": "pending", "profiles": []}
+
+
+@pytest.mark.asyncio
 async def test_create_execution_omits_blank_runtime_and_skill_search_attributes(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

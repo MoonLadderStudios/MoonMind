@@ -1,8 +1,8 @@
 # Workflows List Page
 
-Status: Living product contract; Provider Profile presentation is adopted desired state, not an implementation claim  
+Status: Living product contract; Provider Profile presentation implemented (MoonLadderStudios/MoonMind#4640)  
 Owners: MoonMind Engineering  
-Last updated: 2026-10-01
+Last updated: 2026-10-06
 Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, Provider Profile presentation, and Progress column sort/filter semantics
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
@@ -17,7 +17,7 @@ The page helps operators inspect Temporal-backed MoonMind Workflow Executions in
 
 The column filtering model is intentionally similar to Google Sheets filters: each filterable column owns a filter control where users can stage changes, search or enter values, include or exclude values when appropriate, include or exclude blanks when meaningful, clear a column filter, cancel staged edits, and apply the filter.
 
-The adopted agent-selection design replaces the ordinary Runtime column and mobile field with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. This requires a recorded-profile data projection and corresponding query controls, not a heading-only rename.
+The agent-selection design replaces the ordinary Runtime column and mobile field with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. The recorded-profile projection and query controls are implemented through the existing executions list, facet, and Temporal Visibility owners (section 7.3).
 
 ---
 
@@ -303,7 +303,7 @@ Rules:
 6. The table may hide optional columns by default to preserve width, but optional columns must not reintroduce ordinary access to system workflow browsing.
 7. The mobile filter sheet must expose the same filterable Workflow columns as desktop, including Progress and Provider Profile.
 8. The table must not expose raw Temporal Visibility query syntax to ordinary users.
-9. Legacy Runtime and Target skill filters use `mm_target_runtime` and singular `mm_target_skill` where those Search Attributes are registered. Provider Profile is not a new label for `mm_target_runtime`; it requires its own compact recorded-identity projection through the existing list/query owner. Missing query capability or projection coverage is reported truthfully rather than guessed from today's profiles.
+9. Legacy Runtime and Target skill filters use `mm_target_runtime` and singular `mm_target_skill` where those Search Attributes are registered. Provider Profile is not a new label for `mm_target_runtime`; it uses its own recorded-identity projection, `mm_provider_profile` (section 7.3). Missing query capability or projection coverage is reported truthfully rather than guessed from today's profiles.
 
 ### 7.1 Admin diagnostics escape hatch
 
@@ -342,6 +342,14 @@ An authored profile can be displayed before launch without claiming successful a
 Extend the existing list projection and typed response for this compact summary. Reuse existing persistence/batching rather than adding a profile-history service. The browser must not request per-row profiles, execution details, step ledgers, or Temporal histories. No credentials, OAuth paths, raw provider payloads, or infrastructure handles enter the ordinary list payload.
 
 Keep one replacement column. Do not add ordinary Harness, Provider, Backend, Container, and Host columns alongside Provider Profile. Long names wrap or truncate accessibly within the current layout rather than overflowing mobile cards. Equal names are disambiguated by a compact stable ID where needed.
+
+### 7.3 Implemented projection and coverage
+
+- Admission records `providerProfileSelection` in workflow parameters: the selection state plus stable IDs with a small display-name and Harness snapshot taken from the selected Provider Profile and explicit step `providerProfileRef` associations. Without a resolved profile it records `pending`; with no agent runtime it records `not_applicable`.
+- `moonmind/workflows/temporal/provider_profile_projection.py` is the single owner that summarizes recorded selection. Older parameters without the snapshot fall back to recorded Provider Profile IDs only (top-level `profileId`, `agentProfileSnapshot.providerProfileRef`, step `runtime.providerProfileRef`), shown as IDs. The execution-configuration `agentProfile.profileId` is never read. No recorded ID yields `not_recorded`.
+- User-workflow start writes the `mm_provider_profile` `Text` Search Attribute (state token plus one token per ID) and mirrors the summary into memo `providerProfile` for facet labels. List rows expose at most five profiles with `profileCount`.
+- Workflows started before the projection have no attribute. That is unavailable coverage: they never match a positive ID or state filter, an exclusion does not reject them, and facets report them as `unavailableCount` instead of counting them as an absence state. Their rows still show recorded IDs from parameters.
+- The UI keeps one filter mode per column: it rejects URLs that mix Provider Profile include and exclude parameters rather than dropping one. The API accepts non-overlapping mixes.
 
 ---
 
@@ -729,7 +737,7 @@ Target server-authoritative rule:
 
 ### 12.1 Canonical filter encoding
 
-The API and URL should support multi-value include and exclude filters where meaningful. Provider Profile parameters below are the target extension of the existing query owner, not a claim that the current API accepts them. Implement and document the server and generated/client contract together.
+The API and URL should support multi-value include and exclude filters where meaningful. The Provider Profile parameters below are implemented by the existing query owner and generated client types.
 
 Representative URL shapes with illustrative stable profile IDs:
 
@@ -845,7 +853,7 @@ Rules:
 
 The UI needs facet data so a filter popover can show values and counts beyond the current page.
 
-Target Provider Profile extension to the existing endpoint, not an already-shipped API claim:
+Provider Profile facet request:
 
 ```text
 GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile IDs, states, and blank shortcut>
@@ -866,6 +874,7 @@ Representative response with illustrative stable IDs:
     { "value": "not_applicable", "label": "Not applicable", "count": 3 }
   ],
   "blankCount": 6,
+  "unavailableCount": 4,
   "countMode": "exact",
   "truncated": false,
   "nextPageToken": null

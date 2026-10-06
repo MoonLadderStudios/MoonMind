@@ -592,6 +592,7 @@ MoonMind uses PostgreSQL Visibility. Custom Search Attribute count, type, and si
 | `mm_integration` | Optional | keyword | set when integration filtering is required |
 | `mm_target_runtime` | Optional | keyword_list | one-item runtime facet; not sortable |
 | `mm_target_skill` | Optional | keyword_list | one-item primary skill facet; not sortable |
+| `mm_provider_profile` | Optional | text | recorded Provider Profile ID/state tokens set at user-workflow start; not sortable |
 | `mm_scheduled_for` | Optional | datetime | deferred/scheduled execution metadata |
 
 `mm_updated_at` is allowed, but it must not become a high-churn telemetry feed. It should move on meaningful user-visible mutations such as domain-state transitions, accepted Updates, visible Signal handling, terminal transitions, bounded progress checkpoints, and title/summary changes. It must not move on every heartbeat, log line, polling tick, low-level retry, or internal backoff detail.

@@ -148,6 +148,12 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextBuilder,
     RemediationLifecyclePublisher,
 )
+from moonmind.workflows.temporal.provider_profile_projection import (
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    provider_profile_search_attribute_value,
+    provider_profile_summary_payload,
+    summarize_recorded_provider_profiles,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
@@ -2391,6 +2397,17 @@ class TemporalExecutionService:
             title_tokens = tokenize_title(resolved_title)
             if title_tokens:
                 search_attributes["mm_title"] = title_tokens
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            # MoonLadderStudios/MoonMind#4640: recorded Provider Profile
+            # membership for list/count/facet filtering, plus the compact
+            # display snapshot facets label IDs with.
+            provider_profile_summary = summarize_recorded_provider_profiles(params)
+            search_attributes[PROVIDER_PROFILE_SEARCH_ATTRIBUTE] = (
+                provider_profile_search_attribute_value(provider_profile_summary)
+            )
+            memo["providerProfile"] = provider_profile_summary_payload(
+                provider_profile_summary
+            )
 
         artifact_refs = [
             ref

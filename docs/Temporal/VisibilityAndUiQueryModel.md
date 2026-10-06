@@ -60,7 +60,7 @@ All MoonMind-owned Search Attributes follow these rules:
 
 ## 4. Current registered custom Search Attributes
 
-MoonMind currently registers 20 custom Search Attributes in the Temporal namespace bootstrap. Exactly 10 are `Keyword`, which is the important SQL Visibility keyword ceiling guarded by integration tests.
+MoonMind currently registers 21 custom Search Attributes in the Temporal namespace bootstrap. Exactly 10 are `Keyword`, which is the important SQL Visibility keyword ceiling guarded by integration tests. The three SQL Visibility `KeywordList` slots are also fully used, so new membership dimensions use a `Text` slot with exact lexeme tokens.
 
 ### 4.1 Keyword attributes — current 10-slot budget
 
@@ -87,6 +87,7 @@ MoonMind currently registers 20 custom Search Attributes in the Temporal namespa
 | `mm_target_runtime` | KeywordList | API/workflow start path; workflow repair | One-item list containing canonical runtime id for filtering/facets. |
 | `mm_target_skill` | KeywordList | API/workflow start path; workflow repair | One-item list containing primary skill id/slug/name for filtering/facets. |
 | `mm_title` | KeywordList | Workflow start/lifecycle logic | Tokenized title word search. Must be materialized before relying on title search. |
+| `mm_provider_profile` | Text | API/workflow start path (`provider_profile_projection.py`) | Recorded Provider Profile membership for the Workflows list: one selection-state token (`ppstaterecorded`, `ppstatepending`, `ppstatenotrecorded`, `ppstatenotapplicable`) plus one `ppid<hex>` token per recorded stable profile ID, bounded to 2,000 characters so the value stays under Temporal's per-value size limit. Queried with `=`/`!=` exact-lexeme matches; not sortable. Absent on workflows started before the projection, which is unavailable coverage rather than an absence state. |
 | `mm_has_dependencies` | Bool | Dependency lifecycle | Dependency presence signal. Re-evaluate if unused by production queries. |
 | `mm_dependency_count` | Int | Dependency lifecycle | Bounded dependency count. Re-evaluate if unused by production queries. |
 | `SessionEpoch` | Int | Managed session workflows | Managed-session clear/reset/epoch correlation. |

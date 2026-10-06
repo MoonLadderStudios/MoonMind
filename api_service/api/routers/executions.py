@@ -154,6 +154,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
     ExecutionListItemModel,
+    ExecutionProviderProfileRefModel,
+    ExecutionProviderProfileSummaryModel,
     ExecutionMetricsCostModel,
     ExecutionMetricsDurationModel,
     ExecutionMetricsResponse,
@@ -228,6 +230,17 @@ from moonmind.workflows.temporal import (
 )
 from moonmind.workflows.temporal.service import reject_historical_control
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+from moonmind.workflows.temporal.provider_profile_projection import (
+    PROVIDER_PROFILE_ABSENCE_STATES,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    PROVIDER_PROFILE_SELECTION_PARAMETER,
+    RecordedProviderProfile,
+    build_provider_profile_selection,
+    provider_profile_id_token,
+    provider_profile_ids_from_search_attribute,
+    provider_profile_state_token,
+    summarize_recorded_provider_profiles,
+)
 from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -458,12 +471,31 @@ _EXECUTION_FACET_ATTRS = {
     "targetSkill": "mm_target_skill",
     "repository": "mm_repo",
     "integration": "mm_integration",
+    "providerProfile": PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
 }
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE: IndexedValueType.INDEXED_VALUE_TYPE_TEXT,
 }
+# MoonLadderStudios/MoonMind#4640: recorded Provider Profile filter aliases.
+_PROVIDER_PROFILE_FILTER_ALIASES = frozenset(
+    {
+        "providerProfileIn",
+        "providerProfileNotIn",
+        "providerProfileStateIn",
+        "providerProfileStateNotIn",
+        "providerProfileBlank",
+    }
+)
+_PROVIDER_PROFILE_STATE_LABELS = {
+    "pending": "Pending selection",
+    "not_recorded": "Not recorded",
+    "not_applicable": "Not applicable",
+}
+# Bound on profiles carried by one list row; the full count stays visible.
+_LIST_ROW_PROVIDER_PROFILE_LIMIT = 5
 _UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
@@ -481,6 +513,7 @@ _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetSkillIn": "mm_target_skill",
     "targetSkillNotIn": "mm_target_skill",
     "titleContains": "mm_title",
+    **{alias: PROVIDER_PROFILE_SEARCH_ATTRIBUTE for alias in _PROVIDER_PROFILE_FILTER_ALIASES},
 }
 _EXECUTION_FACET_FILTER_ALIASES = {
     "status": frozenset({"state", "stateIn", "stateNotIn"}),
@@ -492,6 +525,7 @@ _EXECUTION_FACET_FILTER_ALIASES = {
         {"repo", "repoExact", "repoIn", "repoNotIn", "repoContains", "repoBlank"}
     ),
     "integration": frozenset({"integration"}),
+    "providerProfile": _PROVIDER_PROFILE_FILTER_ALIASES,
 }
 _TEMPORAL_STATUS_VALUES = (
     "scheduled",
@@ -3112,6 +3146,84 @@ def _append_word_match_temporal_filter(
         query_parts.append(f'{attr} = "{_escape_temporal_value(token)}"')
 
 
+def _append_provider_profile_temporal_filter(
+    query_parts: list[str],
+    request: Request,
+    *,
+    excluded: Callable[[str], bool],
+) -> None:
+    """Filter recorded Provider Profile membership (MoonLadderStudios/MoonMind#4640).
+
+    Positive IDs and absence states OR within the column; each excluded ID or
+    state rejects a matching workflow. Workflows without projection coverage
+    never match a positive value and are not rejected by an exclusion, because
+    unavailable coverage is not a known absence.
+    """
+
+    def values(alias: str) -> list[str]:
+        return [] if excluded(alias) else _raw_query_values(request, alias, None)
+
+    ids_in = values("providerProfileIn")
+    ids_not_in = values("providerProfileNotIn")
+    states_in = values("providerProfileStateIn")
+    states_not_in = values("providerProfileStateNotIn")
+    for alias, states in (
+        ("providerProfileStateIn", states_in),
+        ("providerProfileStateNotIn", states_not_in),
+    ):
+        unknown = [state for state in states if state not in PROVIDER_PROFILE_ABSENCE_STATES]
+        if unknown:
+            raise TemporalExecutionValidationError(
+                f"{alias} accepts only: " + ", ".join(PROVIDER_PROFILE_ABSENCE_STATES) + "."
+            )
+    for include_alias, include, exclude_alias, exclude in (
+        ("providerProfileIn", ids_in, "providerProfileNotIn", ids_not_in),
+        ("providerProfileStateIn", states_in, "providerProfileStateNotIn", states_not_in),
+    ):
+        overlap = sorted(set(include) & set(exclude))
+        if overlap:
+            raise TemporalExecutionValidationError(
+                f"{include_alias} and {exclude_alias} cannot both contain: "
+                + ", ".join(overlap)
+                + "."
+            )
+    blank_raw = None if excluded("providerProfileBlank") else request.query_params.get(
+        "providerProfileBlank"
+    )
+    attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    if blank_raw is not None:
+        blank = blank_raw.strip().lower()
+        if blank not in {"true", "false"}:
+            raise TemporalExecutionValidationError(
+                "providerProfileBlank must be true or false."
+            )
+        if ids_in or ids_not_in or states_in or states_not_in:
+            raise TemporalExecutionValidationError(
+                "providerProfileBlank cannot be combined with other Provider Profile "
+                "filters; use providerProfileStateIn or providerProfileStateNotIn."
+            )
+        blank_states = (
+            PROVIDER_PROFILE_ABSENCE_STATES if blank == "true" else ("recorded",)
+        )
+        query_parts.append(
+            _any_temporal_query(
+                attr, [provider_profile_state_token(state) for state in blank_states]
+            )
+        )
+        return
+    include_clause = _any_temporal_query(
+        attr,
+        [provider_profile_id_token(value) for value in ids_in]
+        + [provider_profile_state_token(state) for state in states_in],
+    )
+    if include_clause is not None:
+        query_parts.append(include_clause)
+    for token in [provider_profile_id_token(value) for value in ids_not_in] + [
+        provider_profile_state_token(state) for state in states_not_in
+    ]:
+        query_parts.append(f'({attr} IS NULL OR {attr}!="{_escape_temporal_value(token)}")')
+
+
 def _build_temporal_execution_query(
     *,
     request: Request,
@@ -3254,6 +3366,8 @@ def _build_temporal_execution_query(
             include=target_skill_in_values,
             exclude=target_skill_not_in_values,
         )
+    if attr_available(PROVIDER_PROFILE_SEARCH_ATTRIBUTE):
+        _append_provider_profile_temporal_filter(query_parts, request, excluded=excluded)
     if not excluded("workflowId"):
         _append_exact_or_multi_temporal_filter(
             query_parts,
@@ -3377,6 +3491,117 @@ def _facet_label(facet: str, value: str) -> str:
     return value
 
 
+async def _workflow_memo_mapping(workflow: object) -> Mapping[str, Any]:
+    memo_fn = getattr(workflow, "memo", None)
+    memo: object | None = None
+    if callable(memo_fn):
+        maybe_memo = memo_fn()
+        if hasattr(maybe_memo, "__await__"):
+            memo = await maybe_memo
+        else:
+            memo = maybe_memo
+    return memo if isinstance(memo, Mapping) else {}
+
+
+async def _provider_profile_facet_response(
+    *,
+    client: Client,
+    base_query: str,
+    search_value: str | None,
+    page_size: int,
+    next_page_token: str | None,
+) -> ExecutionFacetResponse:
+    """Provider Profile facet from recorded associations (MoonLadderStudios/MoonMind#4640).
+
+    Values come from the recorded ``mm_provider_profile`` membership of the
+    authorized, filtered workflow scope, including profiles that are no
+    longer launchable. Labels come from the admission display snapshot; an ID
+    without a recorded name is shown as the ID. Each workflow counts once per
+    value, so multi-profile totals may overlap.
+    """
+
+    attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    token_bytes = _decode_execution_facet_page_token(next_page_token)
+    iterator = client.list_workflows(
+        query=base_query,
+        page_size=page_size,
+        next_page_token=token_bytes,
+    )
+    await iterator.fetch_next_page()
+
+    labels: dict[str, str | None] = {}
+    for workflow in iterator.current_page or []:
+        search_attributes = getattr(workflow, "search_attributes", {}) or {}
+        profile_ids = provider_profile_ids_from_search_attribute(
+            search_attributes.get(attr)
+        )
+        if not profile_ids:
+            continue
+        recorded_labels: dict[str, str | None] = {}
+        if any(labels.get(profile_id) is None for profile_id in profile_ids):
+            memo = await _workflow_memo_mapping(workflow)
+            snapshot = summarize_recorded_provider_profiles(
+                {"providerProfileSelection": memo.get("providerProfile")}
+            )
+            recorded_labels = {
+                profile.profile_id: profile.label for profile in snapshot.profiles
+            }
+        for profile_id in profile_ids:
+            if labels.get(profile_id) is None:
+                labels[profile_id] = recorded_labels.get(profile_id)
+
+    needle = (search_value or "").lower()
+    items: list[ExecutionFacetItemModel] = []
+    for profile_id, label in labels.items():
+        display = label or profile_id
+        if needle and needle not in display.lower() and needle not in profile_id.lower():
+            continue
+        if len(items) >= page_size:
+            break
+        count_info = await client.count_workflows(
+            query=_and_temporal_query(
+                base_query,
+                f'{attr}="{_escape_temporal_value(provider_profile_id_token(profile_id))}"',
+            )
+        )
+        items.append(
+            ExecutionFacetItemModel(value=profile_id, label=display, count=count_info.count)
+        )
+    state_items: list[ExecutionFacetItemModel] = []
+    for state in PROVIDER_PROFILE_ABSENCE_STATES:
+        count_info = await client.count_workflows(
+            query=_and_temporal_query(
+                base_query, f'{attr}="{provider_profile_state_token(state)}"'
+            )
+        )
+        state_items.append(
+            ExecutionFacetItemModel(
+                value=state,
+                label=_PROVIDER_PROFILE_STATE_LABELS[state],
+                count=count_info.count,
+            )
+        )
+    unavailable_info = await client.count_workflows(
+        query=_and_temporal_query(base_query, f"{attr} IS NULL")
+    )
+    next_token = (
+        base64.b64encode(iterator.next_page_token).decode("utf-8")
+        if iterator.next_page_token
+        else None
+    )
+    return ExecutionFacetResponse(
+        facet="providerProfile",
+        items=items,
+        stateItems=state_items,
+        blankCount=sum(item.count for item in state_items),
+        unavailableCount=unavailable_info.count,
+        truncated=bool(iterator.next_page_token),
+        nextPageToken=next_token,
+        countMode="exact",
+        source="authoritative",
+    )
+
+
 async def _facet_value_from_workflow(workflow: object, facet: str) -> str:
     search_attributes = getattr(workflow, "search_attributes", {}) or {}
     if facet == "status":
@@ -3405,16 +3630,7 @@ async def _facet_value_from_workflow(workflow: object, facet: str) -> str:
         )
         if value:
             return value
-    memo_fn = getattr(workflow, "memo", None)
-    memo: object | None = None
-    if callable(memo_fn):
-        maybe_memo = memo_fn()
-        if hasattr(maybe_memo, "__await__"):
-            memo = await maybe_memo
-        else:
-            memo = maybe_memo
-    if not isinstance(memo, Mapping):
-        return ""
+    memo = await _workflow_memo_mapping(workflow)
     if facet == "targetRuntime":
         return _coerce_temporal_scalar(
             memo.get("targetRuntime") or memo.get("target_runtime")
@@ -4128,6 +4344,26 @@ def _bounded_execution_progress_from_sources(
     return None
 
 
+def _list_row_provider_profile(
+    parameters: Mapping[str, Any],
+) -> ExecutionProviderProfileSummaryModel:
+    """Bounded recorded Provider Profile summary (MoonLadderStudios/MoonMind#4640)."""
+
+    summary = summarize_recorded_provider_profiles(parameters)
+    return ExecutionProviderProfileSummaryModel(
+        selection_state=summary.selection_state,
+        profiles=[
+            ExecutionProviderProfileRefModel(
+                id=profile.profile_id,
+                label=profile.label,
+                harness=profile.harness,
+            )
+            for profile in summary.profiles[:_LIST_ROW_PROVIDER_PROFILE_LIMIT]
+        ],
+        profile_count=len(summary.profiles),
+    )
+
+
 def _serialize_execution_list_item(record) -> ExecutionListItemModel:
     close_status = _enum_value(getattr(record, "close_status", None))
     if close_status == TemporalExecutionCloseStatus.COMPLETED.value:
@@ -4322,6 +4558,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         target_skill=target_skill,
         task_skills=task_skills,
         repository=repository,
+        provider_profile=_list_row_provider_profile(params),
         progress=progress,
         scheduled_for=scheduled_for,
         created_at=created_at,
@@ -9155,6 +9392,55 @@ def _merge_workflow_required_capabilities(
     return merged
 
 
+async def _recorded_provider_profile_selection(
+    *,
+    session: Any,
+    task_profile: Any | None,
+    target_runtime: str | None,
+    steps: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Snapshot the admitted Provider Profile selection (MoonLadderStudios/MoonMind#4640).
+
+    Records stable IDs with a small display-name/harness snapshot so renaming,
+    disabling, or deleting a profile later cannot erase historical identity.
+    Without a resolved profile the selection is ``pending``; it is never
+    replaced by today's deployment default.
+    """
+
+    profiles: list[RecordedProviderProfile] = []
+
+    def snapshot(profile: Any, profile_id: str) -> RecordedProviderProfile:
+        return RecordedProviderProfile(
+            profile_id=profile_id,
+            label=getattr(profile, "provider_label", None),
+            harness=getattr(profile, "runtime_id", None),
+        )
+
+    if task_profile is not None:
+        profile_id = str(getattr(task_profile, "profile_id", "") or "").strip()
+        if profile_id:
+            profiles.append(snapshot(task_profile, profile_id))
+    known_ids = {profile.profile_id for profile in profiles}
+    for step in steps or []:
+        runtime_payload = step.get("runtime") if isinstance(step, Mapping) else None
+        if not isinstance(runtime_payload, Mapping):
+            continue
+        step_profile_id = str(runtime_payload.get("providerProfileRef") or "").strip()
+        if not step_profile_id or step_profile_id in known_ids:
+            continue
+        known_ids.add(step_profile_id)
+        step_profile = (
+            await session.get(ManagedAgentProviderProfile, step_profile_id)
+            if session is not None
+            else None
+        )
+        profiles.append(snapshot(step_profile, step_profile_id))
+    return build_provider_profile_selection(
+        profiles=profiles,
+        agent_applicable=bool(target_runtime),
+    )
+
+
 async def _resolve_step_runtime_selections(
     *,
     steps: list[dict[str, Any]],
@@ -12449,6 +12735,19 @@ async def _create_execution_from_workflow_request(
         if frozen_rollout:
             initial_parameters["runtimeProviderTarget"] = dict(frozen_rollout)
 
+    initial_parameters[PROVIDER_PROFILE_SELECTION_PARAMETER] = (
+        await _recorded_provider_profile_selection(
+            session=session,
+            task_profile=(
+                selected_provider_profile
+                if selected_provider_profile is not None
+                else (_provider_profile if raw_profile_id else None)
+            ),
+            target_runtime=canonical_target_runtime,
+            steps=normalized_steps,
+        )
+    )
+
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
         # Single-user (#4351): ordinary operator creates are instance-owned
@@ -12892,6 +13191,14 @@ async def _resolve_recurring_runtime_metadata(
         metadata["modelTierResolution"] = model_tier_resolution
     if raw_profile_id:
         metadata["profileId"] = raw_profile_id
+    metadata[PROVIDER_PROFILE_SELECTION_PARAMETER] = (
+        await _recorded_provider_profile_selection(
+            session=session,
+            task_profile=provider_profile if raw_profile_id else None,
+            target_runtime=canonical_target_runtime,
+            steps=None,
+        )
+    )
     if resolved_effort is not None:
         metadata["effort"] = resolved_effort
     elif "effort" in runtime_payload:
@@ -12935,6 +13242,10 @@ def _stamp_recurring_runtime_metadata(
         ]
     if runtime_metadata.get("profileId"):
         initial_parameters["profileId"] = runtime_metadata["profileId"]
+    if isinstance(runtime_metadata.get(PROVIDER_PROFILE_SELECTION_PARAMETER), Mapping):
+        initial_parameters[PROVIDER_PROFILE_SELECTION_PARAMETER] = copy.deepcopy(
+            dict(runtime_metadata[PROVIDER_PROFILE_SELECTION_PARAMETER])
+        )
     if "effort" in runtime_metadata:
         initial_parameters["effort"] = runtime_metadata.get("effort")
     if "modelTier" in runtime_metadata:
@@ -15008,6 +15319,33 @@ async def list_executions(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # MoonLadderStudios/MoonMind#4640: recorded Provider Profile filters, read
+    # by the shared query builder so list, metrics, and facets agree.
+    provider_profile_in: Optional[str] = Query(
+        None,
+        alias="providerProfileIn",
+        description="Recorded stable Provider Profile IDs; matches any recorded member.",
+    ),
+    provider_profile_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileNotIn",
+        description="Rejects workflows recording any listed Provider Profile ID.",
+    ),
+    provider_profile_state_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateIn",
+        description="Absence states: pending, not_recorded, not_applicable.",
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateNotIn",
+        description="Rejects workflows in any listed absence state.",
+    ),
+    provider_profile_blank: Optional[str] = Query(
+        None,
+        alias="providerProfileBlank",
+        description="true: any absence state; false: a recorded profile.",
+    ),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15413,6 +15751,33 @@ async def get_execution_metrics(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # MoonLadderStudios/MoonMind#4640: recorded Provider Profile filters, read
+    # by the shared query builder so list, metrics, and facets agree.
+    provider_profile_in: Optional[str] = Query(
+        None,
+        alias="providerProfileIn",
+        description="Recorded stable Provider Profile IDs; matches any recorded member.",
+    ),
+    provider_profile_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileNotIn",
+        description="Rejects workflows recording any listed Provider Profile ID.",
+    ),
+    provider_profile_state_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateIn",
+        description="Absence states: pending, not_recorded, not_applicable.",
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateNotIn",
+        description="Rejects workflows in any listed absence state.",
+    ),
+    provider_profile_blank: Optional[str] = Query(
+        None,
+        alias="providerProfileBlank",
+        description="true: any absence state; false: a recorded profile.",
+    ),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15645,6 +16010,7 @@ async def list_execution_facets(
         "targetSkill",
         "repository",
         "integration",
+        "providerProfile",
     ] = Query(..., alias="facet"),
     workflow_type: Optional[str] = Query(None, alias="workflowType"),
     owner_type: Optional[str] = Query(None, alias="ownerType"),
@@ -15663,6 +16029,33 @@ async def list_execution_facets(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # MoonLadderStudios/MoonMind#4640: recorded Provider Profile filters, read
+    # by the shared query builder so list, metrics, and facets agree.
+    provider_profile_in: Optional[str] = Query(
+        None,
+        alias="providerProfileIn",
+        description="Recorded stable Provider Profile IDs; matches any recorded member.",
+    ),
+    provider_profile_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileNotIn",
+        description="Rejects workflows recording any listed Provider Profile ID.",
+    ),
+    provider_profile_state_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateIn",
+        description="Absence states: pending, not_recorded, not_applicable.",
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None,
+        alias="providerProfileStateNotIn",
+        description="Rejects workflows in any listed absence state.",
+    ),
+    provider_profile_blank: Optional[str] = Query(
+        None,
+        alias="providerProfileBlank",
+        description="true: any absence state; false: a recorded profile.",
+    ),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15765,6 +16158,15 @@ async def list_execution_facets(
             usable_search_attributes=usable_search_attributes,
         )
         client = temporal_client
+
+        if facet == "providerProfile":
+            return await _provider_profile_facet_response(
+                client=client,
+                base_query=base_query,
+                search_value=search_value,
+                page_size=page_size,
+                next_page_token=next_page_token,
+            )
 
         if facet == "status":
             matching_values = [

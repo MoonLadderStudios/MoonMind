@@ -80,6 +80,21 @@ def test_build_typed_search_attributes_encodes_target_facets_as_keyword_lists() 
     ) == ["pr-resolver"]
 
 
+def test_build_typed_search_attributes_encodes_provider_profile_as_text() -> None:
+    typed_search_attributes = _build_typed_search_attributes(
+        {"mm_provider_profile": ["ppstaterecorded ppid61"]}
+    )
+
+    assert typed_search_attributes is not None
+    assert typed_search_attributes.get(
+        SearchAttributeKey.for_text("mm_provider_profile")
+    ) == "ppstaterecorded ppid61"
+    assert (
+        typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_provider_profile"))
+        is None
+    )
+
+
 def test_build_typed_search_attributes_encodes_single_title_token_as_keyword_list() -> None:
     typed_search_attributes = _build_typed_search_attributes({"mm_title": ["run"]})
 
