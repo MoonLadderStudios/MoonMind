@@ -23,6 +23,7 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": "KeywordList",
     "mm_target_skill": "KeywordList",
     "mm_title": "KeywordList",
+    "mm_provider_profile": "Text",
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
     "mm_dependency_count": "Int",
@@ -41,6 +42,7 @@ LEGACY_SEARCH_ATTRIBUTES = {
         and key != "mm_has_dependencies"
         and key != "mm_started_at"
         and key != "mm_title"
+        and key != "mm_provider_profile"
         and key
         not in {
             "AgentRunId",

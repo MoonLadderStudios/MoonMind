@@ -1,7 +1,7 @@
 # Harness, Provider Profile, and Backend Selection
 
 **Status:** Accepted
-**Implementation and deployment:** Tracked separately; acceptance of this design does not certify shipped behavior.
+**Implementation and deployment:** The Workflows list Provider Profile column, filters, and facets are implemented (MoonLadderStudios/MoonMind#4640; see [Workflows List §7.3](WorkflowsListPage.md#73-implemented-projection-and-coverage)). Other surfaces are tracked separately; acceptance of this design does not certify them.
 **Document Class:** System / Feature Design View
 **Owners:** MoonMind Product and Platform
 **Updated:** 2026-10-01

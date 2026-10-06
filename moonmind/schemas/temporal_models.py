@@ -4250,6 +4250,35 @@ class ExecutionModel(BaseModel):
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
 
 
+class ExecutionProviderProfileRefModel(BaseModel):
+    """One recorded Provider Profile association in a list row."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    id: str = Field(..., alias="id")
+    label: str | None = Field(None, alias="label")
+    harness: str | None = Field(None, alias="harness")
+
+
+class ExecutionProviderProfileSummaryModel(BaseModel):
+    """Bounded recorded Provider Profile selection for one list row.
+
+    MoonLadderStudios/MoonMind#4640: this is the workflow's recorded selection,
+    not a live current-agent indicator. ``profiles`` is bounded; ``profileCount``
+    keeps the total number of recorded associations visible.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    selection_state: Literal[
+        "recorded", "pending", "not_recorded", "not_applicable"
+    ] = Field(..., alias="selectionState")
+    profiles: list[ExecutionProviderProfileRefModel] = Field(
+        default_factory=list, alias="profiles"
+    )
+    profile_count: int = Field(0, alias="profileCount", ge=0)
+
+
 class ExecutionListItemModel(BaseModel):
     """Compact execution row returned by list APIs.
 
@@ -4304,6 +4333,9 @@ class ExecutionListItemModel(BaseModel):
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     repository: Optional[str] = Field(None, alias="repository")
+    provider_profile: ExecutionProviderProfileSummaryModel | None = Field(
+        None, alias="providerProfile"
+    )
     progress: ExecutionProgressModel | None = Field(None, alias="progress")
     scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")
@@ -4450,9 +4482,18 @@ class ExecutionFacetResponse(BaseModel):
         "targetSkill",
         "repository",
         "integration",
+        "providerProfile",
     ] = Field(..., alias="facet")
     items: list[ExecutionFacetItemModel] = Field(default_factory=list, alias="items")
+    # Provider Profile only: typed absence states (pending, not_recorded,
+    # not_applicable), always all three including zero counts.
+    state_items: list[ExecutionFacetItemModel] | None = Field(
+        None, alias="stateItems"
+    )
     blank_count: int | None = Field(None, alias="blankCount")
+    # Provider Profile only: workflows without recorded-selection projection
+    # coverage. They are unavailable information, never an absence state.
+    unavailable_count: int | None = Field(None, alias="unavailableCount")
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(
         "exact", alias="countMode"
     )

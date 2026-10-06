@@ -2771,8 +2771,8 @@ tbody tr:hover {
   width: 18%;
 }
 
-.queue-table-column-runtime {
-  width: 10%;
+.queue-table-column-provider-profile {
+  width: 12%;
 }
 
 .queue-table-column-repository {
@@ -3002,6 +3002,19 @@ tbody tr:hover {
 
 .queue-table-cell-progress .workflow-list-progress {
   word-break: break-word;
+}
+
+/* MoonLadderStudios/MoonMind#4640: recorded Provider Profile with optional
+ * secondary Harness. Long names wrap inside the compact cell and mobile card. */
+.workflow-list-provider-profile {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-list-provider-profile-secondary {
+  color: rgb(var(--mm-muted));
+  line-height: 1.25;
 }
 
 .data-table-slab {

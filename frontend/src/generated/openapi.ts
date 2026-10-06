@@ -8212,11 +8212,15 @@ export interface components {
              * Facet
              * @enum {string}
              */
-            facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+            facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration" | "providerProfile";
             /** Items */
             items?: components["schemas"]["ExecutionFacetItemModel"][];
+            /** Stateitems */
+            stateItems?: components["schemas"]["ExecutionFacetItemModel"][] | null;
             /** Blankcount */
             blankCount?: number | null;
+            /** Unavailablecount */
+            unavailableCount?: number | null;
             /**
              * Countmode
              * @default exact
@@ -8331,6 +8335,7 @@ export interface components {
             taskSkills?: string[] | null;
             /** Repository */
             repository?: string | null;
+            providerProfile?: components["schemas"]["ExecutionProviderProfileSummaryModel"] | null;
             progress?: components["schemas"]["ExecutionProgressModel"] | null;
             /** Scheduledfor */
             scheduledFor?: string | null;
@@ -9033,6 +9038,40 @@ export interface components {
             remediation?: string | null;
             /** Cause */
             cause?: string | null;
+        };
+        /**
+         * ExecutionProviderProfileRefModel
+         * @description One recorded Provider Profile association in a list row.
+         */
+        ExecutionProviderProfileRefModel: {
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /** Harness */
+            harness?: string | null;
+        };
+        /**
+         * ExecutionProviderProfileSummaryModel
+         * @description Bounded recorded Provider Profile selection for one list row.
+         *
+         *     MoonLadderStudios/MoonMind#4640: this is the workflow's recorded selection,
+         *     not a live current-agent indicator. ``profiles`` is bounded; ``profileCount``
+         *     keeps the total number of recorded associations visible.
+         */
+        ExecutionProviderProfileSummaryModel: {
+            /**
+             * Selectionstate
+             * @enum {string}
+             */
+            selectionState: "recorded" | "pending" | "not_recorded" | "not_applicable";
+            /** Profiles */
+            profiles?: components["schemas"]["ExecutionProviderProfileRefModel"][];
+            /**
+             * Profilecount
+             * @default 0
+             */
+            profileCount: number;
         };
         /**
          * ExecutionRecurrenceProvenanceModel
@@ -17791,6 +17830,16 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Recorded stable Provider Profile IDs; matches any recorded member. */
+                providerProfileIn?: string | null;
+                /** @description Rejects workflows recording any listed Provider Profile ID. */
+                providerProfileNotIn?: string | null;
+                /** @description Absence states: pending, not_recorded, not_applicable. */
+                providerProfileStateIn?: string | null;
+                /** @description Rejects workflows in any listed absence state. */
+                providerProfileStateNotIn?: string | null;
+                /** @description true: any absence state; false: a recorded profile. */
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
@@ -17895,6 +17944,16 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Recorded stable Provider Profile IDs; matches any recorded member. */
+                providerProfileIn?: string | null;
+                /** @description Rejects workflows recording any listed Provider Profile ID. */
+                providerProfileNotIn?: string | null;
+                /** @description Absence states: pending, not_recorded, not_applicable. */
+                providerProfileStateIn?: string | null;
+                /** @description Rejects workflows in any listed absence state. */
+                providerProfileStateNotIn?: string | null;
+                /** @description true: any absence state; false: a recorded profile. */
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
@@ -17938,7 +17997,7 @@ export interface operations {
     list_execution_facets_api_executions_facets_get: {
         parameters: {
             query: {
-                facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+                facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration" | "providerProfile";
                 workflowType?: string | null;
                 ownerType?: string | null;
                 state?: string | null;
@@ -17956,6 +18015,16 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Recorded stable Provider Profile IDs; matches any recorded member. */
+                providerProfileIn?: string | null;
+                /** @description Rejects workflows recording any listed Provider Profile ID. */
+                providerProfileNotIn?: string | null;
+                /** @description Absence states: pending, not_recorded, not_applicable. */
+                providerProfileStateIn?: string | null;
+                /** @description Rejects workflows in any listed absence state. */
+                providerProfileStateNotIn?: string | null;
+                /** @description true: any absence state; false: a recorded profile. */
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;

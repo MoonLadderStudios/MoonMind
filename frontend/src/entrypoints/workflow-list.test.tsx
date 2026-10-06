@@ -52,6 +52,32 @@ describe('Workflows Entrypoint', () => {
   const openFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
   const applyFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
+  const profileRow = (workflowId: string, title: string) => ({
+    taskId: workflowId,
+    workflowId,
+    source: 'temporal',
+    title,
+    status: 'completed',
+    state: 'completed',
+    rawState: 'completed',
+    createdAt: '2026-03-28T00:00:00Z',
+  });
+
+  // Serves the list rows for /api/executions and an optional Provider Profile
+  // facet; other facets (or `'error'`) fail like an unavailable facet service.
+  const mockListAndFacets = (items: unknown[], profileFacet?: unknown) => {
+    fetchSpy.mockImplementation(async (url: unknown) => {
+      const text = String(url);
+      if (text.startsWith('/api/executions/facets?')) {
+        if (profileFacet && profileFacet !== 'error' && text.includes('facet=providerProfile')) {
+          return { ok: true, json: async () => profileFacet } as Response;
+        }
+        return { ok: false, statusText: 'Service Unavailable', json: async () => ({}) } as Response;
+      }
+      return { ok: true, json: async () => ({ items }) } as Response;
+    });
+  };
+
   it('shows the loading state while the workflow list request is pending', () => {
     fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
 
@@ -142,7 +168,7 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('table')).toBeTruthy();
-    for (const header of ['Workflow', 'Status', 'Progress', 'Repo', 'Runtime', 'Updated']) {
+    for (const header of ['Workflow', 'Status', 'Progress', 'Repo', 'Provider Profile', 'Updated']) {
       expect(screen.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeTruthy();
     }
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
@@ -277,17 +303,17 @@ describe('Workflows Entrypoint', () => {
     });
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
-    const runtimeHeaderButton = screen.getByRole('button', {
-      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
+    const profileHeaderButton = screen.getByRole('button', {
+      name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i,
     });
-    expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('none');
+    expect(profileHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('none');
 
-    fireEvent.click(runtimeHeaderButton);
+    fireEvent.click(profileHeaderButton);
 
     await waitFor(() => {
-      expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
-      expect(runtimeHeaderButton.getAttribute('aria-label')).toBe(
-        'Runtime. Sorted ascending, current page only. Activate to sort descending.',
+      expect(profileHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+      expect(profileHeaderButton.getAttribute('aria-label')).toBe(
+        'Provider Profile. Sorted ascending, current page only. Activate to sort descending.',
       );
     });
   });
@@ -300,16 +326,16 @@ describe('Workflows Entrypoint', () => {
     // Visible explanatory text near pagination.
     expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
 
-    const runtimeHeaderButton = screen.getByRole('button', {
-      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
+    const profileHeaderButton = screen.getByRole('button', {
+      name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i,
     });
     // Tooltip text reinforces the current-page-only scope.
-    expect(runtimeHeaderButton.getAttribute('title')).toBe('Sorting applies to the current page only.');
+    expect(profileHeaderButton.getAttribute('title')).toBe('Sorting applies to the current page only.');
 
-    fireEvent.click(runtimeHeaderButton);
+    fireEvent.click(profileHeaderButton);
 
     await waitFor(() => {
-      expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+      expect(profileHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
     });
 
     // URL state must not imply a global server-side sort.
@@ -995,9 +1021,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), {
-      target: { value: 'jules' },
-    });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Pending selection' }));
     fireEvent.change(screen.getByLabelText('Title filter value'), {
       target: { value: 'Example' },
     });
@@ -1005,7 +1029,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=jules&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&providerProfileStateIn=pending&titleContains=Example',
       );
     });
   });
@@ -1036,7 +1060,7 @@ describe('Workflows Entrypoint', () => {
     expect(window.location.search).toBe('?updatedFrom=2026-04-01&updatedTo=2026-04-30&limit=50');
   });
 
-  it('applies runtime and skill exclude modes from the drawer', async () => {
+  it('applies Provider Profile and skill exclude modes from the drawer', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1048,8 +1072,12 @@ describe('Workflows Entrypoint', () => {
             status: 'completed',
             state: 'completed',
             rawState: 'completed',
-            targetRuntime: 'codex_cli',
             targetSkill: 'pr-resolver',
+            providerProfile: {
+              selectionState: 'recorded',
+              profiles: [{ id: 'codex-work', label: 'Work', harness: 'codex_cli' }],
+              profileCount: 1,
+            },
             createdAt: '2026-03-28T00:00:00Z',
           },
         ],
@@ -1060,14 +1088,14 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     openFilterDrawer();
-    fireEvent.change(screen.getByLabelText('Runtime filter mode'), { target: { value: 'exclude' } });
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText('Provider Profile filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Provider Profile filter value'), { target: { value: 'codex-work' } });
     applyFilterDrawer();
 
     await waitFor(() => {
-      expect(lastExecutionListUrl()).toContain('targetRuntimeNotIn=codex_cli');
+      expect(lastExecutionListUrl()).toContain('providerProfileNotIn=codex-work');
     });
-    expect(screen.getByRole('button', { name: 'Runtime filter: not Codex CLI' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Provider Profile filter: not Work' })).toBeTruthy();
     await screen.findAllByText('Example task');
 
     openFilterDrawer();
@@ -1077,30 +1105,59 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       const url = lastExecutionListUrl();
-      expect(url).toContain('targetRuntimeNotIn=codex_cli');
+      expect(url).toContain('providerProfileNotIn=codex-work');
       expect(url).toContain('targetSkillNotIn=pr-resolver');
     });
     expect(screen.getByRole('button', { name: 'Skill filter: not pr-resolver' })).toBeTruthy();
   }, 10_000);
 
-  it('offers every supported runtime identifier in the runtime filter', async () => {
+  it('offers recorded Provider Profile IDs from server facets instead of a hardcoded runtime list', async () => {
+    mockListAndFacets(
+      [{ ...profileRow('task-123', 'Example task'), providerProfile: null }],
+      {
+        facet: 'providerProfile',
+        items: [
+          { value: 'profile-a', label: 'Work', count: 3 },
+          { value: 'profile-b', label: 'Work', count: 1 },
+          { value: 'retired-profile', label: 'retired-profile', count: 2 },
+        ],
+        stateItems: [
+          { value: 'pending', label: 'Pending selection', count: 2 },
+          { value: 'not_recorded', label: 'Not recorded', count: 0 },
+          { value: 'not_applicable', label: 'Not applicable', count: 1 },
+        ],
+        blankCount: 3,
+        unavailableCount: 4,
+        countMode: 'exact',
+        truncated: false,
+        source: 'authoritative',
+      },
+    );
+
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     openFilterDrawer();
 
-    const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
-    expect(runtimeFilter.multiple).toBe(false);
-    // Skip the leading placeholder option that prompts the user to add a value.
-    expect(
-      Array.from(runtimeFilter.options)
-        .map((option) => option.value)
-        .filter((value) => value !== ''),
-    ).toEqual([
-      'codex_cli',
-      'claude_code',
-      'jules',
-    ]);
+    const profileFilter = screen.getByLabelText('Provider Profile filter value') as HTMLSelectElement;
+    await waitFor(() => {
+      // Equal labels stay distinct stable IDs with compact disambiguation, and
+      // profiles that are no longer launchable remain selectable.
+      expect(
+        Array.from(profileFilter.options)
+          .filter((option) => option.value !== '')
+          .map((option) => [option.value, option.textContent]),
+      ).toEqual([
+        ['profile-a', 'Work · profile-a'],
+        ['profile-b', 'Work · profile-b'],
+        ['retired-profile', 'retired-profile'],
+      ]);
+    });
+    expect(screen.queryByRole('option', { name: 'Codex CLI' })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'Pending selection (2)' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Not recorded (0)' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Not applicable (1)' })).toBeTruthy();
+    expect(screen.getByText(/4 older workflows predate recorded Provider\s+Profile data/)).toBeTruthy();
   });
 
   it('keeps workflow-kind browsing controls out of the normal workflow list', async () => {
@@ -1136,7 +1193,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByText('manifest')).toBeNull();
   });
 
-  it('loads repeated canonical runtime params as raw URL values with product-label chips', async () => {
+  it('keeps repeated legacy runtime params as a labeled legacy runtime constraint', async () => {
     window.history.pushState(
       {},
       'Repeated canonical filters',
@@ -1151,7 +1208,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex_cli%2Cclaude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI +1' })).toBeTruthy();
   });
 
   it('canonicalizes loaded Claude Code runtime filter labels before fetching', async () => {
@@ -1169,7 +1226,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=claude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=claude_code&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Claude Code' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Claude Code' })).toBeTruthy();
   });
 
   it('preserves raw stored runtime identifiers from loaded include filters', async () => {
@@ -1187,7 +1244,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex%2Cclaude&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI +1' })).toBeTruthy();
   });
 
   it('preserves raw stored runtime identifiers from loaded exclude filters', async () => {
@@ -1205,7 +1262,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeNotIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeNotIn=codex%2Cclaude&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: not (Codex CLI +1)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: not (Codex CLI +1)' })).toBeTruthy();
   });
 
   it('shows a clear validation error for contradictory canonical URL filters', async () => {
@@ -2269,21 +2326,21 @@ describe('Workflows Entrypoint', () => {
     applyFilterDrawer();
     await screen.findAllByText('Example task');
     openFilterDrawer();
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Pending selection' }));
     applyFilterDrawer();
 
     await waitFor(() => {
       const activeFilterText = document.querySelector('.workflow-list-filter-chips')?.textContent || '';
       expect(activeFilterText).toContain('completed');
       expect(activeFilterText).toContain('owner/repo');
-      expect(activeFilterText).toContain('Codex CLI');
+      expect(activeFilterText).toContain('Pending selection');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Repo filter: owner/repo' }));
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&providerProfileStateIn=pending',
       );
     });
     // The drawer opens focused on the chip's field.
@@ -2295,7 +2352,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo&providerProfileStateIn=pending',
       );
       expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
@@ -2491,29 +2548,263 @@ describe('Workflows Entrypoint', () => {
     expect((await screen.findAllByText('Blocked by 2 prerequisites'))[0]).toBeTruthy();
   });
 
-  it('renders human-readable runtime labels in list rows', async () => {
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        items: [
-          {
-            taskId: 'task-321',
-            source: 'temporal',
-            targetRuntime: 'codex_cli',
-            title: 'Readable runtime task',
-            status: 'running',
-            state: 'executing',
-            rawState: 'executing',
-            createdAt: '2026-03-28T00:00:00Z',
-          },
-        ],
-      }),
-    } as Response);
+  it('renders the recorded Provider Profile with Harness as secondary text on desktop and mobile', async () => {
+    mockListAndFacets([
+      {
+        ...profileRow('task-321', 'Readable profile task'),
+        targetRuntime: 'omnigent',
+        providerProfile: {
+          selectionState: 'recorded',
+          profiles: [{ id: 'codex-work', label: 'OpenAI · Work', harness: 'codex_cli' }],
+          profileCount: 1,
+        },
+      },
+    ]);
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
-    expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
+    expect((await screen.findAllByText('Readable profile task'))[0]).toBeTruthy();
+    const tableCell = document.querySelector('table .workflow-list-provider-profile');
+    expect(tableCell?.querySelector('.workflow-list-provider-profile-name')?.textContent).toBe('OpenAI · Work');
+    expect(tableCell?.querySelector('.workflow-list-provider-profile-secondary')?.textContent).toBe('Codex CLI');
+    expect(tableCell?.getAttribute('title')).toBe('codex-work');
+    const card = document.querySelector('.queue-card');
+    const cardTerms = Array.from(card?.querySelectorAll('dt') || []).map((term) => term.textContent);
+    expect(cardTerms).toContain('Provider Profile');
+    expect(cardTerms).not.toContain('Runtime');
+    expect(card?.textContent).toContain('OpenAI · Work');
+    // One compact replacement column: no Runtime, Harness, Backend, or Host columns.
+    const headers = Array.from(document.querySelectorAll('table thead th')).map((th) => th.textContent || '');
+    expect(headers.some((text) => /Runtime|Harness|Backend|Host|Container/.test(text))).toBe(false);
+    expect(screen.queryByText('Omnigent')).toBeNull();
+    // The summary comes from the list payload: no per-row detail, Provider
+    // Profile, step-ledger, or history requests.
+    expect(
+      fetchSpy.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => !url.startsWith('/api/executions?') && !url.startsWith('/api/executions/facets?')),
+    ).toEqual([]);
+  });
+
+  it('renders pending, not recorded, not applicable, multiple, and unavailable Provider Profile states', async () => {
+    mockListAndFacets([
+      { ...profileRow('wf-pending', 'Pending task'), providerProfile: { selectionState: 'pending', profiles: [] } },
+      {
+        ...profileRow('wf-history', 'Historical task'),
+        providerProfile: { selectionState: 'not_recorded', profiles: [] },
+      },
+      {
+        ...profileRow('wf-tool', 'Tool task'),
+        providerProfile: { selectionState: 'not_applicable', profiles: [] },
+      },
+      {
+        ...profileRow('wf-multi', 'Multi task'),
+        providerProfile: {
+          selectionState: 'recorded',
+          profiles: [
+            { id: 'p-1', label: 'Primary' },
+            { id: 'p-2', label: 'Secondary' },
+            { id: 'p-3', label: 'Third' },
+          ],
+          profileCount: 7,
+        },
+      },
+      // An execution-configuration profileId is not a Provider Profile and is
+      // never shown in this column.
+      { ...profileRow('wf-config', 'Config task'), profileId: 'exec-config-1', providerProfile: null },
+    ]);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Pending task');
+    const cellText = (title: string) =>
+      screen
+        .getAllByRole('row')
+        .find((row) => row.textContent?.includes(title))
+        ?.querySelector('.workflow-list-provider-profile')?.textContent;
+    expect(cellText('Pending task')).toBe('Pending selection');
+    expect(cellText('Historical task')).toBe('Not recorded');
+    expect(cellText('Tool task')).toBe('Not applicable');
+    expect(cellText('Multi task')).toBe('Multiple profilesPrimary, Secondary +5');
+    expect(cellText('Config task')).toBe('Unavailable');
+    expect(document.body.textContent).not.toContain('exec-config-1');
+  });
+
+  it('disambiguates equal recorded names and falls back to the stable ID without a recorded name', async () => {
+    mockListAndFacets([
+      {
+        ...profileRow('wf-a', 'Account A task'),
+        providerProfile: {
+          selectionState: 'recorded',
+          profiles: [{ id: 'profile-a', label: 'Work' }],
+          profileCount: 1,
+        },
+      },
+      {
+        ...profileRow('wf-b', 'Account B task'),
+        providerProfile: {
+          selectionState: 'recorded',
+          profiles: [{ id: 'profile-b-with-a-long-identifier', label: 'Work' }],
+          profileCount: 1,
+        },
+      },
+      {
+        ...profileRow('wf-c', 'Old record task'),
+        providerProfile: { selectionState: 'recorded', profiles: [{ id: 'deleted-profile' }], profileCount: 1 },
+      },
+    ]);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Account A task');
+    const names = Array.from(
+      document.querySelectorAll('table .workflow-list-provider-profile-name'),
+    ).map((element) => element.textContent);
+    expect(names.sort()).toEqual(['Work · profile-a', 'Work · profile-b-…', 'deleted-profile'].sort());
+  });
+
+  it('sorts the current page by recorded Provider Profile label with a stable ID tie-breaker', async () => {
+    mockListAndFacets([
+      {
+        ...profileRow('wf-beta', 'Beta task'),
+        providerProfile: { selectionState: 'recorded', profiles: [{ id: 'b', label: 'Beta' }], profileCount: 1 },
+      },
+      {
+        ...profileRow('wf-alpha-2', 'Alpha two task'),
+        providerProfile: { selectionState: 'recorded', profiles: [{ id: 'a2', label: 'Alpha' }], profileCount: 1 },
+      },
+      {
+        ...profileRow('wf-alpha-1', 'Alpha one task'),
+        providerProfile: { selectionState: 'recorded', profiles: [{ id: 'a1', label: 'Alpha' }], profileCount: 1 },
+      },
+    ]);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Beta task');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i }),
+    );
+
+    await waitFor(() => {
+      const titles = Array.from(document.querySelectorAll('table a.workflow-list-row-title')).map(
+        (link) => link.textContent,
+      );
+      expect(titles).toEqual(['Alpha one task', 'Alpha two task', 'Beta task']);
+    });
+    expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
+    expect(window.location.search).not.toContain('sort=');
+    expect(executionListCalls().every(([url]) => !String(url).includes('sort='))).toBe(true);
+  });
+
+  it('round-trips typed Provider Profile ID and state filters through the URL, chips, and detail links', async () => {
+    window.history.pushState(
+      {},
+      'Profile filters',
+      '/workflows?providerProfileIn=profile-a&providerProfileStateIn=pending&stateIn=failed&limit=50',
+    );
+    mockListAndFacets([
+      {
+        ...profileRow('task-123', 'Example task'),
+        providerProfile: {
+          selectionState: 'recorded',
+          profiles: [{ id: 'profile-a', label: 'OpenAI · Primary' }],
+          profileCount: 1,
+        },
+      },
+    ]);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(lastExecutionListUrl()).toBe(
+      '/api/executions?source=temporal&pageSize=50&stateIn=failed&providerProfileIn=profile-a&providerProfileStateIn=pending',
+    );
+    expect(window.location.search).toBe(
+      '?stateIn=failed&providerProfileIn=profile-a&providerProfileStateIn=pending&limit=50',
+    );
+    expect(
+      await screen.findByRole('button', { name: 'Provider Profile filter: OpenAI · Primary +1' }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Example task' })[0]?.getAttribute('href')).toBe(
+      '/workflows/task-123?stateIn=failed&providerProfileIn=profile-a&providerProfileStateIn=pending&limit=50&source=temporal',
+    );
+  });
+
+  it('keeps legacy runtime links as a labeled runtime constraint that is never relabeled as a profile filter', async () => {
+    window.history.pushState({}, 'Legacy runtime', '/workflows?targetRuntimeIn=codex_cli&limit=50');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex_cli');
+    expect(lastExecutionListUrl()).not.toContain('providerProfile');
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI' })).toBeTruthy();
+
+    openFilterDrawer();
+    expect(screen.getByText(/legacy runtime constraint \(Codex CLI\)/)).toBeTruthy();
+    expect((screen.getByLabelText('Provider Profile filter value') as HTMLSelectElement).value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove legacy runtime filter' }));
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
+    });
+  });
+
+  it('preserves selected Provider Profile IDs and states when the facet request fails', async () => {
+    window.history.pushState(
+      {},
+      'Selected profile',
+      '/workflows?providerProfileIn=profile-z&providerProfileStateIn=not_recorded&limit=50',
+    );
+    mockListAndFacets([profileRow('task-123', 'Example task')], 'error');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    openFilterDrawer();
+
+    expect(
+      await screen.findByText('Facet values unavailable. Showing current page values only.', {
+        selector: '[data-filter-section="providerProfile"] p',
+      }),
+    ).toBeTruthy();
+    const selected = screen.getByRole('list', { name: 'Selected Provider Profile filters' });
+    expect(within(selected).getByText('profile-z')).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Not recorded' }) as HTMLInputElement).checked).toBe(true);
+    applyFilterDrawer();
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&providerProfileIn=profile-z&providerProfileStateIn=not_recorded',
+      );
+    });
+  });
+
+  it('rejects unknown Provider Profile state tokens instead of broadening results', async () => {
+    const baselineCalls = executionListCalls().length;
+    window.history.pushState({}, 'Bad state', '/workflows?providerProfileStateIn=unknown');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Unknown Provider Profile state: unknown.')).toBeTruthy();
+    expect(executionListCalls().length).toBe(baselineCalls);
+  });
+
+  it('inherits a saved Runtime column preference for the Provider Profile column', async () => {
+    window.localStorage.setItem(
+      DASHBOARD_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: DASHBOARD_PREFERENCES_VERSION,
+        preferences: { workflowListColumnVisibility: { targetRuntime: false } },
+      }),
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.queryByRole('columnheader', { name: /Provider Profile/i })).toBeNull();
+    expect(screen.getByRole('columnheader', { name: /Repo/i })).toBeTruthy();
   });
 
   it('renders the desktop table with constrained columns for long workflow IDs', async () => {

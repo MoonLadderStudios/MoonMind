@@ -66,15 +66,15 @@ const TEMPORAL_STATUSES = [
   'failed',
   'canceled',
 ] as const;
-const RUNTIME_FILTER_OPTIONS = [
-  'codex_cli',
-  'claude_code',
-  'jules',
-] as const;
-const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
-  codex_cli: 'codex_cli',
-  claude_code: 'claude_code',
-  jules: 'jules',
+// MoonLadderStudios/MoonMind#4640: the Provider Profile column summarizes the
+// workflow's recorded selection. Absence states are typed separately from
+// stable profile IDs in filters, chips, and URLs.
+const PROVIDER_PROFILE_STATES = ['pending', 'not_recorded', 'not_applicable'] as const;
+type ProviderProfileState = (typeof PROVIDER_PROFILE_STATES)[number];
+const PROVIDER_PROFILE_STATE_LABELS: Record<ProviderProfileState, string> = {
+  pending: 'Pending selection',
+  not_recorded: 'Not recorded',
+  not_applicable: 'Not applicable',
 };
 const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
@@ -95,7 +95,8 @@ type FilterField =
   | 'status'
   | 'progress'
   | 'repository'
-  | 'targetRuntime'
+  | 'providerProfile'
+  | 'legacyRuntime'
   | 'targetSkill'
   | 'title'
   | 'scheduledFor'
@@ -124,7 +125,12 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
   { field: 'progress', label: 'Progress', sortable: true, colClassName: 'queue-table-column-progress' },
   { field: 'repository', label: 'Repo', sortable: true, colClassName: 'queue-table-column-repository' },
-  { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
+  {
+    field: 'providerProfile',
+    label: 'Provider Profile',
+    sortable: true,
+    colClassName: 'queue-table-column-provider-profile',
+  },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
 const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
@@ -132,7 +138,7 @@ const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
   status: 'status',
   progress: 'progress',
   repository: 'repository',
-  targetRuntime: 'targetRuntime',
+  providerProfile: 'providerProfile',
   updatedAt: 'updatedAt',
 };
 
@@ -144,7 +150,8 @@ const FILTER_FIELDS = [
   ['status', 'Status'],
   ['progress', 'Progress'],
   ['repository', 'Repo'],
-  ['targetRuntime', 'Runtime'],
+  ['providerProfile', 'Provider Profile'],
+  ['legacyRuntime', 'Legacy runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
@@ -157,7 +164,8 @@ const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'status',
   'progress',
   'repository',
-  'targetRuntime',
+  'providerProfile',
+  'legacyRuntime',
   'targetSkill',
   'title',
   'updatedAt',
@@ -175,7 +183,8 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['status', 'Status'],
   ['progress', 'Progress'],
   ['repository', 'Repo'],
-  ['targetRuntime', 'Runtime'],
+  ['providerProfile', 'Provider Profile'],
+  ['legacyRuntime', 'Legacy runtime'],
   ['targetSkill', 'Skill'],
   ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
@@ -187,6 +196,10 @@ function isFilterField(field: string): field is FilterField {
 }
 type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
 type RepositoryFilter = ValueFilter & { exactText?: string };
+// Stable profile IDs in `values`, typed absence states in `states`. `blank`
+// is the aggregate shortcut (`providerProfileBlank`) and is never combined
+// with IDs or states.
+type ProviderProfileFilter = ValueFilter & { states: ProviderProfileState[] };
 type TextFilter = { contains?: string };
 type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
 type ProgressBucket = (typeof PROGRESS_BUCKET_OPTIONS)[number];
@@ -206,7 +219,12 @@ type ColumnFilters = {
   status: ValueFilter;
   progress: ProgressFilter;
   repository: RepositoryFilter;
-  targetRuntime: ValueFilter;
+  providerProfile: ProviderProfileFilter;
+  // Legacy runtime constraint from old links and saved views. It keeps its
+  // runtime meaning (`targetRuntimeIn`/`targetRuntimeNotIn`) and is never
+  // translated into Provider Profile IDs. Exit condition: remove when the
+  // executions API retires the `targetRuntime*` filters.
+  legacyRuntime: ValueFilter;
   targetSkill: ValueFilter;
   title: TextFilter;
   updatedAt: DateFilter;
@@ -223,8 +241,22 @@ const ExecutionRowSchema = z
     workflowType: z.string().optional(),
     repository: z.string().nullable().optional(),
     integration: z.string().nullable().optional(),
-    targetRuntime: z.string().nullable().optional(),
     targetSkill: z.string().nullable().optional(),
+    providerProfile: z
+      .object({
+        selectionState: z.enum(['recorded', ...PROVIDER_PROFILE_STATES]),
+        profiles: z.array(
+          z.object({
+            id: z.string(),
+            label: z.string().nullable().optional(),
+            harness: z.string().nullable().optional(),
+          }),
+        ),
+        profileCount: z.number().optional(),
+      })
+      .nullable()
+      .optional()
+      .catch(null),
     taskSkills: z.array(z.string()).nullable().optional(),
     title: z.string(),
     status: z.string(),
@@ -273,6 +305,106 @@ const ExecutionListResponseSchema = z.object({
 
 type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
 
+type RecordedProviderProfile = {
+  id: string;
+  label?: string | null | undefined;
+  harness?: string | null | undefined;
+};
+type ProviderProfileDisplay = {
+  primary: string;
+  secondary: string;
+  title: string;
+  sortKey: string;
+  tieBreaker: string;
+};
+
+function isProviderProfileState(value: string): value is ProviderProfileState {
+  return (PROVIDER_PROFILE_STATES as readonly string[]).includes(value);
+}
+
+function compactProfileId(id: string): string {
+  return id.length <= 12 ? id : `${id.slice(0, 10)}…`;
+}
+
+// Equal recorded names never collapse distinct accounts: a label shared by
+// more than one stable ID is disambiguated with a compact ID.
+function ambiguousProviderProfileLabels(profiles: Iterable<RecordedProviderProfile>): Set<string> {
+  const idsByLabel = new Map<string, Set<string>>();
+  for (const profile of profiles) {
+    const label = (profile.label || '').trim();
+    if (!label) continue;
+    const ids = idsByLabel.get(label) ?? new Set<string>();
+    ids.add(profile.id);
+    idsByLabel.set(label, ids);
+  }
+  return new Set(
+    Array.from(idsByLabel.entries())
+      .filter(([, ids]) => ids.size > 1)
+      .map(([label]) => label),
+  );
+}
+
+// Recorded friendly name, falling back to the stable ID. Old records that only
+// carry an ID show the ID rather than a guessed former name.
+function providerProfileName(profile: RecordedProviderProfile, ambiguousLabels: Set<string>): string {
+  const label = (profile.label || '').trim();
+  if (!label) return profile.id;
+  return ambiguousLabels.has(label) ? `${label} · ${compactProfileId(profile.id)}` : label;
+}
+
+function providerProfileDisplay(row: ExecutionRow, ambiguousLabels: Set<string>): ProviderProfileDisplay {
+  const summary = row.providerProfile;
+  if (!summary) {
+    return {
+      primary: 'Unavailable',
+      secondary: '',
+      title: 'Provider Profile information unavailable',
+      sortKey: 'unavailable',
+      tieBreaker: '',
+    };
+  }
+  if (summary.selectionState !== 'recorded' || summary.profiles.length === 0) {
+    const label =
+      summary.selectionState === 'recorded'
+        ? PROVIDER_PROFILE_STATE_LABELS.not_recorded
+        : PROVIDER_PROFILE_STATE_LABELS[summary.selectionState];
+    return { primary: label, secondary: '', title: label, sortKey: label.toLowerCase(), tieBreaker: '' };
+  }
+  const total = Math.max(summary.profileCount ?? 0, summary.profiles.length);
+  const ids = summary.profiles.map((profile) => profile.id);
+  const [profile] = summary.profiles;
+  if (total === 1 && profile) {
+    const name = providerProfileName(profile, ambiguousLabels);
+    return {
+      primary: name,
+      secondary: profile.harness ? formatRuntimeLabel(profile.harness) : '',
+      title: profile.id,
+      sortKey: name.toLowerCase(),
+      tieBreaker: profile.id,
+    };
+  }
+  const visible = summary.profiles.slice(0, 2).map((profile) => providerProfileName(profile, ambiguousLabels));
+  const hidden = total - visible.length;
+  return {
+    primary: 'Multiple profiles',
+    secondary: `${visible.join(', ')}${hidden > 0 ? ` +${hidden}` : ''}`,
+    title: `${ids.join(', ')}${total > ids.length ? ` +${total - ids.length}` : ''}`,
+    sortKey: 'multiple profiles',
+    tieBreaker: ids.join(','),
+  };
+}
+
+function ProviderProfileCell({ display }: { display: ProviderProfileDisplay }) {
+  return (
+    <span className="workflow-list-provider-profile" title={display.title}>
+      <span className="workflow-list-provider-profile-name">{display.primary}</span>
+      {display.secondary ? (
+        <span className="workflow-list-provider-profile-secondary small">{display.secondary}</span>
+      ) : null}
+    </span>
+  );
+}
+
 function normalizeProgressSignalValue(value: string): ProgressSignal | null {
   const normalized = value === 'running' ? 'executing' : value;
   return (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(normalized)
@@ -297,16 +429,18 @@ function emptyProgressFilter(): ProgressFilter {
   };
 }
 
+const ExecutionFacetItemSchema = z.object({
+  value: z.string(),
+  label: z.string(),
+  count: z.number(),
+});
+
 const ExecutionFacetResponseSchema = z.object({
-  facet: z.enum(['status', 'targetRuntime', 'targetSkill', 'repository', 'integration']),
-  items: z.array(
-    z.object({
-      value: z.string(),
-      label: z.string(),
-      count: z.number(),
-    }),
-  ),
+  facet: z.enum(['status', 'providerProfile', 'targetSkill', 'repository', 'integration']),
+  items: z.array(ExecutionFacetItemSchema),
+  stateItems: z.array(ExecutionFacetItemSchema).nullable().optional(),
   blankCount: z.number().nullable().optional(),
+  unavailableCount: z.number().nullable().optional(),
   countMode: z.string().optional(),
   truncated: z.boolean().optional(),
   nextPageToken: z.string().nullable().optional(),
@@ -566,6 +700,8 @@ function displayTemporalCount(count: number | null | undefined, countMode: strin
   return countMode && countMode !== 'exact' ? `${count} (${countMode})` : String(count);
 }
 
+const NO_AMBIGUOUS_LABELS = new Set<string>();
+
 function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'): ExecutionRow[] {
   const dir = direction === 'asc' ? 1 : -1;
   const copy = rows.slice();
@@ -593,6 +729,14 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
       const leftStatus = (left.rawState || left.state || '').toLowerCase();
       const rightStatus = (right.rawState || right.state || '').toLowerCase();
       const compare = leftStatus.localeCompare(rightStatus);
+      if (compare !== 0) return dir * compare;
+    } else if (field === 'providerProfile') {
+      // Recorded display text with a deterministic stable-ID tie-breaker.
+      const leftDisplay = providerProfileDisplay(left, NO_AMBIGUOUS_LABELS);
+      const rightDisplay = providerProfileDisplay(right, NO_AMBIGUOUS_LABELS);
+      const compare =
+        leftDisplay.sortKey.localeCompare(rightDisplay.sortKey) ||
+        leftDisplay.tieBreaker.localeCompare(rightDisplay.tieBreaker);
       if (compare !== 0) return dir * compare;
     } else if (field === 'progress') {
       const leftPct = progressPct(left);
@@ -675,13 +819,18 @@ function emptyValueFilter(): ValueFilter {
   return { mode: 'include', values: [], blank: '' };
 }
 
+function emptyProviderProfileFilter(): ProviderProfileFilter {
+  return { ...emptyValueFilter(), states: [] };
+}
+
 function emptyFilters(): ColumnFilters {
   return {
     workflowId: {},
     status: emptyValueFilter(),
     progress: emptyProgressFilter(),
     repository: { ...emptyValueFilter(), exactText: '' },
-    targetRuntime: emptyValueFilter(),
+    providerProfile: emptyProviderProfileFilter(),
+    legacyRuntime: emptyValueFilter(),
     targetSkill: emptyValueFilter(),
     title: {},
     updatedAt: {},
@@ -698,8 +847,7 @@ function uniqueValues(values: Array<string | null | undefined>): string[] {
 function normalizeRuntimeFilterValue(value: string | null | undefined): string {
   const raw = (value || '').trim();
   if (!raw) return '';
-  const key = raw.toLowerCase().replace(/[\s-]+/g, '_');
-  return RUNTIME_FILTER_VALUE_ALIASES[key] || key;
+  return raw.toLowerCase().replace(/[\s-]+/g, '_');
 }
 
 function uniqueRuntimeValues(values: Array<string | null | undefined>): string[] {
@@ -742,6 +890,27 @@ function validateCanonicalFilterPair(
   return null;
 }
 
+function validateProviderProfileParams(params: URLSearchParams): string[] {
+  const includes = [...splitParam(params, 'providerProfileIn'), ...splitParam(params, 'providerProfileStateIn')];
+  const excludes = [...splitParam(params, 'providerProfileNotIn'), ...splitParam(params, 'providerProfileStateNotIn')];
+  const states = [...splitParam(params, 'providerProfileStateIn'), ...splitParam(params, 'providerProfileStateNotIn')];
+  const messages: string[] = [];
+  const unknown = states.filter((state) => !isProviderProfileState(state));
+  if (unknown.length > 0) {
+    messages.push(`Unknown Provider Profile state: ${unknown.join(', ')}.`);
+  }
+  if (includes.length > 0 && excludes.length > 0) {
+    messages.push('Cannot combine Provider Profile include and exclude filters.');
+  }
+  const blank = params.get('providerProfileBlank');
+  if (blank !== null && !['true', 'false'].includes(blank.trim().toLowerCase())) {
+    messages.push('providerProfileBlank must be true or false.');
+  } else if (blank !== null && (includes.length > 0 || excludes.length > 0)) {
+    messages.push('providerProfileBlank cannot be combined with other Provider Profile filters.');
+  }
+  return messages;
+}
+
 function validateInitialFilterParams(params: URLSearchParams): string[] {
   return [
     validateCanonicalFilterPair(params, 'stateIn', 'stateNotIn'),
@@ -750,6 +919,7 @@ function validateInitialFilterParams(params: URLSearchParams): string[] {
     validateCanonicalFilterPair(params, 'targetSkillIn', 'targetSkillNotIn'),
     validateCanonicalFilterPair(params, 'progressBucketIn', 'progressBucketNotIn'),
     validateCanonicalFilterPair(params, 'progressSignalIn', 'progressSignalNotIn'),
+    ...validateProviderProfileParams(params),
   ].filter((message): message is string => Boolean(message));
 }
 
@@ -775,15 +945,30 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   filters.workflowId = { contains: params.get('workflowIdContains') || params.get('workflowId') || '' };
   filters.title = { contains: params.get('titleContains') || '' };
 
+  const profileExcludes = splitParam(params, 'providerProfileNotIn');
+  const stateExcludes = splitParam(params, 'providerProfileStateNotIn').filter(isProviderProfileState);
+  const excludeMode = profileExcludes.length > 0 || stateExcludes.length > 0;
+  const profileBlank = (params.get('providerProfileBlank') || '').trim().toLowerCase();
+  filters.providerProfile = {
+    mode: excludeMode ? 'exclude' : 'include',
+    values: excludeMode ? profileExcludes : splitParam(params, 'providerProfileIn'),
+    states: excludeMode
+      ? stateExcludes
+      : splitParam(params, 'providerProfileStateIn').filter(isProviderProfileState),
+    blank: profileBlank === 'true' ? 'include' : profileBlank === 'false' ? 'exclude' : '',
+  };
+
+  // Legacy runtime constraints keep their runtime meaning; they are never
+  // relabeled as or expanded into Provider Profile IDs.
   const runtimeIn = splitParam(params, 'targetRuntimeIn');
   const runtimeNotIn = splitParam(params, 'targetRuntimeNotIn');
   const normalizedRuntimeIn = uniqueRuntimeValues(runtimeIn);
   const normalizedRuntimeNotIn = uniqueRuntimeValues(runtimeNotIn);
   const legacyRuntime = normalizeRuntimeFilterValue(params.get('targetRuntime'));
   if (normalizedRuntimeNotIn.length > 0) {
-    filters.targetRuntime = { mode: 'exclude', values: normalizedRuntimeNotIn, blank: '' };
+    filters.legacyRuntime = { mode: 'exclude', values: normalizedRuntimeNotIn, blank: '' };
   } else if (normalizedRuntimeIn.length > 0 || legacyRuntime) {
-    filters.targetRuntime = {
+    filters.legacyRuntime = {
       mode: 'include',
       values: normalizedRuntimeIn.length > 0 ? normalizedRuntimeIn : [legacyRuntime],
       blank: '',
@@ -845,6 +1030,19 @@ function appendValueParams(
   }
 }
 
+function appendProviderProfileParams(params: URLSearchParams, filter: ProviderProfileFilter) {
+  const exclude = filter.mode === 'exclude';
+  if (filter.values.length > 0) {
+    params.set(exclude ? 'providerProfileNotIn' : 'providerProfileIn', filter.values.join(','));
+  }
+  if (filter.states.length > 0) {
+    params.set(exclude ? 'providerProfileStateNotIn' : 'providerProfileStateIn', filter.states.join(','));
+  }
+  if (filter.blank) {
+    params.set('providerProfileBlank', filter.blank === 'include' ? 'true' : 'false');
+  }
+}
+
 function appendDateParams(
   params: URLSearchParams,
   filter: DateFilter,
@@ -878,7 +1076,8 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
     params.set('repoContains', filters.repository.exactText.trim());
   }
   appendValueParams(params, filters.repository, 'repoIn', 'repoNotIn', 'repoBlank');
-  appendValueParams(params, filters.targetRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn', 'targetRuntimeBlank');
+  appendProviderProfileParams(params, filters.providerProfile);
+  appendValueParams(params, filters.legacyRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn');
   appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
   if (filters.title.contains?.trim()) params.set('titleContains', filters.title.contains.trim());
   appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
@@ -890,11 +1089,11 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
 // The four value fields that resolve to a server-side facet. `integration` is a
 // valid response facet but is not a workflow-list filter field, so it is not
 // part of this map.
-type FacetField = 'status' | 'targetRuntime' | 'targetSkill' | 'repository';
+type FacetField = 'status' | 'providerProfile' | 'targetSkill' | 'repository';
 
 function facetForFilterField(field: FilterField | null): FacetField | null {
   if (field === 'status') return 'status';
-  if (field === 'targetRuntime') return 'targetRuntime';
+  if (field === 'providerProfile') return 'providerProfile';
   if (field === 'targetSkill') return 'targetSkill';
   if (field === 'repository') return 'repository';
   return null;
@@ -998,7 +1197,27 @@ function summarizeValues(
   return filter.values.length > 1 ? `not (${label})` : `not ${label}`;
 }
 
-function filterSummary(field: FilterField, filters: ColumnFilters): string {
+function summarizeProviderProfileFilter(
+  filter: ProviderProfileFilter,
+  labelFor: (id: string) => string,
+): string {
+  if (filter.blank === 'include') return 'no recorded profile';
+  if (filter.blank === 'exclude') return 'has recorded profile';
+  return summarizeValues({
+    mode: filter.mode,
+    values: [
+      ...filter.values.map(labelFor),
+      ...filter.states.map((state) => PROVIDER_PROFILE_STATE_LABELS[state]),
+    ],
+    blank: '',
+  });
+}
+
+function filterSummary(
+  field: FilterField,
+  filters: ColumnFilters,
+  providerProfileLabelFor: (id: string) => string = (id) => id,
+): string {
   if (field === 'workflowId') return filters.workflowId.contains?.trim() || '';
   if (field === 'status') return summarizeValues(filters.status, formatStatusLabel, { maxVisibleValues: 3 });
   if (field === 'progress') {
@@ -1028,7 +1247,10 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     if (progressFilter.blank === 'exclude') parts.push('has progress data');
     return parts.join(', ');
   }
-  if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
+  if (field === 'providerProfile') {
+    return summarizeProviderProfileFilter(filters.providerProfile, providerProfileLabelFor);
+  }
+  if (field === 'legacyRuntime') return summarizeValues(filters.legacyRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {
     if (filters.repository.exactText?.trim()) return filters.repository.exactText.trim();
@@ -1058,6 +1280,7 @@ function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFil
   if (field === 'workflowId' || field === 'title') next[field] = {};
   else if (field === 'progress') next.progress = emptyProgressFilter();
   else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+  else if (field === 'providerProfile') next.providerProfile = emptyProviderProfileFilter();
   else if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') next[field] = {};
   else next[field] = emptyValueFilter();
   return next;
@@ -1229,7 +1452,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const facetByField = {
     status: useQuery(getFacetQueryOptions('status')),
-    targetRuntime: useQuery(getFacetQueryOptions('targetRuntime')),
+    providerProfile: useQuery(getFacetQueryOptions('providerProfile')),
     targetSkill: useQuery(getFacetQueryOptions('targetSkill')),
     repository: useQuery(getFacetQueryOptions('repository')),
   } as const;
@@ -1238,6 +1461,36 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setListCursor(null);
     setCursorStack([]);
   }, []);
+
+  // Recorded Provider Profile names from server facets and loaded rows. These
+  // only label stable IDs; selections and queries always use the IDs.
+  // Names seen earlier stay known while a refetch is loading, so chips do not
+  // fall back to raw IDs between pages or filter changes.
+  const knownProviderProfileLabelsRef = useRef(new Map<string, string>());
+  const providerProfileFacetData = facetByField.providerProfile.data;
+  const providerProfileLabels = useMemo(() => {
+    const labels = knownProviderProfileLabelsRef.current;
+    (providerProfileFacetData?.items || []).forEach((item) => {
+      if (item.label && item.label !== item.value) labels.set(item.value, item.label);
+    });
+    (data?.items || []).forEach((row) => {
+      row.providerProfile?.profiles.forEach((profile) => {
+        if (profile.label && !labels.has(profile.id)) labels.set(profile.id, profile.label);
+      });
+    });
+    return new Map(labels);
+  }, [providerProfileFacetData, data?.items]);
+  const ambiguousProfileLabels = useMemo(
+    () =>
+      ambiguousProviderProfileLabels(
+        Array.from(providerProfileLabels.entries()).map(([id, label]) => ({ id, label })),
+      ),
+    [providerProfileLabels],
+  );
+  const providerProfileLabelFor = useCallback(
+    (id: string) => providerProfileName({ id, label: providerProfileLabels.get(id) }, ambiguousProfileLabels),
+    [ambiguousProfileLabels, providerProfileLabels],
+  );
 
   useEffect(() => {
     if (!workspaceReturnFromDetail || !listCursor || isLoading || isError || !data) return;
@@ -1582,12 +1835,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     () =>
       FILTER_FIELDS.map(([field, label]) => {
         if (!isFilterField(field)) return null;
-        const value = filterSummary(field, filters);
+        const value = filterSummary(field, filters, providerProfileLabelFor);
         return value ? { field, label, value } : null;
       }).filter(
         (filter): filter is { field: FilterField; label: FilterColumn[1]; value: string } => Boolean(filter),
       ),
-    [filters],
+    [filters, providerProfileLabelFor],
   );
   const hasActiveFilters = activeFilters.length > 0;
   const hasWorkflowListNotices =
@@ -1604,11 +1857,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   const updateDraftValues = (
-    field: 'status' | 'targetRuntime' | 'targetSkill',
+    field: 'status' | 'targetSkill',
     values: string[],
   ) => {
     setDraftFilters((current) => {
-      const dedupedValues = field === 'targetRuntime' ? uniqueRuntimeValues(values) : uniqueValues(values);
+      const dedupedValues = uniqueValues(values);
       if (dedupedValues.length === 0) {
         return { ...current, [field]: { ...emptyValueFilter(), mode: current[field].mode } };
       }
@@ -1620,12 +1873,19 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   const updateDraftValueMode = (
-    field: 'status' | 'targetRuntime' | 'targetSkill',
+    field: 'status' | 'targetSkill',
     mode: ValueFilter['mode'],
   ) => {
     setDraftFilters((current) => ({
       ...current,
       [field]: { ...current[field], mode },
+    }));
+  };
+
+  const updateDraftProviderProfile = (patch: Partial<ProviderProfileFilter>) => {
+    setDraftFilters((current) => ({
+      ...current,
+      providerProfile: { ...current.providerProfile, ...patch },
     }));
   };
 
@@ -1653,12 +1913,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     const facetValues =
       facetData && facetData.facet === facetKey ? facetData.items.map((item) => item.value) : [];
     if (field === 'status') return uniqueValues([...facetValues, ...TEMPORAL_STATUSES]);
-    if (field === 'targetRuntime') {
-      return uniqueRuntimeValues([
-        ...filters.targetRuntime.values,
-        ...draftFilters.targetRuntime.values,
+    if (field === 'providerProfile') {
+      // Selected IDs stay available even when a failed, partial, or truncated
+      // facet response omits them.
+      return uniqueValues([
+        ...filters.providerProfile.values,
+        ...draftFilters.providerProfile.values,
         ...facetValues,
-        ...RUNTIME_FILTER_OPTIONS,
+        ...(data?.items || []).flatMap((row) => row.providerProfile?.profiles.map((profile) => profile.id) ?? []),
       ]);
     }
     if (field === 'targetSkill') {
@@ -1694,10 +1956,27 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     if (facetQuery.isFetching) {
       return <p className="small workflow-list-facet-notice">Loading facet values...</p>;
     }
-    if (facetQuery.data?.truncated) {
-      return <p className="small workflow-list-facet-notice">Facet values truncated by the server.</p>;
+    if (facetQuery.data?.source === 'current_page_fallback') {
+      return (
+        <p className="small workflow-list-facet-notice" role="status">
+          Facet values unavailable. Showing current page values only.
+        </p>
+      );
     }
-    return null;
+    const unavailableCount = facetQuery.data?.unavailableCount ?? 0;
+    return (
+      <>
+        {facetQuery.data?.truncated ? (
+          <p className="small workflow-list-facet-notice">Facet values truncated by the server.</p>
+        ) : null}
+        {unavailableCount > 0 ? (
+          <p className="small workflow-list-facet-notice">
+            {unavailableCount} older workflow{unavailableCount === 1 ? '' : 's'} predate recorded Provider
+            Profile data and {unavailableCount === 1 ? 'is' : 'are'} not counted.
+          </p>
+        ) : null}
+      </>
+    );
   };
 
   // Renders one filter's controls bound to the draft filter state. Edits stage
@@ -1911,17 +2190,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       );
     }
 
-    if (field === 'targetRuntime') {
-      const runtimeOptions = valueOptionsForField('targetRuntime');
-      const draft = draftFilters.targetRuntime;
+    if (field === 'providerProfile') {
+      const draft = draftFilters.providerProfile;
+      const profileOptions = valueOptionsForField('providerProfile');
+      const stateCounts = new Map(
+        (facetByField.providerProfile.data?.stateItems || []).map((item) => [item.value, item.count]),
+      );
       return (
         <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            Runtime filter mode
+            Provider Profile filter mode
             <select
               value={draft.mode}
               disabled={!listEnabled}
-              onChange={(event) => updateDraftValueMode('targetRuntime', event.target.value as ValueFilter['mode'])}
+              onChange={(event) =>
+                updateDraftProviderProfile({ mode: event.target.value as ValueFilter['mode'] })
+              }
             >
               <option value="include">Include selected</option>
               <option value="exclude">Exclude selected</option>
@@ -1929,16 +2213,77 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </label>
           <FilterPillMultiSelect
             values={draft.values}
-            options={runtimeOptions}
-            formatValue={formatRuntimeLabel}
+            options={profileOptions}
+            formatValue={providerProfileLabelFor}
             disabled={!listEnabled}
-            ariaLabelAdd="Runtime filter value"
-            ariaLabelSelected="Selected runtime filters"
-            addPlaceholder="Add runtime"
-            emptyMessage="No runtime filters selected"
-            onChange={(next) => updateDraftValues('targetRuntime', next)}
+            ariaLabelAdd="Provider Profile filter value"
+            ariaLabelSelected="Selected Provider Profile filters"
+            addPlaceholder="Add profile"
+            emptyMessage="No profiles selected"
+            onChange={(next) => updateDraftProviderProfile({ values: uniqueValues(next) })}
           />
-          {renderFacetNotice('targetRuntime')}
+          <fieldset className="workflow-list-progress-filter-group">
+            <legend>Selection states</legend>
+            {PROVIDER_PROFILE_STATES.map((state) => {
+              const count = stateCounts.get(state);
+              return (
+                <label className="checkbox" key={state}>
+                  <input
+                    type="checkbox"
+                    checked={draft.states.includes(state)}
+                    disabled={!listEnabled}
+                    onChange={(event) =>
+                      updateDraftProviderProfile({
+                        states: event.target.checked
+                          ? PROVIDER_PROFILE_STATES.filter(
+                              (candidate) => candidate === state || draft.states.includes(candidate),
+                            )
+                          : draft.states.filter((candidate) => candidate !== state),
+                      })
+                    }
+                  />
+                  {PROVIDER_PROFILE_STATE_LABELS[state]}
+                  {count !== undefined ? ` (${count})` : ''}
+                </label>
+              );
+            })}
+          </fieldset>
+          <label>
+            Provider Profile blank values
+            <select
+              value={draft.blank || ''}
+              disabled={!listEnabled}
+              onChange={(event) =>
+                updateDraftProviderProfile({ blank: event.target.value as NonNullable<ValueFilter['blank']> })
+              }
+            >
+              <option value="">Ignore blanks</option>
+              <option value="include">Only without a recorded profile</option>
+              <option value="exclude">Only with a recorded profile</option>
+            </select>
+          </label>
+          {renderFacetNotice('providerProfile')}
+        </div>
+      );
+    }
+
+    if (field === 'legacyRuntime') {
+      const legacy = filters.legacyRuntime;
+      if (legacy.values.length === 0) return null;
+      return (
+        <div className="queue-inline-filter workflow-list-filter-control">
+          <p className="small workflow-list-facet-notice">
+            This view keeps a legacy runtime constraint ({summarizeValues(legacy, formatRuntimeLabel)}). It filters by
+            the recorded runtime, not by Provider Profile.
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!listEnabled}
+            onClick={() => removeActiveFilter('legacyRuntime')}
+          >
+            Remove legacy runtime filter
+          </button>
         </div>
       );
     }
@@ -2296,7 +2641,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </button>
             </header>
             <div className="workflow-list-filter-drawer-body">
-              {DRAWER_FILTER_FIELDS.map(([field, label]) => (
+              {DRAWER_FILTER_FIELDS.filter(
+                ([field]) => field !== 'legacyRuntime' || filters.legacyRuntime.values.length > 0,
+              ).map(([field, label]) => (
                 <section
                   key={field}
                   className="workflow-list-filter-section"
@@ -2429,7 +2776,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       {visibleColumns.map(({ field, label, sortable }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         const filterField = TABLE_COLUMN_FILTER_FIELDS[field];
-                        const filterValue = filterField ? filterSummary(filterField, filters) : '';
+                        const filterValue = filterField
+                          ? filterSummary(filterField, filters, providerProfileLabelFor)
+                          : '';
                         const isFilterOpen = filterField === desktopFilterField;
                         return (
                           <th
@@ -2590,8 +2939,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           {isColumnVisible('repository') ? (
                             <td className="queue-table-cell-compact">{row.repository || '—'}</td>
                           ) : null}
-                          {isColumnVisible('targetRuntime') ? (
-                            <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          {isColumnVisible('providerProfile') ? (
+                            <td className="queue-table-cell-compact">
+                              <ProviderProfileCell display={providerProfileDisplay(row, ambiguousProfileLabels)} />
+                            </td>
                           ) : null}
                           {isColumnVisible('updatedAt') ? (
                             <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
@@ -2648,8 +2999,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </dd>
                       </div>
                       <div>
-                        <dt>Runtime</dt>
-                        <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
+                        <dt>Provider Profile</dt>
+                        <dd>
+                          <ProviderProfileCell display={providerProfileDisplay(row, ambiguousProfileLabels)} />
+                        </dd>
                       </div>
                       <div>
                         <dt>Repo</dt>

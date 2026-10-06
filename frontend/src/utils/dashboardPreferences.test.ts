@@ -37,7 +37,7 @@ describe('dashboardPreferences', () => {
           status: true,
           progress: false,
           repository: true,
-          targetRuntime: false,
+          providerProfile: false,
           updatedAt: true,
         },
         workflowListPageSize: 100,
@@ -180,6 +180,20 @@ describe('dashboardPreferences', () => {
       expect(DEFAULT_DASHBOARD_PREFERENCES.workflowListColumnVisibility).not.toHaveProperty(
         'nextAction',
       );
+    });
+
+    it('carries a saved Runtime column visibility over to Provider Profile', () => {
+      const migrated = sanitizeDashboardPreferences({
+        workflowListColumnVisibility: { targetRuntime: false, repository: false },
+      });
+      expect(migrated.workflowListColumnVisibility.providerProfile).toBe(false);
+      expect(migrated.workflowListColumnVisibility.repository).toBe(false);
+      expect(migrated.workflowListColumnVisibility).not.toHaveProperty('targetRuntime');
+
+      const explicit = sanitizeDashboardPreferences({
+        workflowListColumnVisibility: { targetRuntime: false, providerProfile: true },
+      });
+      expect(explicit.workflowListColumnVisibility.providerProfile).toBe(true);
     });
 
     it('ignores legacy nextAction visibility during sanitization', () => {

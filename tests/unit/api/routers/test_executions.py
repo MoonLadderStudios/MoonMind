@@ -21456,3 +21456,457 @@ def test_create_execution_rejects_structured_repository_with_conflicting_legacy_
     assert response.status_code == 422
     assert f"workflow.{field}" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#4640: recorded Provider Profile list/facet contract
+# ---------------------------------------------------------------------------
+
+_PROVIDER_PROFILE_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_TEXT)
+
+
+def _provider_profile_token(profile_id: str) -> str:
+    return "ppid" + profile_id.encode("utf-8").hex()
+
+
+class _EmptyProviderProfileWorkflowIterator:
+    current_page: list[object] = []
+    next_page_token: bytes | None = None
+
+    async def fetch_next_page(self) -> None:
+        return None
+
+
+def _provider_profile_list_client(
+    *, registered: bool = True, page: list[object] | None = None, counts=None
+) -> SimpleNamespace:
+    custom_attributes = (
+        {
+            "mm_provider_profile": SimpleNamespace(
+                type=_PROVIDER_PROFILE_SEARCH_ATTRIBUTE_TYPE
+            )
+        }
+        if registered
+        else {}
+    )
+
+    class _Iterator:
+        current_page = list(page or [])
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    return SimpleNamespace(
+        namespace=f"provider-profile-{uuid4()}",
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes=custom_attributes)
+            )
+        ),
+        count_workflows=AsyncMock(
+            side_effect=counts
+            if counts is not None
+            else (lambda **_kwargs: SimpleNamespace(count=0))
+        ),
+        list_workflows=Mock(return_value=_Iterator()),
+    )
+
+
+def _provider_profile_list_app(temporal_client: SimpleNamespace) -> FastAPI:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = lambda: AsyncMock()
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+    _override_user_dependencies(app, is_superuser=False)
+    return app
+
+
+def test_list_executions_filters_provider_profile_ids_and_states_before_pagination() -> None:
+    temporal_client = _provider_profile_list_client()
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params=[
+                ("source", "temporal"),
+                ("providerProfileIn", "profile-a,profile-b"),
+                ("providerProfileIn", "profile-a"),
+                ("providerProfileStateIn", "pending"),
+                ("stateIn", "failed"),
+                ("pageSize", "5"),
+            ],
+        )
+
+    assert response.status_code == 200, response.text
+    kwargs = temporal_client.list_workflows.call_args.kwargs
+    query = kwargs["query"]
+    assert kwargs["page_size"] == 5
+    # Positive IDs and states OR within the column, by stable ID tokens.
+    assert (
+        f'(mm_provider_profile="{_provider_profile_token("profile-a")}" OR '
+        f'mm_provider_profile="{_provider_profile_token("profile-b")}" OR '
+        'mm_provider_profile="ppstatepending")'
+    ) in query
+    # Other columns AND with the Provider Profile clause inside the same
+    # authorized user-workflow scope.
+    assert 'ExecutionStatus="Failed"' in query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert "mm_target_runtime" not in query
+
+
+def test_list_executions_provider_profile_exclusions_reject_any_member() -> None:
+    temporal_client = _provider_profile_list_client()
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "providerProfileNotIn": "profile-a",
+                "providerProfileStateNotIn": "not_applicable",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
+    token = _provider_profile_token("profile-a")
+    assert (
+        f'(mm_provider_profile IS NULL OR mm_provider_profile!="{token}")' in query
+    )
+    assert (
+        '(mm_provider_profile IS NULL OR mm_provider_profile!="ppstatenotapplicable")'
+        in query
+    )
+
+
+@pytest.mark.parametrize(
+    ("blank", "expected"),
+    [
+        (
+            "true",
+            (
+                '(mm_provider_profile="ppstatepending" OR '
+                'mm_provider_profile="ppstatenotrecorded" OR '
+                'mm_provider_profile="ppstatenotapplicable")'
+            ),
+        ),
+        ("false", 'mm_provider_profile="ppstaterecorded"'),
+    ],
+)
+def test_list_executions_provider_profile_blank_shortcut(blank: str, expected: str) -> None:
+    temporal_client = _provider_profile_list_client()
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "providerProfileBlank": blank},
+        )
+
+    assert response.status_code == 200, response.text
+    assert expected in temporal_client.list_workflows.call_args.kwargs["query"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"providerProfileIn": "profile-a", "providerProfileNotIn": "profile-a"},
+        {"providerProfileStateIn": "pending", "providerProfileStateNotIn": "pending"},
+        {"providerProfileStateIn": "unknown"},
+        {"providerProfileStateNotIn": "recorded"},
+        {"providerProfileBlank": "true", "providerProfileIn": "profile-a"},
+        {"providerProfileBlank": "maybe"},
+    ],
+)
+def test_list_executions_rejects_invalid_provider_profile_filters(params) -> None:
+    temporal_client = _provider_profile_list_client()
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions", params={"source": "temporal", **params}
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_execution_query"
+    temporal_client.list_workflows.assert_not_called()
+
+
+def test_list_executions_provider_profile_filter_reports_unavailable_projection() -> None:
+    temporal_client = _provider_profile_list_client(registered=False)
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "providerProfileIn": "profile-a"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Never silently broadened: no unfiltered query runs and the count is
+    # reported as unknown rather than a known empty result.
+    temporal_client.list_workflows.assert_not_called()
+    assert body["items"] == []
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
+
+
+def test_list_executions_legacy_runtime_filter_keeps_runtime_meaning() -> None:
+    temporal_client = _provider_profile_list_client()
+    temporal_client.operator_service.list_search_attributes.return_value = SimpleNamespace(
+        custom_attributes={
+            "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+            "mm_provider_profile": SimpleNamespace(
+                type=_PROVIDER_PROFILE_SEARCH_ATTRIBUTE_TYPE
+            ),
+        }
+    )
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "targetRuntimeIn": "codex_cli"},
+        )
+
+    assert response.status_code == 200, response.text
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert 'mm_target_runtime="codex_cli"' in query
+    assert "mm_provider_profile" not in query
+
+
+def test_provider_profile_facet_counts_recorded_ids_and_distinct_absence_states() -> None:
+    async def _memo_ab():
+        return {
+            "providerProfile": {
+                "state": "recorded",
+                "profiles": [
+                    {"id": "profile-a", "label": "Work", "harness": "codex_cli"},
+                    {"id": "profile-b", "label": "Work", "harness": "claude_code"},
+                ],
+            }
+        }
+
+    async def _memo_a():
+        return {}
+
+    page = [
+        SimpleNamespace(
+            search_attributes={
+                "mm_provider_profile": "ppstaterecorded "
+                + _provider_profile_token("profile-a")
+                + " "
+                + _provider_profile_token("profile-b")
+            },
+            memo=_memo_ab,
+        ),
+        SimpleNamespace(
+            search_attributes={
+                "mm_provider_profile": "ppstaterecorded "
+                + _provider_profile_token("profile-a")
+            },
+            memo=_memo_a,
+        ),
+        SimpleNamespace(
+            search_attributes={"mm_provider_profile": "ppstatepending"},
+            memo=_memo_a,
+        ),
+    ]
+    count_by_clause = {
+        f'mm_provider_profile="{_provider_profile_token("profile-a")}"': 2,
+        f'mm_provider_profile="{_provider_profile_token("profile-b")}"': 1,
+        'mm_provider_profile="ppstatepending"': 1,
+        'mm_provider_profile="ppstatenotrecorded"': 0,
+        'mm_provider_profile="ppstatenotapplicable"': 0,
+        "mm_provider_profile IS NULL": 4,
+    }
+
+    def _count(*, query: str):
+        matches = [count for clause, count in count_by_clause.items() if query.endswith(clause)]
+        assert len(matches) == 1, query
+        return SimpleNamespace(count=matches[0])
+
+    temporal_client = _provider_profile_list_client(page=page, counts=_count)
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/facets",
+            params={
+                "source": "temporal",
+                "facet": "providerProfile",
+                "stateIn": "executing",
+                "providerProfileIn": "profile-z",
+                "providerProfileStateNotIn": "pending",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    base_query = temporal_client.list_workflows.call_args.kwargs["query"]
+    # The facet keeps other filters and the workflow scope but omits every
+    # Provider Profile constraint.
+    assert 'mm_state="executing"' in base_query
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in base_query
+    assert "mm_provider_profile" not in base_query
+    body = response.json()
+    assert body["facet"] == "providerProfile"
+    # One item per stable ID (counted once per workflow); equal labels stay
+    # distinct IDs and overlap is allowed for multi-profile workflows.
+    assert body["items"] == [
+        {"value": "profile-a", "label": "Work", "count": 2},
+        {"value": "profile-b", "label": "Work", "count": 1},
+    ]
+    assert body["stateItems"] == [
+        {"value": "pending", "label": "Pending selection", "count": 1},
+        {"value": "not_recorded", "label": "Not recorded", "count": 0},
+        {"value": "not_applicable", "label": "Not applicable", "count": 0},
+    ]
+    assert body["blankCount"] == 1
+    # Workflows without projection coverage are reported, never folded into
+    # an absence state.
+    assert body["unavailableCount"] == 4
+    assert body["countMode"] == "exact"
+    assert body["source"] == "authoritative"
+
+
+def test_provider_profile_facet_reports_unregistered_projection_as_fallback() -> None:
+    temporal_client = _provider_profile_list_client(registered=False)
+    app = _provider_profile_list_app(temporal_client)
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions/facets",
+            params={"source": "temporal", "facet": "providerProfile"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["source"] == "current_page_fallback"
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["items"] == []
+    assert body["blankCount"] is None
+    temporal_client.list_workflows.assert_not_called()
+
+
+def test_list_item_projects_bounded_recorded_provider_profile_summary() -> None:
+    record = _build_execution_record()
+    record.parameters = {
+        "targetRuntime": "omnigent",
+        "profileId": "profile-0",
+        "agentProfile": {"profileId": "exec-config-1"},
+        "providerProfileSelection": {
+            "state": "recorded",
+            "profiles": [
+                {
+                    "id": f"profile-{index}",
+                    "label": f"Account {index}",
+                    "harness": "codex_cli",
+                    "credentialRef": "secret://never",
+                }
+                for index in range(7)
+            ],
+        },
+    }
+
+    payload = _serialize_execution_list_item(record).model_dump(
+        by_alias=True, mode="json"
+    )
+
+    summary = payload["providerProfile"]
+    assert summary["selectionState"] == "recorded"
+    assert summary["profileCount"] == 7
+    assert len(summary["profiles"]) == 5
+    assert summary["profiles"][0] == {
+        "id": "profile-0",
+        "label": "Account 0",
+        "harness": "codex_cli",
+    }
+    assert "secret://never" not in json.dumps(payload)
+    assert "exec-config-1" not in json.dumps(summary)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected_state", "expected_ids"),
+    [
+        ({"targetRuntime": "codex_cli"}, "not_recorded", []),
+        (
+            {"providerProfileSelection": {"state": "pending", "profiles": []}},
+            "pending",
+            [],
+        ),
+        (
+            {"providerProfileSelection": {"state": "not_applicable", "profiles": []}},
+            "not_applicable",
+            [],
+        ),
+        ({"profileId": "renamed-or-deleted"}, "recorded", ["renamed-or-deleted"]),
+    ],
+)
+def test_list_item_provider_profile_states_never_guess_defaults(
+    parameters, expected_state, expected_ids
+) -> None:
+    record = _build_execution_record()
+    record.parameters = parameters
+
+    summary = _serialize_execution_list_item(record).model_dump(
+        by_alias=True, mode="json"
+    )["providerProfile"]
+
+    assert summary["selectionState"] == expected_state
+    assert [profile["id"] for profile in summary["profiles"]] == expected_ids
+    # Old records with only an ID show the ID, not a guessed former name.
+    assert all(profile["label"] is None for profile in summary["profiles"])
+
+
+def test_create_execution_snapshots_recorded_provider_profile_display_name() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    profile.provider_label = "MiniMax · Team"
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=_mm3788_task_request(
+                target_runtime="claude_code", profile_id="claude_minimax_team"
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["providerProfileSelection"] == {
+        "state": "recorded",
+        "profiles": [
+            {
+                "id": "claude_minimax_team",
+                "label": "MiniMax · Team",
+                "harness": "claude_code",
+            }
+        ],
+    }
+
+
+def test_create_execution_records_pending_selection_without_default_guess() -> None:
+    profile = _mm3788_provider_profile(
+        profile_id="claude_minimax_team", runtime_id="claude_code"
+    )
+    request = _mm3788_task_request(target_runtime="claude_code", profile_id="")
+    request["payload"]["workflow"]["runtime"].pop("providerProfileRef")
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=request)
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["providerProfileSelection"] == {
+        "state": "pending",
+        "profiles": [],
+    }
