@@ -407,6 +407,8 @@ def _recovery_plan_digest_from_record(record: TemporalExecutionRecord) -> str | 
         resume_block.get("sourcePlanDigest"),
         resume_block.get("source_plan_digest"),
     )
+
+
 ALLOWED_REMEDIATION_ACTION_POLICY_REFS = frozenset({"admin_healer_default"})
 PENDING_REMEDIATION_APPROVAL_STATUSES = frozenset(
     {"awaiting_approval", "approval_required"}
@@ -416,6 +418,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def _get_managed_session_store_root() -> str:
     import os
 
@@ -423,6 +426,7 @@ def _get_managed_session_store_root() -> str:
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_sessions",
     )
+
 
 NON_TERMINAL_STATES: set[MoonMindWorkflowState] = set(NON_TERMINAL_WORKFLOW_STATES)
 OPERATOR_SIGNAL_ALLOWED_STATES: set[MoonMindWorkflowState] = set(
@@ -478,11 +482,14 @@ _TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS: tuple[str, ...] = (
     "workflow execution already closed",
 )
 
+
 class TemporalExecutionError(RuntimeError):
     """Base class for temporal execution service errors."""
 
+
 class TemporalExecutionNotFoundError(TemporalExecutionError):
     """Raised when a workflow execution cannot be located."""
+
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
@@ -575,6 +582,7 @@ class TemporalExecutionListResult:
     next_page_token: str | None
     count: int
 
+
 @dataclass(slots=True)
 class ExecutionDependencySummary:
     """Compact execution metadata for dependency UI and reconciliation."""
@@ -586,6 +594,7 @@ class ExecutionDependencySummary:
     close_status: str | None
     workflow_type: str | None
     attention_required: bool = False
+
 
 def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) -> None:
     """Reject a publish mode the authored plan can never satisfy."""
@@ -4062,15 +4071,7 @@ class TemporalExecutionService:
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
                 return record
-            from moonmind.workflows.temporal.remediation_tools import (
-                resume_pending_action_verifications,
-            )
-
-            await resume_pending_action_verifications(
-                self._session, workflow_id=record.workflow_id
-            )
-            await self._fan_out_dependency_resolution(record)
-            return await self._sync_projection_best_effort(record)
+            return await self._propagate_terminal_result(record)
 
         self._set_state(record, target_state, close_status=target_close_status)
         self._record_finish_summary(
@@ -4103,15 +4104,30 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         if isinstance(record, TemporalExecutionRecord):
             return record
+        return await self._propagate_terminal_result(record)
+
+    async def _propagate_terminal_result(self, record):
         from moonmind.workflows.temporal.remediation_tools import (
             resume_pending_action_verifications,
         )
 
-        await resume_pending_action_verifications(
-            self._session, workflow_id=record.workflow_id
-        )
+        resume_error = None
+        try:
+            await resume_pending_action_verifications(
+                self._session, workflow_id=record.workflow_id
+            )
+        except Exception as exc:
+            # The canonical terminal effect is already committed. Preserve the
+            # observation failure for Activity retry without starving unrelated
+            # dependents or leaving a failed SQL transaction in their path.
+            resume_error = exc
+            await self._session.rollback()
+            await self._session.refresh(record)
         await self._fan_out_dependency_resolution(record)
-        return await self._sync_projection_best_effort(record)
+        projection = await self._sync_projection_best_effort(record)
+        if resume_error is not None:
+            raise resume_error
+        return projection
 
     def _attach_terminal_governance_report(
         self,
@@ -6758,6 +6774,7 @@ class TemporalExecutionService:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
 
 def _format_search_attribute_datetime(value: datetime) -> str:
     if value.tzinfo is None:

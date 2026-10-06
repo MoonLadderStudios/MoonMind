@@ -581,7 +581,11 @@ class CanonicalRecordEvidenceReader:
             )
         if turn.status in {"failed", "canceled", "blocked"}:
             return TargetEvidenceSnapshot(
-                stage=stage, available=True, state=turn.status, identities=exact
+                stage=stage,
+                available=True,
+                state=turn.status,
+                close_status="canceled" if turn.status == "canceled" else "failed",
+                identities=exact,
             )
         if (
             candidate.get("branchId") != branch.branch_id

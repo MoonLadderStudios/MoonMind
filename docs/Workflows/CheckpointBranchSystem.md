@@ -600,6 +600,25 @@ Harvest results, workspace/checkpoint/output/publication/capture/cleanup evidenc
 before releasing host/Profile authority in the normal release-last order. Persist
 turn state separately from remediation verification.
 
+The objective verifier's runtime-published report is admitted through:
+
+```http
+POST /api/executions/{workflowId}/checkpoint-branches/{branchId}/verification
+```
+
+The authenticated request contains only `verifierArtifactRef` (`artifact://...`).
+The branch owner reads the existing immutable JSON report, verifies its runtime
+publisher, source workflow/run, completed checking turn, Step Execution, exact
+head version/ref/digest, and canonical verdict, then records the receipt through
+the existing remediation-head owner. Callers cannot submit a verdict or head
+update. Missing, unauthorized, mismatched, or malformed reports return 409 with
+`checkpoint_verification_rejected`; schema-invalid requests return 422.
+Accepted receipts resume the saved remediation action without rerunning branch
+compute. A verifier that changes the candidate workspace records the objective
+failure rather than advancing the head. Failed, canceled, and blocked turn
+finalization also resumes the same read-only action verification, including
+idempotent finalization retries.
+
 Retries reuse the stored runtime launch identity and cannot post a second first
 message. Branch execution gets fresh host/session authority, not the source
 session's mutable OAuth lease. Caller operation keys deduplicate their API calls;

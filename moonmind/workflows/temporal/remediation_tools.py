@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -79,8 +79,10 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
 )
 
+
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationLogReadResult:
@@ -91,6 +93,7 @@ class RemediationLogReadResult:
     lines: tuple[str, ...]
     next_cursor: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowEvent:
     """One live-follow event visible to a remediation task."""
@@ -100,6 +103,7 @@ class RemediationLiveFollowEvent:
     text: str
     timestamp: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowResult:
     """Live-follow batch plus the cursor the caller should persist."""
@@ -107,6 +111,7 @@ class RemediationLiveFollowResult:
     agent_run_id: str
     events: tuple[RemediationLiveFollowEvent, ...]
     resume_cursor: dict[str, Any] | None
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationTargetHealthSnapshot:
@@ -121,6 +126,7 @@ class RemediationTargetHealthSnapshot:
     summary: str | None
     target_run_changed: bool
     runtime: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
@@ -153,6 +159,7 @@ class RemediationArtifactReadResult:
     content: str | None
     content_truncated: bool
 
+
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target agent run."""
 
@@ -166,6 +173,7 @@ class RemediationLogReader(Protocol):
     ) -> RemediationLogReadResult:
         raise NotImplementedError
 
+
 class RemediationLiveFollower(Protocol):
     """Follow live target output for a target agent run."""
 
@@ -176,6 +184,7 @@ class RemediationLiveFollower(Protocol):
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
         raise NotImplementedError
+
 
 class RemediationActionExecutor(Protocol):
     """Execute one authorized remediation action through an owning subsystem."""
@@ -188,6 +197,7 @@ class RemediationActionExecutor(Protocol):
         target_health: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
         raise NotImplementedError
+
 
 class _UnavailableLogReader:
     async def read_logs(
@@ -202,6 +212,7 @@ class _UnavailableLogReader:
             "remediation.read_target_logs is not configured in this runtime."
         )
 
+
 class _UnavailableLiveFollower:
     async def follow_logs(
         self,
@@ -212,6 +223,7 @@ class _UnavailableLiveFollower:
         raise RemediationEvidenceToolError(
             "remediation.follow_target_logs is not configured in this runtime."
         )
+
 
 class _UnavailableActionExecutor:
     async def execute_action(
@@ -301,6 +313,7 @@ class MoonMindControlPlaneRemediationActionExecutor:
         normalized.setdefault("beforeEvidenceRefs", [])
         normalized.setdefault("afterEvidenceRefs", [])
         return normalized
+
 
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
@@ -881,6 +894,7 @@ class RemediationEvidenceToolService:
         if not saved and saved_action_id:
             receipt = await self._lifecycle_publisher.find_published_artifact(
                 workflow_id=link.remediation_workflow_id,
+                run_id=link.remediation_run_id,
                 artifact_type="remediation.action_result",
                 name=f"reports/remediation_action_result-{saved_action_id}.json",
             )
@@ -892,6 +906,7 @@ class RemediationEvidenceToolService:
                 )
                 request_receipt = await self._lifecycle_publisher.find_published_artifact(
                     workflow_id=link.remediation_workflow_id,
+                    run_id=link.remediation_run_id,
                     artifact_type="remediation.action_request",
                     name=f"reports/remediation_action_request-{saved_action_id}.json",
                 )
@@ -1130,6 +1145,7 @@ class RemediationEvidenceToolService:
                 )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.action_request",
             name=f"reports/remediation_action_request-{action_request['actionId']}.json",
             payload=_redact_payload_value(
@@ -1227,6 +1243,7 @@ class RemediationEvidenceToolService:
             result_payload["approvalBinding"] = dict(raw_result["approvalBinding"])
         result_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.action_result",
             name=f"reports/remediation_action_result-{action_request['actionId']}.json",
             payload=result_payload,
@@ -1272,9 +1289,43 @@ class RemediationEvidenceToolService:
         }
         link.mutation_guard_ledger_state = {**state, "entries": entries}
 
+    async def _change_verification_execution(self, link, action_id, change):
+        """CAS the existing link ledger; no observation can overwrite a peer."""
+        model = db_models.TemporalExecutionRemediationLink
+        for _ in range(8):
+            await self._session.refresh(link)
+            state = json.loads(json.dumps(link.mutation_guard_ledger_state or {}))
+            revision = state.get("verificationRevision", 0)
+            saved = state["entries"][action_id]["execution"]
+            extra_values, result = change(saved)
+            state["verificationRevision"] = revision + 1
+            updated = await self._session.execute(
+                update(model)
+                .where(
+                    model.remediation_workflow_id == link.remediation_workflow_id,
+                    func.coalesce(
+                        model.mutation_guard_ledger_state[
+                            "verificationRevision"
+                        ].as_integer(),
+                        0,
+                    )
+                    == revision,
+                )
+                .values(mutation_guard_ledger_state=state, **extra_values)
+                .execution_options(synchronize_session=False)
+            )
+            await self._session.commit()
+            if updated.rowcount == 1:
+                await self._session.refresh(link)
+                return result
+        raise RemediationEvidenceToolError(
+            "Concurrent verification state changed; retry evidence persistence only"
+        )
+
     async def _resume_action_verification(
         self, *, link, action_id: str
     ) -> dict[str, Any]:
+        await self._session.refresh(link)
         saved = dict(
             link.mutation_guard_ledger_state["entries"][action_id]["execution"]
         )
@@ -1309,60 +1360,84 @@ class RemediationEvidenceToolService:
         principal = "service:remediation-tools"
         verification_contract = verification_contract_for(action_kind)
         before_snapshot = snapshot_from_payload(saved["beforeSnapshot"])
-        observation = saved.get("observation", 0)
-        suffix = f"-observation-{observation}" if observation else ""
-        remaining_polls = max(
-            0, verification_contract.max_polls - saved.get("pollsConsumed", 0)
-        )
-        # Reserve the remaining short-poll allowance before observation. An
-        # interruption cannot reset it or cause another accepted effect.
-        saved["pollsConsumed"] = saved.get("pollsConsumed", 0) + remaining_polls
-        self._save_action_execution(link, action_id, saved)
-        await self._session.commit()
-        # Trusted post-action verification phase (issue #3622): re-read fresh
-        # canonical evidence after the action, perform bounded stabilization, and
-        # classify the actual repair outcome. This replaces the prior behavior of
-        # serializing adapter output or defaulting to "not_verified". Delivery
-        # status (``status`` on the action result) and the repair verification
-        # outcome are now separate fields.
-        # Fresh reruns create a new execution identity (returned in
-        # afterEvidenceRefs); verify against that resulting workflow rather than
-        # the original terminal record, which would always read as still_failed.
-        (
-            verification_target_workflow_id,
-            verification_pinned_run_id,
-        ) = resolve_verification_target(
-            verification_contract,
-            result_payload,
-            default_workflow_id=link.target_workflow_id,
-            default_run_id=link.target_run_id,
-        )
-        verification_result = await self._verification_phase.run(
-            contract=verification_contract,
-            action_kind=action_kind,
-            action_id=action_request["actionId"],
-            delivery_status=status,
-            target_workflow_id=verification_target_workflow_id,
-            pinned_run_id=verification_pinned_run_id,
-            before_snapshot=before_snapshot,
-            action_result=result_payload,
-            remaining_polls=remaining_polls,
-        )
-        verification_payload = _redact_payload_value(
-            {
-                **verification_result.to_payload(),
-                "approvalRef": approval_ref,
-            }
-        )
-        verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
-            remediation_workflow_id=link.remediation_workflow_id,
-            artifact_type="remediation.verification",
-            name=f"reports/remediation_verification-{action_request['actionId']}{suffix}.json",
-            payload=verification_payload,
-            target_workflow_id=link.target_workflow_id,
-            target_run_id=link.target_run_id,
-            extra_metadata=verification_result.to_metadata(),
-        )
+        recovered = None
+        # A committed terminal receipt outranks a new time-sensitive read after
+        # lost acknowledgment. In-flight ordinals were reserved before evidence
+        # collection, so peer observers always receive different identities.
+        for ordinal in saved.get("inFlightObservations", []):
+            suffix = f"-observation-{ordinal}" if ordinal else ""
+            receipt = await self._lifecycle_publisher.find_published_artifact(
+                workflow_id=link.remediation_workflow_id,
+                run_id=link.remediation_run_id,
+                artifact_type="remediation.verification",
+                name=f"reports/remediation_verification-{action_id}{suffix}.json",
+            )
+            if receipt is not None:
+                _, payload = await read_receipt(receipt.artifact_id)
+                if not payload.get("pending"):
+                    recovered = (ordinal, receipt, payload)
+                    break
+        if recovered is None:
+
+            def reserve(current):
+                if current.get("verificationState") == "complete":
+                    return {}, current["verificationResponse"]
+                ordinal = current.get("observation", 0)
+                remaining = max(
+                    0, verification_contract.max_polls - current.get("pollsConsumed", 0)
+                )
+                current["observation"] = ordinal + 1
+                current["pollsConsumed"] = current.get("pollsConsumed", 0) + remaining
+                current["inFlightObservations"] = [
+                    *current.get("inFlightObservations", []),
+                    ordinal,
+                ]
+                return {}, (ordinal, remaining)
+
+            reservation = await self._change_verification_execution(
+                link, action_id, reserve
+            )
+            if isinstance(reservation, dict):
+                return reservation
+            observation, remaining_polls = reservation
+            suffix = f"-observation-{observation}" if observation else ""
+            verification_target_workflow_id, verification_pinned_run_id = (
+                resolve_verification_target(
+                    verification_contract,
+                    result_payload,
+                    default_workflow_id=link.target_workflow_id,
+                    default_run_id=link.target_run_id,
+                )
+            )
+            verification_result = await self._verification_phase.run(
+                contract=verification_contract,
+                action_kind=action_kind,
+                action_id=action_request["actionId"],
+                delivery_status=status,
+                target_workflow_id=verification_target_workflow_id,
+                pinned_run_id=verification_pinned_run_id,
+                before_snapshot=before_snapshot,
+                action_result=result_payload,
+                remaining_polls=remaining_polls,
+            )
+            verification_payload = _redact_payload_value(
+                {**verification_result.to_payload(), "approvalRef": approval_ref}
+            )
+            verification_artifact = (
+                await self._lifecycle_publisher.publish_json_artifact(
+                    remediation_workflow_id=link.remediation_workflow_id,
+                    remediation_run_id=link.remediation_run_id,
+                    artifact_type="remediation.verification",
+                    name=f"reports/remediation_verification-{action_id}{suffix}.json",
+                    payload=verification_payload,
+                    target_workflow_id=link.target_workflow_id,
+                    target_run_id=link.target_run_id,
+                    extra_metadata=verification_result.to_metadata(),
+                )
+            )
+        else:
+            observation, verification_artifact, _ = recovered
+            suffix = f"-observation-{observation}" if observation else ""
 
         # Retry/replay safety: publish_json_artifact deduplicates on the stable
         # (artifact_type, label) key and returns the pre-existing immutable
@@ -1383,6 +1458,11 @@ class RemediationEvidenceToolService:
         verification_resulting_identity = dict(
             persisted_payload.get("resultingIdentity") or {}
         )
+
+        await self._session.refresh(link)
+        accepted = link.mutation_guard_ledger_state["entries"][action_id]["execution"]
+        if accepted.get("verificationState") == "complete":
+            return dict(accepted["verificationResponse"])
 
         audit_timestamp = datetime.now(timezone.utc)
         audit_payload = build_remediation_audit_event(
@@ -1410,6 +1490,7 @@ class RemediationEvidenceToolService:
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.audit_event",
             name=f"events/remediation_action-{action_request['actionId']}{suffix}.json",
             payload=audit_payload,
@@ -1442,6 +1523,7 @@ class RemediationEvidenceToolService:
         )
         annotation_artifact = await self._lifecycle_publisher.publish_target_annotation(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
             name=(
@@ -1451,24 +1533,6 @@ class RemediationEvidenceToolService:
             payload=annotation_payload,
         )
 
-        link.latest_action_summary = action_kind
-        # ``outcome`` records the action *delivery* status; the repair
-        # verification outcome is tracked separately so a delivered action never
-        # relabels the target as repaired.
-        link.outcome = status
-        link.verification_outcome = verification_outcome
-        if resolved_approval is not None:
-            link.approval_state = {
-                **dict(link.approval_state or {}),
-                "artifactRefs": {
-                    **dict((link.approval_state or {}).get("artifactRefs") or {}),
-                    "actionRequest": request_artifact.artifact_id,
-                    "actionResult": result_artifact.artifact_id,
-                    "verification": verification_artifact.artifact_id,
-                    "auditEvent": audit_artifact.artifact_id,
-                    "targetAnnotation": annotation_artifact.artifact_id,
-                },
-            }
         response = {
             "schemaVersion": "v1",
             "actionKind": action_kind,
@@ -1480,9 +1544,9 @@ class RemediationEvidenceToolService:
                 "pending": verification_pending,
                 "deliveryStatus": status,
                 "automaticallyVerifiable": (
-                    verification_result.contract.automatically_verifiable
+                    verification_contract.automatically_verifiable
                 ),
-                "verifierKind": verification_result.contract.verifier_kind,
+                "verifierKind": verification_contract.verifier_kind,
                 "reason": verification_reason,
                 "resultingIdentity": verification_resulting_identity,
             },
@@ -1498,12 +1562,36 @@ class RemediationEvidenceToolService:
             response["policyAuthority"] = result_payload["policyAuthority"]
         if "approvalBinding" in result_payload:
             response["approvalBinding"] = result_payload["approvalBinding"]
-        saved["verificationState"] = "pending" if verification_pending else "complete"
-        saved["verificationResponse"] = response
-        saved["observation"] = saved.get("observation", 0) + 1
-        self._save_action_execution(link, action_request["actionId"], saved)
-        await self._session.commit()
-        return response
+
+        def accept(current):
+            current["inFlightObservations"] = [
+                ordinal
+                for ordinal in current.get("inFlightObservations", [])
+                if ordinal != observation
+            ]
+            if current.get("verificationState") == "complete":
+                return {}, current["verificationResponse"]
+            current["verificationState"] = (
+                "pending" if verification_pending else "complete"
+            )
+            current["verificationResponse"] = response
+            values = dict(
+                latest_action_summary=action_kind,
+                outcome=status,
+                verification_outcome=verification_outcome,
+            )
+            if resolved_approval is not None:
+                state = dict(link.approval_state or {})
+                values["approval_state"] = {
+                    **state,
+                    "artifactRefs": {
+                        **dict(state.get("artifactRefs") or {}),
+                        **response["artifactRefs"],
+                    },
+                }
+            return values, response
+
+        return await self._change_verification_execution(link, action_id, accept)
 
     async def resume_pending_verifications(self, *, workflow_id: str) -> int:
         """Reconcile on durable result notifications; never dispatch a mutation.
@@ -1732,6 +1820,7 @@ class RemediationEvidenceToolService:
                 "guardResult.lock.holderWorkflowId does not match the action context."
             )
 
+
 def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
     evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
@@ -1750,6 +1839,7 @@ def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
 
     collect(evidence_mapping)
     return artifact_ids
+
 
 def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
@@ -1775,10 +1865,12 @@ def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
                     output.add(agent_run_id)
     return output
 
+
 def _artifact_id_from_ref(value: str | Mapping[str, Any] | Any) -> str | None:
     if isinstance(value, Mapping):
         return _string_or_none(value.get("artifact_id") or value.get("artifactId"))
     return _string_or_none(value)
+
 
 def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> int | None:
     max_tail_lines = 2000
@@ -1816,6 +1908,7 @@ def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> in
             requested = max_tail_lines
     return max(0, min(int(requested), effective_limit))
 
+
 def _normalize_log_stream(value: Any) -> RemediationLogStream:
     normalized = _required_string(value, "stream")
     if normalized not in {"stdout", "stderr", "merged", "diagnostics"}:
@@ -1823,6 +1916,7 @@ def _normalize_log_stream(value: Any) -> RemediationLogStream:
             "stream must be one of stdout, stderr, merged, or diagnostics."
         )
     return normalized  # type: ignore[return-value]
+
 
 def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None:
     if value is not None:
@@ -1857,6 +1951,7 @@ def _normalize_action_result_status(value: Any) -> str:
         )
     return status
 
+
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"accepted", "applied", "failed", "timed_out"}:
         return "attempted"
@@ -1868,11 +1963,13 @@ def _annotation_decision_for_status(status: str) -> str:
         return "denied"
     return "escalated"
 
+
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
         raise RemediationEvidenceToolError(f"{field_name} is required.")
     return normalized
+
 
 def _string_or_none(value: Any) -> str | None:
     if value is None:
@@ -1880,10 +1977,12 @@ def _string_or_none(value: Any) -> str | None:
     normalized = str(value).strip()
     return normalized or None
 
+
 def _safe_sequence(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
 
 def _bool_or_default(value: Any, *, default: bool) -> bool:
     if value is None:
@@ -1898,8 +1997,10 @@ def _bool_or_default(value: Any, *, default: bool) -> bool:
             return False
     return bool(value)
 
+
 def _redact_sequence(value: Any) -> list[Any]:
     return [_redact_payload_value(item) for item in _safe_sequence(value)]
+
 
 def _redact_payload_value(value: Any) -> Any:
     def apply_custom_redaction(node: Any) -> Any:
@@ -1916,6 +2017,7 @@ def _redact_payload_value(value: Any) -> Any:
 
     return apply_custom_redaction(redact_sensitive_payload(value))
 
+
 def _redact_text(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if normalized is None:
@@ -1929,6 +2031,7 @@ def _redact_text(value: Any) -> str | None:
     redacted = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED_SECRET]", redacted)
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
+
 
 def _enum_value(value: Any) -> str | None:
     if value is None:
