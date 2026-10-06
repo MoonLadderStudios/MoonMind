@@ -530,6 +530,12 @@ async def test_plan_schedule_follows_managed_bootstrap_policy_cutover(
         omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
     )
     monkeypatch.setattr(deployment_identity, "assert_plan_matches_deployed_runtime", AsyncMock())
+    monkeypatch.setattr(
+        OmnigentPolicyService, "resolve_runtime_snapshot", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        deployment_identity, "resolve_deployed_server_build_digest", lambda: "sha256:" + "5" * 64
+    )
 
     service = RecurringWorkflowsService(session, artifact_service=object())
     assert await service._refresh_managed_bootstrap_target(definition) is True
@@ -588,7 +594,8 @@ async def test_current_managed_snapshot_is_not_re_resolved(managed_snapshot_reso
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "moved", [None, "policy", "server", "strict", "repository", "process"]
+    "moved",
+    [None, "policy", "server", "strict", "repository", "edit", "provider", "process"],
 )
 async def test_plan_schedule_refresh_converges_until_authority_moves(
     monkeypatch, managed_snapshot_resolver, moved,
@@ -603,22 +610,15 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
     from api_service.services import recurring_workflows_service
     from api_service.services.recurring_workflows_service import RecurringWorkflowsService
     from moonmind.omnigent import deployment_identity
-    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
     from tests.unit.services.test_recurring_workflows_service import _schedule_plan_binding
 
-    monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLANS_COMPILED_IN_PROCESS", set())
+    monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLAN_INPUTS", {})
     session = ManagedBootstrapScheduleSession()
+    session.provider.runtime_id, session.provider.provider_id = "codex_cli", "openai"
     definition = _managed_plan_schedule(session)
     policy = {"policyRef": "codex-on-demand@20", "boundaries": {"host": {"mode": "on_demand_docker"}}}
-    stored_plan = SimpleNamespace(
-        launchPolicyRef="codex-on-demand@20",
-        policySnapshotDigest=omnigent_execution_plan_service.json_artifact_digest(policy),
-        admissionAuthority=SimpleNamespace(
-            admissionMode="strict" if moved == "strict" else "ordinary"
-        ),
-        resolvedTools={"repositoryAccess": {"repo": {}}} if moved == "repository" else {},
-    )
+    authority = {"policy": policy, "server": "sha256:" + "5" * 64}
     compiled = []
 
     async def compile_plan(**kwargs):
@@ -626,40 +626,52 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
         # Every compile persists new artifacts, so its binding is always new.
         binding = _schedule_plan_binding(str(len(compiled) + 1))
         return SimpleNamespace(
-            envelope=SimpleNamespace(payload=SimpleNamespace()),
+            envelope=SimpleNamespace(
+                payload=SimpleNamespace(
+                    admissionAuthority=SimpleNamespace(
+                        admissionMode="strict" if moved == "strict" else "ordinary"
+                    ),
+                    resolvedTools=(
+                        {"repositoryAccess": {"repo": {}}} if moved == "repository" else {}
+                    ),
+                )
+            ),
             binding=OmnigentExecutionPlanBinding.model_validate(binding),
             artifact_refs=("artifact:plan",),
             resolved_skillset_ref="artifact:skills",
             runtime_provider_rollout={"targetId": "codex.legacy-profile-bound-omnigent"},
         )
 
-    async def load_plan(_store, plan_ref):
-        assert plan_ref == definition.target["initialParameters"]["omnigentExecutionPlan"]["planRef"]
-        return SimpleNamespace(payload=stored_plan)
-
     async def resolve_policy(_service, policy_ref):
         assert policy_ref == "codex-on-demand@20"
-        return {**policy, "rollout": {"cohort": "next"}} if moved == "policy" else policy
-
-    async def deployed_runtime(payload):
-        if moved == "server" and payload is stored_plan:
-            raise deployment_identity.OmnigentDeploymentIdentityConflict("server moved")
+        return authority["policy"]
 
     monkeypatch.setattr(
         omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
     )
-    monkeypatch.setattr(SessionExecutionPlanStore, "load", load_plan)
     monkeypatch.setattr(OmnigentPolicyService, "resolve_runtime_snapshot", resolve_policy)
-    monkeypatch.setattr(deployment_identity, "assert_plan_matches_deployed_runtime", deployed_runtime)
+    monkeypatch.setattr(
+        deployment_identity, "resolve_deployed_server_build_digest", lambda: authority["server"]
+    )
+    monkeypatch.setattr(deployment_identity, "assert_plan_matches_deployed_runtime", AsyncMock())
 
     service = RecurringWorkflowsService(session, artifact_service=object())
     # The release cut moves the schedule onto the new policy.
     assert await service._refresh_managed_bootstrap_target(definition) is True
     assert definition.version == 973
     published = deepcopy(definition.target)
-    if moved == "process":
+    if moved == "policy":
+        authority["policy"] = {**policy, "rollout": {"cohort": "next"}}
+    elif moved == "server":
+        # A compatible server replacement still moves the exact build.
+        authority["server"] = "sha256:" + "6" * 64
+    elif moved == "edit":
+        definition.target["initialParameters"]["task"] = {"instructions": "Edited task"}
+    elif moved == "provider":
+        session.provider.provider_id = "openai-compatible"
+    elif moved == "process":
         # A restarted API cannot know which image or environment compiled it.
-        monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLANS_COMPILED_IN_PROCESS", set())
+        monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLAN_INPUTS", {})
 
     # The next reconcile pass, ~120 seconds later.
     refreshed = await service._refresh_managed_bootstrap_target(definition)
@@ -676,3 +688,6 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
             _schedule_plan_binding("3")
         )
         assert definition.version == 974
+    assert len(recurring_workflows_service._SCHEDULE_PLAN_INPUTS) == (
+        0 if moved in {"strict", "repository"} else 1
+    )
