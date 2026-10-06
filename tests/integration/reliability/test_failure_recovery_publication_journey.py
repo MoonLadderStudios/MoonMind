@@ -118,6 +118,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
     enabled = {
         run_module.RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
         run_module.RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH,
+        run_module.RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH,
         "run-remediation-current-evidence-inputs-v1",
         "run-materialize-evidence-retry-v1",
     }
