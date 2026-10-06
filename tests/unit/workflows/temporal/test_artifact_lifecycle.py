@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base, TemporalArtifactStatus
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
+    TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -88,6 +89,137 @@ async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(
             assert refreshed.status is TemporalArtifactStatus.DELETED
             assert refreshed.hard_deleted_at is not None
             assert refreshed.tombstoned_at is not None
+
+async def _create_expired_artifacts(
+    service: TemporalArtifactService, count: int
+) -> list[str]:
+    artifact_ids: list[str] = []
+    for index in range(count):
+        artifact, _upload = await service.create(
+            principal="user-1", content_type="text/plain"
+        )
+        await service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal="user-1",
+            payload=f"payload-{index}".encode(),
+            content_type="text/plain",
+        )
+        row = await service._repository.get_artifact(artifact.artifact_id)
+        row.expires_at = datetime.now(UTC) - timedelta(days=1)
+        artifact_ids.append(artifact.artifact_id)
+    await service._repository.commit()
+    return artifact_ids
+
+
+async def test_lifecycle_drain_clears_a_backlog_larger_than_one_page(
+    tmp_path: Path,
+) -> None:
+    """One page per hourly pass let expired blobs outgrow the object store."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            artifact_ids = await _create_expired_artifacts(service, 3)
+            pages: list[int] = []
+
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                run_id="drain-1",
+                limit=1,
+                time_budget=timedelta(minutes=5),
+                on_page=lambda page: pages.append(page.hard_deleted_count),
+            )
+
+            assert summary.drained is True
+            assert summary.soft_deleted_count == 3
+            assert summary.hard_deleted_count == 3
+            assert summary.pages == len(pages) >= 3
+            for artifact_id in artifact_ids:
+                row = await service._repository.get_artifact(artifact_id)
+                assert row.hard_deleted_at is not None
+
+
+async def test_lifecycle_drain_stops_at_its_budget_and_reports_backlog(
+    tmp_path: Path,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            await _create_expired_artifacts(service, 3)
+
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                limit=1,
+                time_budget=timedelta(0),
+            )
+
+            assert summary.pages == 1
+            assert summary.hard_deleted_count == 1
+            assert summary.drained is False
+
+
+async def test_lifecycle_drain_stops_when_a_full_page_is_all_protected(
+    tmp_path: Path,
+) -> None:
+    """Protected candidates fill a page without progress; never spin on them."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            (artifact_id,) = await _create_expired_artifacts(service, 1)
+            await service._repository.acquire_use_claim(
+                artifact_id=artifact_id,
+                owner_principal="service:restore",
+                request_id="restore-1",
+                operation_kind="restore",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+            await service._repository.commit()
+
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                limit=1,
+                time_budget=timedelta(minutes=5),
+            )
+
+            assert summary.pages == 1
+            assert summary.skipped_in_use_count == 1
+            assert summary.drained is False
+            row = await service._repository.get_artifact(artifact_id)
+            assert row.status is TemporalArtifactStatus.COMPLETE
+
+
+async def test_lifecycle_sweep_activity_drains_and_reports_completion(
+    tmp_path: Path,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            await _create_expired_artifacts(service, 2)
+
+            summary = await TemporalArtifactActivities(service).artifact_lifecycle_sweep(
+                principal="service:storage-maintenance"
+            )
+
+            assert summary.hard_deleted_count == 2
+            assert summary.drained is True
+
 
 async def test_lifecycle_sweep_skips_pinned_artifacts(tmp_path: Path) -> None:
     """Pinned artifacts should remain undeleted during lifecycle sweeps."""
