@@ -709,6 +709,59 @@ async def test_schedule_refresh_failure_does_not_fail_a_verified_release(
     else:
         assert receipt["schedulesRefreshed"] == 2
         assert receipt["scheduleRefreshFailures"] == [reason]
+    assert receipt["scheduleRefreshFailureCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_receipt_naming_many_failed_schedules_survives_the_controller_tail(
+    tmp_path, monkeypatch
+):
+    """The standalone controller recovers the receipt from a bounded log tail.
+
+    A receipt carrying every failed schedule outgrows that tail, the controller
+    loses the result prefix, and reports "returned no release receipt" for an
+    update that was installed and verified.
+    """
+    import dataclasses
+    import json
+
+    from tests.support.deployment_controller import load_controller_modules
+
+    load_controller_modules(monkeypatch)
+    import redact
+    import server
+
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    failures = [f"schedule-{index:03d}: " + "x" * 480 for index in range(500)]
+
+    async def refresh_schedules():
+        return {"refreshed": 0, "failures": failures}
+
+    drivers = dataclasses.replace(
+        _drivers([], candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live=_refs()),
+        refresh_schedules=refresh_schedules,
+    )
+    receipt = await migrate_omnigent_release(
+        store=store, runner=object(), owner="test", drivers=drivers
+    )
+
+    # Same line, stream order, and bound as controller_omnigent_cli feeding
+    # the controller's subprocess runner.
+    diagnostics = "\n".join(f"migration diagnostic {n}" for n in range(400))
+    line = server.OMNIGENT_RESULT_PREFIX + json.dumps(receipt, sort_keys=True)
+    last = redact.tail_text(f"{diagnostics}\n{line}").splitlines()[-1]
+    assert last.startswith(server.OMNIGENT_RESULT_PREFIX)
+    parsed = json.loads(last[len(server.OMNIGENT_RESULT_PREFIX) :])
+    assert parsed["status"] == "migrated"
+    assert parsed["scheduleRefreshFailureCount"] == 500
+    assert parsed["scheduleRefreshFailures"]
+    assert parsed["scheduleRefreshFailures"][0].startswith("schedule-000: ")
 
 
 def test_store_merge_preserves_unrelated_entries(tmp_path):
