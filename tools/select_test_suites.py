@@ -265,13 +265,12 @@ RELIABILITY_JOURNEY_EXACT = {
     "tests/helpers/codex_session_runtime.py",
     "tools/select_test_suites.py",
     "tools/start-worker.sh",
-    # MoonLadderStudios/MoonMind#4366: reliability sharding inputs. The
-    # committed pytest-split duration hints, their file-level seeds, the
-    # refresh/validate helper, and the per-shard evidence hook are consumed
-    # by the reliability shards; a change to any of them must re-run the
-    # corpus that reads them.
+    # MoonLadderStudios/MoonMind#4366, #4629: reliability sharding inputs.
+    # The committed pytest-split duration hints, the validate/import helper,
+    # and the per-shard evidence hook (also the exact node-ID plugin) are
+    # consumed by the reliability shards; a change to any of them must re-run
+    # the corpus that reads them.
     "tests/.reliability-test-durations.json",
-    "tools/ci/reliability_shard_weights.json",
     "tools/ci/refresh_reliability_durations.py",
     "tools/ci/write_backend_matrix_summary.py",
 }

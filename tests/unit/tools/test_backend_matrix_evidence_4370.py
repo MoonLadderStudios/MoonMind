@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from tools.ci.write_backend_matrix_summary import (
+    DURATION_SEMANTICS,
+    SNAPSHOT_SCHEMA,
     build_evidence,
     classify_outcome,
     parse_junit,
@@ -78,7 +82,97 @@ def test_slowest_and_durations_snapshot_are_separate_files(tmp_path: Path) -> No
     payload = json.loads(snapshot.read_text())
     assert payload["suite"] == "reliability-shard-1"
     assert payload["tests"] == 3
-    assert payload["cases"][0]["nodeid"] == "mod::test_a"
+    # #4629: a JUnit report without the recorded pytest node ID only offers
+    # a classname::name guess; the snapshot keeps it as a display name and
+    # never presents it as an exact node ID.
+    assert payload["cases"][0]["junitName"] == "mod::test_a"
+    assert payload["cases"][0]["nodeid"] is None
+    assert payload["durationSemantics"] is None
+
+
+def test_malformed_case_time_stays_unavailable_not_zero(tmp_path: Path) -> None:
+    """#4629 R2: invalid timing text must not silently become a measured
+    zero in the per-shard snapshot."""
+    root = ET.Element("testsuite", {"tests": "2", "failures": "0", "errors": "0", "skipped": "0", "time": "1"})
+    ET.SubElement(root, "testcase", {"classname": "mod", "name": "test_bad", "time": "fast"})
+    ET.SubElement(root, "testcase", {"classname": "mod", "name": "test_ok", "time": "0.5"})
+    path = tmp_path / "junit.xml"
+    ET.ElementTree(root).write(path)
+
+    summary = parse_junit(path)
+    snapshot = tmp_path / "durations.json"
+    write_durations_snapshot("reliability-shard-1", summary, snapshot)
+    write_slowest_report(summary, tmp_path / "slowest.txt")
+
+    cases = {case["junitName"]: case for case in json.loads(snapshot.read_text())["cases"]}
+    assert cases["mod::test_bad"]["duration"] is None
+    assert cases["mod::test_ok"]["duration"] == 0.5
+    assert "unavailable mod::test_bad" in (tmp_path / "slowest.txt").read_text()
+
+
+_EXACT_ID_FIXTURE = """
+import pytest
+
+
+class TestUpgrade:
+    @pytest.mark.parametrize("version", ["v1.2/a", "plain"])
+    def test_inflight(self, version):
+        pass
+
+
+@pytest.mark.skip(reason="intentionally skipped")
+def test_skipped():
+    pass
+"""
+
+
+def test_snapshot_carries_exact_pytest_node_ids_and_run_identity(tmp_path: Path) -> None:
+    """#4629 R1/R3: the producer, loaded as a pytest plugin by the reliability
+    rows, records the actual pytest node ID (path, class, parameter) in JUnit
+    instead of the dotted classname guess, plus the run identity and the
+    setup+call+teardown duration semantics the import requires."""
+    corpus = tmp_path / "corpus"
+    (corpus / "tests" / "integration" / "reliability").mkdir(parents=True)
+    (corpus / "tests" / "integration" / "reliability" / "test_exact.py").write_text(
+        _EXACT_ID_FIXTURE, encoding="utf-8"
+    )
+    junit = tmp_path / "junit.xml"
+    run = subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "tests/integration/reliability",
+            "-p", "no:cacheprovider", "-p", "tools.ci.write_backend_matrix_summary",
+            f"--junitxml={junit}",
+        ],
+        cwd=corpus,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True, text=True, timeout=120,
+    )
+    assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-2000:]
+
+    snapshot = tmp_path / "durations.json"
+    args_ns = _args(tmp_path, junit=junit, selected="true", outcome="success")
+    args_ns.suite = "reliability-shard-2"
+    args_ns.shard = "2"
+    args_ns.durations_snapshot = str(snapshot)
+    build_evidence(args_ns)
+
+    payload = json.loads(snapshot.read_text())
+    assert payload["schema"] == SNAPSHOT_SCHEMA
+    assert (payload["suite"], payload["shard"]) == ("reliability-shard-2", "2")
+    assert (payload["revision"], payload["runId"], payload["attempt"]) == ("abc123", "1", "1")
+    assert payload["testOutcome"] == "success"
+    assert payload["durationSemantics"] == DURATION_SEMANTICS
+    base = "tests/integration/reliability/test_exact.py::"
+    outcomes = {case["nodeid"]: case["outcome"] for case in payload["cases"]}
+    assert outcomes == {
+        f"{base}TestUpgrade::test_inflight[v1.2/a]": "passed",
+        f"{base}TestUpgrade::test_inflight[plain]": "passed",
+        f"{base}test_skipped": "skipped",
+    }
+    for case in payload["cases"]:
+        assert isinstance(case["duration"], float) and case["duration"] >= 0
+    # The reconstructed JUnit guess is not the exact ID for class/param cases.
+    assert all(case["junitName"] != case["nodeid"] for case in payload["cases"])
 
 
 def test_hook_never_fails_job_on_bad_xml(tmp_path: Path) -> None:

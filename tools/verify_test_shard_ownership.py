@@ -34,6 +34,8 @@ import pytest
 
 from tools.ci.refresh_reliability_durations import (
     RELIABILITY_MARKER_EXPR,
+    RELIABILITY_SHARD_COUNT,
+    RELIABILITY_SUITES,
     durations_pytest_args,
 )
 
@@ -43,10 +45,7 @@ PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 # aggregate fans out to the four physical groups below.
 RELIABILITY_MATRIX_OWNER = "reliability-matrix"
 # pytest-split groups are 1-based; suite reliability-shard-N runs --group N.
-RELIABILITY_SHARD_COUNT = 4
-RELIABILITY_SHARD_NAMES = tuple(
-    f"reliability-shard-{index}" for index in range(1, RELIABILITY_SHARD_COUNT + 1)
-)
+RELIABILITY_SHARD_NAMES = RELIABILITY_SUITES
 SPLIT_GROUP_IDS = tuple(range(1, RELIABILITY_SHARD_COUNT + 1))
 
 RELIABILITY_PREFIX = "tests/integration/reliability/"

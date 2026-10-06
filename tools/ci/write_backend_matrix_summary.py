@@ -18,12 +18,23 @@ Contract guarantees (checked by unit tests, not by live Actions runs):
 - The committed partition input is never modified: duration hints are
   written only to the caller-supplied per-shard snapshot path, which must
   be a separate artifact file.
+
+MoonLadderStudios/MoonMind#4629: the reliability rows also load this module
+as a pytest plugin (``-p tools.ci.write_backend_matrix_summary``) so each
+JUnit ``<testcase>`` records the actual pytest node ID (path, class and
+parameter components) and the JUnit duration semantics. The per-shard
+snapshot exports those exact IDs with the run/attempt/revision identity
+that ``tools/ci/refresh_reliability_durations.py import`` checks before it
+replaces the committed hints. Without the recorded property the snapshot
+only offers the ``classname::name`` display guess and its ``nodeid`` is
+null; malformed case times stay null instead of becoming a measured zero.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -33,12 +44,32 @@ from pathlib import Path
 SLOWEST_LIMIT = 25
 SUMMARY_SLOWEST_SHOWN = 10
 
+# JUnit <testcase> properties recorded by the pytest_itemcollected hook below.
+NODEID_PROPERTY = "pytest_nodeid"
+DURATION_REPORT_PROPERTY = "junit_duration_report"
+# The one documented cost meaning for observed durations: pytest's JUnit
+# ``junit_duration_report = total``, i.e. setup + call + teardown of a case.
+DURATION_SEMANTICS = "pytest-junit-total:setup+call+teardown"
+SNAPSHOT_SCHEMA = "moonmind.reliability-durations-snapshot/v1"
+
+
+def pytest_itemcollected(item) -> None:  # noqa: ANN001 -- pytest plugin hook
+    """Record the exact node ID and duration semantics in the JUnit report."""
+    item.user_properties.append((NODEID_PROPERTY, item.nodeid))
+    item.user_properties.append(
+        (DURATION_REPORT_PROPERTY, item.config.getini("junit_duration_report"))
+    )
+
 
 @dataclass(frozen=True)
 class CaseTiming:
     nodeid: str
     classname: str
-    time: float
+    time: float | None
+    junit_name: str = ""
+    pytest_nodeid: str | None = None
+    duration_report: str | None = None
+    outcome: str = "passed"
 
 
 @dataclass(frozen=True)
@@ -99,13 +130,30 @@ def parse_junit(path: Path) -> JUnitSummary:
         for case in suite.iter("testcase"):
             classname = case.get("classname", "")
             name = case.get("name", "")
-            nodeid = f"{classname}::{name}" if classname else name
+            properties = {
+                prop.get("name"): prop.get("value")
+                for prop in case.iter("property")
+            }
+            pytest_nodeid = properties.get(NODEID_PROPERTY) or None
+            junit_name = f"{classname}::{name}" if classname else name
             try:
-                duration = float(case.get("time", "0") or 0)
+                duration: float | None = float(case.get("time", "0") or 0)
             except ValueError:
-                duration = 0.0
-            cases.append(CaseTiming(nodeid=nodeid, classname=classname, time=duration))
-    cases.sort(key=lambda c: c.time, reverse=True)
+                duration = None
+            if duration is not None and not math.isfinite(duration):
+                duration = None
+            cases.append(
+                CaseTiming(
+                    nodeid=pytest_nodeid or junit_name,
+                    classname=classname,
+                    time=duration,
+                    junit_name=junit_name,
+                    pytest_nodeid=pytest_nodeid,
+                    duration_report=properties.get(DURATION_REPORT_PROPERTY),
+                    outcome=_case_outcome(case),
+                )
+            )
+    cases.sort(key=lambda c: (c.time is not None, c.time or 0.0), reverse=True)
     return JUnitSummary(
         tests=tests,
         failures=failures,
@@ -116,6 +164,21 @@ def parse_junit(path: Path) -> JUnitSummary:
     )
 
 
+def _case_outcome(case: ET.Element) -> str:
+    tags = {child.tag for child in case}
+    if "failure" in tags:
+        return "failed"
+    if "error" in tags:
+        return "error"
+    if "skipped" in tags:
+        return "skipped"
+    return "passed"
+
+
+def _format_time(value: float | None) -> str:
+    return "unavailable" if value is None else f"{value:.2f}s"
+
+
 def write_slowest_report(summary: JUnitSummary, path: Path, limit: int = SLOWEST_LIMIT) -> None:
     """Write the slowest-test text report derived from JUnit timings."""
     lines = [
@@ -124,28 +187,54 @@ def write_slowest_report(summary: JUnitSummary, path: Path, limit: int = SLOWEST
         f"failures={summary.failures} errors={summary.errors} skipped={summary.skipped}",
     ]
     for case in summary.cases[:limit]:
-        lines.append(f"{case.time:.2f}s {case.nodeid}")
+        lines.append(f"{_format_time(case.time)} {case.nodeid}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_durations_snapshot(suite: str, summary: JUnitSummary, path: Path) -> None:
-    """Write the per-shard duration-hints snapshot (separate artifact).
+def write_durations_snapshot(
+    suite: str,
+    summary: JUnitSummary,
+    path: Path,
+    *,
+    shard: str = "",
+    revision: str = "",
+    run_id: str = "",
+    attempt: str = "",
+    test_outcome: str = "",
+) -> None:
+    """Write the per-shard duration observations snapshot (separate artifact).
 
-    This file is the #4366 maintenance input for the current shard only. It
-    must never overwrite a shared/committed selection-hints baseline, and a
-    partial failed-shard result must never replace a complete baseline: the
-    caller uploads this snapshot path as its own artifact.
+    This file is the #4629 import input for the current shard only. It must
+    never overwrite a shared/committed selection-hints baseline; the import
+    command accepts it only together with the other shards of the same
+    run/attempt/revision. ``nodeid`` is the exact pytest node ID recorded by
+    the plugin hook (null when absent) and ``duration`` is the JUnit total
+    (null when the report's time was malformed).
     """
+    semantics = {c.duration_report for c in summary.cases}
     payload = {
+        "schema": SNAPSHOT_SCHEMA,
         "suite": suite,
+        "shard": shard,
+        "revision": revision,
+        "runId": run_id,
+        "attempt": attempt,
+        "testOutcome": test_outcome,
+        "durationSemantics": DURATION_SEMANTICS if semantics == {"total"} else None,
         "tests": summary.tests,
         "failures": summary.failures,
         "errors": summary.errors,
         "skipped": summary.skipped,
         "time": summary.time,
         "cases": [
-            {"nodeid": c.nodeid, "classname": c.classname, "duration": c.time}
+            {
+                "nodeid": c.pytest_nodeid,
+                "junitName": c.junit_name,
+                "classname": c.classname,
+                "duration": c.time,
+                "outcome": c.outcome,
+            }
             for c in summary.cases
         ],
     }
@@ -292,7 +381,7 @@ def render_summary(
     lines += ["", "### Slowest cases", ""]
     if junit is not None and junit.cases:
         for case in junit.cases[:SUMMARY_SLOWEST_SHOWN]:
-            lines.append(f"- `{case.time:.2f}s` `{case.nodeid}`")
+            lines.append(f"- `{_format_time(case.time)}` `{case.nodeid}`")
     elif not selected:
         lines.append("- Slowest cases: intentionally unselected.")
     else:
@@ -447,7 +536,16 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         except OSError as exc:
             error = f"slowest-report write failed: {exc}"
         try:
-            write_durations_snapshot(args.suite, junit, Path(args.durations_snapshot))
+            write_durations_snapshot(
+                args.suite,
+                junit,
+                Path(args.durations_snapshot),
+                shard=args.shard or "",
+                revision=args.revision or "",
+                run_id=args.run_id or "",
+                attempt=args.attempt or "",
+                test_outcome=args.test_outcome or "",
+            )
             durations_available = True
         except OSError as exc:
             note = f"durations-snapshot write failed: {exc}"
