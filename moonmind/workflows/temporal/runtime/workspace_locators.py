@@ -275,7 +275,9 @@ class SandboxWorkspaceRecordStore:
             pass
 
     @staticmethod
-    def _claim_is_expired(payload: dict[str, Any]) -> bool:
+    def _claim_is_expired(
+        payload: dict[str, Any], now: datetime | None = None
+    ) -> bool:
         """Return whether a recorded claim outlived its grant lifetime."""
 
         raw = str(payload.get("expiresAt") or "")
@@ -287,7 +289,7 @@ class SandboxWorkspaceRecordStore:
             return False
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=UTC)
-        return moment <= datetime.now(tz=UTC)
+        return moment <= (now or datetime.now(tz=UTC))
 
     def claim_existing_workspace(self, workspace_id: str, grant: Any) -> None:
         """Record exclusive/read-only use of another workflow's workspace.
@@ -404,6 +406,56 @@ class SandboxWorkspaceRecordStore:
                 WORKSPACE_AUTHORITY_MISMATCH,
                 "existing-workspace grant release failed",
             ) from exc
+
+    def active_claim_grantees(
+        self, workspace_id: str, *, now: datetime | None = None
+    ) -> tuple[str, ...]:
+        """Return grantee workflow ids of unexpired existing-workspace claims.
+
+        A claim without a recorded grantee yields ``""`` so callers cannot
+        attribute it to a finished workflow.
+        """
+
+        claims = self._claims_dir(workspace_id)
+        grantees: list[str] = []
+        for claim_path in sorted(claims.glob("*.json")):
+            try:
+                payload = json.loads(claim_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                grantees.append("")
+                continue
+            if not isinstance(payload, dict):
+                grantees.append("")
+                continue
+            if self._claim_is_expired(payload, now):
+                continue
+            grantees.append(str(payload.get("granteeWorkflowId") or "").strip())
+        return tuple(grantees)
+
+    def record_paths(self, workspace_id: str) -> tuple[Path, ...]:
+        """Return the existing owner-side files kept for ``workspace_id``."""
+
+        return tuple(
+            path
+            for path in (
+                self._record_path(workspace_id),
+                self._completion_marker_path(workspace_id),
+                self._readiness_marker_path(workspace_id),
+                self._claims_dir(workspace_id),
+            )
+            if path.exists()
+        )
+
+    def discard(self, workspace_id: str) -> None:
+        """Remove the owner record, markers and claims of a deleted workspace."""
+
+        for path in self.record_paths(workspace_id):
+            if path.is_dir():
+                for child in path.iterdir():
+                    child.unlink(missing_ok=True)
+                path.rmdir()
+            else:
+                path.unlink(missing_ok=True)
 
     def load(self, workspace_id: str) -> SandboxWorkspaceRecord | None:
         path = self._record_path(workspace_id)

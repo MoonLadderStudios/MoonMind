@@ -5,15 +5,16 @@ Implements MM-949 from source issue MM-940.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
@@ -26,6 +27,9 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecordStore,
+)
 
 ManagedRuntimeCandidateKind = Literal[
     "workspace",
@@ -167,12 +171,33 @@ class ManagedRuntimeCleanupConfig:
 
 
 @dataclass(frozen=True)
+class SandboxWorkspaceOwner:
+    """Owner evidence for one ``temporal_sandbox/<workspace_id>`` workspace.
+
+    Sandbox and Omnigent workspaces have no run/session record; their owner
+    record names the workflow that materialized them, and existing-workspace
+    claims name any other workflow still granted use of them.
+    """
+
+    workspace_id: str
+    workflow_id: str = ""
+    claim_grantees: tuple[str, ...] = ()
+    record_paths: tuple[Path, ...] = ()
+    error: str | None = None
+
+    @property
+    def workflow_ids(self) -> tuple[str, ...]:
+        return (self.workflow_id, *self.claim_grantees)
+
+
+@dataclass(frozen=True)
 class ManagedRuntimeCleanupCandidate:
     kind: ManagedRuntimeCandidateKind
     path: Path
     ownership_root: Path | None = None
     run_records: tuple[ManagedRunRecord, ...] = ()
     session_records: tuple[CodexManagedSessionRecord, ...] = ()
+    sandbox_owner: SandboxWorkspaceOwner | None = None
 
 
 @dataclass(frozen=True)
@@ -294,6 +319,59 @@ class DockerReferenceState:
 
 DockerReferenceProvider = Callable[[], DockerReferenceState | Mapping[str, object]]
 CleanupProgressCallback = Callable[[Mapping[str, object]], None]
+# Maps each workflow id Temporal reports closed to its close time (``None``
+# when Temporal no longer retains the history). Omitted ids are open or
+# unknown and keep their workspaces.
+ClosedWorkflowProvider = Callable[[Sequence[str]], Mapping[str, datetime | None]]
+
+_SANDBOX_STORE = "temporal_sandbox"
+_CLOSED_WORKFLOW_STATUSES = frozenset(
+    {"COMPLETED", "FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
+)
+
+
+async def resolve_closed_workflows(
+    workflow_ids: Iterable[str],
+    *,
+    describe: Callable[[str], Awaitable[Any]],
+    concurrency: int = 16,
+) -> dict[str, datetime | None]:
+    """Return close times for the workflows Temporal reports closed.
+
+    A workflow whose history Temporal no longer retains closed before the
+    namespace retention window, so it is closed with an unknown time.
+    Running workflows and failed lookups are omitted and stay protected.
+    """
+
+    from temporalio.service import RPCError, RPCStatusCode
+
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def lookup(workflow_id: str) -> tuple[str, bool, datetime | None]:
+        async with semaphore:
+            try:
+                description = await describe(workflow_id)
+            except RPCError as exc:
+                return workflow_id, exc.status == RPCStatusCode.NOT_FOUND, None
+            except Exception:
+                return workflow_id, False, None
+        status = getattr(getattr(description, "status", None), "name", None)
+        if status not in _CLOSED_WORKFLOW_STATUSES:
+            return workflow_id, False, None
+        close_time = getattr(description, "close_time", None)
+        return (
+            workflow_id,
+            True,
+            _ensure_aware(close_time) if isinstance(close_time, datetime) else None,
+        )
+
+    ids = [workflow_id for workflow_id in dict.fromkeys(workflow_ids) if workflow_id]
+    results = await asyncio.gather(*(lookup(workflow_id) for workflow_id in ids))
+    return {
+        workflow_id: closed_at
+        for workflow_id, closed, closed_at in results
+        if closed
+    }
 
 
 class ManagedRuntimeWorkspaceJanitor:
@@ -306,6 +384,7 @@ class ManagedRuntimeWorkspaceJanitor:
         session_store: ManagedSessionStore,
         config: ManagedRuntimeCleanupConfig | None = None,
         docker_reference_provider: DockerReferenceProvider | None = None,
+        closed_workflow_provider: ClosedWorkflowProvider | None = None,
         progress_callback: CleanupProgressCallback | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -313,9 +392,14 @@ class ManagedRuntimeWorkspaceJanitor:
         self._session_store = session_store
         self._config = config or ManagedRuntimeCleanupConfig.from_env()
         self._docker_reference_provider = docker_reference_provider
+        self._closed_workflow_provider = closed_workflow_provider
         self._progress_callback = progress_callback
         self._now = now or (lambda: datetime.now(tz=UTC))
         self._unreadable_protected_paths: frozenset[Path] = frozenset()
+        self._sandbox_store = SandboxWorkspaceRecordStore(
+            self._config.runtime_store_root
+        )
+        self._closed_workflows: dict[str, datetime | None] = {}
 
     def run(self) -> ManagedRuntimeCleanupResult:
         config = self._config
@@ -370,6 +454,7 @@ class ManagedRuntimeWorkspaceJanitor:
         candidates = self._build_candidates(
             run_records, session_records, unreadable=unreadable
         )
+        self._refresh_closed_workflows(candidates, errors=errors)
         budget = _CleanupBudget()
         decisions: list[ManagedRuntimeCleanupDecision] = []
         for index, candidate in enumerate(candidates):
@@ -572,6 +657,7 @@ class ManagedRuntimeWorkspaceJanitor:
         groups: dict[Path, dict[str, list[object]]] = defaultdict(
             lambda: {"runs": [], "sessions": []}
         )
+        sandbox_owners = self._sandbox_owners()
         ambiguous: list[ManagedRuntimeCleanupCandidate] = []
         for record in run_records:
             root = self._ownership_root_for_path(record.workspace_path)
@@ -611,11 +697,22 @@ class ManagedRuntimeWorkspaceJanitor:
                 ownership_root=root,
                 run_records=tuple(values["runs"]),  # type: ignore[arg-type]
                 session_records=tuple(values["sessions"]),  # type: ignore[arg-type]
+                sandbox_owner=sandbox_owners.get(root),
             )
             for root, values in sorted(groups.items(), key=lambda item: str(item[0]))
         ]
         known_roots = {candidate.path for candidate in candidates}
         candidates.extend(self._workspace_path_candidates(known_roots))
+        candidates.extend(
+            ManagedRuntimeCleanupCandidate(
+                kind="workspace",
+                path=path,
+                ownership_root=path,
+                sandbox_owner=owner,
+            )
+            for path, owner in sandbox_owners.items()
+            if path not in known_roots
+        )
         candidates.extend(ambiguous)
         candidates.extend(self._artifact_candidates(run_records, session_records))
         candidates.extend(self._record_candidates(run_records, session_records))
@@ -638,7 +735,13 @@ class ManagedRuntimeWorkspaceJanitor:
                         )
                     )
         if runtime_root.exists():
-            reserved = {"artifacts", "managed_runs", "managed_sessions", "workspaces"}
+            reserved = {
+                "artifacts",
+                "managed_runs",
+                "managed_sessions",
+                "workspaces",
+                _SANDBOX_STORE,
+            }
             for path in sorted(child for child in runtime_root.iterdir() if child.is_dir()):
                 if path.name in reserved or path in known_roots:
                     continue
@@ -650,6 +753,85 @@ class ManagedRuntimeWorkspaceJanitor:
                     )
                 )
         return candidates
+
+    def _sandbox_owners(self) -> dict[Path, SandboxWorkspaceOwner | None]:
+        """Map each sandbox workspace to its owner record (``None`` if absent).
+
+        The record store and deletion quarantines are dot-prefixed and are
+        never workspaces themselves.
+        """
+
+        sandbox_root = self._config.runtime_store_root / _SANDBOX_STORE
+        if not sandbox_root.is_dir():
+            return {}
+        return {
+            path: self._sandbox_owner(path.name)
+            for path in sorted(sandbox_root.iterdir())
+            if path.is_dir() and not path.name.startswith(".")
+        }
+
+    def _sandbox_owner(self, workspace_id: str) -> SandboxWorkspaceOwner | None:
+        store = self._sandbox_store
+        try:
+            record = store.load(workspace_id)
+        except (OSError, ValueError) as exc:
+            return SandboxWorkspaceOwner(workspace_id=workspace_id, error=str(exc))
+        if record is None:
+            return None
+        try:
+            grantees = store.active_claim_grantees(workspace_id, now=self._now())
+            record_paths = store.record_paths(workspace_id)
+        except (OSError, ValueError) as exc:
+            return SandboxWorkspaceOwner(
+                workspace_id=workspace_id,
+                workflow_id=record.workflow_id,
+                error=str(exc),
+            )
+        return SandboxWorkspaceOwner(
+            workspace_id=workspace_id,
+            workflow_id=record.workflow_id,
+            claim_grantees=grantees,
+            record_paths=record_paths,
+        )
+
+    def _refresh_closed_workflows(
+        self,
+        candidates: Iterable[ManagedRuntimeCleanupCandidate],
+        *,
+        errors: list[str] | None = None,
+    ) -> None:
+        """Ask Temporal which sandbox owners and claim holders have closed."""
+
+        workflow_ids = sorted(
+            {
+                workflow_id
+                for candidate in candidates
+                if candidate.sandbox_owner is not None
+                for workflow_id in candidate.sandbox_owner.workflow_ids
+                if workflow_id
+            }
+        )
+        if not workflow_ids:
+            return
+        for workflow_id in workflow_ids:
+            self._closed_workflows.pop(workflow_id, None)
+        if self._closed_workflow_provider is None:
+            return
+        try:
+            closed = self._closed_workflow_provider(workflow_ids)
+        except Exception as exc:
+            if errors is not None:
+                errors.append(f"owner workflow lookup failed: {exc}")
+            return
+        for workflow_id in workflow_ids:
+            if workflow_id in closed:
+                self._closed_workflows[workflow_id] = closed[workflow_id]
+
+    def _sandbox_claim_open(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        owner = candidate.sandbox_owner
+        return owner is not None and any(
+            grantee not in self._closed_workflows for grantee in owner.claim_grantees
+        )
 
     def _artifact_candidates(
         self,
@@ -734,14 +916,14 @@ class ManagedRuntimeWorkspaceJanitor:
             return None
         path = Path(raw_path)
         runtime_root = self._config.runtime_store_root
-        workspaces_root = runtime_root / "workspaces"
-        try:
-            relative = path.absolute().relative_to(workspaces_root.absolute())
-            if relative.parts:
-                return workspaces_root / relative.parts[0]
-        except (OSError, ValueError):
-            # Paths outside /workspaces fall through to the per-run root check.
-            pass
+        for store_root in (runtime_root / "workspaces", runtime_root / _SANDBOX_STORE):
+            try:
+                relative = path.absolute().relative_to(store_root.absolute())
+            except (OSError, ValueError):
+                # Paths outside this store fall through to the next check.
+                continue
+            # A store is never itself one workspace's ownership root.
+            return store_root / relative.parts[0] if relative.parts else None
         try:
             relative = path.absolute().relative_to(runtime_root.absolute())
             if relative.parts and relative.parts[0] not in {
@@ -788,10 +970,17 @@ class ManagedRuntimeWorkspaceJanitor:
                     "skipped_ambiguous_owner",
                     "ownership root could not be derived",
                 )
+            if candidate.sandbox_owner is not None and candidate.sandbox_owner.error:
+                return self._decision(
+                    candidate,
+                    "protected_unreadable_owner",
+                    "sandbox workspace owner record is unreadable",
+                )
             if (
                 kind == "workspace"
                 and not candidate.run_records
                 and not candidate.session_records
+                and candidate.sandbox_owner is None
             ):
                 return self._decision(
                     candidate,
@@ -808,7 +997,10 @@ class ManagedRuntimeWorkspaceJanitor:
                 classification: ManagedRuntimeCleanupClassification = (
                     "protected_shared"
                     if kind == "workspace"
-                    and len(candidate.run_records) + len(candidate.session_records) > 1
+                    and (
+                        len(candidate.run_records) + len(candidate.session_records) > 1
+                        or self._sandbox_claim_open(candidate)
+                    )
                     else "protected_active"
                 )
                 return self._decision(
@@ -930,6 +1122,12 @@ class ManagedRuntimeWorkspaceJanitor:
             return False
 
     def _has_active_owner(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        owner = candidate.sandbox_owner
+        if owner is not None and (
+            owner.workflow_id not in self._closed_workflows
+            or self._sandbox_claim_open(candidate)
+        ):
+            return True
         return any(
             record.status not in TERMINAL_AGENT_RUN_STATES or record.active_turn_id
             for record in candidate.run_records
@@ -973,8 +1171,23 @@ class ManagedRuntimeWorkspaceJanitor:
                     record.artifact_spool_path,
                 )
             )
+        if candidate.sandbox_owner is not None:
+            ids.update(
+                workflow_id
+                for workflow_id in candidate.sandbox_owner.workflow_ids
+                if workflow_id
+            )
         if ids.intersection(docker_state.active_container_refs):
             return True
+        if candidate.path.parent.name == _SANDBOX_STORE:
+            # Host containers mount the workspace volume by subpath, so Docker
+            # reports daemon-side paths that never equal the worker path.
+            segment = f"/{_SANDBOX_STORE}/{candidate.path.name}"
+            if any(
+                mount.endswith(segment) or f"{segment}/" in mount
+                for mount in docker_state.active_mount_paths
+            ):
+                return True
         return any(
             mount == path
             or mount.startswith(f"{path.rstrip('/')}/")
@@ -1003,10 +1216,23 @@ class ManagedRuntimeWorkspaceJanitor:
                 for ts in (record.updated_at, record.last_log_at, record.started_at)
                 if ts is not None
             )
+        owner = candidate.sandbox_owner
+        if owner is not None:
+            timestamps.extend(
+                closed_at
+                for workflow_id in owner.workflow_ids
+                if (closed_at := self._closed_workflows.get(workflow_id)) is not None
+            )
         try:
             if candidate.path.exists():
                 timestamps.append(
                     datetime.fromtimestamp(candidate.path.stat().st_mtime, tz=UTC)
+                )
+            if owner is not None:
+                timestamps.extend(
+                    mtime
+                    for path in owner.record_paths
+                    if (mtime := _path_mtime(path)) is not None
                 )
         except OSError:
             return None
@@ -1067,6 +1293,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 return True
             for fresh in current:
                 if fresh.kind == candidate.kind and fresh.path == candidate.path:
+                    self._refresh_closed_workflows((fresh,))
                     if self._has_active_owner(fresh) or self._has_live_docker_reference(
                         fresh, docker_state
                     ):
@@ -1098,6 +1325,8 @@ class ManagedRuntimeWorkspaceJanitor:
             f".gc-{uuid.uuid4().hex}-{candidate.path.name}"
         )
         candidate.path.rename(quarantine)
+        if candidate.sandbox_owner is not None:
+            self._sandbox_store.discard(candidate.sandbox_owner.workspace_id)
         _delete_path(quarantine, progress_callback=self._progress_callback)
         return True
 
@@ -1273,6 +1502,7 @@ def cleanup_managed_runtime_files(
     session_store: ManagedSessionStore,
     config: ManagedRuntimeCleanupConfig | None = None,
     docker_reference_provider: DockerReferenceProvider | None = None,
+    closed_workflow_provider: ClosedWorkflowProvider | None = None,
     progress_callback: CleanupProgressCallback | None = None,
 ) -> ManagedRuntimeCleanupResult:
     """Run one managed-runtime retained cleanup pass."""
@@ -1281,6 +1511,7 @@ def cleanup_managed_runtime_files(
         session_store=session_store,
         config=config,
         docker_reference_provider=docker_reference_provider,
+        closed_workflow_provider=closed_workflow_provider,
         progress_callback=progress_callback,
     ).run()
 
