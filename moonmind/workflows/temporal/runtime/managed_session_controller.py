@@ -4205,7 +4205,7 @@ class DockerCodexManagedSessionController:
         )
 
     async def reclaim_docker_storage_pressure(self, *, config: Any = None) -> Any:
-        """Reclaim only unused image/cache data through the selected daemon."""
+        """Reclaim unused images, cache and anonymous volumes via the daemon."""
         from moonmind.workflows.temporal.runtime.docker_storage_maintenance import (
             DockerStorageMaintenanceConfig,
             reclaim_docker_storage_under_pressure,
