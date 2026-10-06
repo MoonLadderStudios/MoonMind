@@ -1130,13 +1130,23 @@ async def refresh_schedule_deployment_snapshot(
     a long-lived schedule. Verify durable profile/usage lineage and compare
     every execution boundary before resolving a replacement snapshot. Existing
     executions keep their original authority.
+
+    The deployment-managed bootstrap profile has no authored semantics to
+    compare: MoonMind advances it with every built-in launch-policy cutover,
+    so its schedules follow the active version.
     """
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        BOOTSTRAP_PROFILE_ID,
+    )
     from api_service.services.omnigent_policies import OmnigentPolicyService
 
     compiled = copy.deepcopy(dict(parameters))
     previous = compiled.get("agentProfileSnapshot") or {}
     document = previous.get("document") or {}
-    if document.get("schemaVersion") != "moonmind.omnigent-agent-profile.v2":
+    managed = previous.get("profileId") == BOOTSTRAP_PROFILE_ID
+    if not managed and (
+        document.get("schemaVersion") != "moonmind.omnigent-agent-profile.v2"
+    ):
         return compiled
     profile_id = previous.get("profileId")
     profile = await session.get(OmnigentAgentProfile, profile_id)
@@ -1144,6 +1154,21 @@ async def refresh_schedule_deployment_snapshot(
         raise ValueError("scheduled Agent Profile is not active")
     if profile.active_version == previous.get("version"):
         return compiled
+    if managed:
+        # Usage is published with the schedule revision after compilation.
+        result = await refresh_managed_bootstrap_snapshot(
+            session,
+            parameters=compiled,
+            consumer_type="schedule",
+            consumer_id=consumer_id,
+            user=user,
+            replace_existing_usage=True,
+            persist_usage=False,
+        )
+        for field in ("model", "effort"):
+            if field in compiled:
+                result[field] = compiled[field]
+        return result
     versions = {}
     for number in (previous.get("version"), profile.active_version):
         versions[number] = await session.scalar(
@@ -1305,6 +1330,7 @@ async def refresh_managed_bootstrap_snapshot(
     consumer_id: str,
     user: User | None,
     replace_existing_usage: bool = False,
+    persist_usage: bool = True,
 ) -> dict[str, Any]:
     """Refresh product-managed launch authority while preserving consumer intent.
 
@@ -1409,6 +1435,7 @@ async def refresh_managed_bootstrap_snapshot(
         consumer_id=consumer_id,
         user=user,
         replace_existing_usage=replace_existing_usage,
+        persist_usage=persist_usage,
     )
     return compile_agent_profile_snapshot_parameters(
         compiled,

@@ -449,13 +449,13 @@ async def _sync_managed_bootstrap_recurring_schedules() -> bool:
         )
 
         async with get_async_session_context() as session:
-            refreshed = await RecurringWorkflowsService(
+            outcome = await RecurringWorkflowsService(
                 session,
             ).refresh_managed_bootstrap_schedules(limit=500)
-        if refreshed:
+        if outcome.refreshed:
             logger.info(
                 "Refreshed managed bootstrap recurring schedules: count=%s",
-                refreshed,
+                outcome.refreshed,
             )
         return True
     except Exception:
