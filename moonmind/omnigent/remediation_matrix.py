@@ -2,10 +2,11 @@
 
 Source issue: MoonLadderStudios/MoonMind#3626.
 
-This module defines the ONE versioned, machine-readable operator-remediation
-required-row catalog and the evidence-artifact contract that binds each row to
-independently observed live evidence. It is the controlling artifact for the
-"can an operator safely diagnose and repair a real workflow" release claim.
+This module retains strict v1 live certification and its evidence readers.
+It does not own ordinary runtime admission or action authorization. The catalog
+projects optional live observations without imposing this legacy inventory on
+PR regression evidence or ordinary recovery. Explicit strict certification
+still requires independently observed evidence for its declared release claim.
 
 The contract is deliberately fail-closed and honest about provenance:
 
@@ -3707,19 +3708,27 @@ class RemediationReleaseStatus:
     thresholds: Mapping[str, Any] | None = None
     policy_version: str = REMEDIATION_RELEASE_POLICY_VERSION
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self, *, advisory: bool = False) -> dict[str, Any]:
+        """Separate optional runtime observations from strict v1 certification.
+
+        Missing live proof stays unverified. The catalog cannot request rollback,
+        grant authority, or impose the legacy inventory on ordinary recovery.
+        Explicit certification callers retain their requirements and verdicts.
+        """
         return {
+            "advisory": advisory,
             "policyVersion": self.policy_version,
             "matrixVersion": self.matrix_version,
             "coveredRows": sorted(self.covered_rows),
-            "requiredRows": list(REQUIRED_REMEDIATION_MATRIX_ROWS),
+            "requiredRows": [] if advisory else list(REQUIRED_REMEDIATION_MATRIX_ROWS),
             "manualDiagnosisSupported": self.manual_diagnosis_supported,
             "manualMutationSupported": self.manual_mutation_supported,
             "autonomousRolloutAuthorized": self.autonomous_rollout_authorized,
-            "promotionAllowed": not self.blockers,
-            "manualPromotionAllowed": self.manual_mutation_supported,
+            "promotionAllowed": not advisory and not self.blockers,
+            "manualPromotionAllowed": not advisory and self.manual_mutation_supported,
             "autonomousPromotionAllowed": self.autonomous_rollout_authorized,
-            "rollbackRequired": any(
+            "rollbackRequired": not advisory
+            and any(
                 blocker
                 not in (
                     "autonomous_rollout_gate_closed",
@@ -3737,7 +3746,8 @@ class RemediationReleaseStatus:
                     "code": blocker,
                     "severity": (
                         "warning"
-                        if blocker
+                        if advisory
+                        or blocker
                         in (
                             "autonomous_rollout_gate_closed",
                             "operation_scoped_evidence_not_release",
@@ -3748,15 +3758,19 @@ class RemediationReleaseStatus:
                         "keep_autonomous_mutation_disabled"
                         if blocker == "autonomous_rollout_gate_closed"
                         else (
-                            "scoped_evidence_not_full_release"
-                            if blocker == "operation_scoped_evidence_not_release"
-                            else "block_or_rollback_manual_promotion"
+                            "collect_optional_live_support_evidence"
+                            if advisory
+                            else (
+                                "scoped_evidence_not_full_release"
+                                if blocker == "operation_scoped_evidence_not_release"
+                                else "block_or_rollback_manual_promotion"
+                            )
                         )
                     ),
                 }
                 for blocker in self.blockers
             ],
-            "catalog": remediation_catalog_document(),
+            **({} if advisory else {"catalog": remediation_catalog_document()}),
             "blockers": list(self.blockers),
         }
 
@@ -4011,16 +4025,10 @@ def evaluate_remediation_release(
         evidence_ref=evidence_ref,
         generated_at=generated_at if isinstance(generated_at, str) else None,
         expires_at=expires_at,
-        telemetry=(
-            derived_telemetry
-            if isinstance(derived_telemetry, Mapping)
-            else telemetry if isinstance(telemetry, Mapping) else None
-        ),
-        thresholds=(
-            derived_thresholds
-            if isinstance(derived_thresholds, Mapping)
-            else thresholds if isinstance(thresholds, Mapping) else None
-        ),
+        # Only independently derived observations are safe to publish. Invalid
+        # caller summaries remain blockers, never a fallback evidence source.
+        telemetry=derived_telemetry,
+        thresholds=derived_thresholds,
     )
 
 
@@ -4231,7 +4239,14 @@ def load_remediation_release_status(
         payload = json.loads(document_path.read_text(encoding="utf-8"))
         if not isinstance(payload, Mapping):
             raise ValueError("remediation_release_evidence_not_object")
-    except (OSError, ValueError, json.JSONDecodeError, UnicodeError):
+        return evaluate_remediation_release(
+            evidence=payload,
+            evidence_document_path=document_path,
+            evidence_ref=raw_ref,
+            now=now,
+        )
+    except (OSError, ValueError, UnicodeError, TypeError, KeyError, OverflowError):
+        # Malformed retained input is unavailable proof, not a runtime outage.
         return RemediationReleaseStatus(
             matrix_version=REMEDIATION_MATRIX_VERSION,
             covered_rows=frozenset(),
@@ -4244,13 +4259,6 @@ def load_remediation_release_status(
             ),
             evidence_ref=raw_ref,
         )
-
-    return evaluate_remediation_release(
-        evidence=payload,
-        evidence_document_path=document_path,
-        evidence_ref=raw_ref,
-        now=now,
-    )
 
 
 __all__ = [
