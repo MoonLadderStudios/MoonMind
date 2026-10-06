@@ -971,6 +971,12 @@ RUN_REMEDIATION_LOOP_AGENT_INSTRUCTIONS_PATCH = (
 RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH = (
     "run-remediation-explicit-evidence-inputs-v1"
 )
+# Remediation attempt nodes use run-scoped logical step IDs like authored plan
+# nodes. Older histories recorded ``<workflow>:<run>:``-prefixed IDs, which
+# every Step Execution key prefixed again; keep those so their child IDs replay.
+RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH = (
+    "run-remediation-run-scoped-step-ids-v1"
+)
 # Preserve controller-owned attempt context at the agent request boundary.
 # Older histories keep their recorded request parameters and cadence metadata.
 RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH = (
@@ -4293,16 +4299,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         state = self._remediation_loop_state
         if spec is None or state is None:
             raise ValueError("remediation loop is not initialized")
-        info = workflow.info()
         return materialize_attempt_nodes(
             spec=spec,
-            workflow_id=info.workflow_id,
-            run_id=self._resilience_policy_run_id or info.run_id,
             ordinal=ordinal,
             workspace_head_ref=state.workspace_head_ref,
             runtime=self._remediation_loop_runtime_block(),
             verification_inputs=verification_inputs,
+            legacy_id_scope=self._remediation_legacy_id_scope(),
         )
+
+    def _remediation_legacy_id_scope(self) -> str | None:
+        """Return the pre-patch attempt-ID prefix only for older histories."""
+
+        if self._workflow_patch_enabled(RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH):
+            return None
+        info = workflow.info()
+        return f"{info.workflow_id}:{self._resilience_policy_run_id or info.run_id}"
 
     @staticmethod
     def _verified_headless_remediation_workspace_spec(
@@ -4792,8 +4804,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             state = start_remediation_attempt(state)
             remediation, verification = materialize_attempt_nodes(
                 spec=spec,
-                workflow_id=workflow.info().workflow_id,
-                run_id=self._resilience_policy_run_id or workflow.info().run_id,
                 ordinal=state.attempt_ordinal,
                 workspace_head_ref=state.workspace_head_ref,
                 runtime=self._remediation_loop_runtime_block(),
@@ -4805,6 +4815,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     if workflow.patched(RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH)
                     else None
                 ),
+                legacy_id_scope=self._remediation_legacy_id_scope(),
             )
             if verified_headless_workspace is not None:
                 verification_workspace = dict(verified_headless_workspace)

@@ -241,13 +241,24 @@ class RemediationContinuationDecision(_Contract):
 
 
 def remediation_step_execution_id(
-    workflow_id: str, run_id: str, loop_id: str, kind: Literal["remediation", "verification"], ordinal: int
+    loop_id: str,
+    kind: Literal["remediation", "verification"],
+    ordinal: int,
+    *,
+    legacy_id_scope: str | None = None,
 ) -> str:
-    """Build the deterministic identity for one semantic loop operation."""
+    """Build the run-scoped logical step ID for one semantic loop operation.
+
+    Like authored plan nodes, the ID omits the workflow and run because every
+    Step Execution, child workflow, and idempotency key prefixes them already.
+    ``legacy_id_scope`` reproduces the ``<workflow>:<run>:`` prefix that
+    histories recorded before ``run-remediation-run-scoped-step-ids-v1``.
+    """
 
     if ordinal < 1:
         raise ValueError("ordinal must be positive")
-    return f"{workflow_id}:{run_id}:{loop_id}:{kind}:{ordinal}"
+    step_id = f"{loop_id}:{kind}:{ordinal}"
+    return f"{legacy_id_scope}:{step_id}" if legacy_id_scope else step_id
 
 
 def start_remediation_attempt(
@@ -463,22 +474,21 @@ def resolve_loop_runtime(
 def materialize_attempt_nodes(
     *,
     spec: RemediationLoopSpec,
-    workflow_id: str,
-    run_id: str,
     ordinal: int,
     workspace_head_ref: str | None,
     runtime: Mapping[str, object],
     remediation_inputs: Mapping[str, object] | None = None,
     verification_inputs: Mapping[str, object] | None = None,
+    legacy_id_scope: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build only the admitted attempt pair with deterministic lineage."""
 
     runtime_id, runtime_block = resolve_loop_runtime(runtime)
     remediation_id = remediation_step_execution_id(
-        workflow_id, run_id, spec.loop_id, "remediation", ordinal
+        spec.loop_id, "remediation", ordinal, legacy_id_scope=legacy_id_scope
     )
     verification_id = remediation_step_execution_id(
-        workflow_id, run_id, spec.loop_id, "verification", ordinal
+        spec.loop_id, "verification", ordinal, legacy_id_scope=legacy_id_scope
     )
     common_annotations = {
         "remediationLoopId": spec.loop_id,

@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflow_registry import (
-    WorkflowProjectionExcluded,
-    is_historical_workflow_type,
-    product_workflow_types,
-)
-
 import asyncio
 import base64
 import binascii
@@ -24,6 +18,12 @@ from pathlib import Path
 from typing import Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
+
+from moonmind.workflows.temporal.workflow_registry import (
+    WorkflowProjectionExcluded,
+    is_historical_workflow_type,
+    product_workflow_types,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,11 @@ from api_service.api.execution_fanout import (
     resolve_execution_fanout_capability,
     resolve_execution_request_authority,
 )
+from api_service.api.execution_principal import (
+    execution_principal_dependency,
+    resolve_execution_principal,
+)
+from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.core import sync as execution_sync
 from api_service.db import models as db_models
@@ -71,29 +76,34 @@ from api_service.db.models import (
     AgentSkillDefinition,
     ManagedAgentProviderProfile,
     MoonMindWorkflowState,
+    TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
-    TemporalArtifact,
-    TemporalArtifactLink,
-    TemporalArtifactStatus,
-    TemporalArtifactRetentionClass,
     User,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
     WorkflowCheckpointBranchTurn,
 )
-from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
-from api_service.services.remediation_capabilities import (
-    project_remediation_action_inputs,
-    remediation_link_capabilities,
+from api_service.services.checkpoint_branch_turn_execution import (
+    CheckpointBranchTurnExecutionOwner,
+    CheckpointBranchTurnLaunchError,
+    get_checkpoint_branch_artifact_service,
 )
-from api_service.services.provider_profile_runtime import (
-    ProviderProfileNotFoundError,
-    ProviderProfileRuntimeMismatchError,
-    load_provider_profile_for_runtime,
-    require_provider_profile_runtime,
+from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
+from api_service.services.control_stop_continuation import (
+    SqlControlStopContinuationRepository,
+    TemporalControlStopContinuationStarter,
+)
+from api_service.services.linked_continuation import (
+    RELATIONSHIP_TYPE_LINKED_CONTINUATION,
+    LinkedContinuationConflict,
+    SqlLinkedContinuationRepository,
+    compute_request_digest,
 )
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
@@ -101,95 +111,37 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
-from api_service.services.control_stop_continuation import (
-    SqlControlStopContinuationRepository,
-    TemporalControlStopContinuationStarter,
+from api_service.services.provider_profile_runtime import (
+    ProviderProfileNotFoundError,
+    ProviderProfileRuntimeMismatchError,
+    load_provider_profile_for_runtime,
+    require_provider_profile_runtime,
 )
-from api_service.services.checkpoint_branch_turn_execution import (
-    CheckpointBranchTurnExecutionOwner,
-    CheckpointBranchTurnLaunchError,
-    get_checkpoint_branch_artifact_service,
+from api_service.services.remediation_capabilities import (
+    project_remediation_action_inputs,
+    remediation_link_capabilities,
 )
 from moonmind.config.settings import settings
-from moonmind.statuses.compat import (
-    canonicalize_finish_outcome_code_alias,
-    normalize_no_commit_finish_summary,
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    BridgeProjectionAmbiguousError,
+    OmnigentBridgeSessionStore,
+    _chat_binding_logical_step_id,
 )
-from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
-from moonmind.utils.metrics import get_metrics_emitter
-from moonmind.workflows.report_output import normalize_report_output_primary_path
-from moonmind.workflows.executions.preset_expansion import (
-    expand_preset_for_child_run,
-    has_unexpanded_task_template,
-)
-from moonmind.workflows.executions.routing import _coerce_bool
-from moonmind.workflows.executions.title_derivation import (
-    is_generic_title,
-    synthesize_workflow_title,
+from moonmind.omnigent.cutover import assert_runtime_new_admission
+from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
+from moonmind.omnigent.settings import (
+    resolved_native_ui_serving_enabled,
+    resolved_native_ui_version,
 )
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
-from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
-from moonmind.schemas.temporal_models import (
-    CancelExecutionRequest,
-    ConfigureIntegrationMonitoringRequest,
-    CreateExecutionRequest,
-    ExecutionActionCapabilityModel,
-    ExecutionDependencySummaryModel,
-    ExecutionDebugFieldsModel,
-    ExecutionFacetItemModel,
-    ExecutionFacetResponse,
-    ExecutionMergeAutomationModel,
-    ExecutionMergeAutomationResolverChildModel,
-    ExecutionProjectionDiagnosticModel,
-    ExecutionListResponse,
-    ExecutionListItemModel,
-    ExecutionMetricsCostModel,
-    ExecutionMetricsDurationModel,
-    ExecutionMetricsResponse,
-    ExecutionModel,
-    ExecutionProgressModel,
-    ExecutionReportProjectionModel,
-    ExecutionRefreshEnvelope,
-    ExecutionRelatedRunModel,
-    ExecutionResumeSummaryModel,
-    ExecutionSkillEvidenceSummaryModel,
-    ExecutionSkillLifecycleIntentModel,
-    ExecutionSkillProvenanceModel,
-    ExecutionSkillRuntimeModel,
-    FailedRunRecoveryManifestModel,
-    ObjectiveOutcomeValue,
-    RecoverExecutionResponse,
-    RecoverFromFailedStepRequest,
-    RecoverFromFailedStepResponse,
-    RecoverFromSelectedStepRequest,
-    RecoveryEligibilityDiagnosticModel,
-    WorkflowInputSnapshotDescriptorModel,
-    PollIntegrationRequest,
-    RescheduleExecutionRequest,
-    ScheduleCreatedResponse,
-    ScheduleParameters,
-    SignalExecutionRequest,
-    StepExecutionDetailModel,
-    StepExecutionListModel,
-    StepExecutionManifestModel,
-    StepExecutionProjectionModel,
-    StepLedgerSnapshotModel,
-    UpdateExecutionRequest,
-    UpdateExecutionResponse,
-    AGENT_RUN_ID_MEMO_KEYS,
-    AGENT_RUN_ID_PARAM_KEYS,
-    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
-    normalize_dependency_ids,
-)
-from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
 from moonmind.schemas.checkpoint_branch_models import (
-    CheckpointBranchArchiveRequest,
     CheckpointBranchApiSourceModel,
+    CheckpointBranchArchiveRequest,
     CheckpointBranchCompareResponse,
     CheckpointBranchComparisonPreviewRequest,
     CheckpointBranchComparisonPreviewResponse,
@@ -204,12 +156,152 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchTurnLaunchRequest,
     CheckpointBranchTurnListResponse,
     CheckpointBranchTurnModel,
+    CheckpointBranchVerificationRequest,
     CheckpointListResponse,
     CheckpointSummaryModel,
 )
-from moonmind.workflows.checkpoint_branches import (
-    CheckpointBranchGitBindingError,
+from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+from moonmind.schemas.temporal_models import (
+    AGENT_RUN_ID_MEMO_KEYS,
+    AGENT_RUN_ID_PARAM_KEYS,
+    AGENT_RUN_ID_SEARCH_ATTR_KEYS,
+    CancelExecutionRequest,
+    ConfigureIntegrationMonitoringRequest,
+    CreateExecutionRequest,
+    ExecutionActionCapabilityModel,
+    ExecutionDebugFieldsModel,
+    ExecutionDependencySummaryModel,
+    ExecutionFacetItemModel,
+    ExecutionFacetResponse,
+    ExecutionListItemModel,
+    ExecutionListResponse,
+    ExecutionMergeAutomationModel,
+    ExecutionMergeAutomationResolverChildModel,
+    ExecutionMetricsCostModel,
+    ExecutionMetricsDurationModel,
+    ExecutionMetricsResponse,
+    ExecutionModel,
+    ExecutionProgressModel,
+    ExecutionProjectionDiagnosticModel,
+    ExecutionRefreshEnvelope,
+    ExecutionRelatedRunModel,
+    ExecutionReportProjectionModel,
+    ExecutionResumeSummaryModel,
+    ExecutionSkillEvidenceSummaryModel,
+    ExecutionSkillLifecycleIntentModel,
+    ExecutionSkillProvenanceModel,
+    ExecutionSkillRuntimeModel,
+    FailedRunRecoveryManifestModel,
+    ObjectiveOutcomeValue,
+    PollIntegrationRequest,
+    RecoverExecutionResponse,
+    RecoverFromFailedStepRequest,
+    RecoverFromFailedStepResponse,
+    RecoverFromSelectedStepRequest,
+    RecoveryEligibilityDiagnosticModel,
+    RescheduleExecutionRequest,
+    ScheduleCreatedResponse,
+    ScheduleParameters,
+    SignalExecutionRequest,
+    StepExecutionDetailModel,
+    StepExecutionListModel,
+    StepExecutionManifestModel,
+    StepExecutionProjectionModel,
+    StepLedgerSnapshotModel,
+    UpdateExecutionRequest,
+    UpdateExecutionResponse,
+    WorkflowInputSnapshotDescriptorModel,
+    normalize_dependency_ids,
 )
+from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
+from moonmind.services.control_stop_continuation import admit_control_stop_continuation
+from moonmind.services.skill_step_inputs import validate_skill_step_inputs
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    normalize_no_commit_finish_summary,
+)
+from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.utils.metrics import get_metrics_emitter
+from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
+from moonmind.workflows.executions.checkpoint_promotion import (
+    bounded_checkpoint_metric_tags,
+)
+from moonmind.workflows.executions.checkpoint_resume_admission import (
+    CheckpointResumeReadiness,
+    evaluate_checkpoint_resume_admission,
+    rollout_policy_from_settings,
+)
+from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
+    ControlStopContinuationContract,
+    ControlStopContinuationError,
+)
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    WorkflowInputAttachmentRef,
+    WorkflowSkillSelectors,
+    allows_repository_publish_for_skill_context,
+    build_authoritative_workflow_input_snapshot,
+    is_non_repository_side_effect_skill,
+    merge_workflow_input,
+    reject_removed_follow_up_fields,
+    reject_retired_vector_fields,
+    reject_workflow_capability_identity_versions,
+    resolve_publish_mode_for_skill,
+    strip_absent_vector_fields,
+    validate_publish_mode_repository_authority,
+    validate_workflow_runtime_targets,
+)
+from moonmind.workflows.executions.model_resolver import (
+    RequestedModelTierUnavailableError,
+    ResolvedModelEffort,
+    resolve_model_effort,
+)
+from moonmind.workflows.executions.new_work_runtime import (
+    NewWorkAdmissionRejected,
+    new_work_evidence,
+    resolve_new_work_selection,
+)
+from moonmind.workflows.executions.preset_expansion import (
+    expand_preset_for_child_run,
+    has_unexpanded_task_template,
+)
+from moonmind.workflows.executions.preset_goal_scheduler import (
+    GoalPresetSchedule,
+    goal_from_payloads,
+    schedule_preset_from_goal,
+    workflow_is_already_authored,
+)
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryContractError,
+    compile_repository_target,
+    github_repository_name_from_value,
+    repository_branch_from_value,
+    repository_name_from_value,
+)
+from moonmind.workflows.executions.routing import _coerce_bool
+from moonmind.workflows.executions.runtime_capabilities import (
+    resolve_runtime_execution_capabilities,
+)
+from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_inheritance import (
+    ExecutionPrincipal,
+    RuntimeInheritanceError,
+    apply_inherited_runtime_to_payload,
+    extract_inheritance_directive,
+    resolve_child_runtime_inheritance,
+)
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
+from moonmind.workflows.executions.title_derivation import (
+    is_generic_title,
+    synthesize_workflow_title,
+)
+from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionHistoricalTypeError,
@@ -220,79 +312,15 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
-from moonmind.workflows.temporal.service import reject_historical_control
-from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
-from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
     build_artifact_ref,
 )
-from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
-)
-from moonmind.workflows.executions.model_resolver import (
-    RequestedModelTierUnavailableError,
-    ResolvedModelEffort,
-    resolve_model_effort,
-)
-from moonmind.workflows.executions.preset_goal_scheduler import (
-    GoalPresetSchedule,
-    goal_from_payloads,
-    schedule_preset_from_goal,
-    workflow_is_already_authored,
-)
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.executions.runtime_target_selection import (
-    AuthoringSurface,
-    resolve_runtime_target_selection,
-)
-from moonmind.workflows.executions.new_work_runtime import (
-    NewWorkAdmissionRejected,
-    new_work_evidence,
-    resolve_new_work_selection,
-)
-from moonmind.omnigent.cutover import (
-    assert_runtime_new_admission,
-)
-from moonmind.omnigent.bridge_store import (
-    BridgeChatBindingAmbiguousError,
-    BridgeProjectionAmbiguousError,
-    OmnigentBridgeSessionStore,
-    _chat_binding_logical_step_id,
-)
-from api_service.services.linked_continuation import (
-    LinkedContinuationConflict,
-    RELATIONSHIP_TYPE_LINKED_CONTINUATION,
-    SqlLinkedContinuationRepository,
-    compute_request_digest,
-)
-from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
-from moonmind.omnigent.settings import (
-    resolved_native_ui_serving_enabled,
-    resolved_native_ui_version,
-)
-from moonmind.workflows.executions.runtime_capabilities import (
-    resolve_runtime_execution_capabilities,
-)
-from moonmind.workflows.executions.checkpoint_resume_admission import (
-    CheckpointResumeReadiness,
-    evaluate_checkpoint_resume_admission,
-    rollout_policy_from_settings,
-)
-from moonmind.workflows.executions.checkpoint_promotion import (
-    bounded_checkpoint_metric_tags,
-)
-from moonmind.workflows.executions.runtime_inheritance import (
-    ExecutionPrincipal,
-    RuntimeInheritanceError,
-    apply_inherited_runtime_to_payload,
-    extract_inheritance_directive,
-    resolve_child_runtime_inheritance,
 )
 from moonmind.workflows.temporal.publication_recovery import (
     PublicationRecoveryContract,
@@ -304,44 +332,11 @@ from moonmind.workflows.temporal.publication_recovery import (
     saved_work_publication_operation_key,
     saved_work_publication_workflow_id,
 )
-from moonmind.services.skill_step_inputs import validate_skill_step_inputs
-from moonmind.services.control_stop_continuation import (
-    admit_control_stop_continuation,
-)
-from moonmind.workflows.executions.control_stop_continuation import (
-    ContinuationBudgetGrant,
-    ControlStopContinuationContract,
-    ControlStopContinuationError,
-)
-from api_service.api.execution_principal import (
-    execution_principal_dependency,
-    resolve_execution_principal,
-)
-from moonmind.workflows.executions.execution_contract import (
-    WorkflowContractError,
-    validate_workflow_runtime_targets,
-    WorkflowInputAttachmentRef,
-    WorkflowSkillSelectors,
-    allows_repository_publish_for_skill_context,
-    build_authoritative_workflow_input_snapshot,
-    is_non_repository_side_effect_skill,
-    reject_removed_follow_up_fields,
-    reject_retired_vector_fields,
-    reject_workflow_capability_identity_versions,
-    resolve_publish_mode_for_skill,
-    strip_absent_vector_fields,
-    validate_publish_mode_repository_authority,
-    merge_workflow_input,
-)
-from moonmind.workflows.executions.repository_contract import (
-    RepositoryContractError,
-    compile_repository_target,
-    github_repository_name_from_value,
-    repository_branch_from_value,
-    repository_name_from_value,
-)
-from api_service.api.schemas import CreateJobRequest
-from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.service import reject_historical_control
+from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+from moonmind.workflows.temporal.title_search import tokenize_title
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -358,6 +353,8 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
 _GITHUB_ONLY_REPOSITORY_SKILLS = frozenset(
     {"batch-pr-resolver", "pr-resolver"}
 )
+
+
 def _product_temporal_scope_query() -> str:
     """Build the product-domain Temporal visibility clause from the registry.
 
@@ -603,6 +600,8 @@ def _requested_unavailable_filter_aliases(
         if alias in request.query_params and attr_name not in usable_search_attributes:
             unavailable.add(alias)
     return frozenset(unavailable)
+
+
 _PROGRESS_FILTER_ALIASES = frozenset(
     {
         "progressPctFrom",
@@ -675,6 +674,7 @@ class RemediationApprovalStateModel(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
 
+
 class RemediationLiveObservationModel(BaseModel):
     status: str | None = None
     label: str | None = None
@@ -683,10 +683,12 @@ class RemediationLiveObservationModel(BaseModel):
     epoch: str | None = None
     fallbackReason: str | None = None
 
+
 class RemediationLockOutcomeModel(BaseModel):
     state: str | None = None
     holder: str | None = None
     releasedAt: datetime | str | None = None
+
 
 class RemediationNextActionBaselineModel(BaseModel):
     checkpointRef: str
@@ -852,6 +854,7 @@ class RemediationCheckpointBranchLinkModel(BaseModel):
             raise ValueError("next action baseline must match the persisted head")
         return self
 
+
 class RemediationActionCapabilityModel(BaseModel):
     actionKind: str
     requestable: bool
@@ -955,6 +958,7 @@ class RemediationLinkSummaryModel(BaseModel):
     createdAt: datetime
     updatedAt: datetime
 
+
 class RemediationLinksResponseModel(BaseModel):
     direction: str
     items: list[RemediationLinkSummaryModel]
@@ -979,9 +983,11 @@ class RemediationCollectionItemModel(BaseModel):
 class RemediationCollectionResponseModel(BaseModel):
     items: list[RemediationCollectionItemModel]
 
+
 class RemediationApprovalDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
+
 
 class RemediationApprovalDecisionResponse(BaseModel):
     accepted: bool
@@ -1011,6 +1017,7 @@ class SavedWorkPublicationRequest(BaseModel):
     pullRequestBody: str | None = Field(None, max_length=20_000)
     commitMessage: str | None = Field(None, max_length=2_000)
 
+
 class RemediationCheckpointBranchRepairRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1030,6 +1037,8 @@ class RemediationCheckpointBranchRepairRequest(BaseModel):
         None, alias="providerProfileRef", min_length=1, max_length=255
     )
     agent_profile: dict[str, Any] | None = Field(None, alias="agentProfile")
+
+
 _PROTECTED_BRANCH_REFS = {"head", "main", "master", "develop", "trunk", "prod", "production"}
 _SAFE_PROMOTION_SIDE_EFFECT_STATES = {
     "none",
@@ -2394,11 +2403,13 @@ _TASK_INPUT_SNAPSHOT_CONTENT_TYPE = (
 _TASK_INPUT_SNAPSHOT_LINK_TYPE = "input.original_snapshot"
 _WORKFLOW_INPUT_SNAPSHOT_VERSION = 1
 
+
 def _bounded_metric_tag(value: object | None, *, fallback: str = "unknown") -> str:
     normalized = str(value or "").strip()
     if not normalized:
         return fallback
     return re.sub(r"[^a-zA-Z0-9_.-]", "_", normalized)[:80] or fallback
+
 
 def _emit_task_editing_metric(
     event: str,
@@ -2430,10 +2441,12 @@ def _emit_task_editing_metric(
     except Exception:
         return
 
+
 def _enum_value(value: object | None) -> str | None:
     if value is None:
         return None
     return getattr(value, "value", value)
+
 
 @lru_cache(maxsize=1)
 def get_temporal_client_adapter() -> TemporalClientAdapter:
@@ -2447,13 +2460,16 @@ def get_control_stop_continuation_starter(
 
     return TemporalControlStopContinuationStarter(adapter)
 
+
 async def get_temporal_client(
     adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
 ) -> Client:
     return await adapter.get_client()
 
+
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
+
 
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
@@ -3429,6 +3445,7 @@ def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
     canonical = TemporalExecutionRecord.canonicalize_identifier(raw_identifier)
     return canonical, canonical != raw_identifier
 
+
 def _mark_execution_alias_usage(
     response: Response, *, raw_identifier: str, canonical_identifier: str
 ) -> None:
@@ -3437,6 +3454,7 @@ def _mark_execution_alias_usage(
     response.headers["Deprecation"] = "true"
     response.headers["X-MoonMind-Canonical-WorkflowId"] = canonical_identifier
     response.headers["X-MoonMind-Deprecated-Identifier"] = raw_identifier
+
 
 def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime:
     refreshed_at = (
@@ -3452,8 +3470,10 @@ def _compatibility_refreshed_at(record, now: datetime | None = None) -> datetime
         return refreshed_at
     return refreshed_at.replace(tzinfo=UTC)
 
+
 def _manifest_attr(manifest_status, field: str, default=None):
     return getattr(manifest_status, field, default) if manifest_status else default
+
 
 def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
@@ -3461,6 +3481,7 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
         return owner_type
     owner_id = str(record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
+
 
 def _execution_owner(record, search_attributes: dict[str, object]) -> tuple[str, str]:
     """Return ``(ownerType, ownerId)`` from recorded owner evidence."""
@@ -3475,6 +3496,7 @@ def _execution_owner(record, search_attributes: dict[str, object]) -> tuple[str,
             return owner_type, ""
     return _normalize_owner_type(record, search_attributes), str(owner_id or "system")
 
+
 def _coerce_temporal_scalar(value: object | None) -> str:
     if isinstance(value, (list, tuple)):
         for item in value:
@@ -3488,6 +3510,7 @@ def _coerce_temporal_scalar(value: object | None) -> str:
         return ""
     return str(value).strip()
 
+
 def _dedupe_non_blank(items: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -3498,6 +3521,7 @@ def _dedupe_non_blank(items: list[str]) -> list[str]:
         seen.add(normalized)
         deduped.append(normalized)
     return deduped
+
 
 def _skill_selector_names(raw: object | None) -> list[str] | None:
     if isinstance(raw, list):
@@ -3517,6 +3541,7 @@ def _skill_selector_names(raw: object | None) -> list[str] | None:
             else:
                 names.append(_coerce_temporal_scalar(item))
     return _dedupe_non_blank(names) or None
+
 
 def _preset_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
     task_template = task_payload.get("taskTemplate") or task_payload.get(
@@ -3546,22 +3571,26 @@ def _preset_primary_skill_name(task_payload: Mapping[str, Any]) -> str | None:
 
     return None
 
+
 def _first_mapping(*candidates: object | None) -> Mapping[str, Any]:
     for candidate in candidates:
         if isinstance(candidate, Mapping):
             return candidate
     return {}
 
+
 def _coerce_skill_bool(value: object | None) -> bool | None:
     if isinstance(value, bool):
         return value
     return None
+
 
 def _mapping_value(raw: Mapping[str, Any], *keys: str) -> object | None:
     for key in keys:
         if key in raw:
             return raw[key]
     return None
+
 
 def _selected_skill_evidence(raw: object | None) -> list[ExecutionSkillEvidenceSummaryModel]:
     if not isinstance(raw, list):
@@ -3608,6 +3637,7 @@ def _selected_skill_evidence(raw: object | None) -> list[ExecutionSkillEvidenceS
         )
     return evidence
 
+
 def _skill_provenance_from_evidence(
     evidence: list[ExecutionSkillEvidenceSummaryModel],
 ) -> list[ExecutionSkillProvenanceModel]:
@@ -3623,6 +3653,7 @@ def _skill_provenance_from_evidence(
             )
         )
     return provenance
+
 
 def _skill_source_provenance(
     raw: object | None,
@@ -3674,6 +3705,7 @@ def _skill_source_provenance(
         provenance.append(entry)
     return provenance
 
+
 def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticModel | None:
     if not isinstance(raw, Mapping):
         return None
@@ -3703,6 +3735,7 @@ def _projection_diagnostic(raw: object | None) -> ExecutionProjectionDiagnosticM
     ):
         return diagnostic
     return None
+
 
 def _skill_lifecycle_intent(
     *,
@@ -3749,6 +3782,7 @@ def _skill_lifecycle_intent(
         resolutionMode=resolution_mode,
         explanation=explanation,
     )
+
 
 def _skill_runtime_evidence(
     *,
@@ -3868,6 +3902,7 @@ def _skill_runtime_evidence(
         lifecycleIntent=lifecycle_intent,
     )
 
+
 def _normalize_entry_value(value: object | None) -> str | None:
     candidate = _coerce_temporal_scalar(value).lower()
     if not candidate:
@@ -3893,6 +3928,7 @@ def _normalize_entry_value(value: object | None) -> str | None:
                 return first
     return None
 
+
 def _normalize_github_pull_request_url(value: object | None) -> str | None:
     candidate = _coerce_temporal_scalar(value)
     if not candidate:
@@ -3907,6 +3943,7 @@ def _normalize_github_pull_request_url(value: object | None) -> str | None:
     if not _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(normalized_path):
         return None
     return f"https://github.com{normalized_path}"
+
 
 def _extract_execution_pr_url(
     memo: Mapping[str, object],
@@ -3925,6 +3962,7 @@ def _extract_execution_pr_url(
             return normalized
     return None
 
+
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
     entry = _normalize_entry_value(search_attributes.get("mm_entry"))
     if entry:
@@ -3940,6 +3978,7 @@ def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> st
     if workflow_type.endswith("manifestingest"):
         return "manifest"
     return "user_workflow"
+
 
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
@@ -3961,6 +4000,7 @@ async def _get_service(
         ),
     )
 
+
 def _ensure_actions_enabled() -> None:
     """FastAPI dependency: raise 403 when Temporal execution actions are disabled."""
     if not settings.temporal_dashboard.actions_enabled:
@@ -3971,6 +4011,7 @@ def _ensure_actions_enabled() -> None:
                 "message": "Temporal execution actions are disabled.",
             },
         )
+
 
 def _ensure_submit_enabled() -> None:
     """FastAPI dependency: raise 503 when Temporal execution submission is disabled."""
@@ -3987,6 +4028,7 @@ def _ensure_submit_enabled() -> None:
                 ),
             },
         )
+
 
 def _derive_full_workflow_instructions(task_payload: Mapping[str, Any]) -> str | None:
     sections: list[str] = []
@@ -4012,6 +4054,7 @@ def _derive_full_workflow_instructions(task_payload: Mapping[str, Any]) -> str |
         return "\n\n".join(sections)
     return None
 
+
 def _normalize_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -4024,6 +4067,7 @@ def _normalize_string_list(value: Any) -> list[str]:
         seen.add(candidate)
         normalized.append(candidate)
     return normalized
+
 
 def _normalize_merge_automation_visibility_payload(
     payload: Any,
@@ -4074,6 +4118,7 @@ def _normalize_merge_automation_visibility_payload(
             exc_info=True,
         )
         return None
+
 
 def _bounded_execution_progress_from_sources(
     *,
@@ -5411,6 +5456,7 @@ def _recovery_failed_step_id_from_record(record) -> str | None:
             return candidate
     return None
 
+
 def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
     params = dict(getattr(record, "parameters", None) or {})
     recovery_block = params.get("recoverySource")
@@ -5420,12 +5466,14 @@ def _recovery_source_block_from_record(record) -> Mapping[str, Any]:
         return {}
     return recovery_block
 
+
 def _first_nonempty_text(*values: Any) -> str | None:
     for value in values:
         candidate = str(value or "").strip()
         if candidate:
             return candidate
     return None
+
 
 def _recovery_completed_step_refs_from_record(record) -> list[str]:
     memo = dict(getattr(record, "memo", None) or {})
@@ -5468,6 +5516,7 @@ def _recovery_completed_step_refs_from_record(record) -> list[str]:
             )
     return refs
 
+
 def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
     search_attributes = dict(getattr(record, "search_attributes", None) or {})
@@ -5490,6 +5539,7 @@ def _recovery_workspace_checkpoint_ref_from_record(record) -> str | None:
         workspace.get("checkpoint_ref"),
         workspace.get("ref"),
     )
+
 
 def _recovery_plan_identity_from_record(record) -> str | None:
     memo = dict(getattr(record, "memo", None) or {})
@@ -5561,6 +5611,7 @@ def _recovery_evidence_disabled_reason(record) -> str | None:
         return "plan_identity_missing"
     return None
 
+
 def _build_recovery_summary(
     record,
     *,
@@ -5575,6 +5626,7 @@ def _build_recovery_summary(
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
         disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
     )
+
 
 def _related_run_href(workflow_id: str) -> str:
     return f"/workflows/{quote(workflow_id, safe='')}?source=temporal"
@@ -5850,6 +5902,7 @@ async def _hydrate_related_run_metadata(
     await _append_linked_continuations(execution, hydrated, session=session, user=user)
     return execution.model_copy(update={"related_runs": hydrated})
 
+
 def _target_diagnostics_block(
     *,
     params: Mapping[str, Any],
@@ -5863,12 +5916,14 @@ def _target_diagnostics_block(
                 return value
     return {}
 
+
 def _attachment_ref_from_payload(value: Mapping[str, Any]) -> str | None:
     for key in ("artifactRef", "artifact_ref", "artifactId", "artifact_id", "ref"):
         candidate = str(value.get(key) or "").strip()
         if candidate:
             return candidate
     return None
+
 
 def _normalize_target_attachment(value: Any) -> dict[str, Any] | None:
     if isinstance(value, str):
@@ -5901,6 +5956,7 @@ def _normalize_target_attachment(value: Any) -> dict[str, Any] | None:
         "previewAvailable": bool(value.get("previewAvailable", bool(artifact_ref))),
     }
 
+
 def _target_attachment_payloads(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Mapping):
         return []
@@ -5930,6 +5986,7 @@ def _target_attachment_payloads(value: Any) -> list[dict[str, Any]]:
         normalized.append(attachment)
     return normalized
 
+
 def _normalize_target_refs(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         return []
@@ -5953,6 +6010,7 @@ def _normalize_target_refs(values: Any) -> list[dict[str, Any]]:
             refs.append({"refKind": ref_kind, "artifactRef": artifact_ref, "path": path})
     return refs
 
+
 def _normalize_attachment_failure_phase(value: Any) -> str:
     phase = str(value or "").strip().lower().replace("-", "_")
     if phase in {
@@ -5972,6 +6030,7 @@ def _normalize_attachment_failure_phase(value: Any) -> str:
     if phase in {"create", "submit", "submitted"}:
         return "upload"
     return "degraded"
+
 
 def _normalize_target_failures(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
@@ -5994,6 +6053,7 @@ def _normalize_target_failures(values: Any) -> list[dict[str, Any]]:
         )
     return failures
 
+
 def _target_step_id(value: Mapping[str, Any], fallback: str) -> str:
     return str(
         value.get("id")
@@ -6003,12 +6063,14 @@ def _target_step_id(value: Mapping[str, Any], fallback: str) -> str:
         or fallback
     ).strip()
 
+
 def _target_step_label(value: Mapping[str, Any], step_id: str, index: int) -> str:
     return (
         str(value.get("title") or value.get("label") or value.get("name") or "").strip()
         or step_id
         or f"Step {index}"
     )
+
 
 def _merge_target_overlay(
     targets: list[dict[str, Any]],
@@ -6053,6 +6115,7 @@ def _merge_target_overlay(
             "failures": _normalize_target_failures(overlay.get("failures")),
         }
     )
+
 
 def _preserved_steps_from_recovery_source(
     recovery_source: Mapping[str, Any],
@@ -6107,6 +6170,7 @@ def _preserved_steps_from_recovery_source(
         )
     return preserved_steps
 
+
 def _failed_recovery_phase(disabled_reason: str | None) -> str | None:
     if not disabled_reason:
         return None
@@ -6122,6 +6186,7 @@ def _failed_recovery_phase(disabled_reason: str | None) -> str | None:
         return "checkpoint_validation"
     return None
 
+
 def _normalize_failed_recovery_phase(value: Any) -> str | None:
     phase = str(value or "").strip().lower().replace("-", "_")
     if phase in {
@@ -6133,6 +6198,7 @@ def _normalize_failed_recovery_phase(value: Any) -> str | None:
         return phase
     return None
 
+
 def _target_diagnostics_recovery_block(
     diagnostics_block: Mapping[str, Any],
 ) -> Mapping[str, Any]:
@@ -6141,12 +6207,14 @@ def _target_diagnostics_recovery_block(
         return recovery
     return {}
 
+
 def _mapping_str_value(value: Mapping[str, Any], *keys: str) -> str | None:
     for key in keys:
         candidate = str(value.get(key) or "").strip()
         if candidate:
             return candidate
     return None
+
 
 def _build_target_diagnostics(
     record,
@@ -6285,6 +6353,7 @@ def _build_target_diagnostics(
         "degradedReason": degraded_reason,
     }
 
+
 async def _enrich_execution_dependencies(
     execution: ExecutionModel,
     *,
@@ -6338,6 +6407,7 @@ async def _enrich_execution_dependencies(
             ],
         }
     )
+
 
 async def _resolver_child_observability(
     *,
@@ -6454,6 +6524,7 @@ async def _enrich_execution_merge_automation(
 
     return execution.model_copy(update={"merge_automation": normalized})
 
+
 def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
     compact_ref = build_artifact_ref(artifact)
     return ArtifactRefModel(
@@ -6466,11 +6537,13 @@ def _build_execution_artifact_ref_model(artifact: Any) -> ArtifactRefModel:
         diagnostics=None,
     )
 
+
 def _select_complete_execution_artifact(artifacts: list[Any]) -> Any | None:
     for artifact in artifacts:
         if getattr(artifact, "status", None) is TemporalArtifactStatus.COMPLETE:
             return artifact
     return None
+
 
 async def _hydrate_execution_report_projection(
     execution: ExecutionModel,
@@ -6590,6 +6663,7 @@ async def _hydrate_execution_report_projection(
         )
         return execution
 
+
 async def _hydrate_provider_profile_metadata(
     execution: ExecutionModel, session: AsyncSession | None
 ) -> ExecutionModel:
@@ -6616,11 +6690,13 @@ async def _hydrate_provider_profile_metadata(
         }
     )
 
+
 def _managed_run_store_root() -> str:
     return os.path.join(
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
         "managed_runs",
     )
+
 
 def _resolve_agent_run_ids_from_managed_store(
     workflow_ids: tuple[str, ...]
@@ -6650,6 +6726,7 @@ def _resolve_agent_run_ids_from_managed_store(
         if run_id:
             resolved[workflow_id] = run_id
     return resolved
+
 
 async def _enrich_step_ledger_agent_run_refs(payload: Any) -> Any:
     if not isinstance(payload, Mapping):
@@ -6998,6 +7075,7 @@ def _execution_uses_live_workflow_queries(execution: ExecutionModel) -> bool:
     if execution.close_status:
         return False
     return execution.temporal_status == "running"
+
 
 async def _load_execution_step_ledger(
     *,
@@ -8061,6 +8139,7 @@ def _build_action_capabilities(
         disabled_reasons=disabled_reasons,
     )
 
+
 def _build_debug_fields(
     *,
     record,
@@ -8084,10 +8163,12 @@ def _build_debug_fields(
         attention_required=attention_required,
     )
 
+
 def _normalize_no_commit_finish_summary(
     finish_summary: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     return normalize_no_commit_finish_summary(finish_summary, logger=logger)
+
 
 def _coerce_artifact_ref(value: Any) -> str | None:
     if value is None:
@@ -8101,6 +8182,7 @@ def _coerce_artifact_ref(value: Any) -> str | None:
             if candidate:
                 return candidate
     return None
+
 
 def _parse_intervention_audit_entries(
     memo: Mapping[str, object],
@@ -8133,6 +8215,7 @@ def _parse_intervention_audit_entries(
             }
         )
     return entries
+
 
 def _invalid_workflow_request(message: str) -> HTTPException:
     return HTTPException(
@@ -8353,6 +8436,7 @@ def _reject_submit_version_identity(task_payload: dict[str, Any]) -> None:
     except WorkflowContractError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
 
+
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
         return "dependency_not_found"
@@ -8369,6 +8453,7 @@ def _validation_error_code(message: str) -> str:
     if message == "dependsOn can have a maximum of 10 items.":
         return "dependency_limit_exceeded"
     return "invalid_execution_request"
+
 
 def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
     if value is None:
@@ -8387,8 +8472,10 @@ def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
             normalized.append(candidate)
     return normalized
 
+
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
 
 def _coerce_step_count(value: Any) -> int:
     if value is None:
@@ -8397,8 +8484,10 @@ def _coerce_step_count(value: Any) -> int:
         raise _invalid_workflow_request("payload.workflow.steps must be a JSON array.")
     return len(value)
 
+
 def _default_task_step_id(index: int) -> str:
     return f"step-{index + 1}"
+
 
 def _task_step_id_from_payload(step: Mapping[str, Any], index: int) -> str:
     for key in ("id", "stepId", "stepRef", "ref"):
@@ -8407,13 +8496,16 @@ def _task_step_id_from_payload(step: Mapping[str, Any], index: int) -> str:
             return candidate
     return _default_task_step_id(index)
 
+
 _ATTACHMENT_REF_KEYS = frozenset(
     {"artifactId", "filename", "contentType", "sizeBytes"}
 )
 _FORBIDDEN_ATTACHMENT_CONTENT_TYPES = frozenset({"image/svg+xml"})
 
+
 def _normalized_attachment_content_type(value: object) -> str:
     return str(value or "").split(";", 1)[0].strip().lower()
+
 
 def _allowed_attachment_content_types() -> set[str]:
     configured = {
@@ -8423,6 +8515,7 @@ def _allowed_attachment_content_types() -> set[str]:
     configured.discard("")
     configured.difference_update(_FORBIDDEN_ATTACHMENT_CONTENT_TYPES)
     return configured or {"image/png", "image/jpeg", "image/webp"}
+
 
 def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
@@ -8469,6 +8562,7 @@ def _normalize_attachment_ref(raw: Any, *, field_name: str) -> dict[str, Any]:
         "sizeBytes": size_bytes,
     }
 
+
 def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[str, Any]]:
     if raw is None:
         return []
@@ -8478,6 +8572,7 @@ def _normalize_attachment_ref_list(raw: Any, *, field_name: str) -> list[dict[st
         _normalize_attachment_ref(item, field_name=f"{field_name}[{index}]")
         for index, item in enumerate(raw)
     ]
+
 
 async def _validate_and_collect_task_input_attachments(
     *,
@@ -8605,6 +8700,7 @@ async def _validate_and_collect_task_input_attachments(
 
     return objective_refs, step_refs, attachment_index
 
+
 def _normalize_task_skill_selectors(
     raw: Any, *, field_name: str
 ) -> dict[str, Any] | None:
@@ -8619,6 +8715,7 @@ def _normalize_task_skill_selectors(
         )
     except (WorkflowContractError, ValidationError, ValueError) as exc:
         raise _invalid_workflow_request(str(exc)) from exc
+
 
 def _normalize_task_input_attachments(
     raw: Any, *, field_name: str
@@ -8639,6 +8736,7 @@ def _normalize_task_input_attachments(
             raise _invalid_workflow_request(f"{field_name}[{index}]: {exc}") from exc
         normalized.append(attachment)
     return normalized
+
 
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_edges = task_payload.get("edges")
@@ -8963,6 +9061,7 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     task_payload["steps"] = normalized_steps
     return normalized_steps
+
 
 def _copy_skill_contract_metadata(
     *,
@@ -9515,6 +9614,7 @@ async def _expand_goal_preset_for_workflow_submission(
         expanded=expanded,
     )
 
+
 def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
     publish_payload = _coerce_mapping(raw_publish)
     if not publish_payload:
@@ -9547,6 +9647,7 @@ def _normalize_publish_payload(raw_publish: Any) -> dict[str, Any]:
         normalized["prBaseBranch"] = normalized["baseBranch"]
     return normalized
 
+
 _REPORT_OUTPUT_STRING_KEYS = frozenset(
     {
         "reportType",
@@ -9558,6 +9659,7 @@ _REPORT_OUTPUT_STRING_KEYS = frozenset(
     }
 )
 _REPORT_OUTPUT_MAX_STRING_CHARS = 512
+
 
 def _normalize_report_output_payload(
     *raw_payloads: Any,
@@ -9619,6 +9721,7 @@ def _normalize_report_output_payload(
         return normalized
     return {}
 
+
 def _report_output_instruction(report_output: Mapping[str, Any]) -> str:
     if not _coerce_bool(report_output.get("enabled"), default=False):
         return ""
@@ -9641,6 +9744,7 @@ def _report_output_instruction(report_output: Mapping[str, Any]) -> str:
         f"{path_sentence}"
     )
 
+
 def _workflow_publish_skill_id(
     task_payload: Mapping[str, Any],
     normalized_tool: Mapping[str, Any] | None,
@@ -9652,6 +9756,7 @@ def _workflow_publish_skill_id(
     skill_payload = _coerce_mapping(task_payload.get("skill"))
     return skill_payload.get("id") or skill_payload.get("name")
 
+
 def _first_present_publish_mode(
     *candidates: tuple[Mapping[str, Any], str],
 ) -> object | None:
@@ -9659,6 +9764,7 @@ def _first_present_publish_mode(
         if key in source and source[key] is not None:
             return source[key]
     return None
+
 
 def _validate_publish_authority_for_payload(payload: Mapping[str, Any]) -> None:
     """Reject an authored publish mode no step in the payload can satisfy."""
@@ -9730,6 +9836,7 @@ def _resolve_workflow_publish_payload(
     resolved = dict(task_publish or top_publish)
     resolved["mode"] = publish_mode
     return resolved
+
 
 _GENERATED_JIRA_PR_HEAD_BRANCH_RE = re.compile(
     r"^(?:moonmind/jira-(?:orchestrate|implement)-[a-z][a-z0-9]*-\d+(?:[-_].*)?|"
@@ -9816,6 +9923,7 @@ def _validate_remediation_branch_submission(
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
+
 def _merge_automation_enabled_from_parameters(
     parameters: Mapping[str, Any],
 ) -> bool:
@@ -9836,6 +9944,7 @@ def _merge_automation_enabled_from_parameters(
         and _coerce_bool(candidate.get("enabled"), default=False)
         for candidate in candidates
     )
+
 
 def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
     story_output = _coerce_mapping(raw_story_output)
@@ -9884,6 +9993,7 @@ def _normalize_story_output_payload(raw_story_output: Any) -> dict[str, Any]:
         normalized["jira"] = normalized_jira
 
     return normalized
+
 
 def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     tool_payload = (
@@ -9946,6 +10056,7 @@ def _normalize_user_role_name(value: Any) -> str:
         )
     return str(value or "").strip().lower()
 
+
 def _role_values_from_claims(claims: Any) -> list[Any]:
     if not isinstance(claims, Mapping):
         return []
@@ -9974,6 +10085,7 @@ def _role_values_from_claims(claims: Any) -> list[Any]:
                 values.extend(resource_roles)
 
     return values
+
 
 def _effective_user_roles(user: Any, request: Any | None = None) -> set[str]:
     roles: set[str] = set()
@@ -10228,12 +10340,14 @@ def _derive_workflow_summary(
         return f"Task instructions stored in artifact {input_artifact_ref}."
     return "Execution initialized."
 
+
 def _workflow_input_snapshot_ref_from_memo(
     memo: Mapping[str, Any],
 ) -> str | None:
     value = memo.get("task_input_snapshot_ref") or memo.get("taskInputSnapshotRef")
     candidate = str(value or "").strip()
     return candidate or None
+
 
 def _workflow_input_snapshot_descriptor_from_record(
     record,
@@ -10301,6 +10415,7 @@ def _workflow_input_snapshot_descriptor_from_record(
         fallbackEvidenceRefs=fallback_refs,
     )
 
+
 def _build_original_workflow_input_snapshot_payload(
     *,
     source_kind: str,
@@ -10344,6 +10459,7 @@ def _build_original_workflow_input_snapshot_payload(
         },
     }
 
+
 def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
     instructions = str(task_payload.get("instructions") or "").strip()
     steps = task_payload.get("steps")
@@ -10360,6 +10476,7 @@ def _derive_task_snapshot_shape(task_payload: Mapping[str, Any]) -> str:
     ):
         return "skill_only"
     return "inline_instructions"
+
 
 def _snapshot_source_payload_from_parameters(
     parameters: Mapping[str, Any],
@@ -10847,6 +10964,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         )
     return payload, parameter_task or artifact_task
 
+
 async def _apply_snapshot_memo_patch_via_mutator(
     *,
     session: AsyncSession,
@@ -11106,6 +11224,7 @@ async def _persist_original_workflow_input_snapshot_from_parameters(
         source_run_id=source_run_id,
     )
 
+
 async def _reuse_original_task_input_snapshot_from_source(
     *,
     session: AsyncSession,
@@ -11244,6 +11363,7 @@ async def _reuse_original_task_input_snapshot_from_source(
                 pass
     return snapshot_ref
 
+
 async def _attach_input_attachment_artifacts_to_execution(
     *,
     session: AsyncSession | None,
@@ -11297,6 +11417,7 @@ async def _attach_input_attachment_artifacts_to_execution(
     if changed_refs:
         record.artifact_refs = existing_refs
     await session.flush()
+
 
 def _workflow_payload_from_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
     workflow_payload = parameters.get("workflow")
@@ -12412,9 +12533,7 @@ async def _create_execution_from_workflow_request(
                 db_session=session,
             )
         except Exception as exc:
-            from moonmind.omnigent.harness_platform.failures import (
-                HarnessPlatformError,
-            )
+            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
             if not isinstance(exc, (HarnessPlatformError, ValueError)):
                 raise
@@ -12599,6 +12718,7 @@ async def _create_execution_from_workflow_request(
     execution = _serialize_execution(record, user=user)
     return execution
 
+
 async def _get_owned_execution(
     *,
     service: TemporalExecutionService,
@@ -12662,6 +12782,7 @@ async def _get_owned_execution(
             ) from exc
     return record
 
+
 def _compute_schedule_delay(
     scheduled_for: datetime,
 ) -> timedelta:
@@ -12681,6 +12802,7 @@ def _compute_schedule_delay(
         )
     return delay
 
+
 def _first_mapping_value(
     source: Mapping[str, Any],
     keys: tuple[str, ...],
@@ -12689,6 +12811,7 @@ def _first_mapping_value(
         if key in source:
             return source[key]
     return None
+
 
 def _recurring_workflow_payload(
     parameters: Mapping[str, Any],
@@ -13122,8 +13245,8 @@ async def _handle_recurring_schedule(
 ) -> ScheduleCreatedResponse:
     """Delegate recurring schedule creation to RecurringWorkflowsService."""
     from api_service.services.recurring_workflows_service import (
-        RecurringWorkflowValidationError,
         RecurringWorkflowsService,
+        RecurringWorkflowValidationError,
     )
 
     # Single-user (#4351): no human-owner gate. The admitted operator
@@ -13186,6 +13309,7 @@ async def _handle_recurring_schedule(
         redirectPath=f"/schedules/{definition.id}",
     )
 
+
 class _ScheduleRouteResult:
     """Result of ``_resolve_schedule_routing``."""
 
@@ -13201,6 +13325,7 @@ class _ScheduleRouteResult:
         self.start_delay = start_delay
         self.scheduled_for = scheduled_for
         self.recurring_response = recurring_response
+
 
 async def _resolve_schedule_routing(
     schedule: ScheduleParameters | None,
@@ -13253,6 +13378,7 @@ async def _resolve_schedule_routing(
         )
 
     return _ScheduleRouteResult()
+
 
 @router.post(
     "/{workflow_id}/remediation",
@@ -13357,6 +13483,7 @@ async def create_remediation_execution(
         principal_context=principal_context,
     )
 
+
 def _bounded_string_list(value: Any) -> list[str] | None:
     if value is None:
         return None
@@ -13364,6 +13491,7 @@ def _bounded_string_list(value: Any) -> list[str] | None:
         return None
     items = [str(item) for item in value if item is not None]
     return items or None
+
 
 def _bounded_live_observation(value: Any) -> RemediationLiveObservationModel | None:
     if not isinstance(value, dict):
@@ -13379,12 +13507,14 @@ def _bounded_live_observation(value: Any) -> RemediationLiveObservationModel | N
     bounded = {key: val for key in allowed if (val := value.get(key)) is not None}
     return RemediationLiveObservationModel.model_validate(bounded) if bounded else None
 
+
 def _bounded_lock_outcome(value: Any) -> RemediationLockOutcomeModel | None:
     if not isinstance(value, dict):
         return None
     allowed = {"state", "holder", "releasedAt"}
     bounded = {key: value.get(key) for key in allowed if key in value}
     return RemediationLockOutcomeModel.model_validate(bounded) if bounded else None
+
 
 def _bounded_checkpoint_branch_links(
     value: Any,
@@ -13400,6 +13530,7 @@ def _bounded_checkpoint_branch_links(
         except ValidationError:
             continue
     return links
+
 
 def _remediation_approval_state_from_link(
     link: Any,
@@ -13456,6 +13587,7 @@ def _remediation_approval_state_from_link(
         decision=("pending" if approval_pending else "not_required"),
         canDecide=approval_pending,
     )
+
 
 def _serialize_remediation_link_summary(
     link: Any,
@@ -13914,6 +14046,7 @@ async def _attach_remediation_capability_projection(
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
     return f"{remediation_workflow_id}:approval"
 
+
 def _context_selected_checkpoint(
     context_payload: Mapping[str, Any],
     checkpoint_ref: str,
@@ -13937,6 +14070,7 @@ def _context_selected_checkpoint(
         }:
             return item
     return None
+
 
 def _checkpoint_summary_for_ref(
     record: Any,
@@ -14011,6 +14145,7 @@ async def _read_remediation_context_payload(
         )
     return decoded
 
+
 @router.get("/remediations", response_model=RemediationCollectionResponseModel)
 async def list_remediation_collection(
     service: TemporalExecutionService = Depends(_get_service),
@@ -14067,6 +14202,7 @@ async def list_remediation_collection(
     items = [item for item in results if item is not None]
     return RemediationCollectionResponseModel(items=items)
 
+
 @router.get(
     "/{workflow_id}/remediations",
     response_model=RemediationLinksResponseModel,
@@ -14121,6 +14257,7 @@ async def list_execution_remediations(
             for link in links
         ],
     )
+
 
 @router.post(
     "/{workflow_id}/remediation/checkpoint-branches",
@@ -14431,6 +14568,7 @@ async def create_remediation_checkpoint_branch(
     await session.refresh(branch)
     return _branch_to_model(branch)
 
+
 @router.post(
     "/{workflow_id}/remediation/approvals/{request_id}",
     response_model=RemediationApprovalDecisionResponse,
@@ -14469,6 +14607,7 @@ async def record_remediation_approval_decision(
             },
         ) from exc
     return RemediationApprovalDecisionResponse.model_validate(result)
+
 
 def _validate_execution_fanout_create_request(
     request_body: Mapping[str, Any],
@@ -14858,6 +14997,7 @@ async def create_execution(
 
     return _serialize_execution(record, user=user)
 
+
 @router.get("", response_model=ExecutionListResponse)
 async def list_executions(
     *,
@@ -15182,6 +15322,7 @@ async def list_executions(
         ),
     )
 
+
 def _coerce_metric_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -15473,7 +15614,9 @@ async def get_execution_metrics(
 
         terminal = completed + failed + canceled
         success_rate = completed / terminal if terminal else None
-        from moonmind.workflows.executions.objective_metrics import objective_sample_metrics
+        from moonmind.workflows.executions.objective_metrics import (
+            objective_sample_metrics,
+        )
         return ExecutionMetricsResponse(
             totalRuns=total,
             completedRuns=completed,
@@ -15505,6 +15648,7 @@ async def get_execution_metrics(
                 "message": "Temporal service unavailable.",
             },
         ) from exc
+
 
 @router.get("/facets", response_model=ExecutionFacetResponse)
 async def list_execution_facets(
@@ -15744,6 +15888,7 @@ async def list_execution_facets(
                 "message": "Temporal service unavailable.",
             },
         ) from exc
+
 
 @router.get(
     "/{workflow_id}/steps/{logical_step_id}/step-executions",
@@ -16000,6 +16145,7 @@ async def describe_execution_steps(
         fallback_record=record,
     )
 
+
 @router.get("/{workflow_id}/checkpoints", response_model=CheckpointListResponse)
 async def list_execution_checkpoints(
     workflow_id: str,
@@ -16255,6 +16401,49 @@ async def describe_checkpoint_branch(
             session, workflow_id=workflow_id, branch_id=branch_id
         )
     )
+
+
+@router.post(
+    "/{workflow_id}/checkpoint-branches/{branch_id}/verification",
+    response_model=CheckpointBranchModel,
+)
+async def record_checkpoint_branch_verification(
+    workflow_id: str,
+    branch_id: str,
+    payload: CheckpointBranchVerificationRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> CheckpointBranchModel:
+    from api_service.services.checkpoint_branch_service import CheckpointBranchService
+
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    branch = await _load_checkpoint_branch(
+        session, workflow_id=workflow_id, branch_id=branch_id
+    )
+    try:
+        await CheckpointBranchService(session).record_remediation_verifier_output(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            verifier_artifact_ref=payload.verifier_artifact_ref,
+            artifact_service=get_temporal_artifact_service(session),
+        )
+    except (
+        ValueError,
+        TemporalArtifactNotFoundError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactStateError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "checkpoint_verification_rejected",
+                "message": "Objective report is unavailable or does not match the admitted candidate.",
+            },
+        ) from exc
+    await session.commit()
+    await session.refresh(branch)
+    return _branch_to_model(branch)
 
 
 @router.get(
@@ -19327,6 +19516,7 @@ async def update_execution(
         ),
     )
 
+
 @router.post(
     "/{workflow_id}/integration",
     response_model=ExecutionModel,
@@ -19366,6 +19556,7 @@ async def configure_integration_monitoring(
 
     return _serialize_execution(record, user=user)
 
+
 @router.post(
     "/{workflow_id}/integration/poll",
     response_model=ExecutionModel,
@@ -19401,6 +19592,7 @@ async def record_integration_poll(
         ) from exc
 
     return _serialize_execution(record, user=user)
+
 
 @router.post(
     "/{workflow_id}/signal",
@@ -19441,6 +19633,7 @@ async def signal_execution(
             canonical_identifier=canonical_workflow_id,
         )
     return _serialize_execution(record, user=user)
+
 
 @router.post(
     "/{workflow_id}/cancel",
@@ -19521,6 +19714,7 @@ async def cancel_execution(
         )
     return _serialize_execution(record, user=user)
 
+
 @router.post(
     "/{workflow_id}/reschedule",
     response_model=ExecutionModel,
@@ -19596,6 +19790,7 @@ async def reschedule_execution(
                 pass
 
     return _serialize_execution(record, user=user)
+
 
 @router.post(
     "/{workflow_id}/rerun",
@@ -20038,9 +20233,7 @@ async def _get_saved_work_repository_connections(
     session: AsyncSession = Depends(get_async_session),
 ) -> Callable[[], Any]:
     """Open the repository-connection owner only for a saved-work request."""
-    from api_service.services.repository_connections import (
-        RepositoryConnectionService,
-    )
+    from api_service.services.repository_connections import RepositoryConnectionService
 
     return lambda: RepositoryConnectionService(session)
 
@@ -20575,6 +20768,7 @@ async def recover_execution_from_failed_step(
     await session.commit()
     return RecoverFromFailedStepResponse.model_validate(result)
 
+
 @router.post(
     "/{workflow_id}/recover-from-selected-step",
     response_model=RecoverFromFailedStepResponse,
@@ -20702,5 +20896,6 @@ async def recover_execution_from_selected_step(
         ) from exc
     await session.commit()
     return RecoverFromFailedStepResponse.model_validate(result)
+
 
 __all__ = ["router"]

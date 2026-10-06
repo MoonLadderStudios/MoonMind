@@ -14,7 +14,6 @@ from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchTurnStateValue,
 )
 
-
 CheckpointBranchKind = Literal["root", "child_fork"]
 CheckpointBranchWorkspacePolicy = Literal[
     "continue_from_previous_execution",
@@ -356,6 +355,15 @@ class CheckpointBranchListResponse(BaseModel):
 
 class CheckpointBranchTurnListResponse(BaseModel):
     items: list[CheckpointBranchTurnModel] = Field(default_factory=list)
+
+
+class CheckpointBranchVerificationRequest(BaseModel):
+    """Reference to an existing objective-verifier report; no caller verdict."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    verifier_artifact_ref: str = Field(
+        ..., alias="verifierArtifactRef", pattern=r"^artifact://", max_length=512
+    )
 
 
 class CheckpointBranchCompareResponse(BaseModel):

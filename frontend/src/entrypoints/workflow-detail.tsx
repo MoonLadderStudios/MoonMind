@@ -11121,7 +11121,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       <option value="approval_gated">Approval-gated admin remediation</option>
                       <option value="observe_only">Troubleshooting only</option>
                       <option value="admin_auto" disabled>
-                        Administrator automatic (release gated)
+                        Administrator automatic (disabled)
                       </option>
                     </select>
                   </label>
