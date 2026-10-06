@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping
@@ -327,6 +328,85 @@ class CheckpointBranchService:
             self._session, workflow_id=workflow_id
         )
         return self._remediation_head(branch)
+
+    async def record_remediation_verifier_output(
+        self,
+        *,
+        workflow_id: str,
+        branch_id: str,
+        verifier_artifact_ref: str,
+        artifact_service,
+    ) -> RemediationWorkspaceHead:
+        """Consume a published objective report through the branch API owner.
+
+        The caller submits a reference, never a verdict. The existing runtime
+        publisher owns the immutable report; its content must identify the
+        admitted source, completed turn, Step Execution and exact current head.
+        """
+        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
+        artifact, payload = await artifact_service.read(
+            artifact_id=verifier_artifact_ref.removeprefix("artifact://"),
+            principal="service:remediation-context",
+            admitted_principal=f"workflow:{workflow_id}",
+        )
+        if (
+            artifact.created_by_principal != "system:agent_runtime"
+            or (artifact.metadata_json or {}).get("producer")
+            != "activity:agent_runtime.publish_artifacts"
+            or artifact.content_type != "application/json"
+            or len(payload) > 256_000
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "objective report producer is not authoritative",
+            )
+        report = json.loads(payload)
+        if not isinstance(report, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH, "objective report is not a mapping"
+            )
+        turn = await self._require_turn_on_branch(
+            branch_id=branch_id,
+            branch_turn_id=str(report.get("branchTurnId") or ""),
+            relation="verifier.branchTurnId",
+        )
+        if (
+            report.get("workflowId") != workflow_id
+            or report.get("runId") != branch.source_run_id
+            or report.get("branchId") != branch_id
+            or turn.completed_at is None
+            or turn.status != CheckpointBranchTurnState.CHECKING.value
+            or report.get("stepExecutionId") != turn.created_step_execution_id
+            or branch.current_head_step_execution_id != turn.created_step_execution_id
+        ):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "objective report does not match the admitted candidate",
+            )
+        verification = report.get("verification")
+        if not isinstance(verification, Mapping):
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH,
+                "objective report lacks head verification evidence",
+            )
+        evidence = VerificationEvidence.model_validate(
+            {
+                **verification,
+                "verifierArtifactRef": verifier_artifact_ref,
+            }
+        )
+        from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+
+        gate = parse_step_gate_result(report)
+        if gate.invalid or gate.verdict != evidence.verdict:
+            raise RemediationHeadError(
+                REMEDIATION_HEAD_MISMATCH, "objective report verdict is invalid"
+            )
+        return await self.record_remediation_verification(
+            workflow_id=workflow_id,
+            branch_id=branch_id,
+            evidence=evidence,
+        )
 
     async def mark_remediation_terminal(
         self,
@@ -1326,6 +1406,7 @@ class CheckpointBranchService:
                 raise ValueError(
                     "immutable terminal field checkpoint_digest cannot be changed"
                 )
+            await self._notify_terminal_turn(workflow_id, turn)
             return turn
         if normalized == "succeeded":
             turn.status = CheckpointBranchTurnState.CHECKING.value
@@ -1383,9 +1464,7 @@ class CheckpointBranchService:
             # Index the terminal handoff beside the result refs so the #3622
             # result-verification owner can discover completed candidates
             # without replaying the Temporal workflow result.
-            branch.artifact_refs["latestBranchTurnVerificationHandoff"] = (
-                branch_turn_id
-            )
+            branch.artifact_refs["latestBranchTurnVerificationHandoff"] = branch_turn_id
         for kind, ref, digest in (
             ("runtime.branch_turn.agent_result.json", agent_result_ref, None),
             ("output.branch_turn.diagnostics.json", diagnostics_ref, None),
@@ -1405,7 +1484,26 @@ class CheckpointBranchService:
                     digest=digest,
                 )
         await self._session.flush()
+        await self._notify_terminal_turn(workflow_id, turn)
         return turn
+
+    async def _notify_terminal_turn(self, workflow_id, turn):
+        if turn.completed_at is None or turn.status not in {
+            "failed",
+            "canceled",
+            "blocked",
+        }:
+            return
+        # Commit accepted terminal evidence before observation; an Activity
+        # retry can replay this notification without repeating turn compute.
+        await self._session.commit()
+        from moonmind.workflows.temporal.remediation_tools import (
+            resume_pending_action_verifications,
+        )
+
+        await resume_pending_action_verifications(
+            self._session, workflow_id=workflow_id
+        )
 
     @staticmethod
     def _require_launch_replay_matches(

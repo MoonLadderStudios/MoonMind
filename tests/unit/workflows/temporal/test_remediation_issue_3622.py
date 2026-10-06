@@ -1,18 +1,28 @@
 """Exact-result verification through production persistence and readers."""
 
+import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from temporalio import activity as temporal_activity
 
+from api_service.api.routers.executions import _get_service, router
 from api_service.db import models
-from api_service.services.checkpoint_branch_service import CheckpointBranchService
+from api_service.db.base import get_async_session
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import ExecutionRef
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -28,10 +38,13 @@ from moonmind.workflows.temporal.remediation_verification import (
     RemediationVerificationPhase,
     verification_contract_for,
 )
-from moonmind.workflows.temporal.remediation_workspace_head import VerificationEvidence
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
     build_branch_turn_verification_handoff,
+)
+from tests.unit.api.routers.test_checkpoint_branch_apis import (
+    _override_user_dependencies,
 )
 from tests.unit.workflows.temporal.test_remediation_context import (
     _admin_permissions,
@@ -117,8 +130,9 @@ async def test_missing_or_wrong_result_cannot_use_source_success(
 @pytest.mark.parametrize(
     "lost_artifact", ["remediation.action_result", "remediation.verification"]
 )
+@pytest.mark.parametrize("advance_remediation_run", [False, True])
 async def test_lost_receipt_acknowledgment_reuses_effect_and_exact_verdict(
-    tmp_path, mock_client_adapter, monkeypatch, lost_artifact
+    tmp_path, mock_client_adapter, monkeypatch, lost_artifact, advance_remediation_run
 ):
     async with temporal_db(tmp_path) as session:
         target, remediation, artifacts, authority, guard = await _prepare(
@@ -164,6 +178,12 @@ async def test_lost_receipt_acknowledgment_reuses_effect_and_exact_verdict(
         )
         with pytest.raises(RuntimeError, match="lost acknowledgment"):
             await tools.execute_action(**kwargs)
+        if advance_remediation_run:
+            current = await session.get(
+                models.TemporalExecutionCanonicalRecord, remediation.workflow_id
+            )
+            current.run_id = "successor-remediation-run"
+            await session.commit()
         if lost_artifact == "remediation.verification":
             candidate.run_id = "unrelated-new-success"
             await session.commit()
@@ -395,8 +415,26 @@ async def test_pending_rerun_resumes_without_repeating_accepted_effect(
         assert source.state == models.MoonMindWorkflowState.FAILED
 
 
+@pytest.mark.parametrize(
+    "report_case",
+    [
+        "exact",
+        "workflow",
+        "run",
+        "branch",
+        "turn",
+        "step",
+        "head_ref",
+        "head_digest",
+        "head_version",
+        "producer",
+        "verdict",
+        "missing",
+        "contamination",
+    ],
+)
 async def test_exact_branch_report_finishes_pending_verification(
-    tmp_path, mock_client_adapter
+    tmp_path, mock_client_adapter, report_case, monkeypatch
 ):
     async with temporal_db(tmp_path) as session:
         target, remediation, artifacts, authority, guard = await _prepare(
@@ -409,6 +447,9 @@ async def test_exact_branch_report_finishes_pending_verification(
         branch = models.WorkflowCheckpointBranch(
             branch_id="accepted-branch",
             workflow_id=target.workflow_id,
+            root_workflow_id=target.workflow_id,
+            label="Accepted repair",
+            runtime_context_policy="fresh_context",
             source_run_id=target.run_id,
             source_checkpoint_boundary="after_execution",
             source_checkpoint_ref="artifact://base",
@@ -478,38 +519,174 @@ async def test_exact_branch_report_finishes_pending_verification(
         assert pending["verification"]["outcome"] is None
         # The production verifier owner accepts and binds this report to the
         # exact candidate; its durable notification resumes the saved action.
-        report, upload = await artifacts.create(
-            principal="service:remediation-context",
-            content_type="application/json",
-            size_bytes=2,
-        )
-        await artifacts.write_complete(
-            artifact_id=report.artifact_id,
-            payload=b"{}",
-            principal="service:remediation-context",
-        )
-        evidence = VerificationEvidence(
+        evidence = dict(
             inputHeadRef="artifact://candidate",
             inputHeadDigest="sha256:candidate",
             inputHeadVersion=2,
             preVerificationWorkspaceDigest="sha256:candidate",
             postVerificationWorkspaceDigest="sha256:candidate",
-            verifierArtifactRef=f"artifact://{report.artifact_id}",
             verdict="FULLY_IMPLEMENTED",
         )
-        await CheckpointBranchService(session).record_remediation_verification(
-            workflow_id=target.workflow_id,
-            branch_id=branch.branch_id,
-            evidence=evidence,
+        report_payload = {
+            "workflowId": target.workflow_id,
+            "runId": target.run_id,
+            "branchId": branch.branch_id,
+            "branchTurnId": turn.branch_turn_id,
+            "stepExecutionId": turn.created_step_execution_id,
+            "verification": evidence,
+            "verdict": "FULLY_IMPLEMENTED",
+        }
+        outer_fields = {
+            "workflow": "workflowId",
+            "run": "runId",
+            "branch": "branchId",
+            "turn": "branchTurnId",
+            "step": "stepExecutionId",
+        }
+        if report_case in outer_fields:
+            report_payload[outer_fields[report_case]] = "unrelated"
+        if report_case in {"head_ref", "head_digest", "head_version"}:
+            field = {
+                "head_ref": "inputHeadRef",
+                "head_digest": "inputHeadDigest",
+                "head_version": "inputHeadVersion",
+            }[report_case]
+            evidence[field] = (
+                1
+                if report_case == "head_version"
+                else "artifact://wrong" if report_case == "head_ref" else "sha256:wrong"
+            )
+        if report_case == "verdict":
+            evidence["verdict"] = "unknown-verdict"
+        if report_case == "contamination":
+            evidence["postVerificationWorkspaceDigest"] = "sha256:changed"
+        if report_case == "producer":
+            report, _ = await artifacts.create(
+                principal="service:remediation-context",
+                content_type="application/json",
+                link=ExecutionRef(
+                    namespace=target.namespace,
+                    workflow_id=target.workflow_id,
+                    run_id=target.run_id,
+                    link_type="output.moonspec_verify",
+                ),
+                metadata_json={"producer": "activity:agent_runtime.publish_artifacts"},
+            )
+            await artifacts.write_complete(
+                artifact_id=report.artifact_id,
+                payload=json.dumps(report_payload).encode(),
+                principal="service:remediation-context",
+            )
+            report_ref = f"artifact://{report.artifact_id}"
+        else:
+            workspace = tmp_path / "workspace"
+            report_path = workspace / "var/artifacts/moonspec-verify/final.json"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+            run_store = ManagedRunStore(tmp_path / "runs")
+            run_store.save(
+                ManagedRunRecord(
+                    runId="objective-verifier",
+                    agentId="codex_cli",
+                    runtimeId="codex_cli",
+                    status="completed",
+                    startedAt=datetime.now(timezone.utc),
+                    workspacePath=str(workspace),
+                )
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=artifacts, run_store=run_store
+            )
+            monkeypatch.setattr(
+                activities,
+                "execution_notify_completion",
+                AsyncMock(return_value={"status": "skipped"}),
+            )
+            source_namespace, source_workflow_id, source_run_id = (
+                target.namespace,
+                target.workflow_id,
+                target.run_id,
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace=source_namespace,
+                    workflow_id=source_workflow_id,
+                    workflow_run_id=source_run_id,
+                ),
+            )
+            published = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Verifier finished.",
+                    metadata={
+                        "agentRunId": "objective-verifier",
+                        "verify_artifact_path": "var/artifacts/moonspec-verify/final.json",
+                    },
+                )
+            )
+            report_ref = (
+                "artifact://" + published.metadata["moonSpecVerify"]["gateResultRef"]
+            )
+        await session.commit()
+        await session.refresh(target)
+        app = FastAPI()
+        app.include_router(router)
+        mock_client_adapter.describe_workflow.return_value = None
+        monkeypatch.setattr(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            lambda db: TemporalArtifactService(
+                TemporalArtifactRepository(db),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            ),
         )
+        _override_user_dependencies(
+            app,
+            SimpleNamespace(id=target.owner_id, email="fixture@example.test", roles=[]),
+        )
+        async with async_sessionmaker(
+            session.bind, expire_on_commit=False
+        )() as api_session:
+
+            async def db_session():
+                yield api_session
+
+            app.dependency_overrides[get_async_session] = db_session
+            app.dependency_overrides[_get_service] = lambda: TemporalExecutionService(
+                api_session, client_adapter=mock_client_adapter
+            )
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://fixture"
+            ) as client:
+                response = await client.post(
+                    f"/api/executions/{target.workflow_id}/checkpoint-branches/{branch.branch_id}/verification",
+                    json={
+                        "verifierArtifactRef": (
+                            "artifact://missing"
+                            if report_case == "missing"
+                            else report_ref
+                        )
+                    },
+                )
+        await session.refresh(branch)
+        await session.refresh(target)
+        if report_case not in {"exact", "contamination"}:
+            assert response.status_code == 409, response.text
+            await session.refresh(branch)
+            assert branch.latest_verification_ref is None
+            assert executor.effects == 1
+            return
+        assert response.status_code == 200, response.text
         result = await tools.execute_action(**kwargs)
         assert executor.effects == 1
-        assert result["verification"]["outcome"] == "verified_resolved"
+        assert result["verification"]["outcome"] == (
+            "still_failed" if report_case == "contamination" else "verified_resolved"
+        )
         identity = result["verification"]["resultingIdentity"]
         assert identity["branchTurnId"] == "accepted-turn"
         assert identity["checkpointRef"] == "artifact://candidate"
         assert identity["headVersion"] == 2
-        assert identity["verifierArtifactRef"] == evidence.verifier_artifact_ref
+        assert identity["verifierArtifactRef"] == report_ref
         assert target.state == models.MoonMindWorkflowState.FAILED
         payload = await _read_artifact_json(
             artifacts, result["artifactRefs"]["verification"]
