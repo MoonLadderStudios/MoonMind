@@ -906,11 +906,8 @@ def deployment_history(
     )
     deadline = time.monotonic() + timeout
     row: dict[str, Any] | None = None
-    last_values: set[str] = set()
-    last_rows: list[dict[str, Any]] = []
     while time.monotonic() < deadline:
         _, values = execution_state(describe(api, workflow_id))
-        last_values = values
         if values & COMPLETED:
             raise JourneyFailure(
                 f"history update {workflow_id} completed although no deployment "
@@ -918,10 +915,6 @@ def deployment_history(
             )
         if values & (CANCELED | TERMINAL_FAILURE):
             _, actions = _stack_actions(api)
-            last_rows = [
-                {key: action.get(key) for key in ("owner", "status", "kind", "runDetailUrl")}
-                for action in actions
-            ]
             row = next(
                 (
                     action
@@ -941,8 +934,7 @@ def deployment_history(
     if row is None:
         raise JourneyFailure(
             f"Settings Operations never listed {workflow_id} as a closed "
-            f"workflow-backed update within {timeout:.0f}s "
-            f"(DIAG describe={sorted(last_values)} rows={last_rows})"
+            f"workflow-backed update within {timeout:.0f}s"
         )
     state["deploymentHistory"] = {
         "workflowId": workflow_id,
