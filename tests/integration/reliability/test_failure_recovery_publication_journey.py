@@ -136,6 +136,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             models.TemporalExecutionCanonicalRecord, target.workflow_id
         )
         run_module.workflow.info().workflow_id = target.workflow_id
+        run_module.workflow.info().run_id = target.run_id
 
         async def put(payload, content_type="application/json"):
             body = json.dumps(payload).encode()
@@ -148,9 +149,9 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                 principal=principal,
                 content_type=content_type,
                 link={
-                    "namespace": "moonmind",
-                    "workflow_id": target.workflow_id,
-                    "run_id": target.run_id,
+                    "namespace": target.namespace,
+                    "workflow_id": run_module.workflow.info().workflow_id,
+                    "run_id": run_module.workflow.info().run_id,
                     "link_type": "output.primary",
                 },
             )
@@ -276,8 +277,15 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             restore_route_registered=True,
         ).model_dump(by_alias=True, mode="json")
         assert manifest["resumeAllowed"] is True
-        client.start_workflow.side_effect = None
-        client.start_workflow.return_value = SimpleNamespace(run_id="recovery-run")
+
+        async def start_recovery(**kwargs):
+            links = await service._repository.list_links(
+                objective_ref.removeprefix("artifact://")
+            )
+            assert any(link.workflow_id == kwargs["workflow_id"] for link in links)
+            return SimpleNamespace(run_id="recovery-run")
+
+        client.start_workflow.side_effect = start_recovery
         recovered = await TemporalExecutionService(
             session, client_adapter=client
         ).create_failed_step_recovery_execution(
@@ -312,6 +320,9 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             models.TemporalExecutionCanonicalRecord,
             recovered["execution"]["workflowId"],
         )
+        assert recovery_record.workflow_id != target.workflow_id
+        run_module.workflow.info().workflow_id = recovery_record.workflow_id
+        run_module.workflow.info().run_id = recovery_record.run_id
         for key, value in intent.items():
             assert recovery_record.parameters["workflow"][key] == value
         recovery_source = recovery_record.parameters["recoverySource"]
