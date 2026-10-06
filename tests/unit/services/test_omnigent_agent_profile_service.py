@@ -649,3 +649,117 @@ async def test_catalog_sync_publishes_only_the_overlaid_observation(
         and record.trustState.value == "core_trusted"
         for record in returned.trust_records
     )
+
+
+@pytest.mark.asyncio
+async def test_launchable_harnesses_read_only_latest_catalog_per_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Inventory refresh must not load the whole pinned observation history.
+
+    Execution plans pin their catalog snapshots, so a long-lived deployment
+    retains thousands of large observations. Loading all of them to keep the
+    newest per endpoint exceeded the submission-time refresh deadline and
+    failed every Create Workflow request with ``TimeoutError``.
+    """
+
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import (
+        Base,
+        OmnigentHarnessCatalogSnapshotRecord,
+        OmnigentHarnessTrustRecord,
+    )
+    from api_service.services.omnigent_agent_profile_service import (
+        _synthetic_opencode_harness_row,
+        computed_launchable_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog import (
+        HarnessImplementationIdentity,
+        create_catalog_snapshot,
+    )
+
+    monkeypatch.setenv("OMNIGENT_GENERIC_HOST_ENABLED", "true")
+    monkeypatch.setenv(
+        "OMNIGENT_PI_HOST_IMAGE_REF", "ghcr.io/example/pi@sha256:" + "1" * 64
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            Base.metadata.create_all,
+            tables=[
+                OmnigentHarnessCatalogSnapshotRecord.__table__,
+                OmnigentHarnessTrustRecord.__table__,
+            ],
+        )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    pi_row = {**_synthetic_opencode_harness_row(), "id": "pi-native", "label": "Pi"}
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+    def record(endpoint_ref: str, minutes: int, harnesses: list[dict]):
+        snapshot = create_catalog_snapshot(
+            endpointRef=endpoint_ref,
+            omnigentVersion="1.0.0",
+            omnigentBuildDigest="sha256:" + "c" * 64,
+            sourceDigest="sha256:" + "d" * 64,
+            harnesses=harnesses,
+            observedAt=start + timedelta(minutes=minutes),
+        )
+        return OmnigentHarnessCatalogSnapshotRecord(
+            catalog_ref=snapshot.catalogRef,
+            endpoint_ref=endpoint_ref,
+            omnigent_version=snapshot.omnigentVersion,
+            omnigent_build_digest=snapshot.omnigentBuildDigest,
+            observed_at=snapshot.observedAt,
+            source_digest=snapshot.sourceDigest,
+            snapshot_json=snapshot.model_dump(by_alias=True, mode="json"),
+            diagnostics_json={},
+        )
+
+    async with sessions() as session:
+        # Older pinned history advertises pi-native; the newest observation of
+        # "default" no longer does, while "secondary" only does in its newest.
+        history = [record("default", minute, [pi_row]) for minute in range(20)]
+        session.add_all(history)
+        session.add(record("default", 100, []))
+        session.add_all(record("secondary", minute, []) for minute in range(20))
+        session.add(record("secondary", 100, [pi_row]))
+        await session.flush()
+        session.add(
+            OmnigentHarnessTrustRecord(
+                implementation_ref=HarnessImplementationIdentity.model_validate(
+                    pi_row["implementation"]
+                ).implementation_ref(),
+                harness_id="pi-native",
+                catalog_ref=history[0].catalog_ref,
+                trust_state="core_trusted",
+            )
+        )
+        await session.commit()
+
+    loaded: list[str] = []
+
+    def count_load(target, _context):
+        loaded.append(target.catalog_ref)
+
+    event.listen(OmnigentHarnessCatalogSnapshotRecord, "load", count_load)
+    try:
+        async with sessions() as session:
+            launchable = await computed_launchable_harnesses(session)
+    finally:
+        event.remove(OmnigentHarnessCatalogSnapshotRecord, "load", count_load)
+
+    assert "pi-native" in launchable
+    assert len(loaded) <= 2, "only the newest observation per endpoint is read"
+
+    async with sessions() as session:
+        await session.execute(
+            OmnigentHarnessCatalogSnapshotRecord.__table__.delete().where(
+                OmnigentHarnessCatalogSnapshotRecord.endpoint_ref == "secondary"
+            )
+        )
+        await session.commit()
+    async with sessions() as session:
+        assert "pi-native" not in await computed_launchable_harnesses(session)
+    await engine.dispose()
