@@ -29,6 +29,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker, WorkerDeploymen
 from moonmind import release_identity
 from moonmind.workflows.temporal import release_routing
 from moonmind.workflows.temporal.release_routing import (
+    await_registered_queues,
     bootstrap_version_routing,
     current_version,
     promote_version,
@@ -341,8 +342,8 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
             activity_queue,
             id=uuid4().hex,
             task_queue=queue,
-            # Startup stewardship may re-verify a seemingly live route past
-            # the poller-freshness window before converging it.
+            # Bounds the probe across candidate registration, canary
+            # qualification, promotion and the in-flight upgrade.
             execution_timeout=timedelta(seconds=600),
             versioning_override=(
                 PinnedVersioningOverride(WorkerDeploymentVersion(deployment, a))
@@ -371,8 +372,18 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
         ):
-            candidate = await bootstrap_version_routing(client, spec(b))
-            assert candidate["status"] == "awaiting_promotion"
+            # Explicit promotion only needs real candidate workers registered
+            # beside the live route (MoonLadderStudios/MoonMind#4374). Startup
+            # stewardship of a live route waits out the production
+            # poller-freshness window before parking; that preservation is
+            # owned by test_steward_preserves_live_current_route under the
+            # scoped routing clock, not repeated here in real time.
+            await await_registered_queues(
+                client,
+                version=f"{deployment}.{b}",
+                workflow_queue=queue,
+                activity_queues=(queue, activity_queue),
+            )
             assert (
                 current_version(await routing_snapshot(client, deployment))
                 == f"{deployment}.{a}"
