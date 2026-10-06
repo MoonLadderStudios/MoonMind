@@ -253,7 +253,7 @@ def _drivers(calls, *, candidates=None, live=None, running=None):
 
     async def refresh_schedules():
         calls.append("schedules")
-        return 3
+        return {"refreshed": 3, "failures": []}
 
     async def verify_live_container(server_ref):
         calls.append("verify-live")
@@ -635,6 +635,80 @@ async def test_migrate_surfaces_step_failures(tmp_path, monkeypatch):
         await migrate_omnigent_release(
             store=_store(tmp_path), runner=object(), drivers=drivers
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outage", [False, True], ids=["one-schedule", "whole-pass"])
+async def test_schedule_refresh_failure_does_not_fail_a_verified_release(
+    tmp_path, monkeypatch, outage
+):
+    """Schedules consume the release; they do not gate it.
+
+    Replays mm:220e9937 (2026-10-06): the fleet and the Omnigent release were
+    installed and verified, then one recurring schedule could not be re-planned
+    and every attempt failed the whole deployment update. The API's bootstrap
+    reconciliation keeps retrying that schedule; the receipt names it.
+    """
+    import dataclasses
+    from contextlib import asynccontextmanager
+
+    from api_service.db import base
+    from api_service.services import recurring_workflows_service as schedules
+    from moonmind.workflows.skills import omnigent_release
+
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    reason = (
+        "a81dd46f: could not refresh scheduled Omnigent authority: effective "
+        "launch host image conflicts with the selected Host Class"
+    )
+
+    class Session:
+        async def commit(self):
+            return None
+
+    @asynccontextmanager
+    async def session_context():
+        yield Session()
+
+    async def refresh(_service, limit=500):
+        if outage:
+            raise RuntimeError("database connection reset")
+        return schedules.ManagedScheduleRefresh(refreshed=2, failures=(reason,))
+
+    monkeypatch.setattr(base, "get_async_session_context", session_context)
+    monkeypatch.setattr(
+        schedules.RecurringWorkflowsService,
+        "refresh_managed_bootstrap_schedules",
+        refresh,
+    )
+    calls: list[str] = []
+    drivers = dataclasses.replace(
+        _drivers(calls, candidates=_refs(server=NEW_SERVER, host=NEW_HOST), live=_refs()),
+        refresh_schedules=omnigent_release._default_refresh_schedules,
+    )
+
+    receipt = await migrate_omnigent_release(
+        store=store, runner=object(), owner="test", drivers=drivers
+    )
+
+    assert receipt["status"] == "migrated"
+    assert receipt["serverImageRef"] == NEW_SERVER
+    # Verification still runs after the schedule pass.
+    assert calls[-1] == "verify-live"
+    if outage:
+        assert receipt["schedulesRefreshed"] == 0
+        assert receipt["scheduleRefreshFailures"] == [
+            "schedule refresh pass failed: database connection reset"
+        ]
+    else:
+        assert receipt["schedulesRefreshed"] == 2
+        assert receipt["scheduleRefreshFailures"] == [reason]
 
 
 def test_store_merge_preserves_unrelated_entries(tmp_path):

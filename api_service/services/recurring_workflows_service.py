@@ -132,6 +132,13 @@ class RecurringScheduleRuntimeSummary:
     last_dispatch_status: str | None = None
     last_dispatch_error: str | None = None
 
+@dataclass(frozen=True, slots=True)
+class ManagedScheduleRefresh:
+    """One managed-schedule refresh pass: how many moved, and why others did not."""
+
+    refreshed: int = 0
+    failures: tuple[str, ...] = ()
+
 def _json_object(value: object, *, field_name: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -713,21 +720,22 @@ class RecurringWorkflowsService:
 
         target = dict(definition.target or {})
         initial_parameters = dict(target.get("initialParameters") or {})
-        if isinstance(
+        has_plan = isinstance(
             initial_parameters.get("omnigentExecutionPlan"), Mapping
-        ):
-            return await self._refresh_omnigent_execution_plan_target(
-                definition,
-                target=target,
-                initial_parameters=initial_parameters,
-            )
+        )
         previous = initial_parameters.get("agentProfileSnapshot")
         if (
             not isinstance(previous, Mapping)
             or previous.get("profileId") != BOOTSTRAP_PROFILE_ID
         ):
+            if has_plan:
+                return await self._refresh_omnigent_execution_plan_target(
+                    definition,
+                    target=target,
+                    initial_parameters=initial_parameters,
+                )
             return False
-        if target.get("agentProfileSnapshot") != previous:
+        if not has_plan and target.get("agentProfileSnapshot") != previous:
             raise RecurringWorkflowValidationError(
                 "managed schedule Agent Profile snapshot identities conflict"
             )
@@ -765,23 +773,33 @@ class RecurringWorkflowsService:
             if isinstance(allowed_policy_refs, list) and allowed_policy_refs
             else ""
         )
+        current = (
+            previous.get("version") == active.version
+            and previous.get("digest") == active.digest
+        )
         provider_profile_ref = str(previous.get("providerProfileRef") or "").strip()
-        if selected_policy_ref and provider_profile_ref:
+        if not current and selected_policy_ref and provider_profile_ref:
             host_binding = await self._session.scalar(
                 select(OmnigentOAuthHostBindingRecord).where(
                     OmnigentOAuthHostBindingRecord.provider_profile_id
                     == provider_profile_ref
                 )
             )
+            # The schedule follows its provider's host binding onto the new
+            # policy; a cutover defers the binding while its host still serves.
             if (
                 host_binding is not None
                 and host_binding.launch_policy_ref != selected_policy_ref
             ):
                 return False
-        if (
-            previous.get("version") == active.version
-            and previous.get("digest") == active.digest
-        ):
+        if has_plan:
+            # Recompiling advances the managed snapshot with the plan.
+            return await self._refresh_omnigent_execution_plan_target(
+                definition,
+                target=target,
+                initial_parameters=initial_parameters,
+            )
+        if current:
             return False
 
         # Single-user (#4351): schedule refresh uses the definition's real
@@ -1055,16 +1073,14 @@ class RecurringWorkflowsService:
         return True
 
     async def refresh_managed_bootstrap_schedules(
-        self, limit: int = 500, *, raise_on_failure: bool = False
-    ) -> int:
+        self, limit: int = 500
+    ) -> ManagedScheduleRefresh:
         """Refresh scheduled actions after a managed bootstrap policy cutover.
 
-        Individual schedule failures are contained by default so one broken
-        definition cannot block startup reconciliation. Pass
-        ``raise_on_failure=True`` when the caller must block completion on any
-        failure (for example the singular Omnigent release migration, which
-        cannot publish success while recurring workflows retain stale
-        execution-plan authority).
+        Individual schedule failures are contained so one broken definition
+        cannot block the others, startup reconciliation, or a deployment
+        update. Each failure is returned with its reason; the API's bootstrap
+        reconciliation retries it on its next pass.
         """
 
         batch_size = max(1, int(limit))
@@ -1122,15 +1138,7 @@ class RecurringWorkflowsService:
                     definition_id,
                     exc,
                 )
-        if failed and raise_on_failure:
-            # The release migration cannot publish success while affected
-            # recurring workflows retain stale execution-plan authority.
-            raise RuntimeError(
-                f"Failed to refresh {len(failed)} managed bootstrap "
-                f"schedule(s): {', '.join(failed[:5])}"
-                + ("..." if len(failed) > 5 else "")
-            )
-        return refreshed
+        return ManagedScheduleRefresh(refreshed=refreshed, failures=tuple(failed))
 
     async def _validate_model_selection_submission(
         self,
