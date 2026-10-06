@@ -170,29 +170,27 @@ class DockerOmnigentHostLauncher:
         *,
         required_executables: tuple[str, ...] = (),
     ) -> str:
-        """Return the image to launch: exact when usable, else qualified local.
+        """Return the image to launch: the installed host when qualified.
 
-        Rebuilt host images change SHA/patch while keeping major.minor. When
-        the plan-pinned digest is absent locally, reuse a qualified
-        same-repository digest (digest-pinned, deployment-observed or
-        operator-pinned, same admitted series) if present instead of forcing a
-        7GB exact pull or failing. Qualification happens before any bearer or
-        credential reaches the fallback image; attestation re-verifies the
-        series with live probes before any session starts.
+        Rebuilt host images change SHA/patch while keeping major.minor. A plan
+        compiled before an update still pins the previous digest, and Docker
+        usually keeps it cached. Every launch here starts a fresh host, so it
+        follows the installed release (MoonLadderStudios/MoonMind#4627): when
+        the deployment records a qualified same-repository digest
+        (digest-pinned, deployment-observed or operator-pinned, same admitted
+        series) that is present locally, launch it instead of the planned one.
+        A host that already ran keeps its recorded image because resumes never
+        relaunch. Qualification happens before any bearer or credential
+        reaches that image; attestation re-verifies the series with live
+        probes before any session starts.
 
-        A plan compiled before an update may pin an image that is still cached
-        but predates the image-owned tools the plan requires. Launching it can
-        only fail exact-host attestation, so when the deployment records a
-        different qualified image that owns those tools, launch that instead.
-        The planned image stays authoritative whenever it satisfies the plan,
-        and nothing is probed unless such an alternative exists.
+        The planned image stays when no such installed alternative is present,
+        or when only the planned image owns the image-owned tools the plan
+        requires. Nothing is probed unless an alternative exists.
         """
 
         requested = str(requested_ref or "").strip()
         if not requested:
-            return requested
-        requested_present = await self._image_present(requested)
-        if requested_present and not required_executables:
             return requested
         if "@sha256:" not in requested:
             return requested
@@ -209,16 +207,18 @@ class DockerOmnigentHostLauncher:
             )
         except Exception:
             fallback = None
-        if fallback is None:
+        if fallback is None or not await self._image_present(fallback):
             return requested
-        if requested_present and await self._image_owns_tools(
-            requested, required_executables, host_class
-        ):
-            return requested
-        if not await self._image_present(fallback):
-            return requested
-        if requested_present and not await self._image_owns_tools(
-            fallback, required_executables, host_class
+        requested_present = await self._image_present(requested)
+        if (
+            requested_present
+            and required_executables
+            and not await self._image_owns_tools(
+                fallback, required_executables, host_class
+            )
+            and await self._image_owns_tools(
+                requested, required_executables, host_class
+            )
         ):
             return requested
         import logging
@@ -229,7 +229,7 @@ class DockerOmnigentHostLauncher:
             requested[:80],
             fallback[:80],
             (
-                "planned image lacks image-owned tools"
+                "installed image supersedes cached planned image"
                 if requested_present
                 else "planned image absent"
             ),
