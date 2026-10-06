@@ -1129,6 +1129,7 @@ class RemediationEvidenceToolService:
             action_request = {
                 **dict(action_request),
                 "targetRuntime": preparation.target.runtime,
+                "remediationWorkflowId": link.remediation_workflow_id,
             }
             if policy_snapshot is not None:
                 action_request["policySnapshot"] = policy_snapshot

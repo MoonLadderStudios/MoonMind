@@ -863,6 +863,8 @@ class RemediationActionCapabilityModel(BaseModel):
     supportedHostModes: list[str]
     requiredEvidenceClasses: list[str]
     blockedReasons: list[str]
+    targetSelectorRequired: bool = False
+    targetSelectorOptions: list[str] = Field(default_factory=list)
 
 
 class RemediationOperatorControlsModel(BaseModel):

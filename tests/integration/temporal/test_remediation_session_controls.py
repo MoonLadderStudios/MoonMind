@@ -205,6 +205,7 @@ async def test_canonical_session_control_separates_delivery_effect_and_replay(
         request = {
             "actionKind": kind,
             "actionId": "control-3624",
+            "remediationWorkflowId": "repair-3624",
             "requester": "service:remediator",
             "params": {"bridgeSessionId": bridge.bridge_session_id},
         }
@@ -263,6 +264,7 @@ async def test_lost_session_ack_is_reconciled_without_redelivery(tmp_path, kind)
         request = {
             "actionKind": kind,
             "actionId": "lost-3624",
+            "remediationWorkflowId": "repair-3624",
             "params": {"bridgeSessionId": bridge.bridge_session_id},
         }
         first = await owner.execute(action_request=request, target=target)
@@ -294,6 +296,7 @@ async def test_wrong_or_stale_session_authority_never_forwards(tmp_path, params)
             {
                 "actionKind": "session.interrupt_turn",
                 "actionId": "stale-3624",
+                "remediationWorkflowId": "repair-3624",
                 "params": params,
             },
             {},
@@ -327,6 +330,7 @@ async def test_rotated_session_generation_at_effect_boundary_never_forwards(tmp_
             {
                 "actionKind": "session.interrupt_turn",
                 "actionId": "rotate-3624",
+                "remediationWorkflowId": "repair-3624",
                 "params": {},
             },
             {},
@@ -368,7 +372,7 @@ async def test_retained_interrupt_is_unavailable_without_disabling_execution_con
 
 @pytest.mark.parametrize("kind", ["session.interrupt_turn", "session.cancel"])
 async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
-    tmp_path, mock_client_adapter, kind
+    tmp_path, mock_client_adapter, monkeypatch, kind
 ):
     from api_service.api.routers.executions import (
         _attach_remediation_capability_projection,
@@ -534,13 +538,15 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
         ), identity
         assert identity["workflowId"] == target.workflow_id, identity
         assert identity["runId"] == target.run_id, identity
-        await _confirm(store, kind)
-        # Existing #3622 continuation reads the saved exact result after a
-        # canonical observation; it does not execute the control again.
-        assert (
-            await tools.resume_pending_verifications(workflow_id=target.workflow_id)
-            == 1
+        # The real terminal owner must resume the saved verifier after commit,
+        # without a caller invoking continuation or repeating the control.
+        monkeypatch.setattr(
+            "moonmind.workflows.get_temporal_artifact_service",
+            lambda db: TemporalArtifactService(
+                TemporalArtifactRepository(db), store=artifacts._store
+            ),
         )
+        await _confirm(store, kind)
         await session.refresh(link)
         ui = _serialize_remediation_link_summary(link)
         assert ui.deliveryStatus == "accepted"
@@ -557,3 +563,194 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
         await session.refresh(canonical)
         assert canonical.state == models.MoonMindWorkflowState.FAILED
         assert canonical.memo["summary"] == "Original target failure"
+
+
+async def test_sequential_remediations_have_distinct_canonical_commands(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        bridge, store, provider, owner, target = await _fixture(session, tmp_path)
+        request = {
+            "actionKind": "session.interrupt_turn",
+            "actionId": "control-1",
+            "remediationWorkflowId": "repair-first",
+            "params": {"bridgeSessionId": bridge.bridge_session_id},
+        }
+        first = await owner.execute(action_request=request, target=target)
+        second = await owner.execute(
+            action_request={**request, "remediationWorkflowId": "repair-second"},
+            target=target,
+        )
+        assert (
+            first["resultingIdentity"]["commandId"]
+            != second["resultingIdentity"]["commandId"]
+        )
+        assert provider.effects == 2
+        replay = await owner.execute(action_request=request, target=target)
+        assert replay["resultingIdentity"] == first["resultingIdentity"]
+        assert provider.effects == 2
+
+
+async def test_embedded_cancel_supplies_recorded_drain_facade(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    async with temporal_db(tmp_path) as session:
+        bridge, _store, provider, owner, target = await _fixture(session, tmp_path)
+        bridge.metadata_ = {**bridge.metadata_, "hostProtocolMode": "embedded"}
+        await session.commit()
+        from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
+
+        owner._config = OmnigentBridgeConfig(
+            enabled=False,
+            compatibility={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        )
+        facade = object()
+        build = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value=facade)
+        monkeypatch.setattr(
+            "api_service.api.routers.omnigent_bridge_composition.build_embedded_host_facade",
+            build,
+        )
+        apply = AsyncMock(return_value={"ok": True})
+        monkeypatch.setattr(
+            "api_service.api.routers.omnigent_bridge._apply_owned_session_control",
+            apply,
+        )
+        result = await owner.execute(
+            action_request={
+                "actionKind": "session.cancel",
+                "actionId": "stop-1",
+                "remediationWorkflowId": "repair-embedded",
+                "params": {},
+            },
+            target=target,
+        )
+        assert result["status"] == "accepted"
+        assert apply.await_args.kwargs["control_facade"] is facade
+        build.assert_called_once_with(owner._config, drain_retained_sessions=True)
+
+
+async def test_concurrent_session_discovery_requires_exact_selector(
+    tmp_path, mock_client_adapter
+):
+    from api_service.services.remediation_capabilities import (
+        project_remediation_action_inputs,
+        remediation_link_capabilities,
+    )
+
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        bridge, _store, _provider, owner, health = await _fixture(
+            session, tmp_path, workflow_id=target.workflow_id, run_id=target.run_id
+        )
+        other = models.OmnigentBridgeSession(
+            bridge_session_id="bridge-other",
+            provider="omnigent",
+            compatibility_profile="omnigent.server.v1",
+            moonmind_workflow_id=target.workflow_id,
+            moonmind_run_id=target.run_id,
+            moonmind_agent_run_id="agent-other",
+            step_execution_id="step-other",
+            idempotency_key="launch-other",
+            omnigent_endpoint_ref="controlled://provider",
+            omnigent_session_id="provider-other",
+            host_type="managed",
+            status="running",
+            effective_launch_snapshot_json=bridge.effective_launch_snapshot_json,
+            metadata_=bridge.metadata_,
+            credential_generation=4,
+        )
+        canonical = await session.get(
+            models.TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        canonical.parameters = {
+            **canonical.parameters,
+            "workflow": {
+                **canonical.parameters.get("workflow", {}),
+                "runtime": {"mode": "omnigent"},
+            },
+        }
+        session.add(other)
+        await session.commit()
+        link = await session.get(
+            models.TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        await project_remediation_action_inputs(link, session=session)
+        rows = {row["actionKind"]: row for row in remediation_link_capabilities(link)}
+        for kind in ("session.interrupt_turn", "session.cancel"):
+            assert rows[kind]["requestable"], rows[kind]
+            assert rows[kind]["targetSelectorRequired"] is True
+            assert rows[kind]["targetSelectorOptions"] == [
+                "bridgeSessionId",
+                "stepExecutionId",
+            ]
+        plane = TemporalRemediationControlPlane(session_control_service=owner)
+        request = {
+            "actionKind": "session.interrupt_turn",
+            "actionId": "selector-1",
+            "remediationWorkflowId": remediation.workflow_id,
+            "params": {},
+        }
+        unscoped = await plane.handlers()[request["actionKind"]](request, {}, health)
+        assert unscoped["status"] == "precondition_failed"
+        selected = await owner.execute(
+            action_request={
+                **request,
+                "params": {"bridgeSessionId": bridge.bridge_session_id},
+            },
+            target=health,
+        )
+        assert selected["status"] == "accepted"
+
+
+async def test_terminal_notification_failure_keeps_evidence_and_retries(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    async with temporal_db(tmp_path) as session:
+        _bridge, store, _provider, _owner, target = await _fixture(session, tmp_path)
+        notify = AsyncMock(side_effect=OSError("verification unavailable"))
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.remediation_tools.resume_pending_action_verifications",
+            notify,
+        )
+        with pytest.raises(OSError, match="verification unavailable"):
+            await _confirm(store, "session.cancel")
+        async with store.transaction() as repos:
+            canonical = await repos.sessions.get("session-3624")
+            assert canonical.terminal_state == "canceled"
+            assert (
+                canonical.terminal_evidence_ref == "artifact://controlled-cancellation"
+            )
+        notify.side_effect = None
+        notify.return_value = 0
+        await _confirm(store, "session.cancel")
+        assert notify.await_count == 2
+        assert notify.await_args.kwargs == {"workflow_id": target.workflow_id}
+
+
+async def test_rolled_back_terminal_write_never_notifies(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    async with temporal_db(tmp_path) as session:
+        _bridge, store, _provider, _owner, _target = await _fixture(session, tmp_path)
+        notify = AsyncMock()
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.remediation_tools.resume_pending_action_verifications",
+            notify,
+        )
+        with pytest.raises(ValueError, match="abort write"):
+            async with store.transaction() as repos:
+                canonical = await repos.sessions.get("session-3624")
+                await repos.sessions.mark_terminal(
+                    canonical.session_id,
+                    "canceled",
+                    expected_revision=canonical.revision,
+                    expected_fencing_generation=canonical.fencing_generation,
+                    terminal_evidence_ref="artifact://cancellation",
+                )
+                raise ValueError("abort write")
+        notify.assert_not_awaited()
+        async with store.transaction() as repos:
+            canonical = await repos.sessions.get("session-3624")
+            assert canonical.terminal_state is None

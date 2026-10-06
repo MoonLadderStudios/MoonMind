@@ -81,6 +81,9 @@ def remediation_link_capabilities(link: Any) -> list[dict[str, Any]]:
         caller_allowed_action_kinds=tuple(policy_actions or ()),
         execution_backend_readiness=backend_readiness,
         action_blocked_reasons=getattr(link, "session_control_blocked_reasons", None),
+        action_target_selector_options=getattr(
+            link, "session_control_selector_options", None
+        ),
         approval_backend_ready=approval_backend_ready,
         verification_backend_readiness=verifier_readiness,
     )
@@ -148,83 +151,62 @@ async def project_remediation_action_inputs(link: Any, *, session: AsyncSession)
         else ()
     )
 
-    bridge = (
-        await session.execute(
-            select(db_models.OmnigentBridgeSession)
-            .where(
-                db_models.OmnigentBridgeSession.moonmind_workflow_id
-                == link.target_workflow_id,
-                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
-            )
-            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
     from api_service.services.remediation_session_controls import (
         SESSION_CONTROLS,
         session_control_capabilities,
     )
+    from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
 
-    # Multiple bindings require an explicit selector at dispatch. Do not guess
-    # which concurrent turn an unscoped control should interrupt.
     bindings = (
         (
             await session.execute(
-                select(db_models.OmnigentBridgeSession.bridge_session_id)
+                select(db_models.OmnigentBridgeSession)
                 .where(
                     db_models.OmnigentBridgeSession.moonmind_workflow_id
                     == link.target_workflow_id,
                     db_models.OmnigentBridgeSession.moonmind_run_id
                     == link.target_run_id,
                 )
-                .limit(2)
+                .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
             )
         )
         .scalars()
         .all()
     )
-    native_capabilities = (
-        session_control_capabilities(bridge)
-        if bridge is not None and len(bindings) == 1
-        else None
-    )
-    link.session_control_blocked_reasons = (
-        {
-            kind: (
-                [
-                    (
-                        native_capabilities.decisions[capability].reason
-                        or "session_binding_unavailable"
-                    )
-                ]
-                if native_capabilities is None
-                or not native_capabilities.decisions[capability].allowed
-                else []
-            )
-            for kind, (_, capability) in SESSION_CONTROLS.items()
-        }
-        if native_capabilities is not None
-        else {kind: ["session_binding_unavailable"] for kind in SESSION_CONTROLS}
-    )
-    link.session_control_readiness = {
-        kind: bool(
-            bridge is not None
-            and bridge.omnigent_session_id
-            and native_capabilities is not None
-            and native_capabilities.decisions[capability].allowed
+    bridge = bindings[0] if bindings else None
+    candidates = [
+        (row, session_control_capabilities(row))
+        for row in bindings
+        if row.omnigent_session_id
+    ]
+    link.session_control_readiness = {}
+    link.session_control_blocked_reasons = {}
+    link.session_control_selector_options = {}
+    for kind, (_, capability) in SESSION_CONTROLS.items():
+        reasons = []
+        ready = False
+        for row, native in candidates:
+            if kind == "session.interrupt_turn" and (row.metadata_ or {}).get(
+                "hostProtocolMode"
+            ) in {HOST_PROTOCOL_MODE_EMBEDDED, "embedded"}:
+                reasons.append("omnigent_bridge_mode_unsupported")
+            elif native.decisions[capability].allowed:
+                ready = True
+            else:
+                reasons.append(
+                    native.decisions[capability].reason or "session_binding_unavailable"
+                )
+        link.session_control_readiness[kind] = ready
+        link.session_control_blocked_reasons[kind] = (
+            []
+            if ready
+            else list(dict.fromkeys(reasons or ["session_binding_unavailable"]))
         )
-        for kind, (_, capability) in SESSION_CONTROLS.items()
-    }
-    # Retained sessions keep their recorded control owner. Its embedded
-    # protocol cannot interrupt a turn; basic execution controls remain usable.
-    if (
-        bridge is not None
-        and (bridge.metadata_ or {}).get("hostProtocolMode") == "embedded"
-    ):
-        link.session_control_readiness["session.interrupt_turn"] = False
-        link.session_control_blocked_reasons["session.interrupt_turn"] = [
-            "omnigent_bridge_mode_unsupported"
-        ]
+        if ready and len(bindings) > 1:
+            link.session_control_selector_options[kind] = [
+                "bridgeSessionId",
+                "stepExecutionId",
+            ]
     launch = (
         bridge.effective_launch_snapshot_json
         if bridge is not None

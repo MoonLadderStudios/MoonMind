@@ -1126,6 +1126,8 @@ const RemediationActionCapabilitySchema = z
     supportedHostModes: z.array(z.string()),
     requiredEvidenceClasses: z.array(z.string()),
     blockedReasons: z.array(z.string()),
+    targetSelectorRequired: z.boolean().optional().default(false),
+    targetSelectorOptions: z.array(z.string()).optional().default([]),
   })
   .passthrough();
 
@@ -8265,7 +8267,7 @@ function RemediationRelationshipsPanel({
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
                   <Card label="Available Actions">{remediationListValue(
                     item.actionCapabilities.filter((row) => row.requestable).map((row) =>
-                      remediationActionLabel(row.actionKind),
+                      `${remediationActionLabel(row.actionKind)}${row.targetSelectorRequired ? ' (select a session)' : ''}`,
                     ),
                   )}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
