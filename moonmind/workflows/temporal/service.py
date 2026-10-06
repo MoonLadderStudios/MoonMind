@@ -2982,6 +2982,7 @@ class TemporalExecutionService:
         parameters_patch: dict[str, Any] | None = None,
         title: str | None = None,
         idempotency_key: str | None = None,
+        expected_run_id: str | None = None,
     ) -> dict[str, Any]:
         if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
@@ -2995,6 +2996,8 @@ class TemporalExecutionService:
             )
 
         record = await self._require_source_execution(workflow_id)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
 
         if (
             record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
@@ -3012,6 +3015,11 @@ class TemporalExecutionService:
             cached = record.last_update_response
             if isinstance(cached, dict):
                 return dict(cached)
+
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
 
         if update_name == "RequestRerun":
             if (
@@ -3068,13 +3076,22 @@ class TemporalExecutionService:
             }
             update_arg = {k: v for k, v in update_arg.items() if v is not None}
             try:
+                control_options = {}
+                if expected_run_id is not None:
+                    control_options["run_id"] = expected_run_id
+                    if idempotency_key is not None:
+                        control_options["idempotency_key"] = idempotency_key
                 await self._client_adapter.update_workflow(
-                    record.workflow_id, update_name, update_arg
+                    record.workflow_id, update_name, update_arg, **control_options
                 )
             except Exception as exc:
                 if update_name == "RequestRerun" and self._is_terminal_update_error(
                     exc
                 ):
+                    if expected_run_id is not None:
+                        raise TemporalExecutionTargetRunChangedError(
+                            "The admitted target run closed before rerun dispatch"
+                        ) from exc
                     logger.info(
                         "Temporal rerun update found closed workflow %s; creating fresh rerun: %s",
                         record.workflow_id,
@@ -3177,14 +3194,14 @@ class TemporalExecutionService:
         record = await self._require_source_execution(workflow_id)
         if expected_run_id is not None:
             await self._session.refresh(record)
-            if record.run_id != expected_run_id:
-                raise TemporalExecutionTargetRunChangedError(
-                    "Target run changed before rerun dispatch"
-                )
         if idempotency_key == record.last_update_idempotency_key and isinstance(
             record.last_update_response, dict
         ):
             return dict(record.last_update_response)
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
         response = await self._create_fresh_rerun_execution(
             record,
             input_artifact_ref=None,
