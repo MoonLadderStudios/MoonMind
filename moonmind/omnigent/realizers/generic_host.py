@@ -60,6 +60,10 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
 
+#: Backoff before each bounded re-run of an unconfirmed cleanup whose result
+#: would start a successor Step Execution (MoonLadderStudios/MoonMind#4627).
+_SUCCESSOR_FENCE_RETRY_DELAYS = (2.0, 8.0)
+
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     """Return the bounded cleanup outcome for one terminal execution.
@@ -688,6 +692,19 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
+            if (
+                isinstance(cleanup_error, Exception)
+                and primary_error is None
+                and result is not None
+                and result.retry_recommendation == "retry_step_execution"
+            ):
+                binding, result, cleanup_error = await self._fence_successor(
+                    request=request,
+                    binding=binding,
+                    acquired=acquired,
+                    result=result,
+                    cleanup_error=cleanup_error,
+                )
         elif acquired:
             try:
                 await self._provider_leases.release_all(acquired)
@@ -949,6 +966,19 @@ class GenericOmnigentHostRealizer:
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
             cleanup_error = exc
+        if (
+            isinstance(cleanup_error, Exception)
+            and primary_error is None
+            and result is not None
+            and result.retry_recommendation == "retry_step_execution"
+        ):
+            current, result, cleanup_error = await self._fence_successor(
+                request=request,
+                binding=current,
+                acquired=acquired,
+                result=result,
+                cleanup_error=cleanup_error,
+            )
         self._record_cleanup_outcome(
             harness_id=plan.payload.harnessId,
             primary_error=primary_error,
@@ -1284,6 +1314,84 @@ class GenericOmnigentHostRealizer:
             },
         )
         return binding, host_lease
+
+    async def _fence_successor(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: StableRuntimeBinding,
+        acquired: tuple[Any, ...],
+        result: AgentRunResult,
+        cleanup_error: Exception,
+    ) -> tuple[StableRuntimeBinding, AgentRunResult, Exception | None]:
+        """Confirm this attempt stopped before its result starts a successor.
+
+        ``retry_step_execution`` lets MoonMind.Run start another Step Execution
+        of the same logical step, with the same publication target. A lost
+        host is only an offline projection; a partitioned host can still
+        write, push, or use its credentials.
+        The persisted cleanup is resumed within a fixed bound. Only the
+        label- and generation-fenced removal of this attempt's own host
+        establishes exclusive authority for the successor; otherwise the
+        recorded result stands without a successor and keeps its capacity for
+        the independent janitor.
+        """
+
+        attempts = 1
+        for delay in _SUCCESSOR_FENCE_RETRY_DELAYS:
+            await asyncio.sleep(delay)
+            attempts += 1
+            try:
+                current = await self._runtime_bindings.get(binding.bindingId)
+                if current is not None:
+                    binding = current
+                credential_handles, host_lease, host_context = (
+                    await self._bound_cleanup_resources(binding)
+                )
+                binding, _host_lease = await self._cleanup(
+                    request=request,
+                    binding=binding,
+                    host_lease=host_lease,
+                    host_context=host_context,
+                    prepared=None,
+                    credential_handles=credential_handles,
+                    acquired=acquired,
+                )
+                return binding, result, None
+            except Exception as exc:
+                cleanup_error = exc
+        logger.warning(
+            "Generic host cleanup for binding %s stayed unconfirmed after %d "
+            "attempts; no successor Step Execution is authorized",
+            binding.bindingId,
+            attempts,
+            exc_info=cleanup_error,
+        )
+        return (
+            binding,
+            result.model_copy(
+                update={
+                    "retry_recommendation": "delegate_to_janitor",
+                    "summary": (
+                        f"{result.summary} The previous host could not be "
+                        "confirmed stopped, so no new attempt was started."
+                    ),
+                    "metadata": {
+                        **(result.metadata or {}),
+                        "successorAuthority": {
+                            "established": False,
+                            "unfinishedPhase": "cleanup",
+                            "cleanupFailureCode": str(
+                                getattr(cleanup_error, "code", "")
+                                or type(cleanup_error).__name__
+                            ),
+                            "cleanupAttempts": attempts,
+                        },
+                    },
+                }
+            ),
+            cleanup_error,
+        )
 
     async def _publish_host_logs(
         self,

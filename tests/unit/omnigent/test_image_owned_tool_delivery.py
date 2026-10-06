@@ -709,15 +709,44 @@ async def test_plan_pinned_to_pre_tools_host_launches_updated_deployment_host(
 
 
 @pytest.mark.asyncio
-async def test_plan_pinned_host_that_owns_its_tools_keeps_the_recorded_image(
+async def test_fresh_launch_from_in_flight_plan_follows_installed_host(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """In-flight plans keep their recorded host when it satisfies the plan."""
+    """A new attempt launches the installed host even if the old one is cached.
+
+    MoonLadderStudios/MoonMind#4627: an update replaced the host image while a
+    step was running. Its successor attempt reuses the run's plan, whose
+    pinned digest is still cached locally. The attempt that already ran keeps
+    its recorded image; the fresh launch follows the installed release.
+    """
 
     _record_deployment_host(monkeypatch, tmp_path, _TOOLED_HOST)
     backend = _ImageContentsBackend(
         present={_PRE_TOOLS_HOST, _TOOLED_HOST},
         with_tools={_PRE_TOOLS_HOST, _TOOLED_HOST},
+    )
+
+    result = await _launcher(backend).launch(
+        spec=_tool_launch_spec(_PRE_TOOLS_HOST),
+        host_class=_pinned_host_class(_PRE_TOOLS_HOST),
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    assert backend.launched_image() == _TOOLED_HOST
+    assert result["launchImageRef"] == _TOOLED_HOST
+
+
+@pytest.mark.asyncio
+async def test_planned_host_is_kept_when_only_it_owns_the_required_tools(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The installed host cannot replace a planned host that alone satisfies it."""
+
+    _record_deployment_host(monkeypatch, tmp_path, _TOOLED_HOST)
+    backend = _ImageContentsBackend(
+        present={_PRE_TOOLS_HOST, _TOOLED_HOST},
+        with_tools={_PRE_TOOLS_HOST},
     )
 
     await _launcher(backend).launch(

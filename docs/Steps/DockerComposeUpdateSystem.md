@@ -219,7 +219,7 @@ advance the installed release when a suitable new image is available for a confi
 the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
-shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+shared host image and are recreated without draining, checkpointing, or deferring for active sessions, while inactive profiles remain inactive. Active work is not an update prerequisite; section 16 describes how interrupted steps continue. A MoonMind update
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
@@ -244,8 +244,13 @@ from legacy-writer detection; orphaned or terminal competing writers continue
 to block cutover.
 
 Reconcile uncertain recreations before repeating them. Future launches follow
-the installed runtime while preserving explicit harness/provider choices and
-the actual image identity of attempts already in progress. A version-number
+the installed runtime while preserving explicit harness/provider choices. This
+includes a fresh host launched from a plan compiled before the update: the
+launcher prefers the qualified installed same-repository image over a cached
+planned digest, unless only the planned image owns the tools the plan
+requires. An attempt already in progress keeps the actual image, session and
+history it recorded. That attempt may still end and be followed by a separate
+successor attempt; its process does not have to survive. A version-number
 difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
@@ -373,6 +378,14 @@ Rollback is an explicit authorized update to a previous allowed image through th
 Workflow submission is one optional way to request the existing privileged update. Ordinary orchestration remains Temporal-owned. Deployment recovery must not depend on a provider-capacity lease, a healthy singleton workflow, or workflow dispatch to repair those same components.
 
 Preserve queued work and schedule identity during recreation. Resume through existing execution/session recovery where safe. Do not replay missed schedule ticks as an unbounded burst, rewrite publication intent, or replace a saved checkpoint with an empty retry.
+
+Recreating API, worker, or agent host processes during an update needs no manual draining, last-second checkpoint, record repair, or resubmission:
+
+- **Observer replaced, session healthy.** A replacement worker reattaches to the accepted turn under the same operation identity. No second turn or agent starts.
+- **Runtime actually lost.** Once Omnigent projects the session's runner and host offline and not resumable past the host-loss grace, the attempt reports `OMNIGENT_SESSION_HOST_LOST` with `retry_step_execution`. MoonMind.Run then starts a new Step Execution of the same workflow and logical step (`runtime_recovered`) on the installed runtime. That attempt keeps the Harness, Provider Profile, model, publication target and plan. Completed steps are not repeated.
+- **Previous attempt stopped before the successor.** For generic on-demand hosts, the old attempt first saves its workspace. Its fenced cleanup must then confirm that the host container was removed, and only then is `retry_step_execution` returned. Cleanup is checked against the host lease reference and launch generation, so a late cleanup cannot remove a newer host. If removal stays unconfirmed after the bounded retries (for example during a partition), the result is changed to `delegate_to_janitor` with `successorAuthority.established: false`. No successor starts, and the binding stays `cleanup_pending` with its capacity for the independent janitor.
+- **Durable progress versus unsaved work.** Completed predecessor outputs and recorded compute, save and publication receipts are durable. A redelivery resumes only an unfinished save, publication or report, and the publisher reconciles a push whose acknowledgement was lost. Work done inside the interrupted turn after its last durable boundary is not durable: the successor starts in a fresh step workspace built from the admitted step inputs, and may repeat that work. There is no process snapshot or exactly-once shell execution.
+- **Bounds.** Repeated interruptions spend the step's single runtime retry budget of three new executions; they never reset it. An exhausted budget fails the step with the original host-loss summary. Cancellation starts no successor.
 
 ## 17. Interaction with Settings information architecture
 
