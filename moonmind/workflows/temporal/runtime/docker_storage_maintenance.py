@@ -129,6 +129,12 @@ async def reclaim_docker_storage_under_pressure(
     Docker Desktop's sparse VM disk can report free space after the host disk
     fills. Routine expiry must therefore work independently of that reading.
     Docker protects images referenced by containers and active build cache.
+
+    Routine expiry removes untagged images only. Image age is build time, not
+    last use, so an all-images age filter deletes a reused tagged image (such
+    as a declared container-job base image) whenever no container holds it.
+    Superseded digest-pinned releases are untagged and still expire. Tagged
+    unused images are removed only under critical pressure.
     """
 
     config.validate()
@@ -159,7 +165,7 @@ async def reclaim_docker_storage_under_pressure(
             docker_binary,
             "image",
             "prune",
-            "-af",
+            "-f",
             "--filter",
             f"until={config.image_min_age_hours}h",
         ),
@@ -173,6 +179,21 @@ async def reclaim_docker_storage_under_pressure(
             "-af",
             "--filter",
             f"until={config.build_cache_min_age_hours}h",
+        ),
+    )
+    # An anonymous volume no container references can never be reattached:
+    # Compose only carries anonymous volumes across a recreate while the old
+    # container still exists. Named volumes (deployment data, caches, builder
+    # state) are excluded by the daemon default and by the label filter.
+    await run(
+        "unreferenced anonymous volume prune",
+        (
+            docker_binary,
+            "volume",
+            "prune",
+            "-f",
+            "--filter",
+            "label=com.docker.volume.anonymous",
         ),
     )
 
