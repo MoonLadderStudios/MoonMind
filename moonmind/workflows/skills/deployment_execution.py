@@ -3698,7 +3698,8 @@ def build_compose_command_plan(
 # at most the controller's pull and apply budgets plus margin.
 CONTROLLER_OBSERVE_INTERVAL_SECONDS: float = 10
 CONTROLLER_OBSERVE_TIMEOUT_SECONDS: float = 2100
-_CONTROLLER_OPEN_STATUSES = frozenset({"QUEUED", "RUNNING"})
+# An unrecognized status is not an outcome; keep observing the operation.
+_CONTROLLER_OPEN_STATUSES = frozenset({"QUEUED", "RUNNING", "UNKNOWN"})
 
 
 def _controller_failure(exc: DeploymentOperationError) -> ToolFailure:

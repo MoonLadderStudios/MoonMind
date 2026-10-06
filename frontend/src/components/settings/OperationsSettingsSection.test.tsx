@@ -733,6 +733,91 @@ describe('OperationsSettingsSection deployment update card', () => {
     ).toBeTruthy();
   });
 
+  it('resubmits one update request under its identity until the controller accepts it', async () => {
+    let attempts = 0;
+    mockControllerState({ installed: true, reachable: true }, (url) => {
+      if (url !== '/api/v1/operations/deployment/update') {
+        return null;
+      }
+      attempts += 1;
+      return Promise.resolve(
+        attempts === 1
+          ? ({
+              ok: false,
+              status: 503,
+              json: async () => ({
+                detail: {
+                  code: 'deployment_controller_unavailable',
+                  message: 'The deployment controller is unavailable: controller did not answer.',
+                },
+              }),
+            } as Response)
+          : ({
+              ok: true,
+              status: 202,
+              json: async () => ({
+                deploymentUpdateRunId: 'ctl-accepted',
+                operationId: 'accepted',
+                owner: 'controller',
+                taskId: null,
+                workflowId: null,
+                status: 'RUNNING',
+              }),
+            } as Response),
+      );
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const submit = await within(card).findByRole('button', { name: /update moonmind/i });
+    const submittedIds = () =>
+      fetchSpy.mock.calls
+        .filter(([url]) => String(url) === '/api/v1/operations/deployment/update')
+        .map(([, init]) => JSON.parse(String(init?.body)).operationId);
+
+    fireEvent.click(submit);
+    expect(await within(card).findByText(/controller did not answer/i)).toBeTruthy();
+    fireEvent.click(submit);
+    expect(
+      await within(card).findByText(/update accepted by the controller: operation accepted/i),
+    ).toBeTruthy();
+    const [first, second] = submittedIds();
+    expect(first).toMatch(/^ui-[A-Za-z0-9._-]+$/);
+    // The lost or refused response is resubmitted as the same request.
+    expect(second).toBe(first);
+
+    // A changed target is new intent with its own identity.
+    fireEvent.change(await within(card).findByLabelText(/update to/i), {
+      target: { value: 'v20260507.2470' },
+    });
+    fireEvent.click(submit);
+    await waitFor(() => expect(submittedIds()).toHaveLength(3));
+    expect(submittedIds()[2]).not.toBe(first);
+  });
+
+  it('keeps observing a controller operation whose status is unknown', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockControllerState({ installed: true, reachable: true }, () => null, [
+        { ...failedControllerAction, status: 'UNKNOWN', retryAllowed: false, completedAt: null },
+      ]);
+      renderOperations();
+      const card = await screen.findByRole('region', { name: /moonmind update/i });
+      await within(card).findByText('Operation ui-1');
+      const stackReads = () =>
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === '/api/v1/operations/deployment/stacks/moonmind',
+        ).length;
+      const before = stackReads();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await waitFor(() => expect(stackReads()).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports a busy controller with the operation that owns the stack', async () => {
     mockControllerState({ installed: true, reachable: true }, (url) =>
       url === '/api/v1/operations/deployment/update'

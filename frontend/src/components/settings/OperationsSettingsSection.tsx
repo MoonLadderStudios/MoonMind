@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -245,7 +245,8 @@ export interface WorkerPauseConfig {
 const DEPLOYMENT_STACK = 'moonmind';
 // Ordinary bounded reads while a controller operation is still in progress.
 const DEPLOYMENT_ACTIVE_POLL_MS = 5_000;
-const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING']);
+// An unknown status is not an outcome, so the page keeps observing it.
+const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING', 'UNKNOWN']);
 
 const DEFAULT_UPDATE_OPTIONS = {
   mode: 'changed_services',
@@ -417,6 +418,13 @@ function deploymentActionKey(action: DeploymentAction): string {
   );
 }
 
+function newDeploymentRequestId(): string {
+  const random =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `ui-${random}`;
+}
+
 function operationIdempotencyKey(action: string): string {
   return `worker-${action}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -455,6 +463,10 @@ export function OperationsSettingsSection({
     level: 'ok' | 'error';
     text: string;
   } | null>(null);
+  // The update request awaiting controller acceptance. Resubmitting the same
+  // target reuses its identity so a lost response observes that operation
+  // instead of starting another; a changed target is a new request.
+  const pendingUpdateRequest = useRef<{ target: string; operationId: string } | null>(null);
   const [pauseMode, setPauseMode] = useState('drain');
   const [pauseReason, setPauseReason] = useState('');
   const [resumeReason, setResumeReason] = useState('');
@@ -698,6 +710,14 @@ export function OperationsSettingsSection({
         return null;
       }
 
+      const stack = deploymentState?.stack || DEPLOYMENT_STACK;
+      const requestTarget = JSON.stringify([stack, repository, reference, updateMode]);
+      if (pendingUpdateRequest.current?.target !== requestTarget) {
+        pendingUpdateRequest.current = {
+          target: requestTarget,
+          operationId: newDeploymentRequestId(),
+        };
+      }
       const response = await fetch('/api/v1/operations/deployment/update', {
         method: 'POST',
         headers: {
@@ -705,13 +725,14 @@ export function OperationsSettingsSection({
           Accept: 'application/json',
         },
         body: JSON.stringify({
-          stack: deploymentState?.stack || DEPLOYMENT_STACK,
+          stack,
           image: {
             repository,
             reference,
           },
           ...DEFAULT_UPDATE_OPTIONS,
           mode: updateMode,
+          operationId: pendingUpdateRequest.current.operationId,
         }),
       });
       if (!response.ok) {
@@ -723,6 +744,7 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
+      pendingUpdateRequest.current = null;
       setUpdateNotice({
         level: 'ok',
         text: deploymentResultNotice(result, 'update'),

@@ -152,6 +152,7 @@ class DeploymentUpdateSubmission:
     rollback_source_action_id: str | None = None
     confirmation: str | None = None
     before_build_id: str | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -407,7 +408,7 @@ class DeploymentOperationsService:
         operation = await asyncio.to_thread(
             submit_controller_update,
             endpoint,
-            operation_id=f"ui-{uuid4().hex}",
+            operation_id=submission.operation_id or f"ui-{uuid4().hex}",
             stack=policy.stack,
             desired_image=f"{submission.repository}{separator}{submission.reference}",
             reason=submission.reason or "",

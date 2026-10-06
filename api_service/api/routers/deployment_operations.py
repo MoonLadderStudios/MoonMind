@@ -63,10 +63,25 @@ class DeploymentUpdateRequest(BaseModel):
         None, alias="rollbackSourceActionId"
     )
     confirmation: str | None = None
+    # One identity per operator request: resubmitting it after a lost
+    # response observes the same controller operation instead of starting
+    # another; a changed target needs a new identity.
+    operation_id: str | None = Field(
+        None,
+        alias="operationId",
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
 
 
 DeploymentActionStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 
 
@@ -634,6 +649,7 @@ async def submit_deployment_update(
                 rollback_source_action_id=payload.rollback_source_action_id,
                 confirmation=payload.confirmation,
                 before_build_id=resolve_moonmind_build_id(),
+                operation_id=payload.operation_id,
             ),
         )
     except TemporalSubmitDisabledError as exc:

@@ -157,6 +157,37 @@ def test_tool_reports_a_failed_controller_operation_with_its_original_error(
     assert result.outputs["retryAllowed"] is True
 
 
+def test_tool_keeps_observing_an_unrecognized_controller_status(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller_factory()
+    observed: list[str] = []
+
+    def unreadable_submit(_endpoint, *, operation_id, **_kwargs):
+        return {"operationId": operation_id, "status": ""}
+
+    def observe(_endpoint, operation_id):
+        observed.append(operation_id)
+        return {
+            "operationId": operation_id,
+            "status": "succeeded",
+            "installed": {"image": IMAGE},
+        }
+
+    monkeypatch.setattr(
+        deployment_execution, "submit_controller_update", unreadable_submit
+    )
+    monkeypatch.setattr(deployment_execution, "observe_controller_operation", observe)
+
+    result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
+
+    # An unreadable status is not a failed update: the adapter observes the
+    # same operation until the controller reports its outcome.
+    assert result.status == "COMPLETED"
+    assert observed == [result.outputs["operationId"]]
+
+
 def test_tool_reports_an_unavailable_controller_without_running_the_legacy_updater(
     controller_factory: Callable[..., InProcessController],
 ) -> None:
