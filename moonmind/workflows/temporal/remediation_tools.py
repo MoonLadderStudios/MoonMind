@@ -14,23 +14,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from api_service.db import models as db_models
 from moonmind.omnigent.policies import (
     policy_authority_evidence,
     validate_policy_authority_evidence,
 )
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
-from moonmind.workflows.temporal.remediation_context import (
-    REMEDIATION_CONTEXT_LINK_TYPE,
-    RemediationLifecyclePublisher,
-    build_remediation_audit_event,
-    build_remediation_decision_log,
-    build_remediation_final_summary,
-    build_remediation_target_annotation,
-)
 from moonmind.workflows.temporal.remediation_actions import (
     REMEDIATION_BRANCH_SENSITIVE_FIELDS,
     RemediationActionAuthorityService,
@@ -41,6 +34,14 @@ from moonmind.workflows.temporal.remediation_actions import (
     remediation_changes_require_checkpoint_branch,
     remediation_parameter_digest,
 )
+from moonmind.workflows.temporal.remediation_context import (
+    REMEDIATION_CONTEXT_LINK_TYPE,
+    RemediationLifecyclePublisher,
+    build_remediation_audit_event,
+    build_remediation_decision_log,
+    build_remediation_final_summary,
+    build_remediation_target_annotation,
+)
 from moonmind.workflows.temporal.remediation_verification import (
     CanonicalRecordEvidenceReader,
     RemediationVerificationPhase,
@@ -48,9 +49,9 @@ from moonmind.workflows.temporal.remediation_verification import (
     VerificationContract,
     resolve_verification_target,
     snapshot_from_health,
+    snapshot_from_payload,
     verification_contract_for,
 )
-from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
 RemediationLogStream = Literal["stdout", "stderr", "merged", "diagnostics"]
 
@@ -78,8 +79,10 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*([^\s,;\"']+)"
 )
 
+
 class RemediationEvidenceToolError(RuntimeError):
     """Raised when a remediation evidence tool request is invalid."""
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationLogReadResult:
@@ -90,6 +93,7 @@ class RemediationLogReadResult:
     lines: tuple[str, ...]
     next_cursor: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowEvent:
     """One live-follow event visible to a remediation task."""
@@ -99,6 +103,7 @@ class RemediationLiveFollowEvent:
     text: str
     timestamp: str | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class RemediationLiveFollowResult:
     """Live-follow batch plus the cursor the caller should persist."""
@@ -106,6 +111,7 @@ class RemediationLiveFollowResult:
     agent_run_id: str
     events: tuple[RemediationLiveFollowEvent, ...]
     resume_cursor: dict[str, Any] | None
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationTargetHealthSnapshot:
@@ -120,6 +126,7 @@ class RemediationTargetHealthSnapshot:
     summary: str | None
     target_run_changed: bool
     runtime: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class RemediationActionRequestPreparation:
@@ -152,6 +159,7 @@ class RemediationArtifactReadResult:
     content: str | None
     content_truncated: bool
 
+
 class RemediationLogReader(Protocol):
     """Read bounded historical logs for a target agent run."""
 
@@ -165,6 +173,7 @@ class RemediationLogReader(Protocol):
     ) -> RemediationLogReadResult:
         raise NotImplementedError
 
+
 class RemediationLiveFollower(Protocol):
     """Follow live target output for a target agent run."""
 
@@ -175,6 +184,7 @@ class RemediationLiveFollower(Protocol):
         from_sequence: int | None = None,
     ) -> RemediationLiveFollowResult:
         raise NotImplementedError
+
 
 class RemediationActionExecutor(Protocol):
     """Execute one authorized remediation action through an owning subsystem."""
@@ -187,6 +197,7 @@ class RemediationActionExecutor(Protocol):
         target_health: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
         raise NotImplementedError
+
 
 class _UnavailableLogReader:
     async def read_logs(
@@ -201,6 +212,7 @@ class _UnavailableLogReader:
             "remediation.read_target_logs is not configured in this runtime."
         )
 
+
 class _UnavailableLiveFollower:
     async def follow_logs(
         self,
@@ -211,6 +223,7 @@ class _UnavailableLiveFollower:
         raise RemediationEvidenceToolError(
             "remediation.follow_target_logs is not configured in this runtime."
         )
+
 
 class _UnavailableActionExecutor:
     async def execute_action(
@@ -300,6 +313,7 @@ class MoonMindControlPlaneRemediationActionExecutor:
         normalized.setdefault("beforeEvidenceRefs", [])
         normalized.setdefault("afterEvidenceRefs", [])
         return normalized
+
 
 class RemediationEvidenceToolService:
     """Typed evidence access surface for one remediation execution."""
@@ -731,8 +745,7 @@ class RemediationEvidenceToolService:
                     workflow_id=target.workflow_id,
                     pinned_run_id=target.pinned_run_id,
                 )
-                if snapshot.available:
-                    return snapshot
+                return snapshot
             except Exception:  # noqa: BLE001 - fall back to the known health read
                 pass
         return snapshot_from_health(
@@ -874,6 +887,85 @@ class RemediationEvidenceToolService:
     ) -> dict[str, Any]:
         """Execute an authorized action and publish bounded lifecycle artifacts."""
         link = await self._load_link(remediation_workflow_id)
+        requested = authority_result.get("request", {}) if authority_result else {}
+        saved_action_id = requested.get("actionId") or idempotency_key
+        entries = (link.mutation_guard_ledger_state or {}).get("entries") or {}
+        saved = (entries.get(saved_action_id) or {}).get("execution")
+        if not saved and saved_action_id:
+            receipt = await self._lifecycle_publisher.find_published_artifact(
+                workflow_id=link.remediation_workflow_id,
+                run_id=link.remediation_run_id,
+                artifact_type="remediation.action_result",
+                name=f"reports/remediation_action_result-{saved_action_id}.json",
+            )
+            if receipt is not None:
+                await self._read_context_payload(
+                    link=link,
+                    principal=principal,
+                    admitted_principal=admitted_principal,
+                )
+                request_receipt = await self._lifecycle_publisher.find_published_artifact(
+                    workflow_id=link.remediation_workflow_id,
+                    run_id=link.remediation_run_id,
+                    artifact_type="remediation.action_request",
+                    name=f"reports/remediation_action_request-{saved_action_id}.json",
+                )
+                if request_receipt is None:
+                    raise RemediationEvidenceToolError(
+                        "Accepted action is missing its request receipt; mutation was not repeated."
+                    )
+                _, data = await self._artifact_service.read(
+                    artifact_id=receipt.artifact_id,
+                    principal="service:remediation-lifecycle",
+                )
+                result = json.loads(data)
+                _, data = await self._artifact_service.read(
+                    artifact_id=request_receipt.artifact_id,
+                    principal="service:remediation-lifecycle",
+                )
+                request = json.loads(data)
+                saved = {
+                    "actionKind": request["actionKind"],
+                    "parameterDigest": remediation_parameter_digest(
+                        request.get("params")
+                    ),
+                    "actionRequestRef": request_receipt.artifact_id,
+                    "actionResultRef": receipt.artifact_id,
+                    "beforeSnapshot": result.get("beforeSnapshot")
+                    or TargetEvidenceSnapshot(
+                        stage="before",
+                        available=False,
+                        workflow_id=link.target_workflow_id,
+                        run_id=link.target_run_id,
+                        degraded_reason="The historical baseline was not recorded.",
+                    ).to_payload(),
+                    "verificationState": "pending",
+                    "pollsConsumed": 0,
+                    "observation": 0,
+                    "resultWorkflowId": (result.get("resultingIdentity") or {}).get(
+                        "workflowId"
+                    )
+                    or link.target_workflow_id,
+                }
+                self._save_action_execution(link, str(saved_action_id), saved)
+                await self._session.commit()
+        if saved:
+            saved_kind = requested.get("actionKind") or action_kind
+            saved_params = requested.get("params", parameters)
+            if (
+                saved_kind != saved["actionKind"]
+                or remediation_parameter_digest(saved_params)
+                != saved["parameterDigest"]
+            ):
+                raise RemediationEvidenceToolError(
+                    "Action identity was reused with different inputs."
+                )
+            await self._read_context_payload(
+                link=link, principal=principal, admitted_principal=admitted_principal
+            )
+            return await self._resume_action_verification(
+                link=link, action_id=str(saved_action_id)
+            )
         if authority_result is None or guard_result is None:
             if link.authority_mode != "admin_auto":
                 raise RemediationEvidenceToolError(
@@ -899,37 +991,37 @@ class RemediationEvidenceToolService:
                 session=self._session,
                 lifecycle_publisher=self._lifecycle_publisher,
             ).evaluate_action_request(
-            remediation_workflow_id=remediation_workflow_id,
-            action_kind=normalized_action_kind,
-            parameters=parameters,
-            dry_run=dry_run,
-            idempotency_key=normalized_idempotency_key,
-            requesting_principal=principal,
-            permissions=RemediationPermissionSet(
-                can_view_target=True,
-                can_request_admin_profile=True,
-                can_approve_high_risk=False,
-            ),
-            security_profile=RemediationSecurityProfile(
-                profile_ref="persisted:admin_auto",
-                execution_principal=principal,
-                allowed_action_kinds=(normalized_action_kind,),
-            ),
-            approval_ref=None,
+                remediation_workflow_id=remediation_workflow_id,
+                action_kind=normalized_action_kind,
+                parameters=parameters,
+                dry_run=dry_run,
+                idempotency_key=normalized_idempotency_key,
+                requesting_principal=principal,
+                permissions=RemediationPermissionSet(
+                    can_view_target=True,
+                    can_request_admin_profile=True,
+                    can_approve_high_risk=False,
+                ),
+                security_profile=RemediationSecurityProfile(
+                    profile_ref="persisted:admin_auto",
+                    execution_principal=principal,
+                    allowed_action_kinds=(normalized_action_kind,),
+                ),
+                approval_ref=None,
             )
             authority_result = authority.to_dict()
             guard = await RemediationMutationGuardService(
                 session=self._session
             ).evaluate(
-            remediation_workflow_id=remediation_workflow_id,
-            remediation_run_id=link.remediation_run_id,
-            target_workflow_id=link.target_workflow_id,
-            target_run_id=link.target_run_id,
-            action_kind=normalized_action_kind,
-            idempotency_key=normalized_idempotency_key,
-            parameters=parameters,
-            policy=RemediationMutationGuardPolicy(),
-            now=datetime.now(timezone.utc),
+                remediation_workflow_id=remediation_workflow_id,
+                remediation_run_id=link.remediation_run_id,
+                target_workflow_id=link.target_workflow_id,
+                target_run_id=link.target_run_id,
+                action_kind=normalized_action_kind,
+                idempotency_key=normalized_idempotency_key,
+                parameters=parameters,
+                policy=RemediationMutationGuardPolicy(),
+                now=datetime.now(timezone.utc),
             )
             guard_result = guard.to_dict()
         if authority_result.get("executable") is not True:
@@ -945,7 +1037,9 @@ class RemediationEvidenceToolService:
         if not isinstance(action_request, Mapping):
             raise RemediationEvidenceToolError("authorityResult.request is required.")
         action_kind = _required_string(action_request.get("actionKind"), "actionKind")
-        if action_kind != _required_string(guard_result.get("actionKind"), "actionKind"):
+        if action_kind != _required_string(
+            guard_result.get("actionKind"), "actionKind"
+        ):
             raise RemediationEvidenceToolError(
                 "authorityResult and guardResult action kinds do not match."
             )
@@ -967,17 +1061,24 @@ class RemediationEvidenceToolService:
         resolved_approval: dict[str, Any] | None = None
         if approval_ref is not None:
             state = getattr(link, "approval_state", None)
-            if not isinstance(state, Mapping) or state.get("approvalRef") != approval_ref:
+            if (
+                not isinstance(state, Mapping)
+                or state.get("approvalRef") != approval_ref
+            ):
                 raise RemediationEvidenceToolError("approval_not_found")
             approval_status = str(state.get("status") or "")
             if approval_status != "approved":
-                raise RemediationEvidenceToolError(f"approval_{approval_status or 'invalid'}")
+                raise RemediationEvidenceToolError(
+                    f"approval_{approval_status or 'invalid'}"
+                )
             try:
                 expired = datetime.fromisoformat(
                     str(state.get("expiresAt") or "")
                 ) <= datetime.now(timezone.utc)
             except ValueError as exc:
-                raise RemediationEvidenceToolError("approval_expiration_invalid") from exc
+                raise RemediationEvidenceToolError(
+                    "approval_expiration_invalid"
+                ) from exc
             if expired:
                 link.approval_state = {**dict(state), "status": "expired"}
                 await self._session.commit()
@@ -989,17 +1090,19 @@ class RemediationEvidenceToolService:
                     authority_result.get("securityProfileRef")
                 ),
             )
-            approval_error = RemediationActionAuthorityService._validate_persisted_approval(
-                link=link,
-                approval_ref=approval_ref,
-                action_kind=action_kind,
-                request_shape_hash=str(state.get("requestDigest") or ""),
-                parameter_digest=remediation_parameter_digest(
-                    action_request.get("params")
-                    if isinstance(action_request.get("params"), Mapping)
-                    else None
-                ),
-                current_authority=current_authority,
+            approval_error = (
+                RemediationActionAuthorityService._validate_persisted_approval(
+                    link=link,
+                    approval_ref=approval_ref,
+                    action_kind=action_kind,
+                    request_shape_hash=str(state.get("requestDigest") or ""),
+                    parameter_digest=remediation_parameter_digest(
+                        action_request.get("params")
+                        if isinstance(action_request.get("params"), Mapping)
+                        else None
+                    ),
+                    current_authority=current_authority,
+                )
             )
             if approval_error is not None:
                 link.approval_state = {**dict(state), "status": "stale"}
@@ -1042,6 +1145,7 @@ class RemediationEvidenceToolService:
                 )
         request_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.action_request",
             name=f"reports/remediation_action_request-{action_request['actionId']}.json",
             payload=_redact_payload_value(
@@ -1083,7 +1187,9 @@ class RemediationEvidenceToolService:
             target_health=preparation.target,
         )
         if not isinstance(raw_result, Mapping):
-            raise RemediationEvidenceToolError("action executor returned invalid result.")
+            raise RemediationEvidenceToolError(
+                "action executor returned invalid result."
+            )
         status = _normalize_action_result_status(raw_result.get("status"))
         verification_required = _bool_or_default(
             raw_result.get("verificationRequired"),
@@ -1122,6 +1228,14 @@ class RemediationEvidenceToolService:
             "afterStateRef": _redact_text(raw_result.get("afterStateRef")),
             "sideEffects": _redact_sequence(raw_result.get("sideEffects")),
             "approvalRef": approval_ref,
+            "beforeEvidenceRefs": _redact_sequence(
+                raw_result.get("beforeEvidenceRefs")
+            ),
+            "afterEvidenceRefs": _redact_sequence(raw_result.get("afterEvidenceRefs")),
+            "resultingIdentity": _redact_payload_value(
+                raw_result.get("resultingIdentity") or {}
+            ),
+            "beforeSnapshot": before_snapshot.to_payload(),
         }
         if isinstance(raw_result.get("policyAuthority"), Mapping):
             result_payload["policyAuthority"] = dict(raw_result["policyAuthority"])
@@ -1129,6 +1243,7 @@ class RemediationEvidenceToolService:
             result_payload["approvalBinding"] = dict(raw_result["approvalBinding"])
         result_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.action_result",
             name=f"reports/remediation_action_result-{action_request['actionId']}.json",
             payload=result_payload,
@@ -1136,49 +1251,193 @@ class RemediationEvidenceToolService:
             target_run_id=link.target_run_id,
         )
 
-        # Trusted post-action verification phase (issue #3622): re-read fresh
-        # canonical evidence after the action, perform bounded stabilization, and
-        # classify the actual repair outcome. This replaces the prior behavior of
-        # serializing adapter output or defaulting to "not_verified". Delivery
-        # status (``status`` on the action result) and the repair verification
-        # outcome are now separate fields.
-        # Fresh reruns create a new execution identity (returned in
-        # afterEvidenceRefs); verify against that resulting workflow rather than
-        # the original terminal record, which would always read as still_failed.
-        (
-            verification_target_workflow_id,
-            verification_pinned_run_id,
-        ) = resolve_verification_target(
-            verification_contract,
-            raw_result,
-            default_workflow_id=link.target_workflow_id,
-            default_run_id=link.target_run_id,
-        )
-        verification_result = await self._verification_phase.run(
-            contract=verification_contract,
-            action_kind=action_kind,
-            action_id=action_request["actionId"],
-            delivery_status=status,
-            target_workflow_id=verification_target_workflow_id,
-            pinned_run_id=verification_pinned_run_id,
-            before_snapshot=before_snapshot,
-            action_result=raw_result,
-        )
-        verification_payload = _redact_payload_value(
+        # Preserve the accepted effect before any verification or reporting work.
+        # The existing mutation ledger stores only compact continuation refs.
+        self._save_action_execution(
+            link,
+            action_request["actionId"],
             {
-                **verification_result.to_payload(),
-                "approvalRef": approval_ref,
-            }
+                "actionKind": action_kind,
+                "parameterDigest": remediation_parameter_digest(
+                    action_request.get("params")
+                ),
+                "actionRequestRef": request_artifact.artifact_id,
+                "actionResultRef": result_artifact.artifact_id,
+                "beforeSnapshot": before_snapshot.to_payload(),
+                "verificationState": "pending",
+                "resultWorkflowId": (result_payload.get("resultingIdentity") or {}).get(
+                    "workflowId"
+                )
+                or link.target_workflow_id,
+                "pollsConsumed": 0,
+                "observation": 0,
+            },
         )
-        verification_artifact = await self._lifecycle_publisher.publish_json_artifact(
-            remediation_workflow_id=link.remediation_workflow_id,
-            artifact_type="remediation.verification",
-            name=f"reports/remediation_verification-{action_request['actionId']}.json",
-            payload=verification_payload,
-            target_workflow_id=link.target_workflow_id,
-            target_run_id=link.target_run_id,
-            extra_metadata=verification_result.to_metadata(),
+        link.verification_outcome = None
+        await self._session.commit()
+        return await self._resume_action_verification(
+            link=link, action_id=action_request["actionId"]
         )
+
+    @staticmethod
+    def _save_action_execution(link, action_id: str, saved: Mapping[str, Any]) -> None:
+        state = dict(link.mutation_guard_ledger_state or {})
+        entries = dict(state.get("entries") or {})
+        entries[action_id] = {
+            **dict(entries.get(action_id) or {}),
+            "execution": dict(saved),
+        }
+        link.mutation_guard_ledger_state = {**state, "entries": entries}
+
+    async def _change_verification_execution(self, link, action_id, change):
+        """CAS the existing link ledger; no observation can overwrite a peer."""
+        model = db_models.TemporalExecutionRemediationLink
+        for _ in range(8):
+            await self._session.refresh(link)
+            state = json.loads(json.dumps(link.mutation_guard_ledger_state or {}))
+            revision = state.get("verificationRevision", 0)
+            saved = state["entries"][action_id]["execution"]
+            extra_values, result = change(saved)
+            state["verificationRevision"] = revision + 1
+            updated = await self._session.execute(
+                update(model)
+                .where(
+                    model.remediation_workflow_id == link.remediation_workflow_id,
+                    func.coalesce(
+                        model.mutation_guard_ledger_state[
+                            "verificationRevision"
+                        ].as_integer(),
+                        0,
+                    )
+                    == revision,
+                )
+                .values(mutation_guard_ledger_state=state, **extra_values)
+                .execution_options(synchronize_session=False)
+            )
+            await self._session.commit()
+            if updated.rowcount == 1:
+                await self._session.refresh(link)
+                return result
+        raise RemediationEvidenceToolError(
+            "Concurrent verification state changed; retry evidence persistence only"
+        )
+
+    async def _resume_action_verification(
+        self, *, link, action_id: str
+    ) -> dict[str, Any]:
+        await self._session.refresh(link)
+        saved = dict(
+            link.mutation_guard_ledger_state["entries"][action_id]["execution"]
+        )
+        if saved["verificationState"] == "complete" and saved.get(
+            "verificationResponse"
+        ):
+            # Lost result acknowledgment: the accepted effect and published
+            # verdict survive a new service instance with no adapter dispatch.
+            link.verification_outcome = saved["verificationResponse"]["verification"][
+                "outcome"
+            ]
+            await self._session.commit()
+            return dict(saved["verificationResponse"])
+
+        async def read_receipt(ref):
+            artifact, data = await self._artifact_service.read(
+                artifact_id=ref, principal="service:remediation-lifecycle"
+            )
+            return artifact, json.loads(data)
+
+        request_artifact, request_payload = await read_receipt(
+            saved["actionRequestRef"]
+        )
+        result_artifact, result_payload = await read_receipt(saved["actionResultRef"])
+        action_request = request_payload
+        authority_result = request_payload.get("authority") or {}
+        action_kind = saved["actionKind"]
+        status = result_payload["status"]
+        verification_required = result_payload["verificationRequired"]
+        approval_ref = result_payload.get("approvalRef")
+        resolved_approval = request_payload.get("resolvedApproval")
+        principal = "service:remediation-tools"
+        verification_contract = verification_contract_for(action_kind)
+        before_snapshot = snapshot_from_payload(saved["beforeSnapshot"])
+        recovered = None
+        # A committed terminal receipt outranks a new time-sensitive read after
+        # lost acknowledgment. In-flight ordinals were reserved before evidence
+        # collection, so peer observers always receive different identities.
+        for ordinal in saved.get("inFlightObservations", []):
+            suffix = f"-observation-{ordinal}" if ordinal else ""
+            receipt = await self._lifecycle_publisher.find_published_artifact(
+                workflow_id=link.remediation_workflow_id,
+                run_id=link.remediation_run_id,
+                artifact_type="remediation.verification",
+                name=f"reports/remediation_verification-{action_id}{suffix}.json",
+            )
+            if receipt is not None:
+                _, payload = await read_receipt(receipt.artifact_id)
+                if not payload.get("pending"):
+                    recovered = (ordinal, receipt, payload)
+                    break
+        if recovered is None:
+
+            def reserve(current):
+                if current.get("verificationState") == "complete":
+                    return {}, current["verificationResponse"]
+                ordinal = current.get("observation", 0)
+                remaining = max(
+                    0, verification_contract.max_polls - current.get("pollsConsumed", 0)
+                )
+                current["observation"] = ordinal + 1
+                current["pollsConsumed"] = current.get("pollsConsumed", 0) + remaining
+                current["inFlightObservations"] = [
+                    *current.get("inFlightObservations", []),
+                    ordinal,
+                ]
+                return {}, (ordinal, remaining)
+
+            reservation = await self._change_verification_execution(
+                link, action_id, reserve
+            )
+            if isinstance(reservation, dict):
+                return reservation
+            observation, remaining_polls = reservation
+            suffix = f"-observation-{observation}" if observation else ""
+            verification_target_workflow_id, verification_pinned_run_id = (
+                resolve_verification_target(
+                    verification_contract,
+                    result_payload,
+                    default_workflow_id=link.target_workflow_id,
+                    default_run_id=link.target_run_id,
+                )
+            )
+            verification_result = await self._verification_phase.run(
+                contract=verification_contract,
+                action_kind=action_kind,
+                action_id=action_request["actionId"],
+                delivery_status=status,
+                target_workflow_id=verification_target_workflow_id,
+                pinned_run_id=verification_pinned_run_id,
+                before_snapshot=before_snapshot,
+                action_result=result_payload,
+                remaining_polls=remaining_polls,
+            )
+            verification_payload = _redact_payload_value(
+                {**verification_result.to_payload(), "approvalRef": approval_ref}
+            )
+            verification_artifact = (
+                await self._lifecycle_publisher.publish_json_artifact(
+                    remediation_workflow_id=link.remediation_workflow_id,
+                    remediation_run_id=link.remediation_run_id,
+                    artifact_type="remediation.verification",
+                    name=f"reports/remediation_verification-{action_id}{suffix}.json",
+                    payload=verification_payload,
+                    target_workflow_id=link.target_workflow_id,
+                    target_run_id=link.target_run_id,
+                    extra_metadata=verification_result.to_metadata(),
+                )
+            )
+        else:
+            observation, verification_artifact, _ = recovered
+            suffix = f"-observation-{observation}" if observation else ""
 
         # Retry/replay safety: publish_json_artifact deduplicates on the stable
         # (artifact_type, label) key and returns the pre-existing immutable
@@ -1190,24 +1449,20 @@ class RemediationEvidenceToolService:
         # "artifact says still_failed while projections say verified_resolved"
         # bug). Reuse the persisted outcome so every downstream projection matches
         # the artifact.
-        persisted_metadata = getattr(verification_artifact, "metadata_json", None) or {}
-        persisted_outcome = _string_or_none(
-            persisted_metadata.get("verificationOutcome")
+        _artifact, persisted_payload = await read_receipt(
+            verification_artifact.artifact_id
         )
-        verification_outcome = persisted_outcome or verification_result.outcome
-        verification_reused = bool(
-            persisted_outcome and persisted_outcome != verification_result.outcome
+        verification_pending = bool(persisted_payload.get("pending"))
+        verification_outcome = persisted_payload.get("outcome")
+        verification_reason = persisted_payload["reason"]
+        verification_resulting_identity = dict(
+            persisted_payload.get("resultingIdentity") or {}
         )
-        verification_reason = (
-            "Reused the persisted verification outcome from the authoritative "
-            "remediation.verification artifact; the action was retried before the "
-            "projections committed, so the recomputed outcome is discarded."
-            if verification_reused
-            else verification_result.reason
-        )
-        verification_resulting_identity = (
-            {} if verification_reused else dict(verification_result.resulting_identity)
-        )
+
+        await self._session.refresh(link)
+        accepted = link.mutation_guard_ledger_state["entries"][action_id]["execution"]
+        if accepted.get("verificationState") == "complete":
+            return dict(accepted["verificationResponse"])
 
         audit_timestamp = datetime.now(timezone.utc)
         audit_payload = build_remediation_audit_event(
@@ -1235,8 +1490,9 @@ class RemediationEvidenceToolService:
         )
         audit_artifact = await self._lifecycle_publisher.publish_json_artifact(
             remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
             artifact_type="remediation.audit_event",
-            name=f"events/remediation_action-{action_request['actionId']}.json",
+            name=f"events/remediation_action-{action_request['actionId']}{suffix}.json",
             payload=audit_payload,
             target_workflow_id=link.target_workflow_id,
             target_run_id=link.target_run_id,
@@ -1265,40 +1521,18 @@ class RemediationEvidenceToolService:
                 "nativeArtifactPolicy": "preserve",
             },
         )
-        annotation_artifact = (
-            await self._lifecycle_publisher.publish_target_annotation(
-                remediation_workflow_id=link.remediation_workflow_id,
-                target_workflow_id=link.target_workflow_id,
-                target_run_id=link.target_run_id,
-                name=(
-                    "annotations/remediation_target-"
-                    f"{action_request['actionId']}.json"
-                ),
-                payload=annotation_payload,
-            )
+        annotation_artifact = await self._lifecycle_publisher.publish_target_annotation(
+            remediation_workflow_id=link.remediation_workflow_id,
+            remediation_run_id=link.remediation_run_id,
+            target_workflow_id=link.target_workflow_id,
+            target_run_id=link.target_run_id,
+            name=(
+                "annotations/remediation_target-"
+                f"{action_request['actionId']}{suffix}.json"
+            ),
+            payload=annotation_payload,
         )
 
-        link.latest_action_summary = action_kind
-        # ``outcome`` records the action *delivery* status; the repair
-        # verification outcome is tracked separately so a delivered action never
-        # relabels the target as repaired.
-        link.outcome = status
-        link.verification_outcome = verification_outcome
-        if resolved_approval is not None:
-            link.approval_state = {
-                **dict(link.approval_state or {}),
-                "artifactRefs": {
-                    **dict(
-                        (link.approval_state or {}).get("artifactRefs") or {}
-                    ),
-                    "actionRequest": request_artifact.artifact_id,
-                    "actionResult": result_artifact.artifact_id,
-                    "verification": verification_artifact.artifact_id,
-                    "auditEvent": audit_artifact.artifact_id,
-                    "targetAnnotation": annotation_artifact.artifact_id,
-                },
-            }
-        await self._session.commit()
         response = {
             "schemaVersion": "v1",
             "actionKind": action_kind,
@@ -1307,11 +1541,12 @@ class RemediationEvidenceToolService:
             # Trusted post-action repair verification, kept distinct from delivery.
             "verification": {
                 "outcome": verification_outcome,
+                "pending": verification_pending,
                 "deliveryStatus": status,
                 "automaticallyVerifiable": (
-                    verification_result.contract.automatically_verifiable
+                    verification_contract.automatically_verifiable
                 ),
-                "verifierKind": verification_result.contract.verifier_kind,
+                "verifierKind": verification_contract.verifier_kind,
                 "reason": verification_reason,
                 "resultingIdentity": verification_resulting_identity,
             },
@@ -1327,7 +1562,67 @@ class RemediationEvidenceToolService:
             response["policyAuthority"] = result_payload["policyAuthority"]
         if "approvalBinding" in result_payload:
             response["approvalBinding"] = result_payload["approvalBinding"]
-        return response
+
+        def accept(current):
+            current["inFlightObservations"] = [
+                ordinal
+                for ordinal in current.get("inFlightObservations", [])
+                if ordinal != observation
+            ]
+            if current.get("verificationState") == "complete":
+                return {}, current["verificationResponse"]
+            current["verificationState"] = (
+                "pending" if verification_pending else "complete"
+            )
+            current["verificationResponse"] = response
+            values = dict(
+                latest_action_summary=action_kind,
+                outcome=status,
+                verification_outcome=verification_outcome,
+            )
+            if resolved_approval is not None:
+                state = dict(link.approval_state or {})
+                values["approval_state"] = {
+                    **state,
+                    "artifactRefs": {
+                        **dict(state.get("artifactRefs") or {}),
+                        **response["artifactRefs"],
+                    },
+                }
+            return values, response
+
+        return await self._change_verification_execution(link, action_id, accept)
+
+    async def resume_pending_verifications(self, *, workflow_id: str) -> int:
+        """Reconcile on durable result notifications; never dispatch a mutation.
+
+        Terminal-state Activities retry this persistence step on worker failure.
+        Checkpoint reports notify through their existing head-verification owner.
+        The original short-poll allowance is carried rather than reset.
+        """
+        links = (
+            (
+                await self._session.execute(
+                    select(db_models.TemporalExecutionRemediationLink)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        resumed = 0
+        for link in links:
+            entries = (link.mutation_guard_ledger_state or {}).get("entries") or {}
+            for action_id, entry in list(entries.items()):
+                saved = entry.get("execution") or {}
+                if (
+                    saved.get("verificationState") == "pending"
+                    and saved.get("resultWorkflowId") == workflow_id
+                ):
+                    await self._resume_action_verification(
+                        link=link, action_id=action_id
+                    )
+                    resumed += 1
+        return resumed
 
     async def publish_lifecycle_summary(
         self,
@@ -1525,6 +1820,7 @@ class RemediationEvidenceToolService:
                 "guardResult.lock.holderWorkflowId does not match the action context."
             )
 
+
 def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
     evidence_mapping = evidence if isinstance(evidence, Mapping) else {}
@@ -1543,6 +1839,7 @@ def _collect_context_artifact_ids(context: Mapping[str, Any]) -> set[str]:
 
     collect(evidence_mapping)
     return artifact_ids
+
 
 def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
     evidence = context.get("evidence")
@@ -1568,10 +1865,12 @@ def _collect_context_agent_run_ids(context: Mapping[str, Any]) -> set[str]:
                     output.add(agent_run_id)
     return output
 
+
 def _artifact_id_from_ref(value: str | Mapping[str, Any] | Any) -> str | None:
     if isinstance(value, Mapping):
         return _string_or_none(value.get("artifact_id") or value.get("artifactId"))
     return _string_or_none(value)
+
 
 def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> int | None:
     max_tail_lines = 2000
@@ -1609,6 +1908,7 @@ def _bounded_tail_lines(context: Mapping[str, Any], requested: int | None) -> in
             requested = max_tail_lines
     return max(0, min(int(requested), effective_limit))
 
+
 def _normalize_log_stream(value: Any) -> RemediationLogStream:
     normalized = _required_string(value, "stream")
     if normalized not in {"stdout", "stderr", "merged", "diagnostics"}:
@@ -1616,6 +1916,7 @@ def _normalize_log_stream(value: Any) -> RemediationLogStream:
             "stream must be one of stdout, stderr, merged, or diagnostics."
         )
     return normalized  # type: ignore[return-value]
+
 
 def _normalize_sequence(value: int | None, *, default_cursor: Any) -> int | None:
     if value is not None:
@@ -1650,6 +1951,7 @@ def _normalize_action_result_status(value: Any) -> str:
         )
     return status
 
+
 def _annotation_decision_for_status(status: str) -> str:
     if status in {"accepted", "applied", "failed", "timed_out"}:
         return "attempted"
@@ -1661,11 +1963,13 @@ def _annotation_decision_for_status(status: str) -> str:
         return "denied"
     return "escalated"
 
+
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _string_or_none(value)
     if not normalized:
         raise RemediationEvidenceToolError(f"{field_name} is required.")
     return normalized
+
 
 def _string_or_none(value: Any) -> str | None:
     if value is None:
@@ -1673,10 +1977,12 @@ def _string_or_none(value: Any) -> str | None:
     normalized = str(value).strip()
     return normalized or None
 
+
 def _safe_sequence(value: Any) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return list(value)
     return []
+
 
 def _bool_or_default(value: Any, *, default: bool) -> bool:
     if value is None:
@@ -1691,8 +1997,10 @@ def _bool_or_default(value: Any, *, default: bool) -> bool:
             return False
     return bool(value)
 
+
 def _redact_sequence(value: Any) -> list[Any]:
     return [_redact_payload_value(item) for item in _safe_sequence(value)]
+
 
 def _redact_payload_value(value: Any) -> Any:
     def apply_custom_redaction(node: Any) -> Any:
@@ -1709,6 +2017,7 @@ def _redact_payload_value(value: Any) -> Any:
 
     return apply_custom_redaction(redact_sensitive_payload(value))
 
+
 def _redact_text(value: Any) -> str | None:
     normalized = _string_or_none(value)
     if normalized is None:
@@ -1723,11 +2032,52 @@ def _redact_text(value: Any) -> str | None:
     redacted = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", redacted)
     return redacted
 
+
 def _enum_value(value: Any) -> str | None:
     if value is None:
         return None
     enum_value = getattr(value, "value", value)
     return _string_or_none(enum_value)
+
+
+async def resume_pending_action_verifications(
+    session: AsyncSession, *, workflow_id: str
+) -> int:
+    """Continue saved verification from an owning durable result notification."""
+    links = (
+        (
+            await session.execute(
+                select(db_models.TemporalExecutionRemediationLink).where(
+                    db_models.TemporalExecutionRemediationLink.mutation_guard_ledger_state.is_not(
+                        None
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not any(
+        saved.get("verificationState") == "pending"
+        and saved.get("resultWorkflowId") == workflow_id
+        for link in links
+        for entry in (
+            (link.mutation_guard_ledger_state or {}).get("entries") or {}
+        ).values()
+        for saved in [entry.get("execution") or {}]
+    ):
+        return 0
+    from moonmind.workflows import get_temporal_artifact_service
+
+    return await RemediationEvidenceToolService(
+        session=session,
+        artifact_service=get_temporal_artifact_service(session),
+        verification_phase=RemediationVerificationPhase(
+            reader=CanonicalRecordEvidenceReader(session),
+            max_poll_cap=0,
+        ),
+    ).resume_pending_verifications(workflow_id=workflow_id)
+
 
 __all__ = [
     "MoonMindControlPlaneRemediationActionExecutor",

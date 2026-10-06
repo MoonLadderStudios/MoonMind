@@ -186,11 +186,23 @@ async def test_rerun_verified_resolved_on_new_run_success():
 
 
 @pytest.mark.asyncio
-async def test_rerun_no_change_when_run_identity_unchanged():
+async def test_accepted_rerun_waits_when_run_identity_unchanged():
     before = _snap("before", state="executing", run_id="r0")
     after = _snap(state="executing", run_id="r0")
     result = await _run("execution.request_rerun_same_workflow", before, [after])
+    assert result.outcome is None
+    assert result.pending
+
+
+@pytest.mark.asyncio
+async def test_confirmed_rerun_no_op_has_no_pending_obligation():
+    before = _snap("before", state="executing", run_id="r0")
+    after = _snap(state="executing", run_id="r0")
+    result = await _run(
+        "execution.request_rerun_same_workflow", before, [after], delivery="no_op"
+    )
     assert result.outcome == VERIFIED_NO_CHANGE
+    assert not result.pending
 
 
 @pytest.mark.asyncio
@@ -206,9 +218,21 @@ async def test_checkpoint_branch_still_failed_when_target_objective_unresolved()
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_branch_verified_resolved_when_target_completed():
+async def test_checkpoint_branch_source_success_does_not_prove_candidate():
     before = _snap("before", state="failed", close_status="failed", run_id="r")
     after = _snap(state="completed", close_status="completed", run_id="r")
+    result = await _run(
+        "checkpoint_branch.create_from_remediation_context", before, [after]
+    )
+    assert result.outcome == STILL_FAILED
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_branch_uses_exact_objective_verdict():
+    before = _snap("before", state="failed", run_id="r")
+    after = _snap(
+        state="completed", identities={"objectiveVerdict": "FULLY_IMPLEMENTED"}
+    )
     result = await _run(
         "checkpoint_branch.create_from_remediation_context", before, [after]
     )

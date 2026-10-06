@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -85,7 +86,7 @@ _SNAPSHOT_STAGES: frozenset[str] = frozenset(
 # side effect that could change the target. Verification of these reads fresh
 # evidence and truthfully reports that the target's original outcome stands.
 _NON_DELIVERED_STATUSES: frozenset[str] = frozenset(
-    {"denied", "rejected", "precondition_failed"}
+    {"denied", "rejected", "precondition_failed", "no_op"}
 )
 
 # Canonical lifecycle vocabulary (mirrors moonmind.statuses.*). Kept as literal
@@ -163,6 +164,21 @@ class TargetEvidenceSnapshot:
 def _unavailable_snapshot(stage: str, reason: str) -> TargetEvidenceSnapshot:
     return TargetEvidenceSnapshot(
         stage=stage, available=False, degraded_reason=reason
+    )
+
+
+def snapshot_from_payload(payload: Mapping[str, Any]) -> TargetEvidenceSnapshot:
+    """Restore an observation as collected, never from a later source state."""
+    return TargetEvidenceSnapshot(
+        stage=payload["stage"],
+        available=payload["available"],
+        workflow_id=payload.get("workflowId"),
+        run_id=payload.get("runId"),
+        state=payload.get("state"),
+        close_status=payload.get("closeStatus"),
+        paused=payload.get("paused"),
+        identities=payload.get("identities") or {},
+        degraded_reason=payload.get("degradedReason"),
     )
 
 
@@ -283,7 +299,7 @@ _VERIFICATION_CONTRACTS: dict[str, VerificationContract] = {
     ),
     "checkpoint_branch.create_from_remediation_context": VerificationContract(
         action_kind="checkpoint_branch.create_from_remediation_context",
-        evidence_owner="checkpoint_branch_graph_and_target_execution",
+        evidence_owner="checkpoint_branch_head_and_objective_verifier",
         target_resource_kind="checkpoint_branch",
         immediate_expected_state="branch_created_target_pending_verification",
         stabilization_seconds=0.0,
@@ -481,6 +497,10 @@ class CanonicalRecordEvidenceReader:
                 stage,
                 f"Target execution {workflow_id} was not found in canonical evidence.",
             )
+        if pinned_run_id and record.run_id != pinned_run_id:
+            return _unavailable_snapshot(
+                stage, "Canonical evidence does not match the admitted run."
+            )
         identities: dict[str, Any] = {}
         return TargetEvidenceSnapshot(
             stage=stage,
@@ -493,6 +513,136 @@ class CanonicalRecordEvidenceReader:
             identities=identities,
         )
 
+    async def read_result_evidence(
+        self,
+        *,
+        contract: VerificationContract,
+        workflow_id: str,
+        stage: str,
+        pinned_run_id: str | None,
+        action_result: Mapping[str, Any],
+    ) -> TargetEvidenceSnapshot:
+        """Read only the persisted result, including the exact branch turn head."""
+        identity = action_result.get("resultingIdentity") or {}
+        if contract.verifier != "checkpoint_branch":
+            if contract.verifier == "execution_rerun" and not pinned_run_id:
+                return _unavailable_snapshot(
+                    stage, "The accepted rerun has no admitted result run."
+                )
+            return await self.read_target_evidence(
+                contract=contract,
+                workflow_id=workflow_id,
+                stage=stage,
+                pinned_run_id=pinned_run_id,
+            )
+        branch = (
+            await self._session.get(
+                db_models.WorkflowCheckpointBranch,
+                identity.get("branchId"),
+                populate_existing=True,
+            )
+            if identity.get("branchId")
+            else None
+        )
+        turn = (
+            await self._session.get(
+                db_models.WorkflowCheckpointBranchTurn,
+                identity.get("branchTurnId"),
+                populate_existing=True,
+            )
+            if identity.get("branchTurnId")
+            else None
+        )
+        if branch is None or turn is None:
+            return _unavailable_snapshot(
+                stage, "The admitted branch/turn evidence is unavailable."
+            )
+        if (
+            branch.workflow_id != workflow_id
+            or branch.source_run_id != pinned_run_id
+            or turn.branch_id != branch.branch_id
+            or turn.created_step_execution_id != identity.get("stepExecutionId")
+        ):
+            return _unavailable_snapshot(
+                stage, "Branch/turn evidence does not match the admitted result."
+            )
+        handoff = (turn.diagnostics or {}).get("verificationHandoff") or {}
+        candidate = handoff.get("candidate") or {}
+        objective = handoff.get("objective") or {}
+        exact = {
+            **dict(identity),
+            "checkpointRef": branch.current_head_checkpoint_ref,
+            "checkpointDigest": branch.current_head_checkpoint_digest,
+            "headVersion": branch.current_head_version,
+        }
+        if turn.completed_at is None:
+            return TargetEvidenceSnapshot(
+                stage=stage, available=True, state="executing", identities=exact
+            )
+        if turn.status in {"failed", "canceled", "blocked"}:
+            return TargetEvidenceSnapshot(
+                stage=stage,
+                available=True,
+                state=turn.status,
+                close_status="canceled" if turn.status == "canceled" else "failed",
+                identities=exact,
+            )
+        if (
+            candidate.get("branchId") != branch.branch_id
+            or candidate.get("branchTurnId") != turn.branch_turn_id
+            or objective.get("sourceWorkflowId") != workflow_id
+            or objective.get("sourceRunId") != pinned_run_id
+            or branch.current_head_step_execution_id != turn.created_step_execution_id
+            or not candidate.get("checkpointRef")
+            or (candidate.get("checkpointRef"), candidate.get("checkpointDigest"))
+            != (
+                branch.current_head_checkpoint_ref,
+                branch.current_head_checkpoint_digest,
+            )
+        ):
+            return _unavailable_snapshot(
+                stage, "The terminal candidate does not match the admitted turn head."
+            )
+        # This receipt is created only by record_remediation_verification after
+        # it enforces the report's input head version/ref/digest atomically.
+        receipt = (
+            await self._session.execute(
+                select(db_models.WorkflowCheckpointBranchArtifact).where(
+                    db_models.WorkflowCheckpointBranchArtifact.branch_id
+                    == branch.branch_id,
+                    db_models.WorkflowCheckpointBranchArtifact.artifact_kind
+                    == f"remediation_verification_v{branch.current_head_version}",
+                )
+            )
+        ).scalar_one_or_none()
+        if not branch.latest_verification_ref:
+            return TargetEvidenceSnapshot(
+                stage=stage, available=True, state="executing", identities=exact
+            )
+        if receipt is None or receipt.artifact_ref != branch.latest_verification_ref:
+            return _unavailable_snapshot(
+                stage, "The objective verifier receipt does not match this head."
+            )
+        from moonmind.workflows import get_temporal_artifact_service
+
+        try:
+            await get_temporal_artifact_service(self._session).read(
+                artifact_id=branch.latest_verification_ref.removeprefix("artifact://"),
+                principal="service:remediation-context",
+                admitted_principal=f"workflow:{workflow_id}",
+            )
+        except Exception:
+            return _unavailable_snapshot(
+                stage, "The objective verifier report is missing or inaccessible."
+            )
+        exact.update(
+            verifierArtifactRef=branch.latest_verification_ref,
+            objectiveVerdict=branch.latest_verification_verdict,
+        )
+        return TargetEvidenceSnapshot(
+            stage=stage, available=True, state="completed", identities=exact
+        )
+
 
 # ---------------------------------------------------------------------------
 # Verification result
@@ -503,7 +653,7 @@ class VerificationResult:
 
     action_kind: str
     action_id: str
-    outcome: str
+    outcome: str | None
     delivery_status: str
     reason: str
     contract: VerificationContract
@@ -513,6 +663,7 @@ class VerificationResult:
     resulting_identity: Mapping[str, Any] = field(default_factory=dict)
     stabilization: Mapping[str, Any] = field(default_factory=dict)
     evidence_refs: Mapping[str, Any] = field(default_factory=dict)
+    pending: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         target_states: dict[str, Any] = {"before": self.before_state.to_payload()}
@@ -525,8 +676,9 @@ class VerificationResult:
             "actionKind": self.action_kind,
             "actionId": self.action_id,
             # Repair verification outcome — distinct from delivery.
-            "status": self.outcome,
+            "status": "verification_pending" if self.pending else self.outcome,
             "outcome": self.outcome,
+            "pending": self.pending,
             "deliveryStatus": self.delivery_status,
             "automaticallyVerifiable": self.contract.automatically_verifiable,
             "verifierKind": self.contract.verifier_kind,
@@ -547,6 +699,7 @@ class VerificationResult:
 
         return {
             "verificationOutcome": self.outcome,
+            "verificationPending": self.pending,
             "verificationDeliveryStatus": self.delivery_status,
             "verificationVerifierKind": self.contract.verifier_kind,
             "verificationAutomaticallyVerifiable": (
@@ -714,7 +867,10 @@ def _classify_execution_rerun(
 ) -> tuple[str, str]:
     final = _stabilized(immediate, stabilized)
     if final is None or not final.available:
-        return EVIDENCE_UNAVAILABLE, "Fresh target evidence was unavailable after rerun."
+        return (
+            EVIDENCE_UNAVAILABLE,
+            "Fresh target evidence was unavailable after rerun.",
+        )
     run_changed = bool(final.run_id and before.run_id and final.run_id != before.run_id)
     if not run_changed:
         # No new run identity: the rerun was accepted but did not change the run.
@@ -731,12 +887,14 @@ def _classify_execution_rerun(
         return VERIFIED_RESOLVED, "Rerun produced a new run that reached success."
     if _is_active(final):
         # Regression check: was it healthy immediately after, now failed?
-        if immediate is not None and immediate.state in _SUCCESS_STATES and (
-            final.state in _FAILURE_STATES
+        if (
+            immediate is not None
+            and immediate.state in _SUCCESS_STATES
+            and (final.state in _FAILURE_STATES)
         ):
             return REGRESSED, "Rerun succeeded then regressed to a failed state."
         return (
-            VERIFIED_NO_CHANGE,
+            EVIDENCE_UNAVAILABLE,
             "Rerun produced a new run that is still in progress.",
         )
     return STILL_FAILED, "Rerun produced a new run that reached a failed state."
@@ -747,14 +905,7 @@ def _classify_checkpoint_branch(
     immediate: TargetEvidenceSnapshot | None,
     stabilized: TargetEvidenceSnapshot | None,
 ) -> tuple[str, str]:
-    """Creating a Checkpoint Branch is a *candidate*, not a repair.
-
-    Delivery (branch graph persisted) is reported separately as the delivery
-    status. Repair verification re-reads the *target* execution: the target
-    objective is only resolved if the target itself reached success. A branch
-    runtime that completes while the target objective remains failed is
-    ``still_failed`` — this is the exact defect this issue fixes.
-    """
+    """Consume the existing objective verdict for the admitted candidate head."""
 
     final = _stabilized(immediate, stabilized)
     if final is None or not final.available:
@@ -762,15 +913,17 @@ def _classify_checkpoint_branch(
             EVIDENCE_UNAVAILABLE,
             "Fresh target evidence was unavailable after branch creation.",
         )
-    if final.state in _SUCCESS_STATES:
+    if (
+        str(final.identities.get("objectiveVerdict") or "").strip().upper()
+        == "FULLY_IMPLEMENTED"
+    ):
         return (
             VERIFIED_RESOLVED,
-            "Target reached success; the checkpoint branch resolved the objective.",
+            "The exact checkpoint candidate passed its objective verifier.",
         )
     return (
         STILL_FAILED,
-        "Checkpoint branch created as a candidate; target objective is not yet "
-        "resolved and requires downstream branch and target verification.",
+        "The checkpoint candidate has not passed its objective verifier.",
     )
 
 
@@ -814,6 +967,10 @@ def _resulting_identity(
     final: TargetEvidenceSnapshot | None,
 ) -> dict[str, Any]:
     identity: dict[str, Any] = {}
+    if isinstance(action_result.get("resultingIdentity"), Mapping):
+        identity.update(action_result["resultingIdentity"])
+    if final is not None:
+        identity.update(final.identities)
     if final is not None and final.available:
         if final.run_id:
             identity["runId"] = final.run_id
@@ -856,18 +1013,20 @@ def resolve_verification_target(
     default_workflow_id: str,
     default_run_id: str | None,
 ) -> tuple[str, str | None]:
-    """Resolve which execution identity the verifier must read fresh evidence for.
+    """Resolve the admitted result separately from the historical source.
 
-    Fresh-rerun actions (``execution.start_fresh_rerun`` and terminal
-    ``execution.request_rerun_same_workflow``, which the execution service also
-    converts into a fresh execution) create a *new* workflow identity and return
-    it in ``afterEvidenceRefs``. Verifying the original ``target_workflow_id``
-    would re-read the prior terminal record and always classify it as
-    ``still_failed``, never observing the newly created execution. When the
-    resulting workflow differs from the original the verifier reads that workflow
-    with an unpinned run so it observes the new run identity and its health.
+    Production adapters persist exact run/branch/turn identities. Historical
+    rerun refs still identify their workflow, but the reader refuses unpinned
+    results rather than using whichever run is currently latest.
     """
 
+    identity = action_result.get("resultingIdentity")
+    if contract.verifier in {"execution_rerun", "checkpoint_branch"} and isinstance(
+        identity, Mapping
+    ):
+        return str(identity.get("workflowId") or default_workflow_id), identity.get(
+            "runId"
+        )
     if contract.verifier != "execution_rerun":
         return default_workflow_id, default_run_id
     resulting = _rerun_result_workflow_id(action_result)
@@ -929,6 +1088,7 @@ class RemediationVerificationPhase:
         pinned_run_id: str | None,
         before_snapshot: TargetEvidenceSnapshot,
         action_result: Mapping[str, Any],
+        remaining_polls: int | None = None,
     ) -> VerificationResult:
         evidence_refs = {
             "before": list(_string_sequence(action_result.get("beforeEvidenceRefs"))),
@@ -946,10 +1106,25 @@ class RemediationVerificationPhase:
             stabilization: Mapping[str, Any] | None = None,
         ) -> VerificationResult:
             final = _stabilized(immediate, stabilized)
+            waiting = bool(
+                delivery_status not in _NON_DELIVERED_STATUSES
+                and contract.verifier in {"execution_rerun", "checkpoint_branch"}
+                and final is not None
+                and final.available
+                and _is_active(final)
+                and outcome not in {CANCELED, VERIFICATION_FAILED}
+            )
+            pending = waiting or bool(
+                contract.verifier in {"execution_rerun", "checkpoint_branch"}
+                and delivery_status
+                not in _NON_DELIVERED_STATUSES | {"approval_required"}
+                and outcome in {EVIDENCE_UNAVAILABLE, VERIFICATION_FAILED, CANCELED}
+            )
             return VerificationResult(
                 action_kind=action_kind,
                 action_id=action_id,
-                outcome=outcome,
+                outcome=None if waiting else outcome,
+                pending=pending,
                 delivery_status=delivery_status,
                 reason=reason,
                 contract=contract,
@@ -994,11 +1169,12 @@ class RemediationVerificationPhase:
             )
 
         try:
-            immediate = await self._reader.read_target_evidence(
+            immediate = await self._read_after(
                 contract=contract,
                 workflow_id=target_workflow_id,
                 stage="immediate_after",
                 pinned_run_id=pinned_run_id,
+                action_result=action_result,
             )
         except asyncio.CancelledError:
             # Preserve best-effort terminal evidence: a canceled verification
@@ -1020,6 +1196,8 @@ class RemediationVerificationPhase:
             target_workflow_id=target_workflow_id,
             pinned_run_id=pinned_run_id,
             immediate=immediate,
+            action_result=action_result,
+            remaining_polls=remaining_polls,
         )
         stabilized_snapshot = stabilization.pop("_snapshot", None)  # type: ignore[assignment]
         if stabilization.get("canceled"):
@@ -1060,7 +1238,9 @@ class RemediationVerificationPhase:
                 stabilization=stabilization,
             )
         try:
-            outcome, reason = classifier(before_snapshot, immediate, stabilized_snapshot)
+            outcome, reason = classifier(
+                before_snapshot, immediate, stabilized_snapshot
+            )
         except Exception as exc:  # noqa: BLE001
             return _result(
                 VERIFICATION_FAILED,
@@ -1077,6 +1257,14 @@ class RemediationVerificationPhase:
             stabilization=stabilization,
         )
 
+    async def _read_after(
+        self, *, action_result: Mapping[str, Any], **kwargs: Any
+    ) -> TargetEvidenceSnapshot:
+        reader = getattr(self._reader, "read_result_evidence", None)
+        if reader is not None:
+            return await reader(action_result=action_result, **kwargs)
+        return await self._reader.read_target_evidence(**kwargs)
+
     async def _stabilize(
         self,
         *,
@@ -1084,8 +1272,12 @@ class RemediationVerificationPhase:
         target_workflow_id: str,
         pinned_run_id: str | None,
         immediate: TargetEvidenceSnapshot,
+        action_result: Mapping[str, Any],
+        remaining_polls: int | None = None,
     ) -> dict[str, Any]:
         max_polls = min(contract.max_polls, self._max_poll_cap)
+        if remaining_polls is not None:
+            max_polls = min(max_polls, max(0, remaining_polls))
         info: dict[str, Any] = {
             "required": max_polls > 0,
             "polls": 0,
@@ -1116,11 +1308,12 @@ class RemediationVerificationPhase:
                 break
             info["polls"] = poll
             try:
-                latest = await self._reader.read_target_evidence(
+                latest = await self._read_after(
                     contract=contract,
                     workflow_id=target_workflow_id,
                     stage="stabilized",
                     pinned_run_id=pinned_run_id,
+                    action_result=action_result,
                 )
             except asyncio.CancelledError:
                 info["canceled"] = True
