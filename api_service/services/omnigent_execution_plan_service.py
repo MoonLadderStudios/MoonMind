@@ -134,6 +134,12 @@ def _sha256(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
+def json_artifact_digest(payload: Mapping[str, Any]) -> str:
+    """Return the digest ``persist_json_artifact`` records for ``payload``."""
+
+    return _sha256(_json_bytes(payload))
+
+
 def _digest_ref(prefix: str, value: Any) -> str:
     body = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
@@ -1798,6 +1804,7 @@ async def compile_and_persist_execution_plan(
 __all__ = [
     "PersistedOmnigentExecutionPlan",
     "compile_and_persist_execution_plan",
+    "json_artifact_digest",
     "persist_json_artifact",
     "selected_skill_names",
     "load_protected_execution_support_evidence",
