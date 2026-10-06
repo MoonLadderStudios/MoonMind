@@ -250,6 +250,8 @@ difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
 
+Until those pins are gone, recurring schedules consume the release rather than gate it. The migration refreshes schedules bound to the managed bootstrap profile onto the cut policy, with or without a recorded execution plan, once their provider's host binding has moved. A schedule it cannot refresh is named in the receipt (`scheduleRefreshFailures`) and retried by the API's bootstrap reconciliation; it does not fail a verified update that no rerun could fix.
+
 ### 10.9 Capture after state
 
 Record confirmed installed images, service and functional observations, and unresolved work alongside the original request. The local record remains usable if publishing an application artifact fails.

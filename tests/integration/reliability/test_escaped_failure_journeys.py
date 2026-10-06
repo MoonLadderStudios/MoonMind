@@ -1369,7 +1369,7 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
                 )
             )
 
-            assert await service.refresh_managed_bootstrap_schedules() == 1
+            assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
             await session.refresh(definition)
 
             assert definition.version == expected["definitionVersion"]
