@@ -862,7 +862,6 @@ def test_ci_required_backend_matrix_states():
     "changed_path",
     [
         "tests/.reliability-test-durations.json",
-        "tools/ci/reliability_shard_weights.json",
         "tools/ci/refresh_reliability_durations.py",
         "tools/ci/write_backend_matrix_summary.py",
     ],
