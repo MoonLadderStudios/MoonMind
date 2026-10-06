@@ -849,10 +849,46 @@ jobs:
             --junitxml=artifacts/pytest-unit-slow.xml
 
   integration-ci:
+    # Independent integration rows (MoonLadderStudios/MoonMind#4628): the
+    # hermetic integration suite, the fresh first-run journey, the upgrade
+    # journey and the controller journey each run once on their own runner
+    # instead of as sequential steps of one 75-minute job. Rows share no
+    # Docker daemon, checkout or Compose project; each checks out the same
+    # candidate SHA, initializes the pinned submodule and builds its own
+    # image. The upgrade row keeps the old-release baseline (fetched by the
+    # journey runner). The host updater transport qualification uses the
+    # candidate deployable image and stays with the controller row, the other
+    # deploy/controller boundary.
+    # fail-fast is off: the journeys are independent, and cancelling a
+    # sibling on another row's failure would erase that scenario's own result
+    # and evidence. ci-required consumes the matrix aggregate, so any failed,
+    # timed-out or canceled row fails the required result.
+    # Bounds from main run 37507573072 (serial job 21m24s): pytest image
+    # build 1m10s + suite 4m46s; deployable build 2m02s; transport 3m02s;
+    # Playwright 0m37s; fresh 2m35s; upgrade 4m24s; controller 2m16s.
+    # run_minutes bounds the scenario step at roughly 3x its observed time;
+    # job_minutes adds an uncached image build (~10 min) and bounded
+    # diagnostics.
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: ${{ matrix.job_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: integration
+            run_minutes: 15
+            job_minutes: 30
+          - scenario: fresh
+            run_minutes: 10
+            job_minutes: 25
+          - scenario: upgrade
+            run_minutes: 15
+            job_minutes: 30
+          - scenario: controller
+            run_minutes: 10
+            job_minutes: 35
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -868,6 +904,7 @@ jobs:
         # The compose ``pytest`` service otherwise rebuilds the dependency
         # layers from scratch on every run. The GitHub Actions cache keeps
         # them across runs; only the layers behind changed inputs rebuild.
+        if: matrix.scenario == 'integration'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -880,19 +917,15 @@ jobs:
           tags: moonmind-python-tests:ci
           cache-from: type=gha,scope=integration-ci-test-runtime
           cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
-      - name: Run hermetic integration CI suite
-        env:
-          MOONMIND_FORCE_LOCAL_TESTS: "1"
-          MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
-        run: |
-          set -euo pipefail
-          ./tools/test_integration.sh
-      - name: Build the candidate deployable image for the first-run journey
-        # MoonLadderStudios/MoonMind#3938: the boundary journey must run the
+      - name: Build the candidate deployable image
+        # MoonLadderStudios/MoonMind#3938: the journeys must run the
         # checked-out revision, not an arbitrary released/cached image. This
         # builds the same default deployable target the exact-artifact gate
         # uses (api_service/Dockerfile, no target override) from this
-        # checkout; the journey step below pins MOONMIND_IMAGE at it.
+        # checkout; the scenario step pins MOONMIND_IMAGE at it. Every journey
+        # row reads the shared layer cache; only the fresh row writes it so
+        # concurrent rows do not race on one cache scope.
+        if: matrix.scenario != 'integration'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -902,8 +935,9 @@ jobs:
           load: true
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=first-run-3938-api-runtime
-          cache-to: type=gha,scope=first-run-3938-api-runtime,mode=max
+          cache-to: ${{ matrix.scenario == 'fresh' && 'type=gha,scope=first-run-3938-api-runtime,mode=max' || '' }}
       - name: Qualify host updater Docker transport recovery
+        if: matrix.scenario == 'controller'
         timeout-minutes: 8
         env:
           MOONMIND_TEST_HOST_UPDATE_TRANSPORT: "1"
@@ -919,6 +953,7 @@ jobs:
             --confcutdir=tests/integration/host_update \
             tests/integration/host_update/test_host_updater_transport.py -q
       - name: Set up Node for the dashboard journey
+        if: matrix.scenario != 'integration'
         uses: actions/setup-node@v7
         with:
           node-version: '20'
@@ -926,84 +961,109 @@ jobs:
       - name: Install the journey browser's Playwright runtime
         # The journeys open the dashboard compiled into the candidate image
         # from the job host, so Playwright belongs here and not in the image.
+        if: matrix.scenario != 'integration'
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
-      - name: Run disposable default first-run journey
-        # MoonLadderStudios/MoonMind#3938 / #4356: one disposable default
-        # Compose installation (no .env, no inherited credentials, no seeded
-        # person) driven through the real API and compiled dashboard:
-        # settings/catalog, synthetic credential binding, submit/observe,
-        # artifacts, recurring dispatch, presets, worker restart, dashboard
-        # cancellation, and read-back. Any failed or unobserved step fails the job.
-        # MOONMIND_IMAGE pins the candidate build above.
+      - name: Run selected integration scenario
+        # Unconditional on purpose: a row cannot succeed by skipping its
+        # selected work, and an unknown scenario fails instead of passing.
+        # integration: hermetic integration_ci suite (tools/test_integration.sh).
+        # fresh (MoonLadderStudios/MoonMind#3938 / #4356): one disposable
+        #   default Compose installation (no .env, no inherited credentials,
+        #   no seeded person) driven through the real API and compiled
+        #   dashboard: settings/catalog, synthetic credential binding,
+        #   submit/observe, artifacts, recurring dispatch, presets, worker
+        #   restart, dashboard cancellation, and read-back.
+        # upgrade (#4356): work saved on an account-era release (before the
+        #   guarded single-user conversion, deployed from its own
+        #   docker-compose.yaml) must survive an in-place update to the
+        #   candidate, the conversion must classify it as one eligible
+        #   operator, and the upgraded instance must accept new work.
+        # controller (#4502): the compiled dashboard and the real Operations
+        #   API submit to, observe, and retry one operation of the real
+        #   deploy/controller server beside the candidate stack. The API is
+        #   replaced and a fresh page reconnects without submitting again,
+        #   and workflow-backed history stays readable without its old
+        #   engine. The controller has no Docker daemon, so it fails at image
+        #   staging and mutates nothing.
+        # Any failed or unobserved journey step fails the row.
+        timeout-minutes: ${{ matrix.run_minutes }}
+        # Each scenario exports only its own image: the hermetic suite runs
+        # in the pytest image, and MOONMIND_IMAGE pins the journeys at the
+        # candidate build above.
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
-        run: |
-          set -euo pipefail
-          # The hermetic suite above runs inside Docker (often as root),
-          # leaving var/ root-owned. Restore ownership so the journey can
-          # record evidence under var/artifacts.
-          sudo chown -R "$(id -u):$(id -g)" var 2>/dev/null || true
-          ./tools/first_run_journey_3938.sh
-      - name: Run eligible-upgrade journey
-        # MoonLadderStudios/MoonMind#4356: work saved on an account-era
-        # release (before the guarded single-user conversion, deployed from
-        # its own docker-compose.yaml) must survive an in-place update to the
-        # candidate, the conversion must classify it as one eligible operator,
-        # and the upgraded instance must accept new work.
-        env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
-        run: |
-          set -euo pipefail
-          ./tools/first_run_journey_3938.sh --upgrade
-      - name: Run Settings Operations controller journey
-        # MoonLadderStudios/MoonMind#4502: the compiled dashboard and the real
-        # Operations API submit to, observe, and retry one operation of the
-        # real deploy/controller server beside the candidate stack. The API is
-        # replaced and a fresh page reconnects without submitting again, and
-        # workflow-backed history stays readable without its old engine. The
-        # controller has no Docker daemon, so it fails at image staging and
-        # mutates nothing. MOONMIND_IMAGE pins the candidate build above.
-        env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
-        run: |
-          set -euo pipefail
-          ./tools/first_run_journey_3938.sh --controller
-      - name: Capture docker compose diagnostics
-        if: failure()
+          INTEGRATION_SCENARIO: ${{ matrix.scenario }}
         run: |
           set -uo pipefail
-          mkdir -p /tmp/pytest-integration-ci
-          printf 'Collecting docker compose diagnostics\n' > /tmp/pytest-integration-ci/diagnostics-status.txt
+          case "${INTEGRATION_SCENARIO:-}" in
+            integration)
+              export MOONMIND_FORCE_LOCAL_TESTS=1 MOONMIND_PYTHON_TEST_IMAGE=moonmind-python-tests:ci
+              command=(./tools/test_integration.sh)
+              ;;
+            fresh)
+              export MOONMIND_IMAGE=moonmind-first-run-3938:ci
+              command=(./tools/first_run_journey_3938.sh)
+              ;;
+            upgrade)
+              export MOONMIND_IMAGE=moonmind-first-run-3938:ci
+              command=(./tools/first_run_journey_3938.sh --upgrade)
+              ;;
+            controller)
+              export MOONMIND_IMAGE=moonmind-first-run-3938:ci
+              command=(./tools/first_run_journey_3938.sh --controller)
+              ;;
+            *)
+              echo "::error::Unknown integration scenario '${INTEGRATION_SCENARIO:-}'; refusing to report success without executing it."
+              exit 2
+              ;;
+          esac
+          candidate="$(git rev-parse HEAD 2>/dev/null || echo unavailable)"
+          started="$(date -u +%s)"
+          "${command[@]}"
+          status=$?
+          elapsed=$(( $(date -u +%s) - started ))
+          echo "Integration scenario \`${INTEGRATION_SCENARIO}\`: exit=${status} after ${elapsed}s on candidate \`${candidate}\` (\`${command[*]}\`)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Capture integration scenario diagnostics
+        if: failure() || cancelled()
+        timeout-minutes: 5
+        env:
+          INTEGRATION_SCENARIO: ${{ matrix.scenario }}
+        run: |
+          set -uo pipefail
+          out="/tmp/pytest-integration-ci-${INTEGRATION_SCENARIO}"
+          mkdir -p "$out"
+          printf 'Collecting %s scenario diagnostics\n' "$INTEGRATION_SCENARIO" > "$out/diagnostics-status.txt"
           if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
             COMPOSE_CMD=(docker compose)
           elif command -v docker-compose >/dev/null 2>&1; then
             COMPOSE_CMD=(docker-compose)
           else
             COMPOSE_CMD=()
-            printf 'docker compose CLI is unavailable\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            printf 'docker compose CLI is unavailable\n' >> "$out/diagnostics-status.txt"
           fi
-          if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt 2>&1; then
-              printf 'docker compose config failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          if [[ "$INTEGRATION_SCENARIO" == "integration" && ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > "$out/docker-compose-config.txt" 2>&1; then
+              printf 'docker compose config failed\n' >> "$out/diagnostics-status.txt"
             fi
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt 2>&1; then
-              printf 'docker compose ps -a failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > "$out/docker-compose-ps.txt" 2>&1; then
+              printf 'docker compose ps -a failed\n' >> "$out/diagnostics-status.txt"
             fi
-            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt 2>&1; then
-              printf 'docker compose logs failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > "$out/docker-compose-logs.txt" 2>&1; then
+              printf 'docker compose logs failed\n' >> "$out/diagnostics-status.txt"
             fi
           fi
           if [[ -d var/artifacts ]]; then
-            cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            cp -R var/artifacts "$out/var-artifacts" || printf 'copying var/artifacts failed\n' >> "$out/diagnostics-status.txt"
           fi
-      - name: Upload integration diagnostics
-        if: failure()
+      - name: Upload integration scenario diagnostics
+        if: failure() || cancelled()
+        timeout-minutes: 5
         uses: actions/upload-artifact@v7
         with:
-          name: pytest-integration-ci-diagnostics
-          path: /tmp/pytest-integration-ci
+          name: pytest-integration-ci-${{ matrix.scenario }}-diagnostics-attempt-${{ github.run_attempt }}
+          path: /tmp/pytest-integration-ci-${{ matrix.scenario }}
           if-no-files-found: error
 
   omnigent-exact-artifact:

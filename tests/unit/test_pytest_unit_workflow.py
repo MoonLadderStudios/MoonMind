@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -89,24 +90,247 @@ def test_required_integration_job_uploads_failure_diagnostics() -> None:
 
     assert job["runs-on"] == "ubuntu-latest"
 
-    steps = job["steps"]
-    run_steps = [step for step in steps if "run" in step]
-    uses_steps = [step for step in steps if "uses" in step]
+    steps = {step["name"]: step for step in job["steps"]}
+    capture = steps["Capture integration scenario diagnostics"]
+    assert "diagnostics-status.txt" in capture["run"]
+    assert "docker-compose" in capture["run"]
+    assert "logs --no-color" in capture["run"]
+    # Failed, timed-out and canceled rows keep their own evidence
+    # (MoonLadderStudios/MoonMind#4628).
+    assert "failure()" in capture["if"] and "cancelled()" in capture["if"]
+    assert capture["timeout-minutes"] <= 5
+    assert "${{ matrix.scenario }}" in capture["run"] or (
+        capture.get("env", {}).get("INTEGRATION_SCENARIO") == "${{ matrix.scenario }}"
+    )
+    upload = steps["Upload integration scenario diagnostics"]
+    assert upload["uses"].startswith("actions/upload-artifact@")
+    assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
+    assert upload["timeout-minutes"] <= 5
+    # Matrix rows upload scenario-specific, attempt-unique artifacts.
+    assert "${{ matrix.scenario }}" in upload["with"]["name"]
+    assert "${{ github.run_attempt }}" in upload["with"]["name"]
+    assert all(step["name"] != "Verify docker compose availability" for step in job["steps"])
 
-    assert any("./tools/test_integration.sh" in step["run"] for step in run_steps)
-    assert any(
-        "diagnostics-status.txt" in step["run"]
-        and "docker-compose" in step["run"]
-        and "logs --no-color" in step["run"]
-        for step in run_steps
+
+_INTEGRATION_SCENARIOS = ["integration", "fresh", "upgrade", "controller"]
+
+
+def _integration_rows() -> dict[str, dict]:
+    job = _load_workflow()["jobs"]["integration-ci"]
+    return {row["scenario"]: row for row in job["strategy"]["matrix"]["include"]}
+
+
+def test_integration_ci_runs_each_scenario_on_an_isolated_row() -> None:
+    """MoonLadderStudios/MoonMind#4628: the hermetic suite, the fresh
+    journey, the upgrade journey and the controller journey run on their own
+    runners instead of as sequential steps of one 75-minute job."""
+    job = _load_workflow()["jobs"]["integration-ci"]
+
+    rows = job["strategy"]["matrix"]["include"]
+    assert [row["scenario"] for row in rows] == _INTEGRATION_SCENARIOS
+    # A failing journey must not cancel independent journeys and erase their
+    # own scenario evidence.
+    assert job["strategy"]["fail-fast"] is False
+    assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
+    for row in rows:
+        # Measured bounds: each row is well under the retired serial
+        # 75-minute job and its execution step is bounded separately.
+        assert 0 < row["run_minutes"] < row["job_minutes"] <= 40, row
+    dispatch = next(
+        step for step in job["steps"] if step["name"] == "Run selected integration scenario"
     )
-    assert all(step["name"] != "Verify docker compose availability" for step in steps)
-    assert any(step.get("if") == "failure()" for step in run_steps)
-    assert any(
-        step["uses"].startswith("actions/upload-artifact@")
-        and step.get("if") == "failure()"
-        for step in uses_steps
+    assert dispatch["timeout-minutes"] == "${{ matrix.run_minutes }}"
+
+
+def test_integration_ci_rows_preserve_candidate_and_submodules() -> None:
+    job = _load_workflow()["jobs"]["integration-ci"]
+    steps = job["steps"]
+    checkout = steps[0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+    assert "submodules" not in checkout.get("with", {})
+    names = [step["name"] for step in steps]
+    submodule = steps[names.index("Initialize pinned Omnigent verifier source")]
+    assert "if" not in submodule
+    assert "git submodule update --init --depth 1 -- omnigent" in submodule["run"]
+
+    builds = {
+        step["name"]: step
+        for step in steps
+        if (step.get("uses") or "").startswith("docker/build-push-action@")
+    }
+    pytest_image = builds["Build the pytest image with a shared layer cache"]
+    assert pytest_image["if"] == "matrix.scenario == 'integration'"
+    deployable = builds["Build the candidate deployable image"]
+    assert deployable["if"] == "matrix.scenario != 'integration'"
+    assert (
+        "MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+        in deployable["with"]["build-args"]
     )
+    dispatch = steps[names.index("Run selected integration scenario")]
+    assert f"MOONMIND_IMAGE={deployable['with']['tags']}" in dispatch["run"]
+    assert f"MOONMIND_PYTHON_TEST_IMAGE={pytest_image['with']['tags']}" in dispatch["run"]
+
+
+def test_integration_ci_runs_every_journey_exactly_once() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["integration-ci"]
+    dispatch = next(
+        step for step in job["steps"] if step["name"] == "Run selected integration scenario"
+    )
+    # The execution step is unconditional: a row can never succeed by
+    # skipping its selected work.
+    assert "if" not in dispatch
+    assert dispatch["env"]["INTEGRATION_SCENARIO"] == "${{ matrix.scenario }}"
+
+    everything = "\n".join(
+        step.get("run", "")
+        for other in workflow["jobs"].values()
+        for step in other.get("steps", [])
+    )
+    for command in (
+        "./tools/test_integration.sh",
+        "./tools/first_run_journey_3938.sh --upgrade",
+        "./tools/first_run_journey_3938.sh --controller",
+        "tests/integration/host_update/test_host_updater_transport.py",
+    ):
+        assert everything.count(command) == 1, command
+    assert dispatch["run"].count("./tools/first_run_journey_3938.sh") == 3
+
+
+def _run_integration_dispatch(tmp_path: Path, scenario: str, stub_exit: int = 0):
+    import subprocess
+
+    dispatch = next(
+        step
+        for step in _load_workflow()["jobs"]["integration-ci"]["steps"]
+        if step["name"] == "Run selected integration scenario"
+    )
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    calls = tmp_path / "calls.txt"
+    for name in ("test_integration.sh", "first_run_journey_3938.sh"):
+        stub = tools / name
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "{name}|$*|${{MOONMIND_IMAGE:-}}|${{MOONMIND_PYTHON_TEST_IMAGE:-}}"'
+            f' >> "{calls}"\nexit {stub_exit}\n'
+        )
+        stub.chmod(0o755)
+    summary = tmp_path / "summary.md"
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "INTEGRATION_SCENARIO": scenario,
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }
+    proc = subprocess.run(
+        ["bash", "-c", dispatch["run"]],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    recorded = calls.read_text().splitlines() if calls.exists() else []
+    return proc, recorded, summary
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected"),
+    [
+        # The hermetic suite gets only the pytest image; journeys get only
+        # the candidate deployable image.
+        ("integration", ["test_integration.sh|||moonmind-python-tests:ci"]),
+        ("fresh", ["first_run_journey_3938.sh||moonmind-first-run-3938:ci|"]),
+        ("upgrade", ["first_run_journey_3938.sh|--upgrade|moonmind-first-run-3938:ci|"]),
+        ("controller", ["first_run_journey_3938.sh|--controller|moonmind-first-run-3938:ci|"]),
+    ],
+)
+def test_integration_dispatch_runs_only_its_scenario(tmp_path, scenario, expected) -> None:
+    proc, recorded, summary = _run_integration_dispatch(tmp_path, scenario)
+    assert proc.returncode == 0, proc.stderr
+    assert recorded == expected
+    assert scenario in summary.read_text()
+
+
+@pytest.mark.parametrize("scenario", ["", "fresh-journey", "unknown"])
+def test_integration_dispatch_fails_unknown_or_missing_scenario(tmp_path, scenario) -> None:
+    proc, recorded, _ = _run_integration_dispatch(tmp_path, scenario)
+    assert proc.returncode != 0
+    assert recorded == []
+
+
+@pytest.mark.parametrize("scenario", _INTEGRATION_SCENARIOS)
+def test_integration_dispatch_propagates_scenario_failure(tmp_path, scenario) -> None:
+    proc, recorded, summary = _run_integration_dispatch(tmp_path, scenario, stub_exit=7)
+    assert proc.returncode == 7
+    assert len(recorded) == 1
+    assert "exit=7" in summary.read_text()
+
+
+_GHA_EXPRESSION = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
+
+
+def _run_ci_required(tmp_path: Path, overrides: dict[str, str]):
+    import subprocess
+
+    job = _load_workflow()["jobs"]["ci-required"]
+    script = "\n".join(step["run"] for step in job["steps"])
+    always = {
+        "select-test-suites",
+        "preflight-policy",
+        "moonspec-projection",
+        "verify-test-shard-ownership",
+        "test-frontend",
+        "check-generated-contracts",
+    }
+    values: dict[str, str] = {}
+    for need in job["needs"]:
+        values[f"needs.{need}.result"] = "success" if need in always else "skipped"
+    for expression in _GHA_EXPRESSION.findall(script):
+        if expression.startswith("needs.select-test-suites.outputs."):
+            values.setdefault(expression, "false")
+    values.update(overrides)
+
+    def render(match: re.Match[str]) -> str:
+        return values[match.group(1)]
+
+    summary = tmp_path / "summary.md"
+    return subprocess.run(
+        ["bash", "-c", _GHA_EXPRESSION.sub(render, script)],
+        env={"PATH": "/usr/bin:/bin", "GITHUB_STEP_SUMMARY": str(summary)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", ""])
+def test_ci_required_fails_unsuccessful_selected_integration_rows(tmp_path, result) -> None:
+    """MoonLadderStudios/MoonMind#4628: a failed, timed-out (failure),
+    canceled, or unexpectedly missing integration row cannot produce the
+    required success."""
+    proc = _run_ci_required(
+        tmp_path,
+        {
+            "needs.select-test-suites.outputs.integration_ci": "true",
+            "needs.integration-ci.result": result,
+        },
+    )
+    assert proc.returncode == 1
+    assert "integration-ci was selected" in proc.stdout
+
+
+def test_ci_required_passes_when_selected_integration_rows_succeed(tmp_path) -> None:
+    proc = _run_ci_required(
+        tmp_path,
+        {
+            "needs.select-test-suites.outputs.integration_ci": "true",
+            "needs.integration-ci.result": "success",
+        },
+    )
+    assert proc.returncode == 0, proc.stdout
+    assert _run_ci_required(tmp_path, {}).returncode == 0
 
 
 def test_preflight_policy_enforces_workflow_display_name_guard() -> None:
@@ -343,19 +567,25 @@ def test_deterministic_conformance_is_selection_gated() -> None:
 def test_image_building_jobs_share_a_layer_cache() -> None:
     workflow = _load_workflow()
     integration_steps = workflow["jobs"]["integration-ci"]["steps"]
-    build = next(
+    builds = [
         step
         for step in integration_steps
         if (step.get("uses") or "").startswith("docker/build-push-action@")
-    )
-    assert build["with"]["target"] == "test-runtime"
+    ]
+    build = next(step for step in builds if step["with"].get("target") == "test-runtime")
     assert build["with"]["load"] is True
     assert build["with"]["cache-from"].startswith("type=gha,")
     assert build["with"]["cache-to"].startswith("type=gha,")
     run_step = next(
-        step for step in integration_steps if step.get("name") == "Run hermetic integration CI suite"
+        step for step in integration_steps if step.get("name") == "Run selected integration scenario"
     )
-    assert run_step["env"]["MOONMIND_PYTHON_TEST_IMAGE"] == build["with"]["tags"]
+    assert f"MOONMIND_PYTHON_TEST_IMAGE={build['with']['tags']}" in run_step["run"]
+    # Three journey rows read the deployable cache; one row writes it so
+    # concurrent rows do not race on the same cache scope.
+    deployable = next(step for step in builds if "target" not in step["with"])
+    assert deployable["with"]["cache-from"].startswith("type=gha,")
+    assert "matrix.scenario == 'fresh'" in deployable["with"]["cache-to"]
+    assert "type=gha," in deployable["with"]["cache-to"]
 
     exact_build = next(
         step
