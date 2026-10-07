@@ -747,6 +747,14 @@ class TemporalExecutionService:
             return await self._client_adapter.get_drain_metrics()
         return await self._client_adapter.get_drain_metrics(task_queues=task_queues)
 
+    async def observe_checkpoint_compat_drain(self) -> Any:
+        """Collect checkpoint compat drain observations (MoonMind#3949).
+
+        Unobservable dimensions stay ``None``; feed the result to
+        ``evaluate_checkpoint_compat_drain_observations``.
+        """
+        return await self._client_adapter.observe_checkpoint_compat_drain()
+
     async def _validate_dependencies(
         self,
         *,

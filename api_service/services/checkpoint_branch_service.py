@@ -1327,6 +1327,11 @@ class CheckpointBranchService:
         )
         if turn.runtime_agent_run_id != runtime_agent_run_id:
             raise ValueError("branch turn Agent Run identity does not match claim")
+        if turn.completed_at is not None:
+            # A handoff delivered after terminal persistence (for example a
+            # retry stuck behind saturated artifacts-worker slots while the
+            # turn was canceled) must not reopen the turn or its branch.
+            return turn
         turn.status = CheckpointBranchTurnState.RUNNING.value
         turn.started_at = turn.started_at or datetime.now(UTC)
         turn.diagnostics = {

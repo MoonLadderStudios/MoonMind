@@ -5,11 +5,10 @@ saturation proof, or explicit reviewer acceptance that the gate-level
 100-handoff ordering rehearsal plus retry/timeout budgets satisfy the
 saturation clause.
 
-Full Temporal execution-under-load (concurrent ``CheckpointBranchTurn``
-workflows against a live artifacts worker) remains integration scope: it
-needs a Temporal test server, database, and deployment worker, and cannot
-execute in a stdlib-only sandbox. This module extends the rehearsal one
-level up from the raw gate without adding those dependencies: it models
+Temporal-level execution against bounded artifacts-worker slots lives in
+``test_saturated_artifacts_slot_keeps_cancellation_and_ordering_3949``
+(``tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py``).
+This module stays a stdlib-only decision rehearsal: it models
 100 bounded concurrent workflow-decision handoffs, where each handoff
 resolves the drain-gate decision for one turn (the same decision the
 workflow's persistence routing and the consolidated worker's cleanup
@@ -21,11 +20,8 @@ and ``checkpoint_compat_drain`` so the rehearsal executes anywhere the
 gate module imports, including dependency-constrained sandboxes.
 
 Companion: ``test_checkpoint_compat_drain_3949.py`` holds the gate-level
-rehearsal (``test_consolidated_worker_retains_control_and_cleanup_progress_under_load``)
-and the behavioral I/O inventory; the topology doc
-(``docs/Temporal/ActivityCatalogAndWorkerTopology.md``) records that both
-are rehearsals, not production saturation proof, pending reviewer
-acceptance or integration-level execution-under-load evidence.
+rehearsal (``test_consolidated_worker_retains_control_and_cleanup_progress_under_load``).
+Both are decision rehearsals, not Temporal execution evidence.
 """
 
 from __future__ import annotations
