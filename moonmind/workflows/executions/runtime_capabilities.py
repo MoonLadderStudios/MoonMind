@@ -89,6 +89,15 @@ class WorkspaceStateCapability(BaseModel):
 
 
 class HostModeCapability(BaseModel):
+    """One host realization mode's isolation guarantees.
+
+    ``githubCredentialsIsolated`` means routing isolation: the mode's host
+    receives only the credential admitted for this run, never an ambient or a
+    sibling run's credential. It is not confinement against arbitrary agent
+    code; a projected ``gh`` credential is agent-readable, and the host reports
+    that exposure as ``githubCredentialExposure`` in its preflight evidence.
+    """
+
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
     mode: NonBlankStr

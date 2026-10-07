@@ -134,7 +134,10 @@ fi
 # a restart without a new GH_TOKEN preserves the previously persisted
 # hosts.yml untouched (no deletion path exists below); unsetting the
 # environment selectors after the write removes them from this process only
-# and does not revoke cached credential authority.
+# and does not revoke cached credential authority. The profile-bound launcher
+# no longer supplies GH_TOKEN: it writes hosts.yml into the cache volume over
+# stdin before launch so the token never enters container metadata, and this
+# block then only versions the config and installs the Git helper.
 github_token=${GH_TOKEN:-}
 github_config_home=${XDG_CONFIG_HOME:-/home/app/.cache/moonmind-xdg}
 case "$github_config_home" in
