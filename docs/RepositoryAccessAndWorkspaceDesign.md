@@ -343,9 +343,11 @@ review requests pass their executing run to `GitHubService`. An App connection
 acquires `merge_request` for a merge or base retarget, `review_request` for a
 review request, and `read` for readiness and selector lookups. A failed
 selection or credential reports the operation unavailable and sends no request.
+The `github.resolve_pull_request_target` tool resolves its selector and reads
+the pull request with the executing run's admitted connection the same way.
 Review-only merge automation and saved publication supply their own admitted
-credentials. Other issue and pull-request helpers still take an explicit token
-and fall back to deployment resolution when it is omitted.
+credentials. Issue-lifecycle helpers still take an explicit token and fall back
+to deployment resolution when it is omitted.
 
 ### INV-004 Ambient identity cannot override admitted identity
 

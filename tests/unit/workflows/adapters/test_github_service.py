@@ -1160,6 +1160,84 @@ async def test_merge_pr_missing_token(monkeypatch):
     assert result.merged is False
     assert "GitHub auth is not configured" in result.summary
 
+@pytest.mark.asyncio
+async def test_merge_pr_http_error_reports_status(monkeypatch):
+    """A provider rejection is reported as not merged with its HTTP status."""
+
+    async def fake_put(self, url, *, headers=None, json=None, **kwargs):
+        response = httpx.Response(
+            status_code=405,
+            text="Pull Request is not mergeable",
+            request=httpx.Request("PUT", url),
+        )
+        response.raise_for_status()
+
+    monkeypatch.setattr(httpx.AsyncClient, "put", fake_put)
+
+    result = await GitHubService().merge_pull_request(
+        pr_url="https://github.com/owner/repo/pull/99",
+        github_token="test-token",
+    )
+
+    assert result.merged is False
+    assert "405" in result.summary
+
+# ---------------------------------------------------------------------------
+# update_pull_request_base
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_update_pull_request_base_rejects_invalid_url():
+    """Non-GitHub PR URLs fail without calling the API."""
+    ok, summary = await GitHubService().update_pull_request_base(
+        pr_url="https://not-github.com/foo",
+        new_base="develop",
+    )
+
+    assert ok is False
+    assert "Could not parse" in summary
+
+@pytest.mark.asyncio
+async def test_update_pull_request_base_success(monkeypatch):
+    async def fake_patch(self, url, *, headers=None, json=None, **kwargs):
+        return httpx.Response(
+            status_code=200,
+            json={"base": {"ref": json["base"]}},
+            request=httpx.Request("PATCH", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "patch", fake_patch)
+
+    ok, summary = await GitHubService().update_pull_request_base(
+        pr_url="https://github.com/owner/repo/pull/42",
+        new_base="develop",
+        github_token="test-token",
+    )
+
+    assert ok is True
+    assert "develop" in summary
+
+@pytest.mark.asyncio
+async def test_update_pull_request_base_http_error(monkeypatch):
+    async def fake_patch(self, url, *, headers=None, json=None, **kwargs):
+        response = httpx.Response(
+            status_code=422,
+            text="Validation Failed",
+            request=httpx.Request("PATCH", url),
+        )
+        response.raise_for_status()
+
+    monkeypatch.setattr(httpx.AsyncClient, "patch", fake_patch)
+
+    ok, summary = await GitHubService().update_pull_request_base(
+        pr_url="https://github.com/owner/repo/pull/42",
+        new_base="nonexistent-branch",
+        github_token="test-token",
+    )
+
+    assert ok is False
+    assert "422" in summary
+
 # ---------------------------------------------------------------------------
 # parse_github_pr_url
 # ---------------------------------------------------------------------------
