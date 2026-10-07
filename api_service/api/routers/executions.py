@@ -264,13 +264,6 @@ from moonmind.workflows.executions.new_work_runtime import (
     new_work_evidence,
     resolve_new_work_selection,
 )
-from moonmind.workflows.executions.provider_profile_projection import (
-    PROVIDER_PROFILE_ABSENCE_STATES,
-    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
-    provider_profile_id_token,
-    provider_profile_state_token,
-    provider_profile_summary_from_memo,
-)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -280,6 +273,13 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     goal_from_payloads,
     schedule_preset_from_goal,
     workflow_is_already_authored,
+)
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_ABSENCE_STATES,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    provider_profile_id_token,
+    provider_profile_state_token,
+    provider_profile_summary_from_memo,
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
