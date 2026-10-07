@@ -15,16 +15,15 @@ existing drain rule instead of inventing another topology mode or service:
 the decision predicate mirrors
 ``moonmind.workflows.executions.checkpoint_promotion.evaluate_worker_drain``
 (``outstanding == 0`` → safe to remove, otherwise retain). The deployment
-feeds the counts from the existing mechanisms — ``get_drain_metrics``
-scoped to the workflow task queue (see
-``TemporalExecutionService.get_drain_metrics`` ``task_queues`` passthrough),
-pending-activity inspection for old-queue tasks, and the supported reset
-ledger — rather than from fixture replay or failed probes. Missing
-visibility or failed probes are not a clean drain: unobservable dimensions
-must be reported as outstanding. Use
-:func:`render_checkpoint_compat_drain_report` for the exact operator
-procedure (visibility queries, history-marker inspection, and the removal
-checklist) that turns live deployment evidence into a removal decision.
+collects the counts automatically through the existing Temporal service
+route, ``TemporalExecutionService.observe_checkpoint_compat_drain`` (backed
+by ``TemporalClientAdapter.observe_checkpoint_compat_drain``), which lists
+``MoonMind.CheckpointBranchTurn`` executions through Visibility and scans
+their histories for persistence scheduled off the artifacts queue — never
+from fixture replay or failed probes. Missing visibility or failed probes
+are not a clean drain: unobservable dimensions are reported as unknown and
+retain compat. :func:`render_checkpoint_compat_drain_report` renders the
+probe definitions and the removal checklist for a collected verdict.
 
 This module depends on the standard library only and lives in the
 lightweight ``moonmind.gates`` namespace (whose ``__init__`` chain imports
@@ -237,18 +236,17 @@ def collect_checkpoint_compat_drain_observations(
 ) -> CheckpointCompatDrainObservations:
     """Build drain-gate observations from live deployment probe outputs.
 
-    This is the production entrypoint that binds the gate to authoritative
-    probes instead of fixture replay:
+    ``TemporalClientAdapter.observe_checkpoint_compat_drain`` is the
+    automated producer of these inputs:
 
-    - ``open_pre_cutover_histories``: running workflows on the workflow task
-      queue whose history lacks the ``COMPAT_PATCH_ID`` marker (``None``
-      when visibility is unavailable or the marker scan failed).
-    - ``pending_old_queue_tasks``: pending activities of type
-      ``checkpoint_branch.turn.*`` still addressed to the workflow task
-      queue (``None`` when activity inspection is unavailable).
-    - ``supported_resets_pending``: retained histories with an undispatched
-      supported reset obligation (``None`` when the reset ledger is
-      unsupported or unreadable).
+    - ``open_pre_cutover_histories``: running ``MoonMind.CheckpointBranchTurn``
+      histories that scheduled ``checkpoint_branch.turn.*`` persistence off
+      the artifacts queue (``None`` when Visibility or a history read fails).
+    - ``pending_old_queue_tasks``: those histories' persistence activities
+      still unclosed on the old queue (``None`` on the same failures).
+    - ``supported_resets_pending``: closed consumer histories Visibility
+      still returns; a reset of one replays onto the old route (``None``
+      when the closed listing or a history read fails).
 
     ``None`` is fail-closed downstream: unobservable dimensions retain the
     compat registration. Negative or non-integer counts raise ``ValueError``
@@ -285,18 +283,17 @@ def render_checkpoint_compat_drain_report(
         f"{COMPAT_DRAIN_CONTRACT}: {decision.required_action}",
         f"outstanding={decision.outstanding}; blocking: {blocking}",
         "",
-        "Probes (live deployment evidence; None = unobservable = retain):",
-        "1. open_pre_cutover_histories: list running workflows with",
-        f'   ExecutionStatus="Running" AND TaskQueue="{workflow_task_queue}",',
-        f"   then keep those whose history lacks the '{COMPAT_PATCH_ID}'",
-        "   patch marker. Scoped visibility counts alone are not enough:",
-        "   the workflow queue also hosts post-cutover lanes.",
-        "2. pending_old_queue_tasks: describe each running workflow on the",
-        "   workflow queue and count pendingActivities with activityType",
-        "   'checkpoint_branch.turn.*' still addressed to the workflow queue.",
-        "3. supported_resets_pending: count retained histories with a",
-        "   supported reset obligation that has not been discharged; report",
-        "   None when the reset ledger is unsupported or unreadable.",
+        "Probes (collected by TemporalExecutionService.",
+        "observe_checkpoint_compat_drain; None = unobservable = retain):",
+        "1. open_pre_cutover_histories: running MoonMind.CheckpointBranchTurn",
+        "   histories that scheduled checkpoint_branch.turn.* persistence on",
+        f"   an old queue such as '{workflow_task_queue}' (before or without",
+        f"   the '{COMPAT_PATCH_ID}' route). A missing marker alone is not",
+        "   enough: new runs record it at their first persistence call.",
+        "2. pending_old_queue_tasks: those histories' persistence activities",
+        "   still unclosed on the old queue.",
+        "3. supported_resets_pending: closed consumer histories Visibility",
+        "   still returns; resetting one replays onto the old route.",
         "",
     ]
     if observations is not None:

@@ -301,27 +301,36 @@ Removal is owned by the drain gate in
 (`evaluate_checkpoint_compat_drain_observations`, contract
 `checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
 `evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
-Deployment probes enter through `collect_checkpoint_compat_drain_observations`
-/ `CheckpointCompatDrainObservations` /
-`evaluate_checkpoint_compat_drain_observations`: any dimension that is
-unobservable (`None`: missing visibility or failed probe) retains compat
-and is named in `blocking_dimensions`. `render_checkpoint_compat_drain_report`
-renders the exact operator procedure (visibility queries, history-marker
-inspection, removal checklist). Scoped visibility counts come from
-`TemporalExecutionService.get_drain_metrics` with the workflow task queue
-passed explicitly. Drained means all three
-deployment-observed dimensions reach zero:
+`TemporalExecutionService.observe_checkpoint_compat_drain` collects the
+observations for the deployment it is connected to: it lists
+`MoonMind.CheckpointBranchTurn` executions through Visibility and scans each
+history for `checkpoint_branch.turn.*` persistence scheduled on a queue other
+than `mm.activity.artifacts`. A missing patch marker alone is not a consumer,
+because new runs record the marker at their first persistence call. Drained
+means all three observed dimensions are zero:
 
-- open pre-cutover histories recorded without the
-  `checkpoint-branch-artifact-fleet-v1` marker (`get_drain_metrics`
-  scoped to the workflow task queue, filtered to pre-marker histories);
-- pending `checkpoint_branch.turn.*` activity tasks still addressed to
-  the workflow queue;
-- retained histories with an undischarged supported-reset obligation.
+- open pre-cutover histories: running turns that scheduled persistence on
+  the old route;
+- pending old-queue tasks: those turns' persistence activities still
+  unclosed on the old route;
+- supported resets: closed old-route turns that Visibility still returns
+  (within namespace retention), because resetting one replays onto the old
+  route.
 
-Fixture replay is history-compatibility evidence, not deployed drainage;
-missing visibility or failed probes are not a clean drain and keep the
-registration retained.
+A failed listing or unreadable history reports that dimension as `None`
+(unknown); unknown dimensions retain compat and are named in
+`blocking_dimensions`. `render_checkpoint_compat_drain_report` renders the
+probe definitions and the removal checklist for a collected verdict. Fixture
+replay (`test_checkpoint_queue_replay.py`) is history-compatibility evidence,
+not deployed drainage.
+
+Repository tests prove the collector against time-skipping Temporal
+histories (`test_drain_observation_*` in `test_checkpoint_compat_drain_3949.py`).
+They do not observe any deployment. Running the collector against the
+deployment being changed, and removing the registration if it reports zero,
+is separately owned deployment work and has not been performed. Until it is,
+the compat registration stays, and its removal condition is the observed
+all-zero verdict.
 
 ### Actual process permission boundary (consolidated topology)
 
@@ -330,17 +339,24 @@ worker process intentionally carries database and artifact-retention
 authority (`async_session_maker`, `CheckpointBranchService`, retained
 artifact refs in `workflows/checkpoint_branch_turn.py`) because the
 retained handlers execute old persistence tasks in that process. The four
-`agent_run.py` metadata helpers need none of it (proven behaviorally by
-`test_checkpoint_compat_drain_3949.py`, which runs all four helpers with
-database I/O denied and provider/Docker/artifact configuration removed,
-while the persistence handlers fail closed).
-New-only workflow processing must carry only what its real helpers require;
-while the topology stays consolidated, the justified permission set is exactly
-the retained handlers' persistence authority plus the helpers' catalog
-and registry reads — and the drain gate above is what retires the
-persistence half.
+`agent_run.py` metadata helpers do not reference that authority: AST/import
+inspection finds no database, credential, Docker or artifact-storage names,
+and in-process tests run the helpers with database I/O monkeypatched to fail.
+These are source and in-process checks, not process confinement.
 
-Measured capability inventory (workflow fleet):
+Effective container rights come from `docker-compose.yaml`. Both
+`temporal-worker-workflow` and `temporal-worker-artifacts` load the operator
+`.env` through `env_file`, so any credential placed there (including provider
+keys) reaches both processes; queue separation is not credential separation,
+and no per-fleet least-privilege claim is made. Neither worker mounts the
+Docker socket. The workflow worker's `agent_workspaces:/work/agent_jobs`
+mount is not a checkpoint-compat right: the workflow side of
+`MoonMind.AgentRun` (`ManagedAgentAdapter`, `CodexSessionAdapter`) saves and
+loads `ManagedRunStore` records under `/work/agent_jobs/managed_runs`, so the
+mount stays with that consumer. The artifacts worker mounts no agent
+workspaces.
+
+Capability inventory (workflow fleet, from source inspection):
 
 | Handler | Needs database | Needs provider/Docker/artifact-storage I/O |
 |---|---|---|
@@ -353,23 +369,25 @@ Measured capability inventory (workflow fleet):
 | `checkpoint_branch.turn.persist_terminal` | yes (`lock` + `finalize`) | yes (artifact retention + result/diagnostics writes) |
 | `checkpoint_branch.turn.persist_terminal_rejection` | yes | yes (rejection row terminalization) |
 
-Under bounded concurrent load the consolidated worker retains every
-handoff's control record before its cleanup record with the drain gate
-staying decisive per input (`test_consolidated_worker_retains_control_and_cleanup_progress_under_load`;
-rehearsal, not production saturation proof). A stdlib-only decision-level
-companion (`test_checkpoint_drain_saturation_3949.py`) extends the same
-property to 100 concurrent workflow-decision handoffs with per-turn
-control-before-cleanup ordering. Temporal execution-under-load proof
-(concurrent `CheckpointBranchTurn` executions retaining control/cleanup
-progress under saturation) remains integration scope and requires either
-required-CI execution evidence or explicit reviewer acceptance of these
-rehearsals plus the retry/timeout budgets below. New persistence is proven to
-reach the artifacts fleet exclusively by
-`test_new_{success,failure,cancellation}_reaches_artifacts_fleet_with_real_handlers_3949`
-plus `test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949`,
-which bind the real handler objects only on the artifacts worker and assert
-the serving queue, timeouts, retry budget, and durable row state from the
-recorded history.
+Executed workflow-to-worker evidence lives in
+`tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py`
+(required CI, `integration_ci`). Its artifacts worker registers the handlers
+returned by `build_worker_activity_bindings(fleet="artifacts")`, exactly as
+worker startup resolves them; the workflow queue registers no
+`checkpoint_branch.turn.*` handler. Only external effects are doubles (the
+AgentRun child, sandbox workspace capture, and checkpoint-artifact
+construction for the fixture's seeded checkpoint), and an activity
+interceptor observes deliveries and injects faults without replacing a
+handler. The journeys assert the serving queue, timeouts, retry budget and
+durable row state for success, provider failure, cancellation, transient
+terminal retry and terminal rejection. One journey bounds the artifacts
+worker's slots and holds one slot with an unfinished `mark_running`: the
+workflow worker still processes the cancellation, the canceled terminal
+persists through the free slot, and the late running handoff cannot reopen
+the canceled turn (`mark_turn_running` leaves terminal turns unchanged).
+The stdlib decision rehearsals (`test_checkpoint_drain_saturation_3949.py`
+and the gate-level rehearsal in `test_checkpoint_compat_drain_3949.py`)
+remain decision-level checks, not execution evidence.
 
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
