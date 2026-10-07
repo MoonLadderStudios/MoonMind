@@ -2553,14 +2553,16 @@ class GitHubService:
                 "blockers": [],
             }
 
-        reaction = await self._find_request_clean_review_reaction(
-            client=client,
-            repo=repo,
-            pr_number=pr_number,
-            headers=headers,
-            provider=record,
-            request_comment_id=review_request.get("requestCommentId"),
-            requested_at=requested_at,
+        reaction, reaction_blocker = (
+            await self._find_request_clean_review_reaction(
+                client=client,
+                repo=repo,
+                pr_number=pr_number,
+                headers=headers,
+                provider=record,
+                request_comment_id=review_request.get("requestCommentId"),
+                requested_at=requested_at,
+            )
         )
         if reaction is not None:
             return {
@@ -2614,6 +2616,12 @@ class GitHubService:
                         "providerFailure": provider_failure.to_metadata(),
                     }
                 ],
+            }
+        if reaction_blocker is not None:
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [reaction_blocker],
             }
         return pending
 
@@ -2691,7 +2699,9 @@ class GitHubService:
         provider: Any,
         request_comment_id: Any,
         requested_at: datetime | None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Retain permission denial while the caller checks other review evidence."""
+
         def _matches(reaction: Any, *, enforce_not_before: bool) -> bool:
             if not isinstance(reaction, dict):
                 return False
@@ -2728,23 +2738,41 @@ class GitHubService:
                 True,
             )
         )
+        permission_blocker = None
         for url, enforce_not_before in urls:
             try:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 reactions = response.json()
-            except (
-                httpx.HTTPStatusError,
-                httpx.TransportError,
-                httpx.TimeoutException,
-            ):
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code == 403
+                    and self._github_rate_limit_event(exc.response) is None
+                    and permission_blocker is None
+                ):
+                    permission_blocker = {
+                        **self._permission_blocker(
+                            response=exc.response,
+                            evidence_source="issue_reactions",
+                            missing_permission="Issues: read",
+                            summary=(
+                                "Requested review reaction evidence is denied "
+                                "by the selected GitHub connection (HTTP 403); "
+                                "no fresh provider review or clean comment "
+                                "is available."
+                            ),
+                        ),
+                        "kind": "policy_denied",
+                    }
+                continue
+            except (httpx.TransportError, httpx.TimeoutException):
                 continue
             if not isinstance(reactions, list):
                 continue
             for reaction in reactions:
                 if _matches(reaction, enforce_not_before=enforce_not_before):
-                    return reaction
-        return None
+                    return reaction, None
+        return None, permission_blocker
 
     async def _evaluate_automated_review(
         self,
