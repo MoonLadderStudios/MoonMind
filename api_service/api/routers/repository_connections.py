@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
+from moonmind.auth.github_app import GITHUB_REPOSITORY_NAME_PATTERN
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
 from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_POLICY_CONFLICT,
@@ -79,9 +80,14 @@ class GitHubAppBeginRequest(BaseModel):
     request_id: str = Field(min_length=1, alias="requestId")
     connection_id: str = Field(min_length=1, alias="connectionId")
     expected_account: str = Field(default="", alias="expectedAccount")
-    permitted_repositories: Sequence[str] = Field(
-        default=(), alias="permittedRepositories"
-    )
+    permitted_repositories: Sequence[
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, pattern=GITHUB_REPOSITORY_NAME_PATTERN
+            ),
+        ]
+    ] = Field(min_length=1, alias="permittedRepositories")
     display_name: str = Field(default="GitHub App connection", alias="displayName")
     endpoint_ref: str = Field(default="https://github.com", alias="endpointRef")
     allowed_operations: Sequence[RepositoryOperation] = Field(
@@ -238,6 +244,7 @@ async def complete_github_app_setup(
     """Verify the installation with the provider, then persist it."""
 
     from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.auth.bound_acquisition import BoundAccessError
     from moonmind.auth.github_app_wiring import (
         default_resolve_secret_ref,
         fetch_installation_record,
@@ -289,8 +296,20 @@ async def complete_github_app_setup(
             jwt=jwt,
             installation_id=request.installation_id.strip(),
             api_base=configuration.api_base,
+            permitted_repositories=pending.permitted_repositories,
         )
+    except BoundAccessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {
+            401,
+            403,
+            404,
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail="GitHub App installation cannot access the requested repositories.",
+            ) from exc
         logger.warning("github_app_provider_fetch_failed", error=str(exc)[:200])
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

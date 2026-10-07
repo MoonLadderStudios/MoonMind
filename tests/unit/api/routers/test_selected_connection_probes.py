@@ -20,7 +20,11 @@ from moonmind.workflows.executions.repository_contract import RepositoryConnecti
 pytestmark = pytest.mark.asyncio
 
 
-def _connection(source="secret_ref", endpoint="https://github.com"):
+def _connection(
+    source="secret_ref",
+    endpoint="https://github.com",
+    permitted_repository="acme/widgets",
+):
     credential = {
         "source": "secret_ref",
         "credentialRef": {"provider": "db", "key": "selected-pat"},
@@ -32,7 +36,7 @@ def _connection(source="secret_ref", endpoint="https://github.com"):
             "installationRef": "github-installation:456",
             "keyRef": "db://selected-app-key",
             "account": "acme",
-            "permittedRepositories": ["acme/widgets"],
+            "permittedRepositories": [permitted_repository],
         }
     return RepositoryConnection.model_validate(
         {
@@ -84,14 +88,20 @@ def probe_route(monkeypatch):
 
     def handler(request):
         state.requests.append(request)
-        if request.url.path.endswith("/app/installations/456"):
+        if request.url.path.endswith(
+            (
+                "/app/installations/456",
+                "/repos/acme/widgets/installation",
+                "/repos/ACME/Widgets/installation",
+            )
+        ):
             return httpx.Response(
                 200,
                 json={
                     "id": 456,
                     "app_id": 123,
-                    "account": {"login": "acme"},
-                    "repository_selection": "all",
+                    "account": {"id": 10, "login": "acme"},
+                    "repository_selection": "selected",
                     "suspended_at": None,
                 },
             )
@@ -158,10 +168,11 @@ def probe_route(monkeypatch):
 
 
 @pytest.mark.parametrize("endpoint", ["https://github.com", "https://ghe.example.com"])
+@pytest.mark.parametrize("permitted_repository", ["acme/widgets", "ACME/Widgets"])
 async def test_selected_app_probe_acquires_bound_installation_token(
-    probe_route, monkeypatch, endpoint
+    probe_route, monkeypatch, endpoint, permitted_repository
 ):
-    probe_route.connection = _connection("github_app", endpoint)
+    probe_route.connection = _connection("github_app", endpoint, permitted_repository)
     key_reader = AsyncMock(return_value=b"selected-app-signing-key-fixture")
     monkeypatch.setattr(github_app_wiring, "default_resolve_secret_ref", key_reader)
     monkeypatch.setattr(
@@ -190,11 +201,13 @@ async def test_selected_app_probe_acquires_bound_installation_token(
     )
     assert [str(request.url) for request in probe_route.requests] == [
         f"{base}/app/installations/456",
+        f"{base}/repos/{permitted_repository}/installation",
         f"{base}/app/installations/456/access_tokens",
         f"{base}/repos/acme/widgets",
         f"{base}/repos/acme/widgets/branches/trunk",
     ]
     assert [request.headers["Authorization"] for request in probe_route.requests] == [
+        "Bearer selected-app-jwt",
         "Bearer selected-app-jwt",
         "Bearer selected-app-jwt",
         "Bearer selected-installation-token",
@@ -266,11 +279,14 @@ async def test_selected_app_probe_rechecks_revocation_without_fallback(
     assert body["observations"]["read"] == "not_checked"
     assert "BOUND_REVOKED" in response.text
     probe_route.secret.assert_not_called()
-    assert not any("/repos/" in request.url.path for request in probe_route.requests)
+    assert not any(
+        request.headers.get("Authorization") == "Bearer selected-installation-token"
+        for request in probe_route.requests
+    )
     if phase == "before_acquisition":
         key_reader.assert_not_called()
     else:
-        assert len(probe_route.requests) == 2
+        assert len(probe_route.requests) == 3
 
 
 async def test_selected_app_probe_issuer_outage_is_unavailable_without_fallback(
@@ -321,7 +337,7 @@ async def test_selected_app_probe_does_not_deny_unrequested_collaboration_scope(
     )
     assert all(
         request.url.path.endswith(
-            ("/456", "/access_tokens", "/widgets", "/branches/trunk")
+            ("/456", "/installation", "/access_tokens", "/widgets", "/branches/trunk")
         )
         for request in probe_route.requests
     )

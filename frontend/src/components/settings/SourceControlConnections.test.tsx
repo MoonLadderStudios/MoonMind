@@ -760,6 +760,21 @@ describe('SourceControlConnections', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it.each(['', 'acme/*', 'acme/widgets/extra', '../widgets', 'acme/..'])('rejects unusable App repository scope %s before setup', async (repositories) => {
+    const state = { items: [] as ConnectionFixture[] };
+    const fetchMock = stubApi(state);
+    renderSection();
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub App' }));
+    const form = screen.getByRole('form', { name: 'Connect GitHub App' });
+    fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Acme App' } });
+    fireEvent.change(within(form).getByLabelText(/App name/), { target: { value: 'acme-bot' } });
+    fireEvent.change(within(form).getByLabelText('App ID'), { target: { value: '123' } });
+    fireEvent.change(within(form).getByLabelText(/repositories/i), { target: { value: repositories } });
+    fireEvent.submit(form);
+    await screen.findByText('Enter at least one repository in owner/repo form.');
+    expect(calls(fetchMock, 'POST', '/api/v1/repository-connections/github-app/begin')).toHaveLength(0);
+  });
+
   it('starts App setup without internal refs and completes it on return', async () => {
     const state = { items: [] as ConnectionFixture[] };
     const fetchMock = stubApi(state, {
@@ -782,11 +797,12 @@ describe('SourceControlConnections', () => {
     fireEvent.change(within(form).getByLabelText('Connection name'), { target: { value: 'Acme App' } });
     fireEvent.change(within(form).getByLabelText(/App name/), { target: { value: 'acme-bot' } });
     fireEvent.change(within(form).getByLabelText('App ID'), { target: { value: '123' } });
+    fireEvent.change(within(form).getByLabelText(/repositories/i), { target: { value: 'Acme/Widgets, acme/other' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Install on GitHub' }));
 
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('https://github.com/apps/acme-bot/installations/new?state=s1'));
     const begin = bodyOf(calls(fetchMock, 'POST', '/api/v1/repository-connections/github-app/begin')[0]);
-    expect(begin).toMatchObject({ appSlug: 'acme-bot', appId: '123', connectionId: 'acme-app', displayName: 'Acme App' });
+    expect(begin).toMatchObject({ appSlug: 'acme-bot', appId: '123', connectionId: 'acme-app', displayName: 'Acme App', permittedRepositories: ['Acme/Widgets', 'acme/other'] });
     expect(begin).not.toHaveProperty('keySecretRef');
     expect(begin).not.toHaveProperty('expectedAppRef');
   });

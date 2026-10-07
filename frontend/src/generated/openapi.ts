@@ -9643,10 +9643,7 @@ export interface components {
              * @default
              */
             expectedAccount: string;
-            /**
-             * Permittedrepositories
-             * @default []
-             */
+            /** Permittedrepositories */
             permittedRepositories: string[];
             /**
              * Displayname
