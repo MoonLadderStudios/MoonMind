@@ -1610,6 +1610,7 @@ class GitHubService:
         attempt_started_at: str,
         recorded_comment_id: int | None = None,
         github_token: str | None = None,
+        expires_at: str | None = None,
     ) -> AutomatedReviewRequestResult:
         """Post exactly one automated review request for one exact head SHA.
 
@@ -1623,6 +1624,9 @@ class GitHubService:
         record = automated_review_provider_or_raise(provider)
         command = record.command
         expected_head_sha = str(expected_head_sha or "").strip()
+        deadline = _parse_github_timestamp(expires_at)
+        if expires_at is not None and deadline is None:
+            raise ValueError("review request expires_at must be an ISO timestamp")
 
         def _result(**kwargs: Any) -> AutomatedReviewRequestResult:
             payload: dict[str, Any] = {
@@ -1738,6 +1742,17 @@ class GitHubService:
                         "Adopted an automated review request created by this "
                         "identity after the attempt started."
                     ),
+                )
+
+            # A late acknowledgement must preserve a reconciled effect above.
+            # Only a new POST is forbidden once the original gate expires,
+            # including when reads or an Activity retry crossed the deadline.
+            if deadline is not None and datetime.now(timezone.utc) >= deadline:
+                return _result(
+                    status="expired",
+                    observedHeadSha=observed_head_sha or None,
+                    retryable=False,
+                    summary="Review deadline expired before a new request was posted.",
                 )
 
             try:

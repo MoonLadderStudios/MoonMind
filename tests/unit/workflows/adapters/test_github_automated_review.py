@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -47,14 +48,30 @@ def _patch_client(mock_client):
     )
 
 
+def _review_clock(monkeypatch, initial):
+    from moonmind.workflows.adapters import github_service
+
+    current = [datetime.fromisoformat(initial)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current[0].astimezone(tz or timezone.utc)
+
+    monkeypatch.setattr(github_service, "datetime", Clock)
+    return current
+
+
 # ---------------------------------------------------------------------------
 # request_automated_review
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_request_posts_exactly_the_configured_command(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_posts_exactly_the_configured_command(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:15:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -80,6 +97,7 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "requested"
@@ -91,10 +109,12 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch, expires_at):
     """A lost response is recovered by adopting the comment it created."""
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -120,6 +140,7 @@ async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkey
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "reconciled"
@@ -219,8 +240,10 @@ async def test_request_refuses_when_pull_request_is_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_adopts_previously_recorded_comment(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_adopts_previously_recorded_comment(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -244,11 +267,64 @@ async def test_request_adopts_previously_recorded_comment(monkeypatch):
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
             recorded_comment_id=777,
+            expires_at=expires_at,
         )
 
     assert result.status == "recorded"
     assert result.request_comment_id == 777
     assert mock_client.post.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expiry_case", ["already_expired", "during_read", "on_retry"])
+async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
+    current = _review_clock(
+        monkeypatch,
+        "2026-08-24T22:17:00+00:00"
+        if expiry_case == "already_expired"
+        else "2026-08-24T22:15:00+00:00",
+    )
+    responses = [
+        _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
+        _get(200, []),
+    ]
+    if expiry_case == "on_retry":
+        responses.insert(0, httpx.ReadTimeout("first attempt could not read PR"))
+    client = _client(get_responses=[])
+
+    async def get(*_args, **_kwargs):
+        response = responses.pop(0)
+        current[0] = datetime.fromisoformat("2026-08-24T22:17:00+00:00")
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client.get.side_effect = get
+    request = {
+        "repo": _REPO, "pr_number": 350, "expected_head_sha": _HEAD,
+        "provider": "codex", "attempt_started_at": "2026-08-24T22:14:00Z",
+        "github_token": "selected-token", "expires_at": "2026-08-24T22:16:00Z",
+    }
+    with _patch_client(client):
+        service = GitHubService()
+        if expiry_case == "on_retry":
+            first = await service.request_automated_review(**request)
+            assert first.status == "unavailable" and first.retryable is True
+        result = await service.request_automated_review(**request)
+    assert result.status == "expired"
+    assert result.retryable is False
+    assert result.request_comment_id is None
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_at", ["", "not-a-timestamp"])
+async def test_request_rejects_invalid_deadline_without_posting(expires_at):
+    with pytest.raises(ValueError, match="expires_at must be an ISO timestamp"):
+        await GitHubService().request_automated_review(
+            repo=_REPO, pr_number=350, expected_head_sha=_HEAD, provider="codex",
+            attempt_started_at="2026-08-24T22:14:00Z", expires_at=expires_at,
+        )
 
 
 @pytest.mark.asyncio

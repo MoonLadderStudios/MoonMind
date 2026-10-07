@@ -1408,7 +1408,16 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
         return await original_activity(name, payload, **kwargs)
 
     monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
-    result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["gate"]["jira"]["status"] = "required"
+
+    async def unexpected_jira_read(_issue_key):
+        raise AssertionError("review-only must not depend on unrelated Jira readiness")
+
+    monkeypatch.setattr(
+        activities, "_merge_gate_jira_status_allowed", unexpected_jira_read
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
 
     assert result["status"] == "review_complete"
     assert check_reads == []
@@ -1878,4 +1887,65 @@ async def test_review_only_does_not_post_when_readiness_crosses_expiry(
 
     assert result["status"] == "expired"
     assert harness.request_payloads == []
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delayed_activity", ["merge_automation.evaluate_readiness", "artifact.create"]
+)
+async def test_review_only_rejects_completion_observed_after_expiry(
+    monkeypatch, delayed_activity
+):
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 180
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+        request_results=[_posted(HEAD_1)],
+    )
+    execute = merge_automation_module.workflow.execute_activity
+    reads = 0
+    delayed = False
+
+    async def activity(name, payload, **kwargs):
+        nonlocal reads, delayed
+        if name == "merge_automation.evaluate_readiness":
+            reads += 1
+        result = await execute(name, payload, **kwargs)
+        if reads == 2 and name == delayed_activity and not delayed:
+            delayed = True
+            harness._now += timedelta(seconds=180)
+        return result
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert len(harness.request_payloads) == 1
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_carries_deadline_into_request_activity(monkeypatch):
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 180
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1)],
+        request_results=[
+            {
+                "status": "expired",
+                "headSha": HEAD_1,
+                "retryable": False,
+                "summary": "Review deadline expired before a new request was posted.",
+            }
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert harness.request_payloads[0]["expiresAt"] == "2026-08-24T22:03:00+00:00"
+    assert result["reviewLoop"]["cycleRecords"] == []
     _assert_review_only_has_no_resolver(harness, result)

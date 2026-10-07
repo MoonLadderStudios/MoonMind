@@ -829,7 +829,8 @@ async def _admit_repository_plan_inputs(
         if mode == AccessMode.ANONYMOUS:
             raise ValueError("anonymous source cannot admit review-request authority")
     slots = {"source": ("source_read", ("read",))}
-    if requires_github and mode != AccessMode.ANONYMOUS:
+    # Native review gates require collaboration even without an agent gh tool.
+    if (requires_github or review_only) and mode != AccessMode.ANONYMOUS:
         operations = ("read",)
         if review_only:
             operations = ("read", "review_request")
