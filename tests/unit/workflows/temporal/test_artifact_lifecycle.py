@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +18,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
 )
 
 pytestmark = [pytest.mark.asyncio]
@@ -304,6 +307,204 @@ async def test_lifecycle_sweep_activity_heartbeats_within_a_page(
             assert heartbeats_before_delete
             assert all(count > 0 for count in heartbeats_before_delete)
             assert heartbeats_before_delete == sorted(set(heartbeats_before_delete))
+
+
+@pytest.mark.parametrize("budget_seconds, reconciled_count", [(300, 3), (0, 1)])
+async def test_lifecycle_drain_reconciles_persisted_intent_backlog_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget_seconds: int,
+    reconciled_count: int,
+) -> None:
+    """Failed physical deletions remain work even after their rows tombstone."""
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+    real_delete = store.delete
+
+    def unavailable_delete(storage_key: str) -> None:
+        raise OSError("object store unavailable")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session), store=store
+            )
+            artifact_ids = await _create_expired_artifacts(service, 3)
+            monkeypatch.setattr(store, "delete", unavailable_delete)
+            for artifact_id in artifact_ids:
+                await service.soft_delete(artifact_id=artifact_id, principal="user-1")
+                with pytest.raises(TemporalArtifactStateError, match="DELETE_RETRY"):
+                    await service.hard_delete(
+                        artifact_id=artifact_id, principal="user-1"
+                    )
+
+        monkeypatch.setattr(store, "delete", real_delete)
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session), store=store
+            )
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                limit=1,
+                time_budget=timedelta(seconds=budget_seconds),
+            )
+
+            assert summary.soft_deleted_count == summary.hard_deleted_count == 0
+            assert summary.reconciled_deletion_count == reconciled_count
+            assert summary.drained is (reconciled_count == len(artifact_ids))
+            pending = await service._repository.list_pending_deletion_intents()
+            assert len(pending) == len(artifact_ids) - reconciled_count
+            for artifact_id in artifact_ids:
+                row = await service._repository.get_artifact(artifact_id)
+                if artifact_id not in {intent.artifact_id for intent in pending}:
+                    with pytest.raises(FileNotFoundError):
+                        store.read_bytes(row.storage_key)
+
+
+@pytest.mark.parametrize("tombstone_missing", [False, True])
+async def test_lifecycle_drain_reports_stalled_deletion_intent_backlog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tombstone_missing: bool
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            (artifact_id,) = await _create_expired_artifacts(service, 1)
+
+            def unavailable_delete(storage_key: str) -> None:
+                raise OSError("object store unavailable")
+
+            monkeypatch.setattr(service._store, "delete", unavailable_delete)
+            await service.soft_delete(artifact_id=artifact_id, principal="user-1")
+            if tombstone_missing:
+                await service._repository.record_deletion_intent(
+                    artifact_id=artifact_id, principal="user-1"
+                )
+                await service._repository.commit()
+            else:
+                with pytest.raises(TemporalArtifactStateError, match="DELETE_RETRY"):
+                    await service.hard_delete(
+                        artifact_id=artifact_id, principal="user-1"
+                    )
+
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                limit=10,
+                time_budget=timedelta(minutes=5),
+            )
+
+            assert summary.pages == 1
+            assert summary.reconciled_deletion_count == 0
+            assert summary.drained is False
+            assert await service._repository.get_deletion_intent(artifact_id)
+
+
+@pytest.mark.parametrize("slow_operation", ["initial_query", "row_lock", "delete"])
+async def test_lifecycle_sweep_activity_heartbeats_during_slow_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slow_operation: str
+) -> None:
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.temporal import activity_runtime
+
+    monkeypatch.setattr(
+        activity_runtime, "_SESSION_CONTROLLER_HEARTBEAT_INTERVAL_SECONDS", 0.01
+    )
+    operation_started = threading.Event()
+    release_operation = threading.Event()
+    heartbeat_seen = asyncio.Event()
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=store,
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            await _create_expired_artifacts(service, 1)
+            real_delete = store.delete
+
+            def slow_delete(storage_key: str) -> None:
+                operation_started.set()
+                if not release_operation.wait(timeout=5):
+                    raise TimeoutError("test did not release object-store delete")
+                real_delete(storage_key)
+
+            def observe_heartbeat(*details: object) -> None:
+                if operation_started.is_set() and not release_operation.is_set():
+                    heartbeat_seen.set()
+
+            if slow_operation == "delete":
+                monkeypatch.setattr(store, "delete", slow_delete)
+            else:
+                method_name = (
+                    "prune_expired_use_claims"
+                    if slow_operation == "initial_query"
+                    else "get_artifact_for_update"
+                )
+                real_operation = getattr(service._repository, method_name)
+
+                async def slow_database_operation(*args, **kwargs):
+                    operation_started.set()
+                    while not release_operation.is_set():
+                        await asyncio.sleep(0.001)
+                    return await real_operation(*args, **kwargs)
+
+                monkeypatch.setattr(
+                    service._repository, method_name, slow_database_operation
+                )
+            environment = ActivityEnvironment()
+            environment.on_heartbeat = observe_heartbeat
+            task = asyncio.create_task(
+                environment.run(
+                    TemporalArtifactActivities(service).artifact_lifecycle_sweep,
+                    principal="service:lifecycle",
+                )
+            )
+            try:
+                await asyncio.wait_for(heartbeat_seen.wait(), timeout=1)
+            finally:
+                release_operation.set()
+                summary = await task
+
+            assert summary.hard_deleted_count == 1
+            assert summary.drained is True
+
+
+async def test_lifecycle_sweep_activity_tolerates_heartbeat_backpressure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from temporalio import activity
+
+    heartbeats = 0
+
+    def heartbeat(*details: object) -> None:
+        nonlocal heartbeats
+        heartbeats += 1
+        raise asyncio.QueueFull
+
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(activity, "heartbeat", heartbeat)
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            await _create_expired_artifacts(service, 1)
+            activities = TemporalArtifactActivities(service)
+            summary = await activities.artifact_lifecycle_sweep(
+                principal="service:lifecycle"
+            )
+
+            assert summary.hard_deleted_count == 1
+            assert summary.drained is True
+            # Candidate and page callbacks all tolerate the SDK's full queue.
+            assert heartbeats >= 3
 
 
 async def test_lifecycle_sweep_skips_pinned_artifacts(tmp_path: Path) -> None:

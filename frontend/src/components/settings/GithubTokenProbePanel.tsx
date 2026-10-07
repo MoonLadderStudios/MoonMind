@@ -204,7 +204,7 @@ export function GithubTokenProbePanel({
             value={repo}
             onChange={(event) => setRepo(event.target.value)}
             placeholder="owner/repo"
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-hidden focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
             autoComplete="off"
             required
           />
@@ -214,7 +214,7 @@ export function GithubTokenProbePanel({
           <select
             value={mode}
             onChange={(event) => setMode(event.target.value as ProbeMode)}
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-hidden focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           >
             {MODE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value} title={option.description}>
@@ -232,7 +232,7 @@ export function GithubTokenProbePanel({
             value={baseBranch}
             onChange={(event) => setBaseBranch(event.target.value)}
             placeholder="main"
-            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-hidden focus:ring-2 focus:ring-mm-accent dark:border-slate-700 dark:bg-slate-900 dark:text-white"
             autoComplete="off"
           />
         </label>

@@ -412,7 +412,14 @@ def test_reliability_job_runs_the_canonical_journey_suite() -> None:
     assert "${{ matrix.shard }}" in command
     assert "least_duration" in command
     assert "tests/.reliability-test-durations.json" in command
-    assert "-m reliability_journey" in command
+    # The CI rows, the ownership verifier and the duration import share one
+    # provider-free marker expression so they partition the same universe
+    # (MoonLadderStudios/MoonMind#4629).
+    from tools.ci.refresh_reliability_durations import RELIABILITY_MARKER_EXPR
+
+    assert f'-m "{RELIABILITY_MARKER_EXPR}"' in command
+    # The producer plugin records exact pytest node IDs in the JUnit report.
+    assert "-p tools.ci.write_backend_matrix_summary" in command
     assert "skipping until #3145 lands" not in command
 
     diagnostics = _run_command(job, "Collect reliability shard diagnostics")
