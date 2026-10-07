@@ -35,6 +35,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/** A response whose body decodes only when the test releases it. */
+function deferredResponse(ok = true) {
+  const body = deferred<unknown>();
+  return {
+    response: { ok, json: () => body.promise } as Response,
+    release: (payload: unknown) => body.resolve(payload),
+  };
+}
+
+async function chooseHarnessAndProvider(runtimeId: string, providerId: string) {
+  fireEvent.change(screen.getByLabelText(/Runtime ID/), {
+    target: { value: runtimeId },
+  });
+  fireEvent.change(screen.getByLabelText(/Provider ID/), {
+    target: { value: providerId },
+  });
+}
+
+async function chooseProvider(providerId: string) {
+  fireEvent.change(screen.getByLabelText(/Provider ID/), {
+    target: { value: providerId },
+  });
+}
+
 function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -2517,6 +2549,237 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       '/api/v1/provider-profiles/credential-volume/validate',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  // ── MoonLadderStudios/MoonMind#4001: request/draft ownership ──
+  const minimaxCapabilities = {
+    version: 'provider-profile-creation-v1',
+    runtime_id: 'codex_cli',
+    provider_id: 'minimax',
+    supported: true,
+    authentication_methods: [
+      {
+        ...openAiCapabilities.authentication_methods[1],
+        label: 'MiniMax API key (expert)',
+        secret_roles: [],
+      },
+    ],
+    diagnostics: [],
+  };
+  const LOADING_MODEL_CHOICES = 'Loading model choices from backend capabilities…';
+
+  function staleTierCapabilities(message: string) {
+    return {
+      version: 'tier-cap-v1-stale',
+      profile_id: null,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      evidence: { source: 'runtime_draft', credential_generation: null, image_ref: null, observed_at: null, stale: true },
+      tier_constraints: { min_count: 1, max_count: null },
+      model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+      effort: { supported: false, runtime_default: null, allow_custom: false, application: 'native', options: [] },
+      diagnostics: [{ code: 'stale_test', severity: 'warning', message }],
+    };
+  }
+
+  it('ignores superseded creation-capability responses after A-to-B-to-A identity changes', async () => {
+    const pendingCapabilities: Array<() => void> = [];
+    let capabilityRequests = 0;
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        capabilityRequests += 1;
+        const providerId = new URL(url, 'https://moonmind.test').searchParams.get('provider_id');
+        const payload = providerId === 'minimax' ? minimaxCapabilities : openAiCapabilities;
+        if (capabilityRequests === 3) {
+          return { ok: true, json: async () => payload } as Response;
+        }
+        const pending = deferredResponse();
+        pendingCapabilities.push(() => pending.release(payload));
+        return pending.response;
+      }
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    await chooseProvider('minimax');
+    await chooseProvider('openai');
+    fireEvent.click(await screen.findByLabelText('OAuth'));
+    expect(capabilityRequests).toBe(3);
+
+    // The superseded B and A requests finish decoding after A owns the draft.
+    await act(async () => pendingCapabilities[1]!());
+    await act(async () => pendingCapabilities[0]!());
+
+    expect(screen.queryByLabelText('MiniMax API key (expert)')).toBeNull();
+    expect((screen.getByLabelText('OAuth') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('keeps draft tier loading and choices owned by the newest runtime/provider request', async () => {
+    const pendingTiers = new Map<string, (payload: unknown) => void>();
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        const providerId = new URL(url, 'https://moonmind.test').searchParams.get('provider_id')!;
+        const pending = deferredResponse();
+        pendingTiers.set(providerId, pending.release);
+        return pending.response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        const providerId = new URL(url, 'https://moonmind.test').searchParams.get('provider_id');
+        const payload = providerId === 'minimax' ? minimaxCapabilities : openAiCapabilities;
+        return { ok: true, json: async () => payload } as Response;
+      }
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    await chooseProvider('minimax');
+    await waitFor(() => expect(pendingTiers.has('minimax')).toBe(true));
+    expect(screen.getByText(LOADING_MODEL_CHOICES)).toBeTruthy();
+
+    await act(async () => pendingTiers.get('openai')!(staleTierCapabilities('Stale OpenAI tier choices')));
+
+    expect(screen.getByText(LOADING_MODEL_CHOICES)).toBeTruthy();
+    expect(screen.queryByText('Stale OpenAI tier choices')).toBeNull();
+    expect(screen.queryByText(/Model choices could not be refreshed/)).toBeNull();
+
+    await act(async () => pendingTiers.get('minimax')!(staleTierCapabilities('Current MiniMax tier choices')));
+    expect(screen.queryByText(LOADING_MODEL_CHOICES)).toBeNull();
+    expect(screen.getByText('Current MiniMax tier choices')).toBeTruthy();
+  });
+
+  const editableOpenAiProfile = (profileId: string): ProviderProfile =>
+    ({
+      profile_id: profileId,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      credential_source: 'secret_ref',
+      runtime_materialization_mode: 'api_key_env',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: true,
+      auth_state: 'connected',
+      model_tiers: [{ label: 'Default', model: 'gpt-5.5', effort: 'medium', parameters: {}, annotations: {} }],
+      default_model_tier: 1,
+      creation_capabilities: openAiCapabilities,
+    }) as ProviderProfile;
+
+  it('keeps a same-identity profile tier refresh from clearing the newer request state', async () => {
+    const pendingProfileTiers: Array<{ release: (payload: unknown) => void; ok: boolean }> = [];
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === '/api/v1/provider-profiles/codex-edit/capabilities') {
+        const ok = pendingProfileTiers.length > 0;
+        const pending = deferredResponse(ok);
+        pendingProfileTiers.push({ release: pending.release, ok });
+        return pending.response;
+      }
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([editableOpenAiProfile('codex-edit')]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await chooseProvider('minimax');
+    await waitFor(() => expect(pendingProfileTiers).toHaveLength(2));
+
+    // The superseded request for the same profile fails after the refresh starts.
+    await act(async () => pendingProfileTiers[0]!.release({ detail: 'Superseded tier refresh failed.' }));
+
+    expect(screen.getByText(LOADING_MODEL_CHOICES)).toBeTruthy();
+    expect(screen.queryByText('Superseded tier refresh failed.')).toBeNull();
+
+    await act(async () => pendingProfileTiers[1]!.release(staleTierCapabilities('Refreshed profile tier choices')));
+    expect(screen.queryByText(LOADING_MODEL_CHOICES)).toBeNull();
+    expect(screen.getByText('Refreshed profile tier choices')).toBeTruthy();
+  });
+
+  it('ignores the previous edit target tier response after switching profiles', async () => {
+    const pendingByProfile = new Map<string, (payload: unknown) => void>();
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      const match = url.match(/^\/api\/v1\/provider-profiles\/([^/]+)\/capabilities$/);
+      if (match) {
+        const pending = deferredResponse();
+        pendingByProfile.set(match[1]!, pending.release);
+        return pending.response;
+      }
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager([
+      editableOpenAiProfile('codex-first'),
+      editableOpenAiProfile('codex-second'),
+    ]);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+    await waitFor(() => expect(pendingByProfile.has('codex-second')).toBe(true));
+
+    await act(async () => pendingByProfile.get('codex-first')!(staleTierCapabilities('First profile tier choices')));
+
+    expect(screen.getByText(LOADING_MODEL_CHOICES)).toBeTruthy();
+    expect(screen.queryByText('First profile tier choices')).toBeNull();
+  });
+
+  it.each([
+    ['the volume changes', 'volume'],
+    ['the authentication method changes and returns', 'authentication'],
+  ])('does not authorize a late imported-volume validation after %s', async (_label, change) => {
+    const validation = deferredResponse();
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      const creationResponse = openAiCreationResponse(url);
+      if (creationResponse) return creationResponse;
+      if (url === '/api/v1/provider-profiles/credential-volume/validate') {
+        return validation.response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    fireEvent.click(await screen.findByLabelText('OAuth'));
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    fireEvent.click(screen.getByRole('button', { name: 'Use an existing credential volume' }));
+    fireEvent.change(screen.getByLabelText('Existing credential volume'), {
+      target: { value: 'existing-codex-home' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate imported volume' }));
+
+    if (change === 'volume') {
+      fireEvent.change(screen.getByLabelText('Existing credential volume'), {
+        target: { value: 'other-codex-home' },
+      });
+    } else {
+      fireEvent.click(screen.getByLabelText('API key'));
+      fireEvent.click(screen.getByLabelText('OAuth'));
+      fireEvent.click(screen.getByRole('button', { name: 'Use an existing credential volume' }));
+    }
+
+    await act(async () =>
+      validation.release({
+        status: 'validated',
+        volume_ref: 'existing-codex-home',
+        volume_mount_path: '/home/app/.codex',
+        source: 'validated_import',
+      }),
+    );
+
+    expect(screen.queryByText('Validated imported volume')).toBeNull();
+    expect(screen.queryByText('existing-codex-home')).toBeNull();
   });
 });
 
