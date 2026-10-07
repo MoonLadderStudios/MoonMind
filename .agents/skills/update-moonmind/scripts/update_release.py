@@ -574,8 +574,11 @@ def _controller_call(controller_url, secret, method, path, payload=None, timeout
             "Content-Type": "application/json",
         },
     )
+    # The controller is a private loopback endpoint guarded by a bearer
+    # secret: an ambient HTTP(S) proxy must neither see nor reroute it.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
         detail = _redact_diagnostics(exc.read().decode("utf-8", errors="replace")[-2000:])

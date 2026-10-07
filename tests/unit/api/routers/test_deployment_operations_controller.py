@@ -24,6 +24,7 @@ from api_service.api.routers.deployment_operations import (
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.services.deployment_operations import recent_action_from_controller
 from moonmind.workflows.skills import deployment_controller as controller_client
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -158,8 +159,8 @@ def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
     assert accepted["owner"] == "controller"
     assert accepted["status"] == "SUCCEEDED"
     # No workflow identity is manufactured for a local controller operation.
-    assert accepted["workflowId"] is None
-    assert accepted["taskId"] is None
+    assert "workflowId" not in accepted
+    assert "taskId" not in accepted
     assert accepted["deploymentUpdateRunId"] == f"ctl-{operation_id}"
     assert controller.applied == [operation_id]
     assert temporal.calls == []
@@ -531,3 +532,158 @@ def test_current_image_is_the_newest_installation_the_controller_confirmed(
     assert current["deployedImage"] == _desired(installed)
     assert current["resolvedDigest"] == installed
     assert current["repository"] == IMAGE_REPOSITORY
+
+
+def test_ambient_http_proxy_never_carries_the_private_controller_request(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The controller is a private endpoint guarded by a bearer secret; an
+    # ambient egress proxy must neither see that credential nor break repair.
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    controller = controller_factory()
+    client, temporal = _client()
+
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert response.status_code == 202, response.text
+    assert controller.applied == [response.json()["operationId"]]
+    assert _stack(client)["controller"]["reachable"] is True
+    assert temporal.calls == []
+
+
+def test_client_operation_identity_converges_duplicates_and_lost_responses(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    def failing_apply(controller: InProcessController, operation: dict) -> None:
+        controller.store.record_attempt_error(
+            operation["operationId"], error="pull failed: manifest unknown"
+        )
+        raise controller.engine.StageError("pull", 1, "manifest unknown")
+
+    controller = controller_factory(failing_apply)
+    client, temporal = _client()
+    request = {**_update(), "operationId": "ui-intent-1"}
+
+    first = client.post("/api/v1/operations/deployment/update", json=request)
+    assert first.status_code == 202, first.text
+    assert first.json()["operationId"] == "ui-intent-1"
+    assert first.json()["status"] == "FAILED"
+    applied = list(controller.applied)
+
+    # The browser never saw that answer and resubmits the same intent: it
+    # observes the recorded failure instead of starting another writer.
+    again = client.post("/api/v1/operations/deployment/update", json=request)
+    assert again.status_code == 202, again.text
+    assert again.json()["operationId"] == "ui-intent-1"
+    assert again.json()["status"] == "FAILED"
+    assert controller.applied == applied
+    assert [op["operationId"] for op in controller.store.list_terminal()] == [
+        "ui-intent-1"
+    ]
+    assert temporal.calls == []
+
+
+def test_reused_operation_identity_for_a_changed_target_is_refused(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    controller = controller_factory()
+    client, _temporal = _client()
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "operationId": "ui-intent-2"},
+    )
+    assert first.status_code == 202, first.text
+
+    changed = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update("sha256:" + "c" * 64), "operationId": "ui-intent-2"},
+    )
+
+    # A changed target is new intent; the controller refuses the reused id.
+    assert changed.status_code == 409, changed.text
+    detail = changed.json()["detail"]
+    assert detail["code"] == "deployment_controller_conflict"
+    assert detail["operationId"] == "ui-intent-2"
+    assert "different request" in detail["message"]
+    assert controller.applied == ["ui-intent-2"]
+    assert controller.store.load("ui-intent-2")["desired"]["image"] == _desired(
+        "sha256:" + "b" * 64
+    )
+
+
+@pytest.mark.parametrize("operation_id", ["host-abc", "wf-abc", "ui-../x", ""])
+def test_dashboard_operation_identity_stays_in_its_own_namespace(
+    controller_factory: Callable[..., InProcessController],
+    operation_id: str,
+) -> None:
+    controller = controller_factory()
+    client, _temporal = _client()
+
+    response = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "operationId": operation_id},
+    )
+
+    assert response.status_code == 422, response.text
+    assert controller.applied == []
+
+
+def test_unrecognized_controller_status_is_unknown_not_queued_or_complete(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    # A controller may answer with a status this API does not know (for
+    # example a newer controller's vocabulary or an unreadable record).
+    def unrecognized(controller: InProcessController, operation: dict) -> None:
+        record = controller.store.load(operation["operationId"])
+        record["status"] = "verifying"
+        controller.store._write(record)
+
+    controller_factory(unrecognized)
+    client, temporal = _client()
+
+    submitted = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert submitted.status_code == 202, submitted.text
+    assert submitted.json()["status"] == "UNKNOWN"
+    assert temporal.calls == []
+    action = recent_action_from_controller(
+        {
+            "operationId": "ui-unreadable",
+            "status": "",
+            "desired": {"image": _desired("sha256:" + "b" * 64)},
+            "updatedAt": "2026-10-07T00:00:00Z",
+        }
+    )
+    assert (action.status, action.completed_at, action.retry_allowed) == (
+        "UNKNOWN",
+        None,
+        False,
+    )
+    assert controller_client.controller_action_status("pending") == "QUEUED"
+
+
+def test_rollback_of_workflow_history_submits_to_the_controller_only(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    controller = controller_factory()
+    client, temporal = _client()
+
+    response = client.post(
+        "/api/v1/operations/deployment/update",
+        json={
+            **_update("20260425.1234"),
+            "operationKind": "rollback",
+            "rollbackSourceActionId": "depupd_history",
+            "confirmation": "Rollback confirmed",
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["owner"] == "controller"
+    assert "workflowId" not in response.json()
+    assert controller.applied == [response.json()["operationId"]]
+    assert temporal.calls == []

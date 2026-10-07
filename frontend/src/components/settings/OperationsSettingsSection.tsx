@@ -206,8 +206,8 @@ const DeploymentStackStateSchema = z
 const DeploymentUpdateResultSchema = z
   .object({
     deploymentUpdateRunId: z.string(),
-    operationId: z.string().optional().nullable(),
-    owner: z.enum(['controller', 'workflow']).optional().nullable(),
+    operationId: z.string(),
+    owner: z.literal('controller'),
     status: z.string(),
   })
   .passthrough();
@@ -245,7 +245,57 @@ export interface WorkerPauseConfig {
 const DEPLOYMENT_STACK = 'moonmind';
 // Ordinary bounded reads while a controller operation is still in progress.
 const DEPLOYMENT_ACTIVE_POLL_MS = 5_000;
-const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING']);
+// An unreadable status is observed again rather than shown as settled.
+const ACTIVE_DEPLOYMENT_STATUSES = new Set(['QUEUED', 'RUNNING', 'UNKNOWN']);
+// One update intent keeps one controller operation identity until the
+// controller answers it, so a duplicate click, lost response, or reload
+// resubmits the same operation instead of starting another writer.
+const PENDING_DEPLOYMENT_KEY = 'moonmind.deployment.pendingOperation';
+
+type PendingDeployment = { targetImage: string; operationId: string };
+let pendingDeployment: PendingDeployment | null = null;
+
+function newDashboardOperationId(): string {
+  // getRandomValues also works on plain-HTTP origins, unlike randomUUID.
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `ui-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function pendingDeploymentOperationId(targetImage: string): string {
+  if (!pendingDeployment) {
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(PENDING_DEPLOYMENT_KEY) || 'null');
+      if (typeof saved?.targetImage === 'string' && typeof saved?.operationId === 'string') {
+        pendingDeployment = saved;
+      }
+    } catch {
+      // Storage is a convenience; the in-memory intent still applies.
+    }
+  }
+  if (pendingDeployment?.targetImage !== targetImage) {
+    // A changed target is new intent with its own identity.
+    pendingDeployment = { targetImage, operationId: newDashboardOperationId() };
+    try {
+      window.sessionStorage.setItem(PENDING_DEPLOYMENT_KEY, JSON.stringify(pendingDeployment));
+    } catch {
+      // Storage is a convenience; the in-memory intent still applies.
+    }
+  }
+  return pendingDeployment.operationId;
+}
+
+function settlePendingDeployment(operationId: string): void {
+  if (pendingDeployment?.operationId !== operationId) {
+    return;
+  }
+  pendingDeployment = null;
+  try {
+    window.sessionStorage.removeItem(PENDING_DEPLOYMENT_KEY);
+  } catch {
+    // Storage is a convenience; the in-memory intent is already cleared.
+  }
+}
 
 const DEFAULT_UPDATE_OPTIONS = {
   mode: 'changed_services',
@@ -374,10 +424,7 @@ function Metric({
 }
 
 function deploymentResultNotice(result: DeploymentUpdateResult, verb: string): string {
-  if (result.owner === 'controller' && result.operationId) {
-    return `Deployment ${verb} accepted by the controller: operation ${result.operationId} (${formatStatusLabel(result.status, 'UNKNOWN')})`;
-  }
-  return `Deployment ${verb} queued: ${result.deploymentUpdateRunId}`;
+  return `Deployment ${verb} accepted by the controller: operation ${result.operationId} (${formatStatusLabel(result.status, 'UNKNOWN')})`;
 }
 
 async function deploymentErrorMessage(response: Response): Promise<string> {
@@ -698,6 +745,7 @@ export function OperationsSettingsSection({
         return null;
       }
 
+      const operationId = pendingDeploymentOperationId(targetImage);
       const response = await fetch('/api/v1/operations/deployment/update', {
         method: 'POST',
         headers: {
@@ -712,11 +760,13 @@ export function OperationsSettingsSection({
           },
           ...DEFAULT_UPDATE_OPTIONS,
           mode: updateMode,
+          operationId,
         }),
       });
       if (!response.ok) {
         throw new Error(await deploymentErrorMessage(response));
       }
+      settlePendingDeployment(operationId);
       return DeploymentUpdateResultSchema.parse(await response.json());
     },
     onSuccess: (result) => {
@@ -763,6 +813,7 @@ export function OperationsSettingsSection({
       }
       const requestedAt = new Date().toISOString();
       const confirmationText = `Rollback to ${targetImage} confirmed from ${sourceActionId}`;
+      const operationId = pendingDeploymentOperationId(targetImage);
       const response = await fetch('/api/v1/operations/deployment/update', {
         method: 'POST',
         headers: {
@@ -782,11 +833,13 @@ export function OperationsSettingsSection({
           operationKind: 'rollback',
           rollbackSourceActionId: sourceActionId,
           confirmation: confirmationText,
+          operationId,
         }),
       });
       if (!response.ok) {
         throw new Error(await deploymentErrorMessage(response));
       }
+      settlePendingDeployment(operationId);
       return DeploymentUpdateResultSchema.parse(await response.json());
     },
     onSuccess: (result) => {
@@ -915,9 +968,9 @@ export function OperationsSettingsSection({
     });
   };
 
-  const controllerUnavailable = Boolean(
-    deploymentState?.controller.installed && !deploymentState.controller.reachable,
-  );
+  // The controller is the only updater: without a reachable controller the
+  // dashboard offers the host repair route instead of accepting work.
+  const controllerNotReady = !deploymentState?.controller.reachable;
   const latestAction = deploymentState?.latestAction;
   const latestActionSummary = latestAction
     ? [
@@ -1043,25 +1096,34 @@ export function OperationsSettingsSection({
                 Build metadata unavailable for this image.
               </p>
             ) : null}
-            {controllerUnavailable ? (
+            {controllerNotReady ? (
               <div
                 role="alert"
                 className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
               >
-                {deploymentState?.controller.message ||
-                  'The deployment controller is unavailable.'}{' '}
-                The dashboard cannot submit updates until it answers; the host command{' '}
-                <code>./tools/update-moonmind.sh</code> remains usable.
+                {deploymentState?.controller.installed ? (
+                  <>
+                    {deploymentState.controller.message ||
+                      'The deployment controller is unavailable.'}{' '}
+                    The dashboard cannot submit updates until it answers; the host command{' '}
+                    <code>./tools/update-moonmind.sh</code> remains usable.
+                  </>
+                ) : (
+                  deploymentState?.controller.message || (
+                    <>
+                      The standalone deployment controller is not installed, so the dashboard
+                      cannot submit updates. Install and start it from the host with{' '}
+                      <code>python3 deploy/controller/bootstrap.py install</code> then{' '}
+                      <code>start</code>, or update from the host with{' '}
+                      <code>./tools/update-moonmind.sh</code>.
+                    </>
+                  )
+                )}
               </div>
-            ) : deploymentState?.controller.installed ? (
+            ) : (
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Updates run in the standalone deployment controller, which keeps a local
                 recovery record.
-              </p>
-            ) : (
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {deploymentState?.controller.message ||
-                  'The standalone deployment controller is not installed.'}
               </p>
             )}
 
@@ -1099,7 +1161,7 @@ export function OperationsSettingsSection({
               <button
                 type="submit"
                 disabled={
-                  deploymentMutation.isPending || !canInvokeOperations || controllerUnavailable
+                  deploymentMutation.isPending || !canInvokeOperations || controllerNotReady
                 }
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
@@ -1190,7 +1252,7 @@ export function OperationsSettingsSection({
                               disabled={
                                 !canInvokeOperations ||
                                 retryMutation.isPending ||
-                                controllerUnavailable
+                                controllerNotReady
                               }
                               onClick={() => retryMutation.mutate(String(action.operationId))}
                             >
@@ -1205,7 +1267,7 @@ export function OperationsSettingsSection({
                               disabled={
                                 !canInvokeOperations ||
                                 rollbackMutation.isPending ||
-                                controllerUnavailable
+                                controllerNotReady
                               }
                               onClick={() => rollbackMutation.mutate(action)}
                             >

@@ -131,6 +131,11 @@ def test_no_argument_host_command_submits_the_controller_operation(
     (repo / "docker-compose.yaml").write_text("services: {api: {}}\n")  # dirty
     commands = _stub_host_docker(monkeypatch, revision)
     monkeypatch.chdir(repo)
+    # An operator HTTP(S) proxy never carries the controller's bearer secret.
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
 
     assert update.main([]) == 0
 

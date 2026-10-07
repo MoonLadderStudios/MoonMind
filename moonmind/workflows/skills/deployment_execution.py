@@ -3698,7 +3698,8 @@ def build_compose_command_plan(
 # at most the controller's pull and apply budgets plus margin.
 CONTROLLER_OBSERVE_INTERVAL_SECONDS: float = 10
 CONTROLLER_OBSERVE_TIMEOUT_SECONDS: float = 2100
-_CONTROLLER_OPEN_STATUSES = frozenset({"QUEUED", "RUNNING"})
+# An unreadable status is observed again, never reported as a terminal result.
+_CONTROLLER_OPEN_STATUSES = frozenset({"QUEUED", "RUNNING", "UNKNOWN"})
 
 
 def _controller_failure(exc: DeploymentOperationError) -> ToolFailure:
@@ -3801,8 +3802,8 @@ async def _execute_through_controller(
             if loop.time() > deadline:
                 raise ToolFailure(
                     "DEPLOYMENT_CONTROLLER_OBSERVATION_TIMEOUT",
-                    f"Controller operation {observed_id} is still running; observe it in "
-                    "Settings Operations.",
+                    f"Controller operation {observed_id} has not reported a terminal "
+                    "result; observe it in Settings Operations.",
                     True,
                     details={"operationId": observed_id, "failureClass": "deployment_controller"},
                 )

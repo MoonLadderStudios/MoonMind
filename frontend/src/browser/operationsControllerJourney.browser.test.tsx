@@ -107,8 +107,10 @@ function controllerBackedApi(input: RequestInfo | URL, init?: RequestInit): Prom
   }
   if (url === '/api/v1/operations/deployment/update' && init?.method === 'POST') {
     submissions.push(String(init.body));
+    // The controller records the dashboard's own operation identity.
+    const { operationId } = JSON.parse(String(init.body));
     operation = {
-      operationId: 'ui-journey-1',
+      operationId,
       status: 'RUNNING',
       installedImage: null,
       errorSummary: null,
@@ -119,28 +121,28 @@ function controllerBackedApi(input: RequestInfo | URL, init?: RequestInit): Prom
     return Promise.resolve(
       jsonResponse(
         {
-          deploymentUpdateRunId: 'ctl-ui-journey-1',
-          operationId: 'ui-journey-1',
+          deploymentUpdateRunId: `ctl-${operationId}`,
+          operationId,
           owner: 'controller',
-          taskId: null,
-          workflowId: null,
           status: 'RUNNING',
         },
         202,
       ),
     );
   }
-  if (url === '/api/v1/operations/deployment/operations/ui-journey-1/retry' && init?.method === 'POST') {
+  if (
+    operation &&
+    url === `/api/v1/operations/deployment/operations/${operation.operationId}/retry` &&
+    init?.method === 'POST'
+  ) {
     retries.push(url);
     operation = { ...operation!, status: 'RUNNING', retryAllowed: false, attemptGroup: 2 };
     return Promise.resolve(
       jsonResponse(
         {
-          deploymentUpdateRunId: 'ctl-ui-journey-1',
-          operationId: 'ui-journey-1',
+          deploymentUpdateRunId: `ctl-${operation.operationId}`,
+          operationId: operation.operationId,
           owner: 'controller',
-          taskId: null,
-          workflowId: null,
           status: 'RUNNING',
         },
         202,
@@ -185,8 +187,11 @@ describe('Settings Operations controller journey', () => {
       target: { value: '20260930.1200' },
     });
     fireEvent.click(within(card).getByRole('button', { name: /update moonmind/i }));
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    const operationId = JSON.parse(submissions[0]!).operationId as string;
+    expect(operationId).toMatch(/^ui-[0-9a-f]{32}$/);
     expect(
-      await within(card).findByText(/accepted by the controller: operation ui-journey-1/i),
+      await within(card).findByText(`Deployment update accepted by the controller: operation ${operationId} (RUNNING)`),
     ).toBeTruthy();
     expect(submissions).toHaveLength(1);
 
@@ -195,7 +200,7 @@ describe('Settings Operations controller journey', () => {
     first.unmount();
     renderOperations();
     const reloaded = await screen.findByRole('region', { name: /moonmind update/i });
-    expect(await within(reloaded).findByText('Operation ui-journey-1')).toBeTruthy();
+    expect(await within(reloaded).findByText(`Operation ${operationId}`)).toBeTruthy();
     expect(within(reloaded).getByText(/Installed:/).textContent).toContain('not confirmed');
     expect(submissions).toHaveLength(1);
 
@@ -221,9 +226,11 @@ describe('Settings Operations controller journey', () => {
 
     fireEvent.click(within(reloaded).getByRole('button', { name: /retry operation/i }));
     expect(
-      await within(reloaded).findByText(/retry accepted by the controller: operation ui-journey-1/i),
+      await within(reloaded).findByText(
+        `Deployment retry accepted by the controller: operation ${operationId} (RUNNING)`,
+      ),
     ).toBeTruthy();
-    expect(retries).toEqual(['/api/v1/operations/deployment/operations/ui-journey-1/retry']);
+    expect(retries).toEqual([`/api/v1/operations/deployment/operations/${operationId}/retry`]);
     expect(submissions).toHaveLength(1);
   }, 30_000);
 });
