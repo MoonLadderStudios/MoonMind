@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:20f53104-5635-4463-85ab-49e8a0040b58-2026-10-07T05:40:00Z",
+  "incidentChildWorkflowId": "mm:20f53104-5635-4463-85ab-49e8a0040b58-2026-10-07T05:40:00Z:agent:tpl:github-issue-search-and-implement:06:0f5925f9",
+  "incidentChildRunId": "01a114f3-321f-76b1-985b-c1ba405d162a",
+  "providerProfileId": "codex_openai_oauth",
+  "hostLeaseRef": "ohl_32cca16cca31f7e3ff42ccd3e98d40e3",
+  "failureShape": "a deployment update restarted the agent-runtime worker mid-turn; the janitor claimed the silent host lease as stale_heartbeat_cleanup, and the workflow's recovery dispatch heartbeated the draining lease and failed with OMNIGENT_GENERIC_DISPATCH_FAILED: host lease cleanup is owned by the janitor"
+}
