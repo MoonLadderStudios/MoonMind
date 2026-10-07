@@ -836,6 +836,7 @@ class GitHubService:
         *,
         repo: str,
         mode: str,
+        api_base: str = "https://api.github.com",
     ) -> list[dict[str, str | None]]:
         """Return read checks; ``{ref}`` marks the branch the caller fills in."""
 
@@ -848,7 +849,7 @@ class GitHubService:
         checks: list[dict[str, str | None]] = [
             {
                 "field": "repositoryAccessible",
-                "url": f"https://api.github.com/repos/{repo}",
+                "url": f"{api_base}/repos/{repo}",
                 "operation": "repository",
                 "permission": None,
             }
@@ -857,7 +858,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": "defaultBranchAccessible",
-                    "url": f"https://api.github.com/repos/{repo}/branches/{ref}",
+                    "url": f"{api_base}/repos/{repo}/branches/{ref}",
                     "operation": "branch",
                     "permission": "Contents",
                 }
@@ -866,7 +867,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": "pullRequestAccessible",
-                    "url": f"https://api.github.com/repos/{repo}/pulls?per_page=1",
+                    "url": f"{api_base}/repos/{repo}/pulls?per_page=1",
                     "operation": "pulls",
                     "permission": "Pull requests",
                 }
@@ -875,7 +876,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"https://api.github.com/repos/{repo}/commits/{ref}/status",
+                    "url": f"{api_base}/repos/{repo}/commits/{ref}/status",
                     "operation": "commit_statuses",
                     "permission": "Commit statuses",
                 }
@@ -884,9 +885,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": (
-                        f"https://api.github.com/repos/{repo}/commits/{ref}/check-runs"
-                    ),
+                    "url": f"{api_base}/repos/{repo}/commits/{ref}/check-runs",
                     "operation": "checks",
                     "permission": "Checks",
                 }
@@ -895,7 +894,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"https://api.github.com/repos/{repo}/issues?per_page=1",
+                    "url": f"{api_base}/repos/{repo}/issues?per_page=1",
                     "operation": "issues",
                     "permission": "Issues",
                 }
@@ -910,29 +909,39 @@ class GitHubService:
         base_branch: str | None = None,
         github_token: str | None = None,
         credential: Any | None = None,
+        connection: Any | None = None,
+        revision_reader: Any | None = None,
     ) -> dict[str, Any]:
-        """Observe read access with one credential; never claim write access.
+        """Observe read access with selected authority; never claim write access.
 
-        ``credential`` is a selected connection's already-resolved credential
-        (MoonLadderStudios/MoonMind#4019); when supplied, no other GitHub
-        credential is consulted. Every check is a read, so ``observations``
-        reports write access as ``untested``. A transport failure is
-        ``unavailable``, never denied access, and branch checks use the
-        remote default branch unless a branch was selected.
+        A selected connection retains its trusted endpoint and typed acquisition
+        path, including bound App installation tokens. ``credential`` remains
+        available to historical callers with already-resolved credentials. Only
+        callers without either selection use the legacy deployment resolver.
         """
 
-        from moonmind.auth.github_credentials import resolve_github_credential
-
-        resolved = (
-            credential
-            if credential is not None
-            else await resolve_github_credential(github_token, repo=repo)
+        from moonmind.auth.bound_acquisition import (
+            BOUND_ISSUER_FAILED,
+            BOUND_UNAVAILABLE,
+            BoundAccessError,
         )
+        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.auth.github_credentials import (
+            resolve_connection_github_credential,
+            resolve_github_credential,
+        )
+
         checklist = self._profile_checklist(mode)
         result: dict[str, Any] = {
             "repo": repo,
             "mode": mode,
-            "credentialSource": resolved.safe_source_dict(),
+            "credentialSource": {
+                "sourceKind": getattr(
+                    getattr(connection, "credential", None), "source", "missing"
+                ),
+                "sourceName": getattr(connection, "id", None),
+                "resolved": False,
+            },
             "repositoryAccessible": None,
             "defaultBranchAccessible": None,
             "pullRequestAccessible": None,
@@ -952,22 +961,76 @@ class GitHubService:
                 ),
             ],
         }
-        if not resolved.token:
-            retryable = bool(getattr(resolved, "retryable", False))
+        api_base = "https://api.github.com"
+        app_read_scope = (
+            connection is not None and connection.credential.source == "github_app"
+        )
+        try:
+            if connection is not None:
+                # Validate the deployment-controlled trust policy before reading
+                # a PAT or signing an App JWT for this connection.
+                api_base = github_api_base_for(connection.endpoint_ref)
+            if app_read_scope:
+                headers = await self.bound_app_headers_for_connection(
+                    connection,
+                    repository=repo,
+                    operations=("read",),
+                    revision_reader=revision_reader,
+                )
+                result["credentialSource"]["resolved"] = True
+            else:
+                if connection is not None:
+                    resolved = await resolve_connection_github_credential(
+                        connection, repo=repo
+                    )
+                elif credential is not None:
+                    resolved = credential
+                else:
+                    resolved = await resolve_github_credential(github_token, repo=repo)
+                result["credentialSource"] = resolved.safe_source_dict()
+                if not resolved.token:
+                    retryable = bool(getattr(resolved, "retryable", False))
+                    if retryable:
+                        result["observations"]["read"] = "unavailable"
+                    result["diagnostics"].append(
+                        {
+                            "operation": "resolve_github_credential",
+                            "message": resolved.safe_summary,
+                            "retryable": retryable,
+                        }
+                    )
+                    return result
+                headers = self._github_headers(resolved.token)
+        except BoundAccessError as exc:
+            retryable = exc.code in {BOUND_UNAVAILABLE, BOUND_ISSUER_FAILED}
             if retryable:
                 result["observations"]["read"] = "unavailable"
             result["diagnostics"].append(
                 {
                     "operation": "resolve_github_credential",
-                    "message": resolved.safe_summary,
+                    "message": str(exc),
                     "retryable": retryable,
                 }
             )
             return result
 
-        headers = self._github_headers(resolved.token)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            checks = self._probe_checks_for_mode(repo=repo, mode=mode)
+            checks = self._probe_checks_for_mode(
+                repo=repo, mode=mode, api_base=api_base
+            )
+            if app_read_scope:
+                # This issuance carries contents/metadata only. A failure on
+                # another endpoint would describe our narrowed token, not the
+                # connection's capabilities, so leave those checks untested.
+                checks = [
+                    check
+                    for check in checks
+                    if check["operation"] in {"repository", "branch"}
+                ]
+                result["limitations"].append(
+                    "GitHub App probes use a read-scoped installation token; "
+                    "pull requests, commit statuses, checks, and issues are not tested."
+                )
             ref = (base_branch or "").strip()
             for check in checks:
                 field = check["field"]
@@ -997,7 +1060,8 @@ class GitHubService:
                         )
                 except httpx.HTTPStatusError as exc:
                     status_code = exc.response.status_code
-                    unavailable = status_code >= 500
+                    rate_limit = self._github_rate_limit_event(exc.response)
+                    unavailable = status_code >= 500 or rate_limit is not None
                     if field and not unavailable:
                         result[field] = False
                     if operation == "repository":

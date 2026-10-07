@@ -4,10 +4,19 @@ import { useSearchParams } from 'react-router-dom';
 
 import type { components } from '../../generated/openapi';
 import { GithubTokenProbePanel } from './GithubTokenProbePanel';
+import { useSettingsDraftRegistration } from './SettingsDraftGuard';
 
 type Connection = components['schemas']['RepositoryConnectionView'];
 type ConnectionList = components['schemas']['RepositoryConnectionListResponse'];
 type AppBeginResponse = components['schemas']['GitHubAppBeginResponse'];
+type UpdateBody = Omit<components['schemas']['ConnectionUpdateRequest'], 'token'>;
+
+interface PendingUpdate {
+  name: string;
+  publish: boolean;
+  tokenFingerprint: string | null;
+  body: UpdateBody;
+}
 
 interface Notice {
   level: 'ok' | 'error';
@@ -17,7 +26,7 @@ interface Notice {
 export const SOURCE_CONTROL_QUERY_KEY = ['repository-connections'] as const;
 const API = '/api/v1/repository-connections';
 const PENDING_APP_KEY = 'moonmind.sourceControl.pendingApp';
-const PUBLISH_OPERATIONS = ['read', 'write'];
+const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
 const READ_OPERATIONS = ['read'];
 
 export interface SourceControlConnectionsProps {
@@ -87,6 +96,25 @@ async function fetchConnection(id: string): Promise<Connection | null> {
   return (await response.json()) as Connection;
 }
 
+async function updateCommitted(id: string, requestId: string): Promise<boolean> {
+  const response = await fetch(
+    `${API}/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw new Error('The change could not be confirmed.');
+  const status = (await response.json()) as components['schemas']['ConnectionRequestStatus'];
+  return status.committed === true;
+}
+
+async function tokenFingerprint(token: string): Promise<string | null> {
+  if (!token) return '';
+  // Retain only an in-memory digest to recognize the same secret on re-entry.
+  // HTTP deployments may lack WebCrypto; never assume two tokens match there.
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function kindLabel(connection: Connection): string {
   switch (connection.credentialKind) {
     case 'personal_access_token':
@@ -107,7 +135,7 @@ function assignmentSummary(connection: Connection): string {
 }
 
 function canPublish(operations: readonly string[]): boolean {
-  return operations.includes('write');
+  return PUBLISH_OPERATIONS.every((operation) => operations.includes(operation));
 }
 
 const inputClass =
@@ -169,6 +197,10 @@ export function SourceControlConnections({
   /** Show the committed server record before anything else is offered. */
   function showCommitted(connection: Connection) {
     queryClient.setQueryData<ConnectionList>(SOURCE_CONTROL_QUERY_KEY, (current) => {
+      const recorded = current?.items.find((item) => item.id === connection.id);
+      // Responses can arrive out of order across save, assignment and disable.
+      // A confirmed newer policy must never be replaced by an older projection.
+      if (recorded && recorded.policyRevision > connection.policyRevision) return current;
       const items = (current?.items ?? []).filter((item) => item.id !== connection.id);
       return {
         items: [...items, connection].sort((a, b) => a.displayName.localeCompare(b.displayName)),
@@ -359,6 +391,16 @@ function PatCreateForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function discard() {
+    settle(`create:${connectionIdFor(name)}`);
+    setName('');
+    setToken('');
+    setPublish(false);
+    setError(null);
+  }
+
+  useSettingsDraftRegistration('source-control-pat', Boolean(name || token || publish || saving), discard);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const connectionId = connectionIdFor(name);
@@ -441,7 +483,7 @@ function PatCreateForm({
           type="button"
           className={secondaryButton}
           onClick={() => {
-            setToken('');
+            discard();
             onCancel();
           }}
         >
@@ -467,9 +509,39 @@ function AppConnectForm({
   const [repositories, setRepositories] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [setupUrl, setSetupUrl] = useState<string | null>(null);
+  const requestedRepositories = Array.from(new Set(repositories.split(/[\s,]+/).filter(Boolean)));
+  const validRepositories = requestedRepositories.length > 0 && requestedRepositories.every(
+    (repository) => /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(repository),
+  );
+
+  function discard() {
+    setName('');
+    setAppSlug('');
+    setAppId('');
+    setRepositories('');
+    setError(null);
+  }
+
+  useSettingsDraftRegistration(
+    'source-control-app',
+    Boolean(name || appSlug || appId || repositories || starting),
+    discard,
+  );
+
+  // Let the draft registration become clean before leaving for GitHub.
+  useEffect(() => {
+    if (!setupUrl) return;
+    navigate(setupUrl);
+    setSetupUrl(null);
+  }, [navigate, setupUrl]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!validRepositories) {
+      setError('Enter at least one repository in owner/repo form.');
+      return;
+    }
     const connectionId = connectionIdFor(name);
     setStarting(true);
     setError(null);
@@ -480,16 +552,15 @@ function AppConnectForm({
         displayName: name.trim(),
         appSlug: appSlug.trim(),
         appId: appId.trim(),
-        permittedRepositories: repositories
-          .split(/[\s,]+/)
-          .map((item) => item.trim())
-          .filter(Boolean),
+        permittedRepositories: requestedRepositories,
       });
       window.sessionStorage.setItem(
         PENDING_APP_KEY,
         JSON.stringify({ connectionId: begun.connectionId, state: begun.state }),
       );
-      navigate(begun.setupUrl);
+      discard();
+      setStarting(false);
+      setSetupUrl(begun.setupUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start the GitHub App connection.');
       setStarting(false);
@@ -500,8 +571,9 @@ function AppConnectForm({
     <form aria-label="Connect GitHub App" className="space-y-3" onSubmit={submit}>
       <h4 className="text-base font-semibold text-slate-900 dark:text-white">Connect GitHub App</h4>
       <p className="text-sm text-slate-600 dark:text-slate-400">
-        You will install the App on GitHub, then return here. MoonMind verifies the installation
-        before saving it.
+        Enter explicit owner/repo names, separated by commas. You will install the App on GitHub,
+        then return here. MoonMind verifies that each named repository belongs to that installation
+        before saving this connection. Empty scope never grants access to all repositories.
       </p>
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-slate-700 dark:text-slate-200">Connection name</span>
@@ -524,21 +596,22 @@ function AppConnectForm({
         />
       </label>
       <label className="flex flex-col gap-1 text-sm">
-        <span className="font-medium text-slate-700 dark:text-slate-200">Limit to repositories (optional)</span>
+        <span className="font-medium text-slate-700 dark:text-slate-200">Repositories this connection may use</span>
         <input
           className={inputClass}
           value={repositories}
           onChange={(e) => setRepositories(e.target.value)}
           placeholder="owner/repo, owner/other"
+          required
           autoComplete="off"
         />
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim()}>
+        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
           {starting ? 'Opening GitHub…' : 'Install on GitHub'}
         </button>
-        <button type="button" className={secondaryButton} onClick={onCancel}>
+        <button type="button" className={secondaryButton} onClick={() => { discard(); onCancel(); }}>
           Cancel
         </button>
       </div>
@@ -570,6 +643,10 @@ function ConnectionDetail({
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [rotationPending, setRotationPending] = useState(false);
+  const pendingUpdate = useRef<PendingUpdate | null>(null);
+  const currentConnection = useRef(connection);
+  currentConnection.current = connection;
   const [repository, setRepository] = useState('');
   const [assignPublish, setAssignPublish] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
@@ -580,49 +657,100 @@ function ConnectionDetail({
   const changed =
     name.trim() !== connection.displayName ||
     publish !== canPublish(connection.allowedOperations) ||
-    token.length > 0;
+    token.length > 0 || rotationPending || pendingUpdate.current !== null;
+  const assignmentChanged = Boolean(repository || assignPublish);
+
+  function discardEdit() {
+    pendingUpdate.current = null;
+    setName(connection.displayName);
+    setPublish(canPublish(connection.allowedOperations));
+    setToken('');
+    setRotationPending(false);
+    setSaveError(null);
+  }
+
+  function discardAssignment() {
+    settle(`assign:${connection.id}:${repository.trim().toLowerCase()}`);
+    setRepository('');
+    setAssignPublish(false);
+    setAssignError(null);
+  }
+
+  useSettingsDraftRegistration(`source-control-edit:${connection.id}`, changed || saving, discardEdit);
+  useSettingsDraftRegistration(
+    `source-control-assignment:${connection.id}`,
+    assignmentChanged || assigning,
+    discardAssignment,
+  );
+
+  function acceptEdit(saved: Connection) {
+    pendingUpdate.current = null;
+    setRotationPending(false);
+    if (currentConnection.current.policyRevision > saved.policyRevision) return false;
+    setName(saved.displayName);
+    setPublish(canPublish(saved.allowedOperations));
+    onCommitted(saved);
+    return true;
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const expected = connection.policyRevision;
-    const operation = `update:${connection.id}:${expected}`;
+    if (saving || (rotationPending && !token)) return;
     const transient = token;
+    setRotationPending(Boolean(transient));
     setToken('');
     setSaving(true);
     setSaveError(null);
-    const body: Record<string, unknown> = {
-      requestId: requestIdFor(operation),
-      expectedPolicyRevision: expected,
-    };
-    if (name.trim() !== connection.displayName) body.displayName = name.trim();
-    if (publish !== canPublish(connection.allowedOperations)) {
-      body.allowedOperations = publish ? PUBLISH_OPERATIONS : READ_OPERATIONS;
-    }
-    if (transient) body.token = transient;
+    let body: UpdateBody | undefined;
     try {
-      const saved = await sendJson<Connection>(`${API}/${encodeURIComponent(connection.id)}`, 'PATCH', body);
-      settle(operation);
-      onCommitted(saved);
-      if (isStillSelected(connection.id)) {
+      const fingerprint = await tokenFingerprint(transient);
+      const previous = pendingUpdate.current;
+      const sameIntent = previous && previous.name === name.trim() && previous.publish === publish &&
+        fingerprint !== null && previous.tokenFingerprint === fingerprint;
+      body = sameIntent ? previous.body : {
+        requestId: newRequestId(),
+        // Reconcile/retry the original compare-and-set even after a refresh.
+        expectedPolicyRevision: previous?.body.expectedPolicyRevision ?? connection.policyRevision,
+      };
+      if (!sameIntent) {
+        if (name.trim() !== connection.displayName) body.displayName = name.trim();
+        if (publish !== canPublish(connection.allowedOperations)) {
+          const operations = publish
+            ? Array.from(new Set([...connection.allowedOperations, ...PUBLISH_OPERATIONS]))
+            : connection.allowedOperations.filter(
+              (operation) => operation === 'read' || !PUBLISH_OPERATIONS.includes(operation),
+            );
+          body.allowedOperations = operations as NonNullable<UpdateBody['allowedOperations']>;
+        }
+      }
+      pendingUpdate.current = { name: name.trim(), publish, tokenFingerprint: fingerprint, body };
+      const saved = await sendJson<Connection>(`${API}/${encodeURIComponent(connection.id)}`, 'PATCH', {
+        ...body,
+        ...(transient ? { token: transient } : {}),
+      });
+      const isCurrent = acceptEdit(saved);
+      if (isCurrent && isStillSelected(connection.id)) {
         onNotice?.({ level: 'ok', text: transient ? 'Token replaced.' : 'Connection saved.' });
       }
     } catch (err) {
-      if (err instanceof UncertainSaveError) {
-        const current = await fetchConnection(connection.id).catch(() => null);
-        if (current && current.policyRevision > expected) {
-          settle(operation);
-          onCommitted(current);
+      if (err instanceof UncertainSaveError && body) {
+        // A newer revision can belong to another writer. Only this request's
+        // durable receipt establishes that our edit (especially rotation) saved.
+        const committed = await updateCommitted(connection.id, body.requestId).catch(() => false);
+        const current = committed ? await fetchConnection(connection.id).catch(() => null) : null;
+        if (current) {
+          acceptEdit(current);
           return;
         }
         if (isStillSelected(connection.id)) {
           setSaveError(
             transient
-              ? 'The change was not saved. Enter the token again to retry the same request.'
-              : 'The change was not saved. Save again to retry the same request.',
+              ? 'The change could not be confirmed. Enter the token again to retry; changed input starts a new request.'
+              : 'The change could not be confirmed. Save again to retry; changed input starts a new request.',
           );
         }
       } else if (err instanceof RequestError) {
-        settle(operation);
+        pendingUpdate.current = null;
         if (isStillSelected(connection.id)) {
           setSaveError(
             err.status === 409
@@ -633,6 +761,8 @@ function ConnectionDetail({
           );
         }
         if (err.status === 409) onReload();
+      } else if (isStillSelected(connection.id)) {
+        setSaveError('Could not prepare the change. Re-enter any new token and try again.');
       }
     } finally {
       setSaving(false);
@@ -673,7 +803,10 @@ function ConnectionDetail({
       );
       settle(operation);
       onCommitted(saved);
-      if (isStillSelected(connection.id)) setRepository('');
+      if (isStillSelected(connection.id)) {
+        setRepository('');
+        setAssignPublish(false);
+      }
     } catch (err) {
       if (err instanceof RequestError) settle(operation);
       if (isStillSelected(connection.id)) {
@@ -773,6 +906,11 @@ function ConnectionDetail({
             <button type="submit" className={primaryButton} disabled={assigning || !repository.trim()}>
               {assigning ? 'Checking…' : 'Assign'}
             </button>
+            {assignmentChanged ? (
+              <button type="button" className={secondaryButton} onClick={discardAssignment} disabled={assigning}>
+                Cancel assignment
+              </button>
+            ) : null}
           </form>
         ) : null}
         <ErrorText>{assignError}</ErrorText>
@@ -796,10 +934,10 @@ function ConnectionDetail({
         <h5 className="text-sm font-semibold text-slate-800 dark:text-slate-100">Edit connection</h5>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-slate-700 dark:text-slate-200">Connection name</span>
-          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required autoComplete="off" />
+          <input className={inputClass} value={name} disabled={saving} onChange={(e) => setName(e.target.value)} required autoComplete="off" />
         </label>
         <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-          <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} />
+          <input type="checkbox" checked={publish} disabled={saving} onChange={(e) => setPublish(e.target.checked)} />
           Allow publishing (push branches and open pull requests)
         </label>
         {isPat ? (
@@ -809,6 +947,7 @@ function ConnectionDetail({
               className={inputClass}
               type="password"
               value={token}
+              disabled={saving}
               onChange={(e) => setToken(e.target.value)}
               autoComplete="off"
               spellCheck={false}
@@ -817,9 +956,14 @@ function ConnectionDetail({
         ) : null}
         <ErrorText>{saveError}</ErrorText>
         <div className="flex flex-wrap gap-2">
-          <button type="submit" className={primaryButton} disabled={saving || !changed || !name.trim()}>
+          <button type="submit" className={primaryButton} disabled={saving || !changed || !name.trim() || (rotationPending && !token)}>
             {saving ? 'Saving…' : 'Save changes'}
           </button>
+          {changed ? (
+            <button type="button" className={secondaryButton} onClick={discardEdit} disabled={saving}>
+              Cancel changes
+            </button>
+          ) : null}
           {isActive ? (
             <button type="button" className={secondaryButton} onClick={() => void disable()}>
               Disable connection
