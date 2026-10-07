@@ -10,6 +10,8 @@ from api_service.api.routers import repository_connections as routes
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 
+PREFIX = "/api/v1/repository-connections"
+
 
 @pytest.fixture
 def enrollment(monkeypatch):
@@ -17,7 +19,7 @@ def enrollment(monkeypatch):
     monkeypatch.setattr(routes, "_setup_service", None)
     current = SimpleNamespace(id="operator-session")
     app = FastAPI()
-    app.include_router(routes.router)
+    app.include_router(routes.router, prefix=PREFIX)
     app.dependency_overrides[get_current_user()] = lambda: current
     def session_stub():
         return object()
@@ -65,7 +67,7 @@ def _begin(client, **changes):
         "permittedRepositories": ["acme/repo"],
     }
     payload.update(changes)
-    response = client.post("/github-app/begin", json=payload)
+    response = client.post(f"{PREFIX}/github-app/begin", json=payload)
     assert response.status_code == 201, response.text
     return response.json()["state"]
 
@@ -100,7 +102,9 @@ def test_invalid_enrollment_never_resolves_secrets_or_contacts_provider(
         current.id = "another-admitted-session"
     else:
         overrides["connectionId"] = "connection:substituted"
-    response = client.post("/github-app/callback", json=_callback(state, **overrides))
+    response = client.post(
+        f"{PREFIX}/github-app/callback", json=_callback(state, **overrides)
+    )
     assert response.status_code == 409, response.text
     assert calls == []
 
@@ -109,7 +113,7 @@ def test_callback_cannot_trust_its_own_api_host(enrollment):
     client, _, calls = enrollment
     state = _begin(client)
     response = client.post(
-        "/github-app/callback",
+        f"{PREFIX}/github-app/callback",
         json=_callback(
             state,
             endpointRef="https://capture.example",
@@ -140,7 +144,9 @@ def test_callback_cannot_trust_its_own_api_host(enrollment):
 def test_callback_cannot_change_issuance_configuration(enrollment, change):
     client, _, calls = enrollment
     state = _begin(client)
-    response = client.post("/github-app/callback", json=_callback(state, **change))
+    response = client.post(
+        f"{PREFIX}/github-app/callback", json=_callback(state, **change)
+    )
     assert response.status_code in (409, 422), response.text
     assert calls == []
 
@@ -193,11 +199,13 @@ def test_http_enrollment_persists_bound_configuration_and_reconciles_retries(
             ) as http:
                 if first_failure:
                     failed = await http.post(
-                        "/github-app/callback", json=_callback(state)
+                        f"{PREFIX}/github-app/callback", json=_callback(state)
                     )
                     assert failed.status_code == 409, failed.text
                     assert not pending.consumed
-                saved = await http.post("/github-app/callback", json=_callback(state))
+                saved = await http.post(
+                    f"{PREFIX}/github-app/callback", json=_callback(state)
+                )
                 assert saved.status_code == 200, saved.text
                 assert saved.json() == {"connectionId": "connection:enroll"}
                 assert pending.consumed
@@ -207,11 +215,14 @@ def test_http_enrollment_persists_bound_configuration_and_reconciles_retries(
                     ("http", "https://api.github.com", "456"),
                 ]
                 calls.clear()
-                retry = await http.post("/github-app/callback", json=_callback(state))
+                retry = await http.post(
+                    f"{PREFIX}/github-app/callback", json=_callback(state)
+                )
                 assert retry.status_code == 200, retry.text
                 assert calls == []
                 rejected = await http.post(
-                    "/github-app/callback", json=_callback(state, installationId="999")
+                    f"{PREFIX}/github-app/callback",
+                    json=_callback(state, installationId="999"),
                 )
                 assert rejected.status_code == 409
                 assert calls == []
@@ -245,7 +256,7 @@ def test_begin_cannot_supply_principal_or_trusted_hosts(enrollment):
         {"allowedApiHosts": ["capture.example"]},
     ):
         response = client.post(
-            "/github-app/begin",
+            f"{PREFIX}/github-app/begin",
             json={
                 "appSlug": "moonmind",
                 "expectedAppRef": "github-app:123",
@@ -308,7 +319,7 @@ def test_enterprise_enrollment_rejects_unsafe_endpoint_before_issuance(
     monkeypatch.setenv("GITHUB_TRUSTED_API_HOSTS", "github.example")
     monkeypatch.setattr(settings, "github", GitHubSettings())
     response = client.post(
-        "/github-app/begin",
+        f"{PREFIX}/github-app/begin",
         json={
             "appSlug": "moonmind",
             "expectedAppRef": "github-app:123",
@@ -351,7 +362,7 @@ def test_enrollment_returns_provider_installation_url(
 
     monkeypatch.setattr(github_app_wiring, "github_api_base_for", trusted_base)
     response = client.post(
-        "/github-app/begin",
+        f"{PREFIX}/github-app/begin",
         json={
             "appSlug": "my-app",
             "expectedAppRef": "github-app:123",
@@ -377,7 +388,7 @@ def test_enrollment_returns_provider_installation_url(
 def test_invalid_operations_are_rejected_before_enrollment(enrollment, operations):
     client, _, calls = enrollment
     response = client.post(
-        "/github-app/begin",
+        f"{PREFIX}/github-app/begin",
         json={
             "appSlug": "moonmind",
             "expectedAppRef": "github-app:123",
