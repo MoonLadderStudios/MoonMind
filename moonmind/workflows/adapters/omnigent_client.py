@@ -533,6 +533,18 @@ class OmnigentHttpClient:
         files = {"bundle": (filename, content, content_type)}
         return await self._request("POST", "/api/agents", files=files)
 
+    async def list_sessions(
+        self, *, agent_id: str, after: str | None = None
+    ) -> dict[str, Any]:
+        """Read one complete provider page, including archived workflow sessions."""
+        path = (
+            "/v1/sessions?limit=1000&kind=any&include_archived=true"
+            f"&agent_id={quote(agent_id, safe='')}"
+        )
+        if after:
+            path += f"&after={quote(after, safe='')}"
+        return await self._request("GET", path)
+
     async def create_session(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/v1/sessions", json=dict(payload))
 
