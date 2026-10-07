@@ -47,6 +47,8 @@ from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
+    WORKFLOW_LAUNCH_DEFAULTS,
+    WORKFLOW_LAUNCH_DEFAULTS_KEY,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
@@ -2573,16 +2575,6 @@ async def run_omnigent_execution(
                 ),
             )
             target_agent_id = target.agent_id
-            session_payload = build_omnigent_session_create_payload(
-                request=request,
-                selection=selection,
-                target=target,
-            )
-            session_payload["idempotency_key"] = request.idempotency_key
-            labels = session_payload.setdefault("labels", {})
-            if isinstance(labels, dict):
-                labels.setdefault("moonmind.issue", "MM-1059")
-
             durable_row = None
             durable_terminal_status: str | None = None
             bridge_session_id: str | None = None
@@ -2664,6 +2656,24 @@ async def run_omnigent_execution(
                         ),
                     ),
                 )
+
+            launch_defaults = (
+                dict(getattr(durable_row, "metadata_", None) or {}).get(
+                    WORKFLOW_LAUNCH_DEFAULTS_KEY, {}
+                )
+                if durable_row is not None
+                else WORKFLOW_LAUNCH_DEFAULTS
+            )
+            session_payload = build_omnigent_session_create_payload(
+                request=request,
+                selection=selection,
+                target=target,
+                launch_defaults=launch_defaults,
+            )
+            session_payload["idempotency_key"] = request.idempotency_key
+            labels = session_payload.setdefault("labels", {})
+            if isinstance(labels, dict):
+                labels.setdefault("moonmind.issue", "MM-1059")
 
             retry_state = _heartbeat_state()
             heartbeat_pre_dispatch_item_ids = (

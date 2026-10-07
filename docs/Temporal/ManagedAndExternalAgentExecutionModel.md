@@ -390,7 +390,13 @@ and launching the workflow is the operator's authorization. Claude Code's
 account default (`auto`) would otherwise let its classifier refuse requested
 work, such as queueing pr-resolver children. Omnigent policy hooks still
 enforce deployment deny rules. A permission flag authored in the session's
-`terminalLaunchArgs` is preserved.
+`terminalLaunchArgs` is preserved and validated before defaults are applied.
+The bridge row freezes workflow launch defaults when the attempt is first
+persisted, before provider session creation. A retry uses that saved decision,
+including when a worker died after creation but before attaching the session ID.
+Rows retained from before this default was introduced keep their original launch
+arguments; upgrades do not rewrite an uncertain provider request under the same
+idempotency key.
 
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
