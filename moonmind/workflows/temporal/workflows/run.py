@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
     )
     from moonmind.omnigent.stock_agents import (
@@ -91,7 +92,10 @@ with workflow.unsafe.imports_passed_through():
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
-    from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.routing import (
+        _coerce_bool,
+        merge_automation_candidates,
+    )
     from moonmind.workflows.executions.preset_readiness import (
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
@@ -504,7 +508,7 @@ MERGE_AUTOMATION_DEFAULT_FINISH_MODE = "merge"
 # value takes the default; every other unsupported value fails validation
 # instead of silently inheriting merge authority.
 MERGE_AUTOMATION_FINISH_MODES = frozenset(
-    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only"}
+    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only", "review_only"}
 )
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
@@ -1335,6 +1339,7 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-validation-v1"
 # PR #4557 review: deriving a stable container-job idempotency key changes the
 # submit activity arguments. Replay-gate the derivation so in-flight histories
 # that recorded the old request shape keep replaying it.
@@ -12606,6 +12611,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "produce a plan artifact reference before execution can proceed. "
                 "Ensure the planning activity returns a non-None 'plan_ref'."
             )
+        if parameters.get("omnigentExecutionPlan") and workflow.patched(
+            RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH
+        ):
+            # Detect native grants from durable authority inside the Activity,
+            # never from an authored marker or the mutable current finish mode.
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.validate")
+            await workflow.execute_activity(
+                "plan.validate",
+                {
+                    "plan_ref": plan_ref,
+                    "principal": self._principal(),
+                    "omnigent_execution_plan": parameters["omnigentExecutionPlan"],
+                    "execution_parameters": parameters,
+                },
+                **self._execute_kwargs_for_route(route),
+            )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
 
         # Fetch provider profile snapshots so that _build_agent_execution_request
@@ -13661,6 +13682,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "workflow_id": workflow.info().workflow_id,
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
+                                **(
+                                    {
+                                        "repositoryAuthority": {
+                                            "executionOwner": workflow.info().workflow_id,
+                                            "parentExecutionPlan": parameters.get(
+                                                "omnigentExecutionPlan"
+                                            ),
+                                        }
+                                    }
+                                    if tool_name == "github.resolve_pull_request_target"
+                                    and (self._merge_automation_request(parameters) or {}).get(
+                                        "finishMode"
+                                    ) == "review_only"
+                                    else {}
+                                ),
                                 **(
                                     {
                                         "execution_principal": parameters.get(
@@ -20035,29 +20071,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self,
         parameters: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        candidates: list[Any] = []
         publish_payload = self._resolve_publish_payload(parameters)
         task_payload = self._mapping_value(parameters, "workflow")
         if not task_payload:
             task_payload = self._mapping_value(parameters, "task")
-        if isinstance(publish_payload, Mapping):
-            candidates.append(
-                publish_payload.get("mergeAutomation")
-                or publish_payload.get("merge_automation")
-            )
-        if isinstance(task_payload, Mapping):
-            candidates.append(
-                task_payload.get("mergeAutomation")
-                or task_payload.get("merge_automation")
-            )
-            task_publish = task_payload.get("publish")
-            if isinstance(task_publish, Mapping):
-                candidates.append(
-                    task_publish.get("mergeAutomation")
-                    or task_publish.get("merge_automation")
-                )
-        candidates.append(
-            parameters.get("mergeAutomation") or parameters.get("merge_automation")
+        candidates = merge_automation_candidates(
+            parameters, publish_payload=publish_payload, task_payload=task_payload
         )
 
         for candidate in candidates:
@@ -20065,6 +20084,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 continue
             if not _coerce_bool(candidate.get("enabled"), default=False):
                 continue
+            finish_mode = self._normalize_finish_mode(
+                candidate.get("finishMode") or candidate.get("finish_mode")
+            )
             timeout_config = candidate.get("timeouts")
             if not isinstance(timeout_config, Mapping):
                 timeout_config = {}
@@ -20088,7 +20110,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 or self._canonical_jira_issue_key_from_parameters(parameters)
             )
             post_merge_jira: dict[str, Any] = dict(post_merge_jira_config)
-            if effective_jira_issue_key and "enabled" not in post_merge_jira:
+            if (
+                finish_mode != "review_only"
+                and effective_jira_issue_key
+                and "enabled" not in post_merge_jira
+            ):
                 post_merge_jira["enabled"] = True
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
@@ -20108,7 +20134,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else {}
             )
             github_issue = self._canonical_github_issue_from_parameters(parameters)
-            if github_issue:
+            if github_issue and finish_mode != "review_only":
                 post_merge_github.setdefault("enabled", True)
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
@@ -20148,9 +20174,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 or "squash",
                 "maxIterations": candidate.get("maxIterations"),
-                "finishMode": self._normalize_finish_mode(
-                    candidate.get("finishMode") or candidate.get("finish_mode")
-                ),
+                "finishMode": finish_mode,
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
                 "postMergeGithub": post_merge_github,
@@ -20405,6 +20429,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ) or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
         if not normalized_head_sha:
             return None
+        parent_execution_plan = None
+        if request.get("finishMode") == "review_only":
+            admitted_binding = parameters.get("omnigentExecutionPlan")
+            if not isinstance(admitted_binding, Mapping):
+                raise ValueError(
+                    "review_only requires admitted parent execution-plan authority"
+                )
+            parent_execution_plan = OmnigentExecutionPlanBinding.model_validate(
+                admitted_binding
+            ).model_dump(by_alias=True, mode="json")
         pr_number = int(parsed["number"])
         fallback_poll_seconds = self._normalize_positive_int(
             request.get("fallbackPollSeconds"),
@@ -20521,6 +20555,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "parentWorkflowId": parent_workflow_id,
             "parentRunId": parent_run_id,
             "principal": self._owner_id or parent_workflow_id,
+            **(
+                {"parentExecutionPlan": parent_execution_plan}
+                if request.get("finishMode") == "review_only"
+                else {}
+            ),
             "publishContextRef": (
                 self._coerce_text(
                     self._publish_context.get("publishContextRef")
@@ -20609,6 +20648,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "enabled": True,
             "status": status or "unknown",
         }
+        finish_mode = self._coerce_text(
+            result_map.get("finishMode") or context.get("mergeAutomationFinishMode"),
+            max_chars=20,
+        )
+        if finish_mode == "review_only":
+            summary["finishMode"] = finish_mode
         if pr_number is not None:
             summary["prNumber"] = pr_number
         if pr_url:
@@ -20811,10 +20856,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return f"Jira issue {issue_key} was already in a done-category status."
         return ""
 
-    def _merge_automation_child_succeeded(self, result: Any) -> bool:
+    def _merge_automation_child_succeeded(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status == "review_complete"
         return status in MERGE_AUTOMATION_SUCCESS_STATUSES
 
     def _merge_automation_child_canceled(self, result: Any) -> bool:
@@ -20823,19 +20872,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         return status == MERGE_AUTOMATION_CANCELED_STATUS
 
-    def _merge_automation_child_status_valid(self, result: Any) -> bool:
+    def _merge_automation_child_status_valid(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status in (
+                MERGE_AUTOMATION_FAILURE_STATUSES
+                | {MERGE_AUTOMATION_CANCELED_STATUS, "review_complete"}
+            )
         return bool(status) and status in MERGE_AUTOMATION_TERMINAL_STATUSES
 
-    def _merge_automation_failure_reason(self, result: Any) -> str:
+    def _merge_automation_failure_reason(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> str:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
         if not status:
             return "merge automation failed: missing terminal status"
-        if status not in MERGE_AUTOMATION_TERMINAL_STATUSES:
+        if not self._merge_automation_child_status_valid(result, finish_mode=finish_mode):
             return f"merge automation failed: unsupported terminal status {status}"
         blockers = self._get_from_result(result, "blockers")
         blocker_summary = ""
@@ -20891,6 +20949,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
+        if payload["mergeAutomationConfig"]["finishMode"] == "review_only":
+            self._publish_context["mergeAutomationFinishMode"] = "review_only"
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"
         self._waiting_reason = "Waiting for PR merge automation."
         self._attention_required = False
@@ -20982,10 +21042,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             or "unknown"
         )
-        child_status_valid = self._merge_automation_child_status_valid(child_result)
+        finish_mode = payload["mergeAutomationConfig"]["finishMode"]
+        child_status_valid = self._merge_automation_child_status_valid(
+            child_result, finish_mode=finish_mode
+        )
         reason = (
-            self._merge_automation_failure_reason(child_result)
-            if not self._merge_automation_child_succeeded(child_result)
+            self._merge_automation_failure_reason(child_result, finish_mode=finish_mode)
+            if not self._merge_automation_child_succeeded(
+                child_result, finish_mode=finish_mode
+            )
             else None
         )
         if child_status_valid:
@@ -21001,10 +21066,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._close_status = CLOSE_STATUS_CANCELED
             self._set_state(
                 STATE_CANCELED,
-                summary=self._merge_automation_failure_reason(child_result),
+                summary=self._merge_automation_failure_reason(
+                    child_result, finish_mode=finish_mode
+                ),
             )
             return
-        if not self._merge_automation_child_succeeded(child_result):
+        if not self._merge_automation_child_succeeded(
+            child_result, finish_mode=finish_mode
+        ):
             raise ValueError(reason or "merge automation failed")
 
     async def _resolve_agent_node_skillset_ref(

@@ -8,6 +8,7 @@ import inspect
 import json
 import re
 import time as _time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -6082,7 +6083,7 @@ async def _mark_github_issue_manual_only(
 
 async def resolve_pull_request_target(
     inputs: Mapping[str, Any],
-    _context: Mapping[str, Any] | None = None,
+    context: Mapping[str, Any] | None = None,
     *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
@@ -6125,10 +6126,39 @@ async def resolve_pull_request_target(
             },
         )
 
+    # Only the trusted workflow context may supply repository authority;
+    # tool inputs and selectors cannot choose a credential or plan.
+    if isinstance(context, Mapping) and "repositoryAuthority" in context:
+        from moonmind.workflows.temporal.merge_automation_repository_access import (
+            merge_automation_repository_token,
+        )
+
+        credential_context = merge_automation_repository_token(
+            context["repositoryAuthority"], repository=repository, operation="read"
+        )
+    else:
+        credential_context = nullcontext(None)
+    async with credential_context as github_token:
+        return await _resolve_pull_request_target(
+            repository=repository,
+            selector=selector,
+            github_token=github_token,
+            github_service_factory=github_service_factory,
+        )
+
+
+async def _resolve_pull_request_target(
+    *,
+    repository: str,
+    selector: str,
+    github_token: str | None,
+    github_service_factory: Callable[[], GitHubService],
+) -> ToolResult:
     service = github_service_factory()
     resolution = await service.resolve_pull_request_selector(
         repo=repository,
         selector=selector,
+        **({"github_token": github_token} if github_token is not None else {}),
     )
     if not resolution.resolved or not resolution.pr_number:
         return ToolResult(
@@ -6140,7 +6170,10 @@ async def resolve_pull_request_target(
             },
         )
 
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    if github_token is not None:
+        token, resolution_error = github_token, None
+    else:
+        token, resolution_error = await service.resolve_github_token(repo=repository)
     if not token:
         return ToolResult(
             status="FAILED",

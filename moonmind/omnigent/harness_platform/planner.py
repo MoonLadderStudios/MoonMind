@@ -987,8 +987,9 @@ def compile_execution_plan(
 
     from moonmind.omnigent.realizers.registry import realizer_authority_kinds
 
-    # Explicit owners retain their selection, but no plan may persist bindings
-    # the selected implementation cannot consume at the session boundary.
+    # Explicit owners retain their selection. Agent-consumed bindings require
+    # the selected realizer's support; native grants belong to Activities and
+    # are independently barred from agent execution.
     assert_worker_supports_binding_set(
         realizer_authority_kinds(realizer), credential_binding_set
     )
