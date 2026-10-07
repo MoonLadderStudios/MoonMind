@@ -79,7 +79,11 @@ class CredentialLeaseMode(str, Enum):
 #: expected to reattach by resubmitting the identical owner request.
 MANAGER_ROLLOVER_ERROR_TYPE = "ProviderProfileManagerRollover"
 
-#: Bounded reattach budget: one clean-completion race plus one rollover detach.
+#: An accepted acquisition timed out while an earlier lease transition remained
+#: unresolved. Reattach the same owner request without changing its authority.
+LEASE_TRANSITION_PENDING_ERROR_TYPE = "ProviderProfileLeaseTransitionPending"
+
+#: Bounded reattach budget shared by completion, rollover, and transition waits.
 _MAX_MANAGER_UPDATE_ATTEMPTS = 3
 
 
@@ -408,7 +412,11 @@ class ProviderProfileLeaseClient:
         same owner request reattaches to the *same* pending request instead of
         losing its turn. This is the client half of that protocol.
 
-        The third case is not a race but a wedge. A manager whose recorded
+        An unresolved lease transition also detaches an Update after its
+        bounded wait. Reattach the identical request within this same budget;
+        a temporary ledger delay must not bypass the manager's release fence.
+
+        The remaining case is not a race but a wedge. A manager whose recorded
         history the running build cannot replay stays ``RUNNING`` while its
         workflow task retries forever, and Temporal answers every Update with
         an RPC-level failure. No number of resubmissions reaches a workflow
@@ -425,6 +433,7 @@ class ProviderProfileLeaseClient:
         reattachable = {
             "AcceptedUpdateCompletedWorkflow",
             MANAGER_ROLLOVER_ERROR_TYPE,
+            LEASE_TRANSITION_PENDING_ERROR_TYPE,
         }
         for attempt in range(_MAX_MANAGER_UPDATE_ATTEMPTS):
             workflow_id = await self._ensure_manager(runtime_id)
@@ -725,6 +734,7 @@ class ProviderProfileLeaseClient:
 __all__ = [
     "CREDENTIALLESS_CREDENTIAL_SOURCES",
     "MANAGER_ROLLOVER_ERROR_TYPE",
+    "LEASE_TRANSITION_PENDING_ERROR_TYPE",
     "CredentialLease",
     "CredentialLeaseMode",
     "CredentialLeasePurpose",

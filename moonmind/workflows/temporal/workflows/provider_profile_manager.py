@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         validate_codex_oauth_capacity,
     )
     from moonmind.provider_profiles.lease_client import (
+        LEASE_TRANSITION_PENDING_ERROR_TYPE,
         MANAGER_ROLLOVER_ERROR_TYPE,
         RELEASING_LEASE_OUTCOMES,
         CredentialLeaseMode,
@@ -3419,7 +3420,7 @@ class MoonMindProviderProfileManagerWorkflow:
             if self._owner_release_ordering:
                 raise exceptions.ApplicationError(
                     "Provider profile lease transition is still unresolved",
-                    type="ProviderProfileLeaseTransitionPending",
+                    type=LEASE_TRANSITION_PENDING_ERROR_TYPE,
                 ) from None
             # Retained histories re-evaluate after their recorded timer.
 
