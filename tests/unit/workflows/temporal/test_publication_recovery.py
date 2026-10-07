@@ -436,7 +436,15 @@ def test_terminal_evidence_rejects_candidate_identity_mismatch(
 
 
 def test_rollout_supports_shadow_canary_disablement_and_inflight_freeze() -> None:
-    disabled = PublicationRecoveryRolloutPolicy()
+    default = PublicationRecoveryRolloutPolicy()
+    assert default.availability_reason(owner_id=None) is None
+    assert default.admission_reason(
+        repository="org/repo", owner_id=None, mode="pr"
+    ) is None
+    disabled = PublicationRecoveryRolloutPolicy(enabled=False)
+    assert disabled.availability_reason(
+        owner_id="owner"
+    ) == "publication_recovery_disabled"
     assert disabled.admission_reason(
         repository="org/repo", owner_id="owner", mode="pr"
     ) == "publication_recovery_disabled"
