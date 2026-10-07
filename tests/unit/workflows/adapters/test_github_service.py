@@ -1054,6 +1054,128 @@ async def test_probe_token_uses_selected_credential_without_global_fallback(
     assert "global-token-must-not-be-used" not in str(headers)
 
 
+def _pat_connection(**overrides):
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryConnection,
+    )
+
+    payload = {
+        "schemaVersion": "moonmind.repository-connection.v1",
+        "id": "connection-b",
+        "provider": "git",
+        "displayName": "Connection B",
+        "hostingService": "github",
+        "endpointRef": "https://github.com",
+        "allowedOperations": ["read"],
+        "clientPolicy": {
+            "pinnedVersion": "system",
+            "toolBundleRef": "git:system",
+            "executableSha256": "system",
+        },
+        "credential": {
+            "source": "secret_ref",
+            "credentialRef": {"provider": "db", "key": "connection-b-pat"},
+        },
+        "ownership": {"ownerRef": "operator", "scopeType": "system"},
+    }
+    payload.update(overrides)
+    return RepositoryConnection.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_kwargs,admitted",
+    [
+        ({"allowedRepositoryIds": ["acme/widgets"]}, ()),
+        ({}, ("Acme/Widgets",)),
+        ({}, ()),
+    ],
+)
+async def test_probe_token_pat_connection_refuses_unassigned_repository(
+    monkeypatch, connection_kwargs, admitted
+):
+    """MoonLadderStudios/MoonMind#4008: a PAT sees more than its connection
+    admits, so the test reads only an assigned repository."""
+
+    from moonmind.auth import github_credentials
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    secret = AsyncMock(return_value="token-b")
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)
+    mock_client = _probe_client([])
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="other/unassigned",
+            connection=_pat_connection(**connection_kwargs),
+            admitted_repositories=admitted,
+        )
+
+    mock_client.get.assert_not_called()
+    secret.assert_not_called()
+    assert result["credentialSource"]["resolved"] is False
+    assert result["repositoryAccessible"] is None
+    assert result["observations"] == {
+        "read": "not_checked",
+        "branch": "not_checked",
+        "write": "untested",
+    }
+    assert result["diagnostics"] == [
+        {
+            "operation": "repository_assignment",
+            "message": (
+                "other/unassigned is not assigned to this connection; "
+                "assign it before testing."
+            ),
+            "retryable": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_kwargs,admitted",
+    [
+        ({"allowedRepositoryIds": ["acme/widgets"]}, ()),
+        ({}, ("Acme/Widgets",)),
+    ],
+)
+async def test_probe_token_pat_connection_reads_assigned_repository_any_case(
+    monkeypatch, connection_kwargs, admitted
+):
+    from moonmind.auth import github_credentials
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setattr(
+        github_credentials, "_resolve_secret_ref", AsyncMock(return_value="token-b")
+    )
+    mock_client = _probe_client(
+        [
+            _mock_get_response(200, {"default_branch": "trunk"}),
+            _mock_get_response(200, {"name": "trunk"}),
+            _mock_get_response(200, []),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="ACME/widgets",
+            connection=_pat_connection(**connection_kwargs),
+            admitted_repositories=admitted,
+        )
+
+    assert mock_client.get.call_count == 3
+    assert {
+        call.kwargs["headers"]["Authorization"]
+        for call in mock_client.get.call_args_list
+    } == {"Bearer token-b"}
+    assert result["observations"]["read"] == "verified"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,headers,message",
@@ -2357,6 +2479,92 @@ async def test_probe_token_distinguishes_empty_repository_and_missing_branch(
     assert checklist["Contents"]["status"] == "not_checked"
     assert checklist["Commit statuses"]["status"] == "not_checked"
     assert checklist["Checks"]["status"] == "not_checked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listing_response",
+    [
+        _mock_get_response_with_headers(
+            429, {"message": "Too many requests"}, {"retry-after": "90"}
+        ),
+        _mock_get_response_with_headers(
+            403,
+            {"message": "API rate limit exceeded"},
+            {"x-ratelimit-remaining": "0", "retry-after": "90"},
+        ),
+    ],
+)
+async def test_probe_token_throttled_branch_listing_is_unavailable_and_stops(
+    monkeypatch, listing_response
+):
+    """MoonLadderStudios/MoonMind#4008: a throttle on the empty-vs-missing
+    listing read is not a missing branch, and no further reads follow."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [
+            _mock_get_response(200, {"default_branch": "main"}),
+            _mock_get_response(404, {"message": "Branch not found"}),
+            listing_response,
+            _mock_get_response(200, []),
+            _mock_get_response(200, []),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="full_pr_automation", base_branch="feature"
+        )
+
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/feature",
+        "https://api.github.com/repos/owner/repo/branches?per_page=1",
+    ]
+    assert result["observations"]["read"] == "verified"
+    assert result["observations"]["branch"] == "unavailable"
+    assert result["retryAfterSeconds"] == 90
+    assert result["pullRequestAccessible"] is None
+    assert result["diagnostics"][-1]["operation"] == "branch_listing"
+    assert result["diagnostics"][-1]["retryable"] is True
+    assert result["diagnostics"][-1]["retryAfterSeconds"] == 90
+
+
+@pytest.mark.asyncio
+async def test_probe_token_branch_listing_outage_is_unavailable_and_stops(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    request = httpx.Request(
+        "GET", "https://api.github.com/repos/owner/repo/branches?per_page=1"
+    )
+    mock_client = _probe_client(
+        [
+            _mock_get_response(200, {"default_branch": "main"}),
+            _mock_get_response(404, {"message": "Branch not found"}),
+            httpx.ConnectError("down", request=request),
+            _mock_get_response(200, []),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="publish", base_branch="feature"
+        )
+
+    assert mock_client.get.call_count == 3
+    assert result["observations"]["branch"] == "unavailable"
+    assert result["retryAfterSeconds"] is None
+    assert result["diagnostics"][-1] == {
+        "operation": "branch_listing",
+        "message": "ConnectError",
+        "retryable": True,
+    }
 
 
 @pytest.mark.asyncio

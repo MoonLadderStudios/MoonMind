@@ -80,6 +80,10 @@ def probe_route(monkeypatch):
         return state.connection
 
     monkeypatch.setattr(RepositoryConnectionService, "get_connection", get_connection)
+    # The fixture connection admits acme/widgets through its own allowlist.
+    monkeypatch.setattr(
+        RepositoryConnectionService, "list_assignments", AsyncMock(return_value=[])
+    )
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-must-not-be-used")
     secret = AsyncMock(return_value="selected-pat-token")
     monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)

@@ -72,6 +72,7 @@ async def probe_github_token(
     connection: Any,
     base_branch: str | None = None,
     revision_reader: Any | None = None,
+    admitted_repositories: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -81,6 +82,7 @@ async def probe_github_token(
         base_branch=base_branch,
         connection=connection,
         revision_reader=revision_reader,
+        admitted_repositories=admitted_repositories,
     )
 
 
@@ -107,6 +109,24 @@ async def _selected_probe_connection(connection_id: str, *, user: Any) -> Any | 
             )
         except RepositoryRouteError:
             return None
+
+
+async def _readable_assigned_repositories(connection_id: str) -> tuple[str, ...]:
+    """Repositories saved on the selected connection for reads."""
+
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+
+    async with db_base.async_session_maker() as session:
+        assignments = await RepositoryConnectionService(session).list_assignments(
+            connection_id
+        )
+    return tuple(
+        assignment.identity.display_name
+        for assignment in assignments
+        if assignment.verified and "read" in assignment.operations
+    )
 
 
 def _permission_denied_response(permission: str) -> JSONResponse:
@@ -615,12 +635,20 @@ async def github_token_probe(
             )
         return await revision_reader_for({selected_id: current})(selected_id)
 
+    # Bound App issuance enforces its own repository restriction; any other
+    # credential is tested only against this connection's assignments.
+    admitted = (
+        ()
+        if connection.credential.source == "github_app"
+        else await _readable_assigned_repositories(connection_id)
+    )
     result = await probe_github_token(
         repo=payload.repo,
         mode=payload.mode,
         base_branch=payload.base_branch,
         connection=connection,
         revision_reader=_read_active_revision,
+        admitted_repositories=admitted,
     )
     return {**result, "connectionId": connection_id}
 

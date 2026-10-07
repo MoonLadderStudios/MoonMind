@@ -215,8 +215,9 @@ export function GithubTokenProbePanel({
       <header className="space-y-1">
         <h4 className="text-base font-semibold text-slate-900 dark:text-white">Test connection</h4>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Reads one repository with <strong>{connection.displayName}</strong> only. The test never
-          writes, so it cannot prove publishing works, and it never uses another credential.
+          Reads one repository assigned to <strong>{connection.displayName}</strong>, with that
+          connection only. The test never writes, so it cannot prove publishing works, and it never
+          uses another credential.
         </p>
       </header>
 
@@ -332,8 +333,8 @@ export function GithubTokenProbePanel({
           ) : null}
           {connection.assignmentCount === 0 ? (
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              This connection has no assigned repositories, so workflows cannot use it yet. A
-              readable repository is not assigned until you add it below.
+              This connection has no assigned repositories, so workflows cannot use it yet. Tests
+              read only assigned repositories; assign one below first.
             </p>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-3">

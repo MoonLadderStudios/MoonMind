@@ -72,8 +72,9 @@ Before starting the Temporal Worker daemon:
 
 1. Verify the intended credential source is present.
 2. Run the connection test for the selected repository connection and the exact
-   `owner/repo`. The test requires `connectionId`; it never falls back to an
-   ambient token. An omitted `baseBranch` uses the remote default branch.
+   `owner/repo`, which must be assigned to (or permitted for) that connection.
+   The test requires `connectionId`; it never falls back to an ambient token.
+   An omitted `baseBranch` uses the remote default branch.
 3. If local operator tooling needs `gh`, login with `GH_TOKEN`; do not rely on
    `gh auth` for managed publish correctness.
 
