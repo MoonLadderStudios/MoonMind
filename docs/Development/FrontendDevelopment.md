@@ -16,6 +16,8 @@ for source scanning, dashboard tokens, and class-based dark mode. It imports
 Tailwind's theme and utilities separately, without Preflight, so the
 dashboard continues to own its base styles. Small shadows and backdrop blur
 retain their existing values in the theme configuration.
+Utilities share the existing unlayered dashboard cascade so specific utility
+classes can still override generic element defaults, such as button typography.
 
 Tailwind 4 requires Safari 16.4+, Chrome 111+, or Firefox 128+ because it uses
 modern CSS features. See the [Tailwind upgrade guide](https://tailwindcss.com/docs/upgrade-guide#browser-requirements).

@@ -1,9 +1,11 @@
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@import "tailwindcss/utilities.css" source(none);
 @config "../../../tailwind.config.cjs";
 
 /* Keep the dashboard's own base styles: intentionally do not import Preflight. */
+/* Utilities stay unlayered alongside the existing dashboard rules so specific
+ * utility classes continue to override generic element defaults. */
 @custom-variant hover (&:hover);
 
 :root {
@@ -10944,6 +10946,12 @@ button.workflow-workspace-sidebar-row:active {
   .settings-page {
     padding-inline: 0;
     padding-block: 0.75rem;
+  }
+
+  /* Tailwind 4 spaces children using end margins. Clear those before applying
+   * the dashboard's existing compact spacing between visible sections. */
+  .settings-page > :not([hidden]) {
+    margin-block-end: 0;
   }
 
   .settings-page > :not([hidden]) ~ :not([hidden]) {
