@@ -709,6 +709,10 @@ def test_unsaved_workspace_outlives_ordinary_retention_until_its_bound(
     assert decision.classification == "protected_unsaved"
     assert "locally_retained_but_unsaved" in decision.reason
     assert workspace.exists()
+    # Operator-facing summaries count the retained only copy as protected.
+    assert protected.protected_roots == 1
+    assert protected.skipped_unsaved == 1
+    assert protected.to_dict()["skippedUnsaved"] == 1
 
     store.clear_unsaved(WORKSPACE_ID)
     store.mark_unsaved(

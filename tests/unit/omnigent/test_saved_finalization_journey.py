@@ -141,7 +141,7 @@ class _NoCredentials:
         return []
 
     def __getattr__(self, name):
-        raise AssertionError(
+        raise AttributeError(
             f"finalization must not use repository credentials: {name}"
         )
 

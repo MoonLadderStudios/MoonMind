@@ -1193,7 +1193,14 @@ class GenericOmnigentHostRealizer:
             )
             async with self._runtime_bindings.finalization(binding.bindingId) as current:
                 phases = current.phaseResults or {}
-                if "saved" in phases or "saveDeferred" in phases:
+                if "saved" in phases:
+                    # The save committed although its acknowledgement failed;
+                    # the workspace is no longer the only copy.
+                    await self._workspace_publisher.release_unsaved_request_workspace(
+                        request
+                    )
+                    return current
+                if "saveDeferred" in phases:
                     return current
                 sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, current)
                 await sink.record_phase("saveDeferred", dict(retention))

@@ -1413,6 +1413,79 @@ async def test_late_older_turn_cannot_replace_newer_branch_head(
 
 
 @pytest.mark.asyncio
+async def test_late_turn_cannot_reclaim_head_rolled_back_to_its_source(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    """A rolled-back head that matches a late turn's source is still newer.
+
+    Another owner advances the head and then rolls it back to the late
+    turn's source checkpoint with a new head version. The ref alone matches
+    again, but the late turn started from an older head version, so it must
+    not overwrite that newer rollback decision.
+    """
+
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-aba"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-4016:cbr-aba:create",
+        }
+    )
+    late_turn = graph.turns[0]
+    newer = await service.continue_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-aba",
+        payload={
+            "instructionRef": "artifact://instructions/newer",
+            "instructionDigest": "sha256:newer",
+            "idempotencyKey": "MM-4016:cbr-aba:continue",
+        },
+    )
+    await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-aba",
+        branch_turn_id=newer.branch_turn_id,
+        outcome="succeeded",
+        agent_result_ref="artifact://agent-result/newer",
+        diagnostics_ref="artifact://terminal-diagnostics/newer",
+        checkpoint_ref="artifact://checkpoint/newer",
+        checkpoint_digest="sha256:newer",
+    )
+    branch = await checkpoint_branch_session.get(WorkflowCheckpointBranch, "cbr-aba")
+    assert branch is not None
+    # Another owner rolls the head back to the late turn's source.
+    branch.current_head_checkpoint_ref = late_turn.source_checkpoint_ref
+    branch.current_head_checkpoint_digest = late_turn.source_checkpoint_digest
+    branch.current_head_version = (branch.current_head_version or 0) + 1
+    rolled_back_version = branch.current_head_version
+    await checkpoint_branch_session.flush()
+
+    late = await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-aba",
+        branch_turn_id=late_turn.branch_turn_id,
+        outcome="succeeded",
+        agent_result_ref="artifact://agent-result/late",
+        diagnostics_ref="artifact://terminal-diagnostics/late",
+        checkpoint_ref="artifact://checkpoint/late",
+        checkpoint_digest="sha256:late",
+    )
+    await checkpoint_branch_session.commit()
+
+    branch = await checkpoint_branch_session.get(WorkflowCheckpointBranch, "cbr-aba")
+    assert branch is not None
+    assert branch.current_head_checkpoint_ref == late_turn.source_checkpoint_ref
+    assert branch.current_head_version == rolled_back_version
+    assert branch.artifact_refs["latestBranchTurnResult"] == (
+        "artifact://agent-result/newer"
+    )
+    assert late.diagnostics["headAdvanced"] is False
+    assert late.diagnostics["checkpointRef"] == "artifact://checkpoint/late"
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_handoff_is_indexed_and_readable(
     checkpoint_branch_session: AsyncSession,
 ) -> None:

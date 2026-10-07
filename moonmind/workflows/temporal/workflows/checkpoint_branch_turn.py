@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from datetime import UTC, timedelta
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from temporalio import activity, workflow
@@ -343,6 +343,27 @@ def _safe_saved_candidate(saved: Mapping[str, Any]) -> dict[str, Any]:
                 saved[key], path=f"savedWorkspaceCheckpoint.{key}"
             )
     return safe
+
+
+def _saved_manifest_dependency_refs(
+    manifest_bytes: bytes | None, *, known: Sequence[str]
+) -> list[str]:
+    """Return artifacts a saved manifest needs for restore beyond ``known``.
+
+    The manifest embeds its Git history bundle and staged index patch by ref;
+    they must be retained with the candidate or restore fails once they
+    expire. A manifest that is not a JSON object names no dependencies.
+    """
+
+    if not manifest_bytes:
+        return []
+    try:
+        manifest = json.loads(manifest_bytes)
+    except ValueError:
+        return []
+    if not isinstance(manifest, Mapping):
+        return []
+    return [ref for ref in _artifact_refs_in(manifest) if ref not in known]
 
 
 def _artifact_refs_in(value: Any) -> list[str]:
@@ -1065,8 +1086,9 @@ async def persist_checkpoint_branch_turn_terminal(
                 )
             )
         replacements: dict[str, str] = {}
+        saved_manifest_bytes: bytes | None = None
         for index, ref in enumerate(dict.fromkeys(refs_to_resolve)):
-            retained_ref, _data = await _retain_artifact(
+            retained_ref, data = await _retain_artifact(
                 ref=ref,
                 path=f"retainedRefs[{index}]",
                 source_namespace=source_namespace,
@@ -1074,8 +1096,26 @@ async def persist_checkpoint_branch_turn_terminal(
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
             )
+            if ref == safe_saved_candidate.get("manifestRef"):
+                saved_manifest_bytes = data
             if retained_ref != ref:
                 replacements[ref] = retained_ref
+        saved_dependency_refs = _saved_manifest_dependency_refs(
+            saved_manifest_bytes, known=refs_to_resolve
+        )
+        for index, ref in enumerate(saved_dependency_refs):
+            retained_ref, _data = await _retain_artifact(
+                ref=ref,
+                path=f"savedWorkspaceCheckpoint.dependencyRefs[{index}]",
+                source_namespace=source_namespace,
+                source_workflow_id=workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
+            )
+            if retained_ref != ref:
+                replacements[ref] = retained_ref
+        if saved_dependency_refs:
+            safe_saved_candidate["dependencyRefs"] = saved_dependency_refs
 
         safe_output_refs = list(
             _replace_artifact_refs(safe_output_refs, replacements)
