@@ -340,3 +340,82 @@ async def test_parent_owned_merge_automation_duplicate_retry_preserves_one_child
 
     assert len(calls) == 1
     assert workflow._publish_context["mergeAutomationWorkflowId"] == calls[0]
+
+
+@pytest.mark.asyncio
+async def test_parent_owned_review_only_accepts_review_complete_without_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/MoonMind"
+    parent._publish_context["headSha"] = "abc123"
+    parameters = {
+        "publishMode": "none",
+        "mergeAutomation": {
+            "enabled": True,
+            "finishMode": "review_only",
+            "reviewLoop": {"enabled": True, "provider": "codex"},
+        },
+    }
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert payload["mergeAutomationConfig"]["finishMode"] == "review_only"
+        return {"status": "review_complete", "latestHeadSha": "abc123"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    await parent._maybe_start_merge_gate(
+        parameters=parameters,
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+
+    assert parent._publish_context["mergeAutomationStatus"] == "review_complete"
+    assert parent._awaiting_external is False
+    assert parent._merge_happened() is False
+    assert parent._publish_status != "published"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_mode", [None, "fix_only"])
+async def test_parent_owned_default_mode_rejects_review_complete(
+    monkeypatch: pytest.MonkeyPatch,
+    finish_mode: str | None,
+) -> None:
+    _patch_workflow_context(monkeypatch)
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/MoonMind"
+    parent._publish_context["headSha"] = "abc123"
+    config: dict[str, Any] = {"enabled": True}
+    if finish_mode is not None:
+        config["finishMode"] = finish_mode
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"status": "review_complete", "latestHeadSha": "abc123"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    with pytest.raises(ValueError, match="unsupported terminal status review_complete"):
+        await parent._maybe_start_merge_gate(
+            parameters={"publishMode": "none", "mergeAutomation": config},
+            pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+        )
+
+    assert parent._publish_context["mergeAutomationStatus"] == "failed"
+    assert parent._awaiting_external is False

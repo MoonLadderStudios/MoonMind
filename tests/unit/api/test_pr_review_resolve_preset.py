@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +16,7 @@ from api_service.db.models import Base
 from api_service.services.presets.catalog import (
     ExpandOptions,
     PresetCatalogService,
+    PresetValidationError,
 )
 from moonmind.schemas.temporal_models import MergeAutomationConfigModel
 
@@ -284,3 +286,57 @@ async def test_explicit_repository_input_wins_over_context(tmp_path) -> None:
     assert (
         expanded["steps"][0]["tool"]["inputs"]["repository"] == "OtherOrg/OtherRepo"
     )
+
+
+async def test_review_only_input_selects_review_only_without_publishing(tmp_path) -> None:
+    expanded = await _expand(tmp_path, {"pull_request": "350", "review_only": True})
+
+    merge_automation = expanded["publish"]["mergeAutomation"]
+    assert expanded["publish"]["mode"] == "none"
+    assert merge_automation["finishMode"] == "review_only"
+    assert merge_automation["automatedReview"] == "required"
+    assert merge_automation["reviewLoop"]["enabled"] is True
+    assert merge_automation["reviewLoop"]["provider"] == "codex"
+
+    config = MergeAutomationConfigModel.model_validate(
+        {
+            "resolver": {"mergeMethod": merge_automation["mergeMethod"]},
+            "finishMode": merge_automation["finishMode"],
+            "timeouts": merge_automation["timeouts"],
+            "reviewLoop": merge_automation["reviewLoop"],
+        }
+    )
+    assert config.finish_mode == "review_only"
+    assert config.review_loop.enabled is True
+    assert config.review_loop.resolved_command() == "@codex review"
+
+
+async def test_explicit_review_only_false_preserves_fix_only_default(tmp_path) -> None:
+    expanded = await _expand(tmp_path, {"pull_request": "350", "review_only": False})
+
+    merge_automation = expanded["publish"]["mergeAutomation"]
+    assert expanded["publish"]["mode"] == "none"
+    assert merge_automation["finishMode"] == "fix_only"
+    assert merge_automation["reviewLoop"]["enabled"] is True
+    assert merge_automation["reviewLoop"]["provider"] == "codex"
+
+
+async def test_review_only_requires_a_configured_review_provider(tmp_path) -> None:
+    with pytest.raises((PresetValidationError, ValidationError)):
+        expanded = await _expand(
+            tmp_path,
+            {
+                "pull_request": "350",
+                "review_only": True,
+                "review_provider": "none",
+            },
+        )
+        merge_automation = expanded["publish"]["mergeAutomation"]
+        MergeAutomationConfigModel.model_validate(
+            {
+                "resolver": {"mergeMethod": merge_automation["mergeMethod"]},
+                "finishMode": merge_automation["finishMode"],
+                "timeouts": merge_automation["timeouts"],
+                "reviewLoop": merge_automation["reviewLoop"],
+            }
+        )

@@ -531,6 +531,20 @@ def test_build_resolver_run_request_withholds_merge_authority_for_fix_only() -> 
     # not left guessing.
     assert task["skill"]["args"]["mergeMethod"] == "squash"
 
+@pytest.mark.parametrize("finish_mode", ["review_only", " review_only "])
+def test_review_only_cannot_build_a_publishing_resolver_request(
+    finish_mode: str,
+) -> None:
+    with pytest.raises(ValueError, match="review_only.*resolver"):
+        build_resolver_run_request(
+            parent_workflow_id="mm:parent",
+            pull_request=_pull_request(),
+            jira_issue_key=None,
+            merge_method="squash",
+            finish_mode=finish_mode,
+        )
+
+
 def test_build_resolver_run_request_normalizes_unknown_finish_mode() -> None:
     request = build_resolver_run_request(
         parent_workflow_id="mm:parent",

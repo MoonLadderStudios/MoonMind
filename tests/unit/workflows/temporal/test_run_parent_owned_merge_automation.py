@@ -363,3 +363,66 @@ def test_unsupported_finish_mode_never_reaches_the_merge_gate_payload() -> None:
             parent_workflow_id="mm:parent",
             parent_run_id="run-1",
         )
+
+
+def test_review_only_merge_gate_payload_preserves_mode_without_post_merge_effects() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    parameters = {
+        "publishMode": "none",
+        "mergeAutomation": {
+            "enabled": True,
+            "finishMode": "review_only",
+            "reviewLoop": {"enabled": True, "provider": "codex"},
+        },
+        "workflow": {
+            "inputs": {
+                "jira_issue_key": "MM-350",
+                "github_issue": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "number": 350,
+                },
+            }
+        },
+    }
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters=parameters,
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    config = payload["mergeAutomationConfig"]
+    assert config["finishMode"] == "review_only"
+    assert not config["postMergeJira"].get("enabled", False)
+    assert not config["postMergeGithub"].get("enabled", False)
+    assert workflow._merge_required(parameters) is False
+
+
+@pytest.mark.parametrize("finish_mode", ["merge", "fix_only"])
+def test_review_complete_requires_review_only_parent_mode(finish_mode: str) -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._merge_automation_child_succeeded({"status": "review_complete"}) is False
+    assert workflow._merge_automation_child_succeeded(
+        {"status": "review_complete"}, finish_mode=finish_mode
+    ) is False
+    assert workflow._merge_automation_child_status_valid(
+        {"status": "review_complete"}, finish_mode=finish_mode
+    ) is False
+
+
+def test_review_complete_is_success_only_for_review_only_parent_mode() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._merge_automation_child_succeeded(
+        {"status": "review_complete"}, finish_mode="review_only"
+    ) is True
+    assert workflow._merge_automation_child_status_valid(
+        {"status": "review_complete"}, finish_mode="review_only"
+    ) is True
+    workflow._publish_context["mergeAutomationStatus"] = "review_complete"
+    assert workflow._merge_happened() is False

@@ -55,6 +55,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 FINISH_MODE_MERGE = "merge"
 FINISH_MODE_FIX_ONLY = "fix_only"
+FINISH_MODE_REVIEW_ONLY = "review_only"
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
@@ -332,6 +333,8 @@ def build_resolver_run_request(
     finish_mode: str = FINISH_MODE_MERGE,
     legacy_capabilities: bool = False,
 ) -> dict[str, Any]:
+    if str(finish_mode or "").strip() == FINISH_MODE_REVIEW_ONLY:
+        raise ValueError("review_only cannot launch a publishing resolver")
     pr = (
         pull_request
         if isinstance(pull_request, PullRequestRefModel)

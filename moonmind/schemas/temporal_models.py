@@ -1804,8 +1804,9 @@ MergeMethod = Literal["merge", "squash", "rebase"]
 # How merge automation finishes once the gate opens and the resolver reports
 # that nothing is left to address. "merge" runs the final pr-resolver pass with
 # merge authority; "fix_only" stops at the open gate without a merge side
-# effect. Histories recorded before this field default to "merge".
-MergeAutomationFinishMode = Literal["merge", "fix_only"]
+# effect. "review_only" requests and observes fresh review without a resolver.
+# Histories recorded before this field default to "merge".
+MergeAutomationFinishMode = Literal["merge", "fix_only", "review_only"]
 PostMergeJiraStrategy = Literal["done_category"]
 
 class MergeAutomationGitHubGateModel(BaseModel):
@@ -2080,6 +2081,19 @@ class MergeAutomationConfigModel(BaseModel):
     # One canonical finish mode for the whole gate. The resolver child request
     # derives its merge authority from this value; it is never configured twice.
     finish_mode: MergeAutomationFinishMode = Field("merge", alias="finishMode")
+
+    @model_validator(mode="after")
+    def _validate_review_only(self) -> "MergeAutomationConfigModel":
+        if self.finish_mode != "review_only":
+            return self
+        if (
+            not self.review_loop.enabled
+            or not self.review_loop.require_fresh_review_for_every_head
+        ):
+            raise ValueError("review_only requires an enabled fresh automated reviewer.")
+        if self.post_merge_jira.enabled or self.post_merge_github.enabled:
+            raise ValueError("review_only forbids post-merge effects.")
+        return self
 
 ReadinessBlockerKind = Literal[
     "checks_running",
