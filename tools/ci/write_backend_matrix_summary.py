@@ -137,7 +137,7 @@ def parse_junit(path: Path) -> JUnitSummary:
             pytest_nodeid = properties.get(NODEID_PROPERTY) or None
             junit_name = f"{classname}::{name}" if classname else name
             try:
-                duration: float | None = float(case.get("time", "0") or 0)
+                duration: float | None = float(case.get("time", ""))
             except ValueError:
                 duration = None
             if duration is not None and not math.isfinite(duration):

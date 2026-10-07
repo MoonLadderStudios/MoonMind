@@ -77,7 +77,7 @@ def test_committed_hints_are_a_usable_pure_node_mapping() -> None:
 def test_file_weight_generator_and_seed_are_retired() -> None:
     """#4629 R4: one hint source. The file-average generator and its seed
     are gone so a later refresh cannot erase measured differences."""
-    import tools.ci.refresh_reliability_durations as helper
+    from tools.ci import refresh_reliability_durations as helper
 
     assert not (REPO_ROOT / "tools" / "ci" / "reliability_shard_weights.json").exists()
     for retired in ("distribute_weights", "assemble_hints", "_load_file_weights", "refresh"):
