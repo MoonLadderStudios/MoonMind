@@ -545,18 +545,73 @@ class OmnigentProfileBoundExecutionCoordinator:
 
         deadline = asyncio.get_running_loop().time() + HOST_PROFILE_BUSY_WAIT_SECONDS
         wait_attempt = 0
+        while True:
+            try:
+                return await self._hosts.create_or_get_host_lease(
+                    binding=binding,
+                    provider_lease_id=provider_lease.lease_id,
+                    holder_workflow_id=workflow_id,
+                    agent_run_id=step_execution_id,
+                    idempotency_key=idempotency_key,
+                )
+            except OmnigentOAuthHostError as exc:
+                if exc.code != HOST_PROFILE_BUSY_ERROR_CODE:
+                    raise
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise
+                wait_attempt += 1
+                retry_after = min(HOST_PROFILE_BUSY_POLL_SECONDS, remaining)
+                await emit(
+                    "host_lease_created",
+                    "waiting",
+                    code=HOST_PROFILE_BUSY_ERROR_CODE,
+                    remediation_action="wait_for_host_cleanup",
+                    metadata={
+                        "providerProfileId": binding.provider_profile_id,
+                        "retryAfterSeconds": retry_after,
+                        "waitAttempt": wait_attempt,
+                    },
+                    ignore_errors=True,
+                )
+                await asyncio.sleep(retry_after)
 
-        async def wait(code: str) -> bool:
-            nonlocal wait_attempt
+    async def _await_host_cleanup_owner(
+        self,
+        host_lease: OmnigentHostLease,
+        *,
+        binding: Any,
+        provider_lease: CredentialLease,
+        emit: Callable[..., Awaitable[None]],
+    ) -> OmnigentHostLease:
+        """Let the owner of a draining host lease finish before reuse.
+
+        A retried dispatch reuses its idempotent lease. When a worker loss left
+        that lease silent, the janitor may already own its cleanup. The caller
+        holds the draining lease before this wait so an aborted wait still
+        defers cleanup to that owner instead of releasing capacity. The owner
+        publishes ``stopped`` only after its whole handoff, so the returned
+        terminal lease is safe to restart while the Provider Profile lease is
+        still held.
+        """
+
+        if host_lease.status != "draining":
+            return host_lease
+        deadline = asyncio.get_running_loop().time() + HOST_PROFILE_BUSY_WAIT_SECONDS
+        wait_attempt = 0
+        while host_lease.status == "draining":
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                return False
+                raise OmnigentOAuthHostError(
+                    "host lease cleanup is owned by the janitor",
+                    code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+                )
             wait_attempt += 1
             retry_after = min(HOST_PROFILE_BUSY_POLL_SECONDS, remaining)
             await emit(
                 "host_lease_created",
                 "waiting",
-                code=code,
+                code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
                 remediation_action="wait_for_host_cleanup",
                 metadata={
                     "providerProfileId": binding.provider_profile_id,
@@ -566,37 +621,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ignore_errors=True,
             )
             await asyncio.sleep(retry_after)
-            return True
-
-        while True:
-            try:
-                host_lease = await self._hosts.create_or_get_host_lease(
-                    binding=binding,
-                    provider_lease_id=provider_lease.lease_id,
-                    holder_workflow_id=workflow_id,
-                    agent_run_id=step_execution_id,
-                    idempotency_key=idempotency_key,
-                )
-                break
-            except OmnigentOAuthHostError as exc:
-                if exc.code != HOST_PROFILE_BUSY_ERROR_CODE:
-                    raise
-                if not await wait(HOST_PROFILE_BUSY_ERROR_CODE):
-                    raise
-        # A retried dispatch reuses its idempotent lease. When a worker loss
-        # left that lease silent, the janitor may already own its cleanup;
-        # let that owner stop the host so the caller restarts the same lease
-        # instead of heartbeating a draining one.
-        while host_lease.status == "draining":
-            if not await wait(HOST_CLEANUP_CLAIMED_ERROR_CODE):
-                raise OmnigentOAuthHostError(
-                    "host lease cleanup is owned by the janitor",
-                    code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
-                )
             current = await self._hosts.get_host_lease(host_lease.lease_id)
             if current is None:
                 raise OmnigentOAuthHostError("host lease does not exist")
             host_lease = current
+        inspection = await self._lease_client.inspect_lease(provider_lease)
+        if not inspection.get("active"):
+            raise OmnigentOAuthHostError(
+                "host lease cleanup released the Provider Profile lease",
+                code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+            )
         return host_lease
 
     async def _claim_continuation_turn(
@@ -1297,6 +1331,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                 workflow_id=workflow_id,
                 step_execution_id=step_execution_id,
                 idempotency_key=request.idempotency_key,
+                emit=emit,
+            )
+            host_lease = await self._await_host_cleanup_owner(
+                host_lease,
+                binding=binding,
+                provider_lease=provider_lease,
                 emit=emit,
             )
             if host_lease.status in {"stopped", "failed"}:

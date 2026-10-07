@@ -7527,14 +7527,13 @@ async def test_omnigent_recovery_dispatch_waits_for_janitor_drained_host(
         update={"lease_id": manifest["hostLeaseRef"], "status": "draining"}
     )
     stopped = draining.model_copy(update={"status": "stopped"})
-    hosts = SimpleNamespace(
-        create_or_get_host_lease=AsyncMock(return_value=draining),
-        get_host_lease=AsyncMock(side_effect=[draining, stopped]),
-    )
+    hosts = SimpleNamespace(get_host_lease=AsyncMock(side_effect=[draining, stopped]))
     emit = AsyncMock()
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
-        lease_client=SimpleNamespace(),
+        lease_client=SimpleNamespace(
+            inspect_lease=AsyncMock(return_value={"active": True})
+        ),
         host_repository=hosts,
         host_runtime=SimpleNamespace(),
         run_store=SimpleNamespace(),
@@ -7546,12 +7545,10 @@ async def test_omnigent_recovery_dispatch_waits_for_janitor_drained_host(
         0.0,
     )
 
-    admitted = await coordinator._create_host_lease_after_profile_idle(
+    admitted = await coordinator._await_host_cleanup_owner(
+        draining,
         binding=binding,
         provider_lease=SimpleNamespace(lease_id=manifest["incidentChildWorkflowId"]),
-        workflow_id=manifest["incidentWorkflowId"],
-        step_execution_id="step-recovery",
-        idempotency_key="recovery-dispatch",
         emit=emit,
     )
 

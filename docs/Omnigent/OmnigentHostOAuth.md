@@ -498,7 +498,7 @@ Run cleanup may not remove:
 - shared image layers
 - deployment-owned policy or network resources
 
-A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release remains last even when cleanup requires retries.
+A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release still follows confirmed host teardown, even when cleanup requires retries. The janitor marks the host lease `stopped` only after the release, the terminal cleanup record, and the runtime-binding cleanup complete. A lease that is still `draining` therefore means the handoff is unfinished. A recovered dispatch that receives its idempotent lease while it is `draining` waits, within a bounded budget, for that state to clear. If the Provider Profile lease is still active, it then restarts the same host lease. If the wait aborts, it leaves cleanup to the janitor and keeps the capacity held.
 
 On-demand OAuth initialization uses a deterministic `<host-container>-init`
 container carrying the host lease, profile, and credential generation labels.
