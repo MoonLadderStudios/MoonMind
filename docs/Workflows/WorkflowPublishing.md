@@ -112,13 +112,17 @@ A resolved scope default is pinned before child creation. Children do not indepe
 
 `pr-resolver.finishMode` distinguishes `merge` from `fix_only`. `fix_only` still remediates, pushes, verifies the current head, and checks the same gates. It does not mean None. The ordinary label should communicate **Merge when ready**, while the single publication control explains that Auto operates on the existing PR.
 
+The `pr-review-resolve` preset's boolean `review_only` defaults to false and preserves that resolver behavior. True selects the gate's `review_only` finish with publication None: request fresh supported review of the current PR head and finish at review_complete, including with findings. It grants no resolver, preparation, remediation, source publication, merge, or post-merge authority. This objective option does not introduce another publishing selector.
+
 Review provider, verification enablement, merge method, discovery filters, and dry run remain meaningful capability inputs. They cannot grant effects that the publication policy forbids. A second generic publish-mode dropdown inside a Skill or Preset is not a meaningful task option.
 
 ### Explicit None
 
 A new explicit `none` prohibits repository publication throughout the scoped tree, including a resolver child or an implicit merge-automation phase. It is not merely an instruction to skip the final managed publisher.
 
-A capability whose successful objective requires a push or merge cannot execute under None unless it has a separately declared, genuinely non-publishing behavior compatible with that objective. The current PR-resolution objective therefore requires correction rather than automatic promotion or a false local-only success. `fix_only` is not that non-publishing behavior.
+A capability whose successful objective requires a push or merge cannot execute under None unless it has a separately declared, genuinely non-publishing behavior compatible with that objective. PR resolution through a resolver therefore requires correction rather than automatic promotion or a false local-only success. `fix_only` is not that non-publishing behavior. The gate's declared `review_only` objective is compatible with None: repository read and `review_request` collaboration are admitted independently, without repository-write, branch, or publication-destination authority.
+
+Review-only transport requires typed `parentExecutionPlan` from the actual admitted parent workflow binding and consumes its immutable selected collaboration repository snapshot and connection for `read` or `review_request`. Existing admission and parent narrowing remain authoritative; caller-supplied tokens, ambient fallback, or arbitrary connections cannot replace them.
 
 None does not prohibit local workspace work, local Git metadata, artifact capture, issue creation, Jira status changes, or child dispatch when those operations are independently declared and authorized. It is not a dry-run or universal read-only switch. A dry-run batch discovers and reports proposed children without enqueuing them; None can still enqueue compatible non-publishing children.
 
@@ -236,7 +240,8 @@ This matrix is the declarative target for catalog metadata, authoring preview, c
 | `batch-dependabot-resolver` | Same existing-PR behavior for matching Dependabot PRs | Preserve conservative filters, caps, dry run, and per-PR/head deduplication. |
 | `pr-resolver` | Skill-owned Auto repairs the selected PR and merges when its declared finish mode is `merge` | `fix_only` still pushes, never merges, and succeeds only at the clean gate. None is incompatible with this publishing objective. |
 | `fix-comments`, `fix-ci`, `fix-merge-conflicts` | Skill-owned Auto for their declared existing-PR/branch effects | Preserve exact remote-head evidence and portable Skill semantics. |
-| `pr-review-resolve` | Review/fix the existing PR; optional final merge is off by default | Coordinator publication is `none`; enabled merge automation declares the resolution owner before the trusted tool qualifies the target. The owner invokes resolver work under the scope's admitted effects. Parent `none` is not a tree-wide user selection. |
+| `pr-review-resolve`, `review_only: false` (default) | Review/fix the existing PR; optional final merge is off by default | Coordinator publication is `none`; enabled merge automation declares the resolution owner before the trusted tool qualifies the target. The owner invokes resolver work under the scope's admitted effects. Parent `none` is not a tree-wide user selection. |
+| `pr-review-resolve`, `review_only: true` | No repository publication; request fresh current-head review and report review_complete, including findings | Scope publication is None. Admit only repository read and review_request collaboration with a supported fresh reviewer; no resolver preparation, remediation, work branch, destination, source publication, merge, or post-merge effects. CI does not gate this review objective. |
 | Standalone implementation presets, including Jira/GitHub Implement, Jira/GitHub Orchestrate, document author/update, and MoonSpec Orchestrate | Managed PR publication under their declared default | Read-only assessment, verification, or tracker steps remain non-publishing inside the same composition. |
 | Standalone assessment, verification, or tracker-only work | No repository publication | Tracker effects and artifact saving have independent contracts. |
 
@@ -265,6 +270,8 @@ One policy does not require one final push. A supported composition can include 
 All new managed and agent-owned repository publishers emit `moonmind.publish.repository.v1` as defined by [Lore VCS Integration Design section 3.13](LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence). That providing contract owns field names, provider-discriminated repository/branch/revision references, statuses/actions, `connectionRef`, `clientEvidence`, security scanning, and remote proof. This document consumes it and does not define a second payload shape.
 
 Managed publication sets `owner = moonmind`; Skill-owned publication sets `owner = agent` with compiled mode `auto`. Owner changes effect responsibility, not evidence strength. Resolved `none` emits no repository-publication evidence and is not forced to fabricate a remote no-op. Coordinator/other side-effect artifacts remain separate objective evidence.
+
+Review-only preserves request-bound reviewer completion and exact current-head observations as objective evidence. Its originally admitted head stays pinned; a moved head blocks stale_revision without retargeting or requesting review of another revision. It does not emit repository-publication evidence or claim a clean, merged, or issue-complete outcome.
 
 The unified artifact and its accepted result reference are bound through the existing terminal contract and artifact provenance to the exact workflow/run/Step Execution/attempt and immutable target. Validate that association before accepting the result. Restored or other-attempt artifacts are stale even if revision, Skill name, and remote state match. Do not recreate the retired schema's fields inside the new payload or let a self-asserted attempt identifier substitute for trusted artifact ownership.
 
@@ -391,7 +398,9 @@ For PR-and-merge intent, successful managed PR publication starts the existing p
 
 The automation's resolver may compile to Skill-owned `auto` without changing the authored policy. It acts only on the admitted PR and within the selected merge/finish authority. An existing-PR review workflow adopts its resolved target instead of creating another PR. A direct resolver does not also get a competing managed publisher or duplicate merge-automation loop.
 
-Detail payloads preserve the single authored selection and explain its effective behavior. Explicit PR-and-merge is displayed as `pr_with_merge_automation`; Auto remains Auto with its resolved explanation. Internal worker input stays `pr` plus automation configuration. No second editable `mergeAutomationSelected` flag is introduced. Active/terminal automation state belongs in the existing status object.
+An existing-PR review-only workflow adopts its target under None and uses the same automation owner's trusted review-request operation. A supported fresh reviewer is required. It returns review_complete for request-bound completion on the current head, including findings and independently of CI, without preparing or launching a resolver or performing publication, merge, or tracker-finalization effects.
+
+Detail payloads preserve the single authored selection and explain its effective behavior. Explicit PR-and-merge is displayed as `pr_with_merge_automation`; Auto remains Auto with its resolved explanation. For PR-producing automation, internal worker input stays `pr` plus automation configuration; review-only retains `none`. No second editable `mergeAutomationSelected` flag is introduced. Active/terminal automation state belongs in the existing status object.
 
 For Jira-backed work, preserve canonical `jiraIssueKey` in automation input. When present, the existing default post-merge Jira completion targets that key. An explicitly configured `postMergeJira.issueKey` is separately validated and overrides it. Never use fuzzy summary search or transition every key found in PR text. PR metadata is only a strict fallback when stronger authoritative context is absent.
 
@@ -477,6 +486,7 @@ The production compiler, schema forms, preset expansion, child API, runtime adap
 - Omission and explicit `default` produce equivalent admitted behavior and preview; authoring Auto never leaks as unresolved worker mode. Retired workspace/environment defaults cannot alter either path.
 - Configured historical None/Branch/PR fallbacks retain proven effective intent or block for review, including unattended schedules and restored settings. Removal produces auditable disposition, not silent loss of operator choice.
 - Main issue batches, both breakdown families, document fan-out, both PR batches, direct resolvers, and the review loop satisfy the matrix using actual production boundaries.
+- Review-only preserves None, repository-read and review_request authority, fresh current-head evidence, and review_complete through preview, expansion, admission, rerun, schedules, and result projection. Findings or unrelated CI cannot cause remediation or grant publication authority.
 - A coordinator with a PR intent has local `none` and PR children, including through another coordinator. Explicit root None cannot be bypassed by a child or merge phase.
 - Non-default bases survive issue discovery. PR batches resolve distinct head/base targets. Cross-repository, conflicting, stale, fork-only, and ambiguous targets retain safe dispositions. Recovery/resolver new writes reject old branch aliases.
 - Read-only assessment/verification and tracker steps do not erase cumulative publication policy or candidate evidence. Conflicting publication owners fail before effects.

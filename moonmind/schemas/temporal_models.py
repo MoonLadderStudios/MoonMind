@@ -24,6 +24,7 @@ from pr_resolver_core.review_providers import (
 )
 
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -1804,8 +1805,9 @@ MergeMethod = Literal["merge", "squash", "rebase"]
 # How merge automation finishes once the gate opens and the resolver reports
 # that nothing is left to address. "merge" runs the final pr-resolver pass with
 # merge authority; "fix_only" stops at the open gate without a merge side
-# effect. Histories recorded before this field default to "merge".
-MergeAutomationFinishMode = Literal["merge", "fix_only"]
+# effect. "review_only" requests and observes fresh review without a resolver.
+# Histories recorded before this field default to "merge".
+MergeAutomationFinishMode = Literal["merge", "fix_only", "review_only"]
 PostMergeJiraStrategy = Literal["done_category"]
 
 class MergeAutomationGitHubGateModel(BaseModel):
@@ -2081,6 +2083,19 @@ class MergeAutomationConfigModel(BaseModel):
     # derives its merge authority from this value; it is never configured twice.
     finish_mode: MergeAutomationFinishMode = Field("merge", alias="finishMode")
 
+    @model_validator(mode="after")
+    def _validate_review_only(self) -> "MergeAutomationConfigModel":
+        if self.finish_mode != "review_only":
+            return self
+        if (
+            not self.review_loop.enabled
+            or not self.review_loop.require_fresh_review_for_every_head
+        ):
+            raise ValueError("review_only requires an enabled fresh automated reviewer.")
+        if self.post_merge_jira.enabled or self.post_merge_github.enabled:
+            raise ValueError("review_only forbids post-merge effects.")
+        return self
+
 ReadinessBlockerKind = Literal[
     "checks_running",
     "checks_failed",
@@ -2221,6 +2236,9 @@ class MergeAutomationStartInput(BaseModel):
     parent_workflow_id: str = Field(..., alias="parentWorkflowId")
     parent_run_id: str | None = Field(None, alias="parentRunId")
     principal: str | None = Field(None, alias="principal")
+    parent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="parentExecutionPlan"
+    )
     publish_context_ref: str = Field(..., alias="publishContextRef")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
@@ -2263,6 +2281,20 @@ class MergeAutomationStartInput(BaseModel):
         if value < 0:
             raise ValueError("cycleCount must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def _require_review_only_parent_plan(self) -> "MergeAutomationStartInput":
+        if self.config.finish_mode == "review_only" and self.parent_execution_plan is None:
+            raise ValueError("review_only requires parentExecutionPlan authority.")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_parent_plan(self, handler):
+        payload = handler(self)
+        if self.parent_execution_plan is None:
+            payload.pop("parentExecutionPlan", None)
+            payload.pop("parent_execution_plan", None)
+        return payload
 
 
 class PRResolverPolicyModel(BaseModel):

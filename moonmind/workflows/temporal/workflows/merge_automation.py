@@ -10,7 +10,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import SearchAttributeKey, SearchAttributePair
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
         DEFAULT_ACTIVITY_RETRY_POLICY,
         FINISH_MODE_FIX_ONLY,
         FINISH_MODE_MERGE,
+        FINISH_MODE_REVIEW_ONLY,
         TERMINAL_BLOCKER_KINDS,
         _effective_expire_at,
         build_resolver_run_request,
@@ -52,6 +53,7 @@ STATE_BLOCKED = "blocked"
 STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
 STATE_REVIEW_CLEAN = "review_clean"
+STATE_REVIEW_COMPLETE = "review_complete"
 STATE_EXPIRED = "expired"
 STATE_FAILED = "failed"
 STATE_CANCELED = "canceled"
@@ -126,6 +128,30 @@ MAX_PUBLISHED_RESOLVER_VERDICT_CYCLES = 20
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
 RESOLVER_ISSUE_RECOVERY_REENTER_GATE = "reenter_gate"
+
+
+def _parse_review_timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _review_completion_is_fresh(
+    *, requested_at: Any, completed_at: Any, completion_kind: Any, completion_id: Any
+) -> bool:
+    requested = _parse_review_timestamp(requested_at)
+    completed = _parse_review_timestamp(completed_at)
+    return bool(
+        str(completion_kind or "").strip()
+        and isinstance(completion_id, int)
+        and not isinstance(completion_id, bool)
+        and completion_id > 0
+        and requested is not None
+        and completed is not None
+        and completed >= requested
+    )
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -213,6 +239,8 @@ class MoonMindMergeAutomationWorkflow:
             ],
             "artifactRefs": artifact_refs,
         }
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            payload["finishMode"] = FINISH_MODE_REVIEW_ONLY
         if self._review_loop_active():
             payload["reviewLoop"] = {
                 "enabled": True,
@@ -1495,12 +1523,23 @@ class MoonMindMergeAutomationWorkflow:
                 blocker_kind="resolver_continuation_invalid",
             )
 
-        config = self._review_loop_config()
-        head_sha = continuation["headSha"]
-        self._input.pull_request.head_sha = head_sha
-        made_progress = self._register_progress_signature(
-            continuation.get("progressSignature")
+        return await self._post_automated_review(
+            head_sha=continuation["headSha"],
+            progress_signature=continuation.get("progressSignature"),
         )
+
+    async def _post_automated_review(
+        self,
+        *,
+        head_sha: str,
+        progress_signature: str | None = None,
+        expires_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Post through the existing owning activity and durable request ledger."""
+
+        config = self._review_loop_config()
+        self._input.pull_request.head_sha = head_sha
+        made_progress = self._register_progress_signature(progress_signature)
         if (
             not made_progress
             and self._no_progress_cycles >= config.max_consecutive_no_progress_cycles
@@ -1529,17 +1568,31 @@ class MoonMindMergeAutomationWorkflow:
             head_sha=head_sha,
             provider=config.provider,
         )
+        request_payload = {
+            "parentWorkflowId": self._resolver_parent_workflow_id(),
+            "repository": self._input.pull_request.repo,
+            "prNumber": self._input.pull_request.number,
+            "expectedHeadSha": head_sha,
+            "provider": config.provider,
+            "requestKey": request_key,
+        }
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            request_payload.update(
+                {
+                    "finishMode": FINISH_MODE_REVIEW_ONLY,
+                    "parentExecutionPlan": self._input.parent_execution_plan.model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                    "principal": self._principal(),
+                    "admittedParentWorkflowId": self._input.parent_workflow_id,
+                    "parentRunId": self._input.parent_run_id,
+                    **({"expiresAt": expires_at.isoformat()} if expires_at else {}),
+                }
+            )
         try:
             outcome = await workflow.execute_activity(
                 "merge_automation.request_automated_review",
-                {
-                    "parentWorkflowId": self._resolver_parent_workflow_id(),
-                    "repository": self._input.pull_request.repo,
-                    "prNumber": self._input.pull_request.number,
-                    "expectedHeadSha": head_sha,
-                    "provider": config.provider,
-                    "requestKey": request_key,
-                },
+                request_payload,
                 start_to_close_timeout=timedelta(minutes=2),
                 task_queue=INTEGRATIONS_TASK_QUEUE,
                 retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
@@ -1558,8 +1611,18 @@ class MoonMindMergeAutomationWorkflow:
 
         outcome_map = dict(outcome) if isinstance(outcome, Mapping) else {}
         status = str(outcome_map.get("status") or "").strip()
+        if status == "expired" and self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            self._status = STATE_EXPIRED
+            self._summary = "Review deadline expired before a new request was posted."
+            self._publish_visibility()
+            return await self._finish()
         if status not in REVIEW_REQUEST_POSTED_STATUSES:
             if status in REVIEW_REQUEST_RETRY_GATE_STATUSES:
+                if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+                    return await self._blocked_review_summary(
+                        summary="The pull request changed before its review was requested.",
+                        blocker_kind="stale_revision",
+                    )
                 observed = str(outcome_map.get("observedHeadSha") or "").strip()
                 if observed and observed != head_sha:
                     self._input.pull_request.head_sha = observed
@@ -1581,6 +1644,16 @@ class MoonMindMergeAutomationWorkflow:
                 blocker_kind="automated_review_request_failed",
             )
 
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY and not (
+            outcome_map.get("headSha") == head_sha
+            and self._review_only_request_is_bound(
+                {**outcome_map, "requestKey": request_key}
+            )
+        ):
+            return await self._blocked_review_summary(
+                summary="The review request receipt does not prove the requested head.",
+                blocker_kind="automated_review_request_failed",
+            )
         request_comment_id = outcome_map.get("requestCommentId")
         cycle = {
             "cycle": len(self._review_cycles) + 1,
@@ -1593,7 +1666,7 @@ class MoonMindMergeAutomationWorkflow:
             "completionId": None,
             "completedAt": None,
             "status": "requested",
-            "progressSignature": continuation.get("progressSignature"),
+            "progressSignature": progress_signature,
         }
         self._review_cycles.append(cycle)
         self._active_review_request = {
@@ -1617,6 +1690,26 @@ class MoonMindMergeAutomationWorkflow:
         if not self._active_review_request or not isinstance(evaluation, Mapping):
             return
         cycle = self._review_cycles[-1] if self._review_cycles else None
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            # The provider activity owns classification and request matching.
+            # An incomplete or different-head projection cannot settle this
+            # exact-head objective or make its restored request disappear.
+            if (
+                evaluation.get("headSha") != self._input.pull_request.head_sha
+                or evaluation.get("automatedReviewRequestStale") is True
+                or cycle is None
+                or cycle.get("requestKey")
+                != self._active_review_request.get("requestKey")
+            ):
+                return
+            if evaluation.get("automatedReviewComplete") is True:
+                if not _review_completion_is_fresh(
+                    requested_at=self._active_review_request.get("requestedAt"),
+                    completed_at=evaluation.get("automatedReviewCompletedAt"),
+                    completion_kind=evaluation.get("automatedReviewCompletionKind"),
+                    completion_id=evaluation.get("automatedReviewCompletionId"),
+                ):
+                    return
         if evaluation.get("automatedReviewComplete") is True:
             if cycle is not None:
                 cycle["completionKind"] = evaluation.get(
@@ -1646,6 +1739,15 @@ class MoonMindMergeAutomationWorkflow:
                 actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
             )
         readiness_payload = self._input.model_dump(by_alias=True, mode="json")
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            # Review completion is independent of CI, including unavailable
+            # check APIs under a deliberately limited repository connection.
+            readiness_payload["mergeAutomationConfig"]["gate"]["github"][
+                "checks"
+            ] = "disabled"
+            readiness_payload["mergeAutomationConfig"]["gate"]["jira"][
+                "status"
+            ] = "disabled"
         # Always publish the *live* request state so a restored input can never
         # make a settled request look active again.
         readiness_payload["activeReviewRequest"] = (
@@ -1681,6 +1783,134 @@ class MoonMindMergeAutomationWorkflow:
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
         )
         return evaluation, evidence
+
+    def _review_only_request_is_bound(self, request: Mapping[str, Any]) -> bool:
+        expected_key = build_review_request_key(
+            parent_workflow_id=self._resolver_parent_workflow_id(),
+            repository=self._input.pull_request.repo,
+            pr_number=self._input.pull_request.number,
+            head_sha=self._input.pull_request.head_sha,
+            provider=self._review_loop_config().provider,
+        )
+        comment_id = request.get("requestCommentId")
+        return bool(
+            request.get("headSha") == self._input.pull_request.head_sha
+            and request.get("provider") == self._review_loop_config().provider
+            and request.get("requestKey") == expected_key
+            and isinstance(comment_id, int)
+            and not isinstance(comment_id, bool)
+            and comment_id > 0
+            and _parse_review_timestamp(request.get("requestedAt")) is not None
+        )
+
+    async def _run_review_only(self, *, expire_at: datetime | None) -> dict[str, Any]:
+        """Request and await one fresh review without resolver or publication effects."""
+
+        if not self._review_loop_active():
+            return await self._blocked_review_summary(
+                summary="Review-only automation requires a configured fresh reviewer.",
+                blocker_kind="policy_denied",
+            )
+        if self._active_review_request and (
+            not self._review_only_request_is_bound(self._active_review_request)
+            or not self._review_cycles
+            or self._review_cycles[-1].get("requestKey")
+            != self._active_review_request.get("requestKey")
+        ):
+            return await self._blocked_review_summary(
+                summary="The restored review request is not bound to this owning gate.",
+                blocker_kind="automated_review_request_failed",
+            )
+
+        while True:
+            if expire_at is not None and workflow.now() >= expire_at:
+                self._status = STATE_EXPIRED
+                self._publish_visibility()
+                return await self._finish()
+            evaluation, evidence = await self._evaluate_readiness_once()
+            observed = evaluation if isinstance(evaluation, Mapping) else {}
+            self._blockers = list(evidence.blockers)
+            await self._write_gate_snapshot(evidence_ready=False)
+            # Readiness and artifact Activities may outlast the remaining budget;
+            # neither a new request nor late completion can extend the objective.
+            if expire_at is not None and workflow.now() >= expire_at:
+                self._status = STATE_EXPIRED
+                self._publish_visibility()
+                return await self._finish()
+            if (
+                observed.get("headSha") != self._input.pull_request.head_sha
+                or observed.get("automatedReviewRequestStale") is True
+            ):
+                return await self._blocked_review_summary(
+                    summary="The pull request head changed during its requested review.",
+                    blocker_kind="stale_revision",
+                )
+            if observed.get("pullRequestOpen") is False or evidence.pull_request_merged:
+                return await self._blocked_review_summary(
+                    summary="The pull request is no longer open for the requested review.",
+                    blocker_kind="pull_request_closed",
+                )
+            if any(b.kind in TERMINAL_BLOCKER_KINDS for b in self._blockers):
+                self._status = STATE_BLOCKED
+                self._publish_visibility()
+                return await self._finish()
+            cycle = self._review_cycles[-1] if self._review_cycles else None
+            if (
+                observed.get("pullRequestOpen") is True
+                and cycle is not None
+                and cycle.get("status") == "completed"
+                and self._review_only_request_is_bound(cycle)
+                and _review_completion_is_fresh(
+                    requested_at=cycle.get("requestedAt"),
+                    completed_at=cycle.get("completedAt"),
+                    completion_kind=cycle.get("completionKind"),
+                    completion_id=cycle.get("completionId"),
+                )
+            ):
+                self._status = STATE_REVIEW_COMPLETE
+                self._summary = (
+                    "The requested fresh review completed for this head. "
+                    "CI and any review findings remain separate obligations."
+                )
+                # Completion was accepted above, after the deadline/head/open
+                # checks and request-bound evidence validation. This final
+                # snapshot only reports that decision; delayed artifact I/O
+                # must not reopen the accepted outcome or imply merge readiness.
+                await self._write_gate_snapshot(evidence_ready=True)
+                self._publish_visibility()
+                return await self._finish()
+            # CI and merge-conflict readiness do not delay a review request.
+            # Unknown external state does: do not infer permission to post.
+            if (
+                not self._active_review_request
+                and not self._review_cycles
+                and observed.get("pullRequestOpen") is True
+                and not any(
+                    b.kind == "external_state_unavailable" for b in self._blockers
+                )
+            ):
+                terminal = await self._post_automated_review(
+                    head_sha=self._input.pull_request.head_sha,
+                    expires_at=expire_at,
+                )
+                if terminal is not None:
+                    return terminal
+            self._status = STATE_WAITING
+            self._publish_visibility()
+            timeout = timedelta(
+                seconds=self._input.config.timeouts.fallback_poll_seconds
+            )
+            if expire_at is not None:
+                timeout = min(timeout, max(timedelta(0), expire_at - workflow.now()))
+            target_event_count = self._external_event_count
+            try:
+                await workflow.wait_condition(
+                    lambda count=target_event_count: self._external_event_count > count,
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                # The bounded wait elapsed; poll readiness again on the next loop.
+                pass
 
     async def _recover_after_resolver_issue(
         self,
@@ -1735,6 +1965,18 @@ class MoonMindMergeAutomationWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeAutomationStartInput.model_validate(payload)
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            parent = workflow.info().parent
+            if (
+                parent is None
+                or parent.workflow_id != self._input.parent_workflow_id
+                or parent.run_id != self._input.parent_run_id
+            ):
+                raise ApplicationError(
+                    "review_only requires its owning Temporal parent",
+                    type="ReviewOnlyParentAuthorityMismatch",
+                    non_retryable=True,
+                )
         self._continuation_observability_enabled = workflow.patched(
             MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH
         )
@@ -1759,6 +2001,9 @@ class MoonMindMergeAutomationWorkflow:
         self._status = STATE_WAITING
         expire_at = _effective_expire_at(self._input, started_at=workflow.now())
         self._publish_visibility()
+
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            return await self._run_review_only(expire_at=expire_at)
 
         while True:
             if expire_at is not None and workflow.now() >= expire_at:
