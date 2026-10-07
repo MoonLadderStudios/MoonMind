@@ -181,11 +181,11 @@ async def test_session_launch_retries_preserve_pre_upgrade_payload(
             agent_name=None,
             target_metadata={},
         )
-        # A row written by the old worker has no launch-default decision. It
-        # may have reached the provider even though it has no attached ID yet.
+        # An explicitly saved empty default is authoritative, even when the
+        # create reached the provider before the session ID was attached.
         async with sessions() as session:
             legacy_row = await session.get(OmnigentBridgeSession, row.bridge_session_id)
-            legacy_row.metadata_ = {}
+            legacy_row.metadata_ = {"workflowLaunchDefaults": {}}
             await session.commit()
         old_payload = build_omnigent_session_create_payload(
             request=bound,
@@ -276,3 +276,109 @@ def test_session_payload_without_saved_defaults_preserves_authored_arguments(bin
         target=OmnigentResolvedTarget(agent_id="agent-1", source="agent_id"),
     )
     assert payload["terminal_launch_args"] == ["--verbose"]
+
+
+@pytest.mark.asyncio
+@_BINDERS
+@pytest.mark.parametrize(
+    "predecessor_args", [None, [], ["--permission-mode", "bypassPermissions"]]
+)
+async def test_unmarked_retry_reconciles_actual_predecessor_session(
+    bind, predecessor_args, monkeypatch, tmp_path
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base, OmnigentBridgeSession
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.execute import run_omnigent_execution
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(sessions)
+    request = bind(_request(), "claude-native")
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="endpoint-1",
+        agent_id="agent-1",
+        agent_name=None,
+        target_metadata={},
+    )
+    async with sessions() as db:
+        persisted = await db.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.metadata_ = {}
+        await db.commit()
+    provider = {
+        "id": "predecessor-session",
+        "agent_id": "agent-1",
+        "host_id": "host-1",
+        "terminal_launch_args": predecessor_args,
+        "labels": {
+            "moonmind.correlation_id": request.correlation_id,
+            "moonmind.idempotency_key": request.idempotency_key,
+        },
+    }
+    lookups = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def list_agents(self):
+            return [{"id": "agent-1", "name": "claude-native-ui"}]
+
+        async def list_sessions(self, *, agent_id, after=None):
+            lookups.append((agent_id, after))
+            return {
+                "data": [] if predecessor_args is None else [provider],
+                "has_more": False,
+                "last_id": provider["id"],
+            }
+
+        async def create_session(self, payload):
+            assert (
+                predecessor_args is None
+            ), "Never replay an accepted predecessor create with guessed flags"
+            persisted = await store.get_existing(request.idempotency_key)
+            assert persisted.metadata_["workflowLaunchDefaults"] == {
+                "claude-native": ["--permission-mode", "bypassPermissions"]
+            }
+            assert payload["terminal_launch_args"] == [
+                "--permission-mode",
+                "bypassPermissions",
+            ]
+            provider.update(payload)
+            return {"id": provider["id"]}
+
+        async def get_session(self, session_id):
+            assert session_id == provider["id"]
+            if (await store.get_existing(request.idempotency_key)).omnigent_session_id:
+                raise _WorkerStopped()
+            return provider
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
+    try:
+        with pytest.raises(_WorkerStopped):
+            await run_omnigent_execution(
+                request,
+                run_store=store,
+                artifact_gateway=LocalOmnigentArtifactGateway(
+                    root=tmp_path / "capture"
+                ),
+            )
+        assert lookups == [("agent-1", None)]
+        assert (
+            await store.get_existing(request.idempotency_key)
+        ).omnigent_session_id == provider["id"]
+        assert provider["terminal_launch_args"] == (
+            predecessor_args
+            if predecessor_args is not None
+            else ["--permission-mode", "bypassPermissions"]
+        )
+    finally:
+        await engine.dispose()

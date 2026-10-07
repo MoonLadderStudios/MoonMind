@@ -76,8 +76,8 @@ def _journal_artifact_service(session: AsyncSession) -> Any:
 
 
 # Pin worker-derived workflow launch defaults before any provider side effect.
-# Missing metadata on a retained row means the pre-upgrade defaults (no flags),
-# not permission to recompute a new payload for its existing idempotency key.
+# Missing metadata is ambiguous across older workers: reconcile any provider
+# effect before selecting defaults for an attempt without a saved decision.
 WORKFLOW_LAUNCH_DEFAULTS_KEY = "workflowLaunchDefaults"
 WORKFLOW_LAUNCH_DEFAULTS = {
     "claude-native": ["--permission-mode", "bypassPermissions"],
@@ -1109,6 +1109,30 @@ class OmnigentBridgeSessionStore:
                 if changed:
                     await session.commit()
             await session.refresh(row)
+            return _detached(session, row)
+
+    async def freeze_workflow_launch_defaults(
+        self, idempotency_key: str
+    ) -> OmnigentBridgeSession:
+        """Freeze defaults only after legacy provider reconciliation found no effect."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            metadata = dict(row.metadata_ or {})
+            if (
+                WORKFLOW_LAUNCH_DEFAULTS_KEY not in metadata
+                and not row.omnigent_session_id
+            ):
+                metadata[WORKFLOW_LAUNCH_DEFAULTS_KEY] = copy.deepcopy(
+                    WORKFLOW_LAUNCH_DEFAULTS
+                )
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
             return _detached(session, row)
 
     async def bind_profile_authorization(
