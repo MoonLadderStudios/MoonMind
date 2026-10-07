@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -439,88 +439,6 @@ class TemporalDeploymentEvidenceWriter:
             content_type="application/json",
         )
         return str(getattr(completed, "artifact_id", artifact.artifact_id))
-
-
-class DisabledComposeRunner:
-    """Fail-closed runner used when deployment-control infrastructure is absent."""
-
-    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
-        raise ToolFailure(
-            error_code="POLICY_VIOLATION",
-            message="Deployment update runner is not configured for this worker.",
-            retryable=False,
-            details={
-                "stack": stack,
-                "phase": phase,
-                "failureClass": "policy_violation",
-            },
-        )
-
-    async def pull(
-        self,
-        *,
-        stack: str,
-        command: tuple[str, ...],
-        requested_image: str,
-    ) -> Mapping[str, Any]:
-        raise ToolFailure(
-            error_code="POLICY_VIOLATION",
-            message="Deployment update runner is not configured for this worker.",
-            retryable=False,
-            details={
-                "stack": stack,
-                "command": list(command),
-                "failureClass": "policy_violation",
-            },
-        )
-
-    async def up(
-        self,
-        *,
-        stack: str,
-        command: tuple[str, ...],
-        requested_image: str,
-    ) -> Mapping[str, Any]:
-        raise ToolFailure(
-            error_code="POLICY_VIOLATION",
-            message="Deployment update runner is not configured for this worker.",
-            retryable=False,
-            details={
-                "stack": stack,
-                "command": list(command),
-                "failureClass": "policy_violation",
-            },
-        )
-
-    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
-        raise ToolFailure(
-            error_code="DEPLOYMENT_RUNNER_UNAVAILABLE",
-            message="Deployment update runner is not configured for this worker.",
-            retryable=False,
-            details={
-                "requestedImage": requested_image,
-                "failureClass": "runner_unavailable",
-            },
-        )
-
-    async def verify(
-        self,
-        *,
-        stack: str,
-        requested_image: str,
-        resolved_digest: str | None,
-    ) -> ComposeVerification:
-        raise ToolFailure(
-            error_code="POLICY_VIOLATION",
-            message="Deployment update runner is not configured for this worker.",
-            retryable=False,
-            details={
-                "stack": stack,
-                "requested_image": requested_image,
-                "resolved_digest": resolved_digest,
-                "failureClass": "policy_violation",
-            },
-        )
 
 
 def _is_host_absolute_path(path: Path | str) -> bool:
@@ -3713,7 +3631,9 @@ def _controller_failure(exc: DeploymentOperationError) -> ToolFailure:
     )
 
 
-def _controller_tool_result(operation: Mapping[str, Any], requested_image: str) -> ToolResult:
+def _controller_tool_result(
+    operation: Mapping[str, Any], requested_image: str, stack: str
+) -> ToolResult:
     status = controller_action_status(str(operation.get("status") or ""))
     installed = operation.get("installed") if isinstance(operation.get("installed"), Mapping) else {}
     installed_image = str((installed or {}).get("image") or "") or None
@@ -3726,14 +3646,16 @@ def _controller_tool_result(operation: Mapping[str, Any], requested_image: str) 
         "owner": "controller",
         "operationId": str(operation.get("operationId") or ""),
         "status": status,
+        "stack": stack,
         "requestedImage": requested_image,
-        "installedImage": installed_image,
-        "resolvedDigest": (
-            installed_image.rsplit("@", 1)[1] if installed_image and "@" in installed_image else None
-        ),
         "verification": verification,
         "retryAllowed": status == "FAILED",
     }
+    # An unconfirmed installation is omitted, never reported as an empty value.
+    if installed_image:
+        outputs["installedImage"] = installed_image
+        if "@" in installed_image:
+            outputs["resolvedDigest"] = installed_image.rsplit("@", 1)[1]
     if status != "SUCCEEDED":
         reason = str(
             operation.get("errorSummary")
@@ -3819,57 +3741,46 @@ async def _execute_through_controller(
                 operation = latest
     except DeploymentOperationError as exc:
         raise _controller_failure(exc) from None
-    return _controller_tool_result(operation, requested_image)
+    return _controller_tool_result(operation, requested_image, parsed["stack"])
 
 
-def build_deployment_update_handler(
-    executor: DeploymentUpdateExecutor | None = None,
-):
-    resolved_executor = executor or DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=DisabledComposeRunner(),
+def _controller_not_installed() -> ToolFailure:
+    return ToolFailure(
+        "DEPLOYMENT_CONTROLLER_NOT_INSTALLED",
+        "The standalone deployment controller is not installed, so this "
+        "deployment cannot be updated from a workflow and no other updater "
+        "was started. Update from the host with `./tools/update-moonmind.sh` "
+        "(it installs the controller published with the release), or install "
+        "and start it with `python3 deploy/controller/bootstrap.py install` "
+        "then `start`.",
+        False,
+        details={"failureClass": "deployment_controller"},
     )
+
+
+def build_deployment_update_handler():
+    """Build the ``deployment.update_compose_stack`` submit/observe adapter.
+
+    The standalone controller is the only updater: the worker never mutates
+    the stack itself, and an absent controller is reported with its host
+    repair route instead of falling back to another writer.
+    """
 
     async def _handler(
         inputs: Mapping[str, Any], context: Mapping[str, Any] | None = None
     ) -> ToolResult:
-        context = dict(context or {})
         endpoint = resolve_controller_endpoint()
-        if endpoint is not None:
-            return await _execute_through_controller(endpoint, inputs, context)
-        context_executor = None
-        candidate = context.get("deployment_update_executor")
-        if isinstance(candidate, DeploymentUpdateExecutor):
-            context_executor = candidate
-        active_executor = context_executor or resolved_executor
-        artifact_service = context.get("temporal_artifact_service")
-        if artifact_service is not None and context_executor is None:
-            active_executor = replace(
-                active_executor,
-                evidence_writer=TemporalDeploymentEvidenceWriter(
-                    artifact_service=artifact_service,
-                    principal=str(
-                        context.get("deployment_evidence_principal")
-                        or "system:deployment"
-                    ),
-                    execution_ref=_execution_ref_from_context(context),
-                ),
-            )
-        return await active_executor.execute(inputs, context)
+        if endpoint is None:
+            raise _controller_not_installed()
+        return await _execute_through_controller(endpoint, inputs, dict(context or {}))
 
     return _handler
 
 
-def register_deployment_update_tool_handler(
-    dispatcher: Any,
-    *,
-    executor: DeploymentUpdateExecutor | None = None,
-) -> None:
+def register_deployment_update_tool_handler(dispatcher: Any) -> None:
     dispatcher.register_skill(
         skill_name=DEPLOYMENT_UPDATE_TOOL_NAME,
-        handler=build_deployment_update_handler(executor),
+        handler=build_deployment_update_handler(),
     )
 
 
@@ -4384,7 +4295,6 @@ __all__ = [
     "DEPLOYMENT_RUNNER_MODES",
     "DEPLOYMENT_UPDATE_STACKS",
     "DEPLOYMENT_UPDATE_MODES",
-    "DisabledComposeRunner",
     "FileDeploymentUpdateLockManager",
     "FileDesiredStateStore",
     "HostDockerComposeRunner",

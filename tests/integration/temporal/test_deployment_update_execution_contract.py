@@ -1,16 +1,21 @@
+"""deployment.update_compose_stack dispatch contract against the real controller.
+
+The registered tool runs through the production tool dispatcher and submits
+to the shipped ``deploy/controller`` endpoint (in-process threaded server,
+bearer check, operation store). Only the controller's Compose applier is
+replaced. Every result must satisfy the tool's declared output schema.
+"""
+
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.deployment_execution import (
-    ComposeVerification,
-    DeploymentUpdateExecutor,
-    DeploymentUpdateLockManager,
-    InMemoryDesiredStateStore,
-    InMemoryEvidenceWriter,
     register_deployment_update_tool_handler,
 )
 from moonmind.workflows.skills.deployment_tools import (
@@ -21,80 +26,53 @@ from moonmind.workflows.skills.tool_dispatcher import (
     ToolActivityDispatcher,
     execute_tool_activity,
 )
-from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
-from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.skills.tool_plan_contracts import (
+    ToolFailure,
+    ToolResult,
+    parse_tool_definition,
+)
 from moonmind.workflows.skills.tool_registry import create_registry_snapshot
-from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+from tests.support.deployment_controller import (
+    InProcessController,
+    forget_controller_modules,
+    install_controller_state,
+    load_controller_modules,
+)
+
+SECRET = "contract-test-secret-value"
+CONTEXT = {
+    "idempotency_key": "deployment-update|moonmind|wf-contract",
+    "workflow_id": "mm:wf-contract",
+}
 
 
-class HermeticRunner:
-    def __init__(self, *, target_build_id: str | None = None) -> None:
-        self.commands: list[tuple[str, tuple[str, ...]]] = []
-        self.target_build_id = target_build_id
+@pytest.fixture
+def controller_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[..., InProcessController]]:
+    load_controller_modules(monkeypatch)
+    state_dir = tmp_path / "controller-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
+    for name in (
+        "MOONMIND_CONTROLLER_URL",
+        "MOONMIND_CONTROLLER_SECRET",
+        "MOONMIND_CONTROLLER_SECRET_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    started: list[InProcessController] = []
 
-    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
-        return {"stack": stack, "phase": phase}
+    def start(applier=None) -> InProcessController:
+        controller = InProcessController(state_dir, secret=SECRET, applier=applier)
+        started.append(controller)
+        install_controller_state(state_dir, port=controller.port, secret=SECRET)
+        monkeypatch.setenv("MOONMIND_CONTROLLER_URL", controller.url)
+        return controller
 
-    async def pull(
-        self, *, stack: str, command: tuple[str, ...], requested_image: str
-    ) -> Mapping[str, Any]:
-        self.commands.append(("pull", command))
-        return {"ok": True}
-
-    async def up(
-        self, *, stack: str, command: tuple[str, ...], requested_image: str
-    ) -> Mapping[str, Any]:
-        self.commands.append(("up", command))
-        return {"ok": True}
-
-    async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
-        payload: dict[str, Any] = {
-            "Id": "sha256:" + "a" * 64,
-            "RepoTags": [requested_image],
-            "RepoDigests": ["ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64],
-        }
-        if self.target_build_id is not None:
-            payload["Config"] = {
-                "Labels": {"org.opencontainers.image.version": self.target_build_id}
-            }
-        return payload
-
-    async def verify(
-        self,
-        *,
-        stack: str,
-        requested_image: str,
-        resolved_digest: str | None,
-    ) -> ComposeVerification:
-        return ComposeVerification(
-            succeeded=True,
-            updated_services=("api",),
-            running_services=({"name": "api", "state": "running"},),
-            details={
-                "requestedImage": requested_image,
-                "resolvedDigest": resolved_digest,
-            },
-        )
-
-
-class FailedVerificationRunner(HermeticRunner):
-    async def verify(
-        self,
-        *,
-        stack: str,
-        requested_image: str,
-        resolved_digest: str | None,
-    ) -> ComposeVerification:
-        return ComposeVerification(
-            succeeded=False,
-            updated_services=(),
-            running_services=({"name": "api", "state": "running"},),
-            details={
-                "message": "health check failed",
-                "requestedImage": requested_image,
-                "resolvedDigest": resolved_digest,
-            },
-        )
+    yield start
+    for controller in started:
+        controller.close()
+    forget_controller_modules()
 
 
 def _snapshot():
@@ -106,7 +84,7 @@ def _snapshot():
     )
 
 
-def _payload() -> dict[str, object]:
+def _payload(reference: str = "20260425.1234") -> dict[str, object]:
     return {
         "id": "deploy-moonmind",
         "tool": {
@@ -117,7 +95,7 @@ def _payload() -> dict[str, object]:
             "stack": "moonmind",
             "image": {
                 "repository": "ghcr.io/moonladderstudios/moonmind",
-                "reference": "20260425.1234",
+                "reference": reference,
             },
             "mode": "changed_services",
             "removeOrphans": True,
@@ -128,12 +106,8 @@ def _payload() -> dict[str, object]:
 
 
 def _rollback_payload() -> dict[str, object]:
-    payload = _payload()
+    payload = _payload("stable")
     inputs = dict(payload["inputs"])
-    inputs["image"] = {
-        "repository": "ghcr.io/moonladderstudios/moonmind",
-        "reference": "stable",
-    }
     inputs["operationKind"] = "rollback"
     inputs["rollbackSourceActionId"] = "depupd_recent"
     inputs["confirmation"] = (
@@ -143,166 +117,123 @@ def _rollback_payload() -> dict[str, object]:
     return payload
 
 
+async def _dispatch(payload: dict[str, object]) -> ToolResult:
+    dispatcher = ToolActivityDispatcher()
+    register_deployment_update_tool_handler(dispatcher)
+    return await execute_tool_activity(
+        invocation_payload=payload,
+        registry_snapshot=_snapshot(),
+        dispatcher=dispatcher,
+        context=dict(CONTEXT),
+    )
+
+
+def _assert_declared_outputs(outputs: dict[str, Any]) -> None:
+    """Every serialized output satisfies the tool's declared output schema."""
+    schema = parse_tool_definition(
+        build_deployment_update_tool_definition_payload()
+    ).output_schema
+    properties = schema["properties"]
+    undeclared = set(outputs) - set(properties)
+    assert undeclared == set(), f"undeclared output keys: {sorted(undeclared)}"
+    missing = set(schema["required"]) - set(outputs)
+    assert missing == set(), f"missing required output keys: {sorted(missing)}"
+    assert outputs["status"] in properties["status"]["enum"]
+    assert outputs["owner"] in properties["owner"]["enum"]
+    for key, value in outputs.items():
+        expected = properties[key].get("type")
+        python_type = {
+            "string": str,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+        }.get(expected)
+        if python_type is not None:
+            assert isinstance(value, python_type), (key, value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.integration_ci
-async def test_deployment_update_tool_dispatch_returns_structured_result() -> None:
-    runner = HermeticRunner()
-    executor = DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=runner,
-    )
-    dispatcher = ToolActivityDispatcher()
-    register_deployment_update_tool_handler(dispatcher, executor=executor)
+async def test_deployment_update_tool_dispatch_returns_the_controller_operation(
+    controller_factory: Callable[..., InProcessController],
+) -> None:
+    controller = controller_factory()
 
-    result = await execute_tool_activity(
-        invocation_payload=_payload(),
-        registry_snapshot=_snapshot(),
-        dispatcher=dispatcher,
-        context={"deployment_runner_mode": "privileged_worker"},
-    )
+    result = await _dispatch(_payload())
 
     assert isinstance(result, ToolResult)
     assert result.status == "COMPLETED"
     assert result.outputs["status"] == "SUCCEEDED"
     assert result.outputs["stack"] == "moonmind"
-    assert result.outputs["beforeStateArtifactRef"].startswith("art:sha256:")
-    assert result.outputs["verificationArtifactRef"].startswith("art:sha256:")
-    assert result.outputs["audit"]["finalStatus"] == "SUCCEEDED"
+    assert result.outputs["owner"] == "controller"
+    assert result.outputs["requestedImage"] == (
+        "ghcr.io/moonladderstudios/moonmind:20260425.1234"
+    )
+    assert result.outputs["installedImage"] == result.outputs["requestedImage"]
+    assert controller.applied == [result.outputs["operationId"]]
     assert result.progress["state"] == "SUCCEEDED"
-    assert [event["state"] for event in result.progress["events"]][-1] == "SUCCEEDED"
-    assert runner.commands[0][0] == "pull"
-    assert runner.commands[1][0] == "up"
+    _assert_declared_outputs(result.outputs)
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.integration_ci
-async def test_deployment_update_tool_dispatch_surfaces_after_build_id_within_output_schema() -> None:
-    runner = HermeticRunner(target_build_id="20260606.0128")
-    executor = DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=runner,
-    )
-    dispatcher = ToolActivityDispatcher()
-    register_deployment_update_tool_handler(dispatcher, executor=executor)
-
-    result = await execute_tool_activity(
-        invocation_payload=_payload(),
-        registry_snapshot=_snapshot(),
-        dispatcher=dispatcher,
-        context={"deployment_runner_mode": "privileged_worker"},
-    )
-
-    assert result.status == "COMPLETED"
-    assert result.outputs["status"] == "SUCCEEDED"
-    # The new build-id field must be carried on the serialized output payload.
-    assert result.outputs["afterBuildId"] == "20260606.0128"
-
-    # Workflow-boundary contract: every serialized output key must be a declared
-    # property of the tool's output schema. The schema sets
-    # ``additionalProperties: False``, so an undeclared ``afterBuildId`` would be
-    # rejected during execution. This asserts the schema and the payload agree.
-    definition = parse_tool_definition(
-        build_deployment_update_tool_definition_payload()
-    )
-    output_properties = set(definition.output_schema["properties"])
-    assert "afterBuildId" in output_properties
-    undeclared = set(result.outputs) - output_properties
-    assert undeclared == set(), f"undeclared output keys: {sorted(undeclared)}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-@pytest.mark.integration_ci
-async def test_deployment_update_tool_dispatch_surfaces_deployment_locked() -> None:
-    lock_manager = DeploymentUpdateLockManager()
-    lease = await lock_manager.acquire("moonmind")
-    executor = DeploymentUpdateExecutor(
-        lock_manager=lock_manager,
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=HermeticRunner(),
-        # An update waits a bounded background owner out before reporting
-        # contention; this holder never releases, so the wait is bounded here
-        # to assert what dispatch surfaces once the budget is spent.
-        lock_wait_seconds=0.1,
-    )
-    dispatcher = ToolActivityDispatcher()
-    register_deployment_update_tool_handler(dispatcher, executor=executor)
-
-    try:
-        with pytest.raises(ToolFailure) as exc_info:
-            await execute_tool_activity(
-                invocation_payload=_payload(),
-                registry_snapshot=_snapshot(),
-                dispatcher=dispatcher,
-            )
-    finally:
-        await lease.release()
-
-    assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
-    assert exc_info.value.retryable is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-@pytest.mark.integration_ci
-async def test_deployment_update_tool_dispatch_failed_verification_has_failure_metadata(
+async def test_deployment_update_tool_dispatch_failed_operation_has_failure_metadata(
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
-    executor = DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=FailedVerificationRunner(),
-    )
-    dispatcher = ToolActivityDispatcher()
-    register_deployment_update_tool_handler(dispatcher, executor=executor)
+    def failing(controller: InProcessController, operation: dict) -> None:
+        controller.store.record_attempt_error(
+            operation["operationId"], error="health check failed"
+        )
+        raise controller.engine.ApplyError("verify", 1, "health check failed")
 
-    result = await execute_tool_activity(
-        invocation_payload=_payload(),
-        registry_snapshot=_snapshot(),
-        dispatcher=dispatcher,
-        context={"deployment_runner_mode": "privileged_worker"},
-    )
+    controller_factory(failing)
+
+    result = await _dispatch(_payload())
 
     assert result.status == "FAILED"
     assert result.outputs["status"] == "FAILED"
-    assert result.outputs["failure"] == {
-        "class": "verification_failure",
-        "reason": "health check failed",
-        "retryable": False,
-    }
-    assert "rollback" not in str(result.outputs).lower()
+    assert result.outputs["failure"]["class"] == "deployment_failure"
+    assert "health check failed" in result.outputs["failure"]["reason"]
+    assert result.outputs["failure"]["retryable"] is False
+    # Retry goes through the controller's explicit Retry, not redelivery.
+    assert result.outputs["retryAllowed"] is True
+    # No installation was confirmed, so none is reported.
+    assert "installedImage" not in result.outputs
+    _assert_declared_outputs(result.outputs)
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.integration_ci
-async def test_rollback_dispatch_uses_existing_deployment_update_tool_contract(
+async def test_rollback_dispatch_submits_the_earlier_image_to_the_controller(
+    controller_factory: Callable[..., InProcessController],
 ) -> None:
-    runner = HermeticRunner()
-    executor = DeploymentUpdateExecutor(
-        lock_manager=DeploymentUpdateLockManager(),
-        desired_state_store=InMemoryDesiredStateStore(),
-        evidence_writer=InMemoryEvidenceWriter(),
-        runner=runner,
-    )
-    dispatcher = ToolActivityDispatcher()
-    register_deployment_update_tool_handler(dispatcher, executor=executor)
+    controller = controller_factory()
 
-    result = await execute_tool_activity(
-        invocation_payload=_rollback_payload(),
-        registry_snapshot=_snapshot(),
-        dispatcher=dispatcher,
-        context={"deployment_runner_mode": "privileged_worker"},
-    )
+    result = await _dispatch(_rollback_payload())
 
     assert result.status == "COMPLETED"
     assert result.outputs["requestedImage"] == (
         "ghcr.io/moonladderstudios/moonmind:stable"
     )
+    operation = controller.store.load(result.outputs["operationId"])
+    assert operation["desired"]["image"] == "ghcr.io/moonladderstudios/moonmind:stable"
+    _assert_declared_outputs(result.outputs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.integration_ci
+async def test_deployment_update_tool_dispatch_without_a_controller_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(tmp_path / "absent"))
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await _dispatch(_payload())
+
+    assert exc_info.value.error_code == "DEPLOYMENT_CONTROLLER_NOT_INSTALLED"
+    assert exc_info.value.retryable is False

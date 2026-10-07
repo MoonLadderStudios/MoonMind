@@ -6,7 +6,16 @@ import urllib.request
 from pathlib import Path
 from wsgiref.simple_server import make_server
 
+import pytest
 from conftest import load
+
+_LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+@pytest.fixture(autouse=True)
+def _loopback_requests_bypass_ambient_proxies(monkeypatch):
+    """These clients talk to a loopback test server, never through a proxy."""
+    monkeypatch.setattr(urllib.request, "urlopen", _LOOPBACK_OPENER.open)
 
 
 class _Harness:

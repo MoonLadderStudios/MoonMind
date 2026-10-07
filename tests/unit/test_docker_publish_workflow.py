@@ -94,7 +94,7 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
     assert "MOONMIND_BUILD_ID=${{ needs.metadata.outputs.version_tag }}" in build_args
 
     merge_job = workflow["jobs"]["merge"]
-    assert set(merge_job.get("needs", [])) == {"metadata", "build"}
+    assert set(merge_job.get("needs", [])) == {"metadata", "build", "controller"}
 
     merge_run_steps = [step["run"] for step in merge_job["steps"] if "run" in step]
     assert any(
@@ -102,6 +102,45 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
         for run in merge_run_steps
     )
     assert all("date +" not in run and "VERSION_TAG=" not in run for run in merge_run_steps)
+
+
+def test_release_publishes_the_controller_the_host_entrypoint_installs(
+    monkeypatch,
+) -> None:
+    """Every release revision carries the controller a default update installs.
+
+    The host entrypoint installs ``<app image>-controller:sha-<revision>`` for
+    the release it selected; the app tags publish only after that image.
+    """
+    import importlib.util
+
+    workflow = _load_workflow()
+    controller = workflow["jobs"]["controller"]
+    assert controller["needs"] == "metadata"
+    build = next(
+        step
+        for step in controller["steps"]
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    )["with"]
+    assert build["file"] == "deploy/controller/Dockerfile"
+    assert build["push"] is True
+    assert set(build["platforms"].split(",")) == {"linux/amd64", "linux/arm64"}
+    image = "${{ needs.metadata.outputs.image_name }}"
+    tags = build["tags"].splitlines()
+    assert f"{image}-controller:sha-${{{{ github.sha }}}}" in tags
+    assert "org.opencontainers.image.revision=${{ github.sha }}" in build["labels"]
+    assert "controller" in workflow["jobs"]["merge"]["needs"]
+
+    monkeypatch.delenv("MOONMIND_CONTROLLER_IMAGE", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "update_release_publish_contract",
+        REPO_ROOT / ".agents/skills/update-moonmind/scripts/update_release.py",
+    )
+    update = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(update)
+    assert update._controller_image_for(image, "${{ github.sha }}") == (
+        f"{image}-controller:sha-${{{{ github.sha }}}}"
+    )
 
 
 def test_docker_publish_writes_build_summary_for_promotion() -> None:

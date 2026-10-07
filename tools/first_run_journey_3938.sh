@@ -42,9 +42,9 @@
 # controller state never lands in the operator's checkout) with its own
 # controller link network. Before a controller exists, a Settings Operations
 # update is refused with the host repair route and no workflow-backed update
-# exists. The real deploy/controller bootstrap then
-# installs the controller state and the real controller server starts beside
-# the stack. The compiled dashboard submits an update to it and sees the
+# exists. The controller image the release publishes is built from the
+# candidate's deploy/controller, the real bootstrap installs the controller
+# state, and that image's controller server starts beside the stack. The compiled dashboard submits an update to it and sees the
 # controller's operation with its requested target, observed installed state,
 # original error, logs, and Retry. The API is replaced; a fresh page
 # reconnects to the same operation without submitting again and retries it.
@@ -290,17 +290,19 @@ require_controller_absent() {
 }
 
 # The real deploy/controller bootstrap writes the deployment-owned state and
-# the real controller server runs beside the stack under its link alias. Its
-# own image is not published yet (MoonLadderStudios/MoonMind#4500), so it
-# runs from the candidate image, which carries Python and the Docker CLI,
-# pinned by the image ID bootstrap records. It has no Docker daemon: it
-# derives its Compose target and records each attempt, image staging fails,
-# and no stack can be mutated.
+# the controller image the release workflow publishes, built here from the
+# candidate's deploy/controller/Dockerfile, runs beside the stack under its
+# link alias, pinned by the image ID bootstrap records. It has no Docker
+# daemon: it derives its Compose target and records each attempt, image
+# staging fails, and no stack can be mutated.
+CONTROLLER_IMAGE="moonmind-controller-journey:candidate"
 install_controller() {
   local state_dir="$DEPLOY_DIR/deploy/state/controller" image_id port
-  image_id="$(docker image inspect "$MOONMIND_IMAGE" --format '{{.Id}}')"
+  echo "Building the standalone controller image from the candidate..."
+  docker build --quiet --tag "$CONTROLLER_IMAGE" "$DEPLOY_DIR/deploy/controller" 2>&1 | redact | tail -n 5
+  image_id="$(docker image inspect "$CONTROLLER_IMAGE" --format '{{.Id}}')"
   python3 "$DEPLOY_DIR/deploy/controller/bootstrap.py" install --repo "$DEPLOY_DIR" \
-    --image "${MOONMIND_IMAGE%%[:@]*}@$image_id" \
+    --image "${CONTROLLER_IMAGE%%:*}@$image_id" \
     --target-network "$MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK" \
     --target-project "$PROJECT_NAME" 2>&1 | redact
   port="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["port"])' \
@@ -309,8 +311,8 @@ install_controller() {
   cat > "$STATE_DIR/controller-override.yaml" <<EOF
 services:
   moonmind-controller-journey:
-    image: "$MOONMIND_IMAGE"
-    entrypoint: ["python", "/opt/moonmind-controller/server.py", "--no-legacy-probe"]
+    image: "$CONTROLLER_IMAGE"
+    command: ["--no-legacy-probe"]
     environment:
       MOONMIND_CONTROLLER_MANAGED: "1"
       MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
@@ -318,7 +320,6 @@ services:
       MOONMIND_CONTROLLER_TARGET_REPO: "$DEPLOY_DIR"
       DOCKER_HOST: unix:///var/run/moonmind-journey-has-no-docker.sock
     volumes:
-      - ./deploy/controller:/opt/moonmind-controller:ro
       - ./deploy/state/controller:/var/lib/moonmind-controller
       - .:$DEPLOY_DIR:ro
     networks:

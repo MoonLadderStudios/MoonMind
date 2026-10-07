@@ -440,3 +440,29 @@ def test_no_service_outside_the_controller_link_can_see_controller_state(
     # Docker never creates that mountpoint as the daemon's user before
     # bootstrap, running as the operator, writes there.
     assert (repo / state).is_dir()
+
+
+def test_bootstrap_cli_derives_the_endpoint_port_and_keeps_a_recorded_one(
+    controller_path, tmp_path
+):
+    """A bare install derives this deployment's port; reinstall keeps it.
+
+    Independent deployments on one daemon must not collide on one fixed
+    port, and the host entrypoint installs the controller without flags.
+    """
+    bootstrap = load("bootstrap")
+    repo = tmp_path / "deploy-a"
+    repo.mkdir()
+    state = tmp_path / "state"
+    args = ["install", "--state-dir", str(state), "--repo", str(repo)]
+
+    assert bootstrap.main(args, env={}) == 0
+    derived = bootstrap.port_for_repo(repo.resolve())
+    assert bootstrap.load_identity(state)["port"] == derived
+    assert f'"127.0.0.1:{derived}:{derived}"' in (
+        state / "controller-compose.yaml"
+    ).read_text()
+
+    bootstrap.ensure_identity(state, repo.resolve(), 9123)
+    assert bootstrap.main(args, env={}) == 0
+    assert bootstrap.load_identity(state)["port"] == 9123

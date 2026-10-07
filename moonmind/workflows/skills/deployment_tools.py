@@ -140,18 +140,36 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "status",
                     "stack",
                     "requestedImage",
-                    "updatedServices",
-                    "runningServices",
+                    "owner",
+                    "operationId",
                 ],
                 "additionalProperties": False,
                 "properties": {
                     "status": {
                         "type": "string",
-                        "enum": ["SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"],
+                        "enum": [
+                            "SUCCEEDED",
+                            "FAILED",
+                            "PARTIALLY_VERIFIED",
+                            "SUPERSEDED",
+                        ],
                     },
                     "stack": {"type": "string"},
                     "requestedImage": {"type": "string"},
+                    "owner": {"type": "string", "enum": ["controller"]},
+                    "operationId": {"type": "string"},
+                    "installedImage": {"type": "string"},
                     "resolvedDigest": {"type": "string"},
+                    "verification": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                    },
+                    "retryAllowed": {"type": "boolean"},
+                    # Results recorded by the retired in-app updater stay
+                    # describable as history; the controller does not emit them.
                     "afterBuildId": {"type": "string"},
                     "updatedServices": {
                         "type": "array",

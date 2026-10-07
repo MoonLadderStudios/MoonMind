@@ -39,6 +39,7 @@ class InProcessController:
         secret: str,
         applier: Callable[[InProcessController, dict], Any] | None = None,
         target_resolver: Callable[[str], dict] | None = None,
+        port: int = 0,
     ) -> None:
         self.server = importlib.import_module("server")
         self.engine = importlib.import_module("engine")
@@ -61,7 +62,7 @@ class InProcessController:
             applier=tracking_applier,
             target_resolver=target_resolver,
         )
-        self.httpd = self.server.make_http_server("127.0.0.1", 0, app)
+        self.httpd = self.server.make_http_server("127.0.0.1", port, app)
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}"
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

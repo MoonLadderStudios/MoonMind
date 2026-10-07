@@ -1,4 +1,4 @@
-"""deployment.update_compose_stack is only a submit/observe adapter once a controller is installed.
+"""deployment.update_compose_stack is only a submit/observe adapter of the controller.
 
 A workflow that requests the typed update tool must not become a second
 updater beside the standalone controller: it submits the same controller
@@ -42,15 +42,6 @@ CONTEXT = {
 }
 
 
-class _NoLegacyRunner:
-    """Any legacy Compose use means the tool became a second updater."""
-
-    def __getattr__(self, name: str):
-        raise AssertionError(
-            f"legacy updater used ({name}) while a controller is installed"
-        )
-
-
 @pytest.fixture
 def controller_factory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -85,13 +76,7 @@ def controller_factory(
 
 
 def _handler():
-    executor = deployment_execution.DeploymentUpdateExecutor(
-        lock_manager=deployment_execution.DeploymentUpdateLockManager(),
-        desired_state_store=deployment_execution.InMemoryDesiredStateStore(),
-        evidence_writer=deployment_execution.InMemoryEvidenceWriter(),
-        runner=_NoLegacyRunner(),
-    )
-    return deployment_execution.build_deployment_update_handler(executor)
+    return deployment_execution.build_deployment_update_handler()
 
 
 def test_tool_submits_and_observes_the_controller_operation(
@@ -169,6 +154,53 @@ def test_tool_reports_an_unavailable_controller_without_running_the_legacy_updat
     assert failure.value.error_code == "DEPLOYMENT_CONTROLLER_UNAVAILABLE"
     assert failure.value.retryable is True
     assert SECRET not in str(failure.value)
+
+
+@pytest.mark.parametrize("partial_install", [False, True])
+def test_tool_without_an_installed_controller_is_refused_with_the_repair_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    partial_install: bool,
+) -> None:
+    """Controller absence never runs the in-app updater from the worker.
+
+    The tool registered on the deployment worker reports the host repair
+    route instead of mutating the stack itself, including when bootstrap
+    could not pin a controller image.
+    """
+    state_dir = tmp_path / "controller-state"
+    state_dir.mkdir()
+    if partial_install:
+        (state_dir / "controller-identity.json").write_text(
+            '{"project": "moonmind-controller-test", "port": 8472}'
+        )
+        (state_dir / "controller-image.json").write_text('{"verified": false}')
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+
+    def no_compose(*args, **kwargs):
+        raise AssertionError("the worker ran a Compose mutation without a controller")
+
+    monkeypatch.setattr(
+        deployment_execution.DeploymentUpdateExecutor, "execute", no_compose
+    )
+    registered: dict[str, object] = {}
+
+    class Dispatcher:
+        def register_skill(self, *, skill_name, handler):
+            registered[skill_name] = handler
+
+    deployment_execution.register_deployment_update_tool_handler(Dispatcher())
+    handler = registered[deployment_execution.DEPLOYMENT_UPDATE_TOOL_NAME]
+
+    with pytest.raises(ToolFailure) as failure:
+        asyncio.run(handler(dict(INPUTS), dict(CONTEXT)))
+
+    assert failure.value.error_code == "DEPLOYMENT_CONTROLLER_NOT_INSTALLED"
+    assert failure.value.retryable is False
+    assert failure.value.details["failureClass"] == "deployment_controller"
+    assert "./tools/update-moonmind.sh" in failure.value.message
+    assert "deploy/controller/bootstrap.py" in failure.value.message
 
 
 def test_tool_keeps_observing_an_unreadable_status_instead_of_reporting_failure(

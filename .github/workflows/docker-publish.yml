@@ -154,11 +154,58 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  controller:
+    # The standalone deployment controller (deploy/controller) ships with every
+    # release under the app image's tags, so a default host update installs
+    # the controller of the release it selected without extra flags.
+    needs: metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push the controller image
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/controller
+          file: deploy/controller/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.version_tag }}
+          tags: |
+            ${{ needs.metadata.outputs.image_name }}-controller:${{ needs.metadata.outputs.version_tag }}
+            ${{ needs.metadata.outputs.image_name }}-controller:sha-${{ github.sha }}
+            ${{ needs.metadata.outputs.image_name }}-controller:latest
+          cache-from: type=gha,scope=controller
+          cache-to: type=gha,scope=controller,mode=max
+
   merge:
     runs-on: ubuntu-latest
     needs:
       - metadata
       - build
+      # The app tags publish only after the release's controller image, so
+      # every selectable release revision has a controller to install.
+      - controller
     permissions:
       contents: read
       packages: write
@@ -211,6 +258,7 @@ jobs:
             echo "- Current build channel: \`${IMAGE_NAME}:latest\`"
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
+            echo "- Controller image: \`${IMAGE_NAME}-controller:sha-${{ github.sha }}\`"
             echo ""
             echo "To promote this build, run **Actions → Release / Promote Stable** with image \`app\` and source tag \`${VERSION}\`."
           } >> "${GITHUB_STEP_SUMMARY}"

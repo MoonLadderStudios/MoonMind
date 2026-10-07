@@ -657,7 +657,15 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
         child.add_argument("--stack", default="moonmind", help="Target stack.")
         child.add_argument("--image", default=DEFAULT_IMAGE, help="Controller image.")
-        child.add_argument("--port", type=int, default=DEFAULT_PORT)
+        child.add_argument(
+            "--port",
+            type=int,
+            default=None,
+            help=(
+                "Pin the loopback endpoint port (default: the recorded port, "
+                "else one derived from the checkout path)."
+            ),
+        )
         child.add_argument(
             "--target-network",
             default=None,
