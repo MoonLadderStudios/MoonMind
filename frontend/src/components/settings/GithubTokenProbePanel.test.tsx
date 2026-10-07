@@ -51,7 +51,8 @@ const READ_RESPONSE = {
   defaultBranchAccessible: true,
   pullRequestAccessible: true,
   remoteDefaultBranch: 'trunk',
-  observations: { read: 'verified', write: 'untested' },
+  testedBranch: 'trunk',
+  observations: { read: 'verified', branch: 'verified', write: 'untested' },
   diagnostics: [],
   limitations: [],
 };
@@ -253,6 +254,72 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
     expect(screen.getByText(/requires the settings.effective.read permission/i)).toBeTruthy();
     select({ ...CONNECTION_A, lifecycle: 'disabled' });
     expect(button().disabled).toBe(true);
+  });
+
+  it('distinguishes an unknown repository, an empty repository and a missing branch', async () => {
+    stubFetch({
+      ...READ_RESPONSE,
+      repositoryAccessible: false,
+      defaultBranchAccessible: null,
+      remoteDefaultBranch: null,
+      testedBranch: null,
+      observations: { read: 'not_found', branch: 'not_checked', write: 'untested' },
+    });
+    const { unmount } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/Repository not found, or this connection cannot see it/)).toBeTruthy();
+    expect(screen.queryByText(/Read access denied/)).toBeNull();
+    unmount();
+
+    stubFetch({
+      ...READ_RESPONSE,
+      defaultBranchAccessible: false,
+      testedBranch: 'main',
+      remoteDefaultBranch: 'main',
+      observations: { read: 'verified', branch: 'empty_repository', write: 'untested' },
+    });
+    const empty = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/The repository is empty/)).toBeTruthy();
+    expect(screen.getByText('Read access verified')).toBeTruthy();
+    empty.unmount();
+
+    stubFetch({
+      ...READ_RESPONSE,
+      defaultBranchAccessible: false,
+      testedBranch: 'release',
+      observations: { read: 'verified', branch: 'missing', write: 'untested' },
+    });
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/was not found in this repository/)).toBeTruthy();
+    expect(screen.getByText('release')).toBeTruthy();
+  });
+
+  it('labels reported permissions as metadata, not a tested write', async () => {
+    stubFetch({ ...READ_RESPONSE, reportedPermissions: { push: true, pull: true } });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(/GitHub reports push permission/)).toBeTruthy();
+    expect(screen.getByText(/Write access not tested/i)).toBeTruthy();
+  });
+
+  it('reports a throttle with the server retry signal instead of a denial', async () => {
+    stubFetch({
+      ...OUTAGE_RESPONSE,
+      retryAfterSeconds: 90,
+      diagnostics: [
+        { operation: 'repository', httpStatus: 429, message: 'Too many requests', retryable: true },
+      ],
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(/GitHub asked MoonMind to wait about 90 seconds/)).toBeTruthy();
+    expect(screen.queryByText(/Read access denied/)).toBeNull();
   });
 
   it('renders backend error responses with their detail and surfaces a notice', async () => {

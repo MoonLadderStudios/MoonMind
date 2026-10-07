@@ -103,16 +103,18 @@ class ApiKeyStatus(BaseModel):
     # Add other keys as needed
 
 class GitHubTokenProbeRequest(BaseModel):
-    """Targeted GitHub token validation request."""
+    """Read-only test of one selected repository connection.
 
-    model_config = ConfigDict(populate_by_name=True)
+    A connection is required: a missing selection never falls back to an
+    ambient deployment token or anonymous access.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
     repo: str = Field(..., min_length=1)
-    mode: Literal["indexing", "publish", "readiness", "full_pr_automation"] = Field(
-        "indexing"
-    )
+    mode: Literal["publish", "readiness", "full_pr_automation"] = Field("publish")
     base_branch: Optional[str] = Field(None, alias="baseBranch")
-    connection_id: Optional[str] = Field(None, alias="connectionId", min_length=1)
+    connection_id: str = Field(..., alias="connectionId", min_length=1)
 
 class QueueSystemMetadataModel(BaseModel):
     """Serialized worker pause metadata shared by claim + heartbeat responses."""

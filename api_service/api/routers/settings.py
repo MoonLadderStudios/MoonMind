@@ -69,8 +69,8 @@ async def probe_github_token(
     *,
     repo: str,
     mode: str,
+    connection: Any,
     base_branch: str | None = None,
-    connection: Any | None = None,
     revision_reader: Any | None = None,
 ) -> dict[str, Any]:
     from moonmind.workflows.adapters.github_service import GitHubService
@@ -596,13 +596,7 @@ async def github_token_probe(
     denied = _require_permission(user, "settings.effective.read")
     if denied is not None:
         return denied
-    connection_id = (payload.connection_id or "").strip()
-    if not connection_id:
-        return await probe_github_token(
-            repo=payload.repo,
-            mode=payload.mode,
-            base_branch=payload.base_branch,
-        )
+    connection_id = payload.connection_id
     connection = await _selected_probe_connection(connection_id, user=user)
     if connection is None:
         return JSONResponse(
