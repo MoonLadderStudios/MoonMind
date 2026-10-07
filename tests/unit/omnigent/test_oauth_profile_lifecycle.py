@@ -4654,6 +4654,9 @@ async def _drive_authority_chain_coordinator(
         execution_runner=execute,
         artifact_gateway=object(),
     )
+    # Repository credential selection has its own coverage; this harness has no
+    # repository connection store.
+    coordinator._github_token = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
     async def _resolve_policy_snapshot(_policy_ref: str) -> dict:
         document = policy_document()
@@ -7526,18 +7529,115 @@ def test_coordinator_repository_intent_defaults_are_empty() -> None:
     assert OmnigentProfileBoundExecutionCoordinator._attachment_refs(request) == ()
 
 
+def _default_connection_credential(monkeypatch, result):
+    """Replace the default repository connection read the realizer consumes."""
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    resolve = AsyncMock(return_value=result)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "resolve_default_github_connection_credential", resolve
+    )
+    return resolve
+
+
+def _record_default_connection(monkeypatch, *, secret_ref: str, read):
+    """Record git-default as a typed SecretRef and serve that ref's secret."""
+    import moonmind.auth.github_credentials as github_credentials
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    provider, _, key = secret_ref.partition("://")
+    connection = SimpleNamespace(
+        id="repository-connection:git-default",
+        credential=SimpleNamespace(
+            source="secret_ref",
+            credential_ref=SimpleNamespace(provider=provider, key=key),
+        ),
+    )
+    load = AsyncMock(return_value=connection)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "load_repository_connection_for_launch", load
+    )
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", read)
+    return load
+
+
+@pytest.mark.asyncio
+async def test_github_token_uses_selected_default_connection_over_ambient_token(
+    monkeypatch,
+) -> None:
+    # MoonLadderStudios/MoonMind#4011: the recorded default connection (B) is
+    # the only authority the profile-bound realizer admits; ambient worker
+    # tokens (A) must never win for clone, gh, or publication consumers.
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "WORKFLOW_GITHUB_TOKEN"):
+        monkeypatch.setenv(name, "ambient-token-A")
+
+    async def read(reference: str) -> str:
+        assert reference == "db://SELECTED_B"
+        return "selected-token-B"
+
+    _record_default_connection(monkeypatch, secret_ref="db://SELECTED_B", read=read)
+
+    for capabilities in (["git"], ["git", "gh"]):
+        request = _execution_request(
+            parameters={"repository": "org/repo", "requiredCapabilities": capabilities}
+        )
+        token = await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+        assert token == "selected-token-B"
+
+
+@pytest.mark.asyncio
+async def test_github_token_failed_selected_credential_never_downgrades(
+    monkeypatch,
+) -> None:
+    # A selected credential that cannot be read must not become an anonymous
+    # clone or an ambient-token clone (#4011).
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+
+    async def read(_reference: str) -> str:
+        raise RuntimeError("secret store unavailable")
+
+    _record_default_connection(monkeypatch, secret_ref="db://SELECTED_B", read=read)
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git"]}
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc:
+        await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+    assert exc.value.code == "github_auth_unavailable"
+    assert "ambient-token-A" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_github_token_explicit_anonymous_source_acquires_nothing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    resolve = _default_connection_credential(
+        monkeypatch, SimpleNamespace(token="unused", source=SimpleNamespace(value="x"))
+    )
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git"]},
+        workspaceSpec={
+            "repository": "org/repo",
+            "workspaceSource": {"accessMode": "anonymous"},
+        },
+    )
+
+    assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
+    resolve.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_github_token_resolves_clone_credential_without_gh_capability(
     monkeypatch,
 ) -> None:
     # publishMode=none read-only work derives `git` but not `gh`; a private
     # GitHub source must still resolve a clone credential.
-    import moonmind.auth.github_credentials as github_credentials
+    from moonmind.auth.github_credentials import ResolvedGitHubCredential
 
-    resolve = AsyncMock(
-        return_value=SimpleNamespace(token="clone-token")
+    resolve = _default_connection_credential(
+        monkeypatch, ResolvedGitHubCredential(token="clone-token")
     )
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
 
     request = _execution_request(
         parameters={"repository": "org/repo", "requiredCapabilities": ["git"]}
@@ -7546,24 +7646,23 @@ async def test_github_token_resolves_clone_credential_without_gh_capability(
     token = await OmnigentProfileBoundExecutionCoordinator._github_token(request)
 
     assert token == "clone-token"
-    resolve.assert_awaited_once()
+    resolve.assert_awaited_once_with(repo="org/repo")
 
 
 @pytest.mark.asyncio
-async def test_github_token_public_clone_tolerates_missing_credential(
+async def test_github_token_public_clone_tolerates_unconfigured_credential(
     monkeypatch,
 ) -> None:
-    import moonmind.auth.github_credentials as github_credentials
+    from moonmind.auth.github_credentials import ResolvedGitHubCredential
 
-    resolve = AsyncMock(return_value=SimpleNamespace(token=""))
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    _default_connection_credential(monkeypatch, ResolvedGitHubCredential())
 
     request = _execution_request(
         parameters={"repository": "org/repo", "requiredCapabilities": ["git"]}
     )
 
-    # No mounted-gh requirement, so a missing credential is not fatal: a public
-    # clone can proceed unauthenticated (a private clone fails later at git).
+    # Nothing is configured, so no credential was selected: a public clone can
+    # proceed unauthenticated (a private clone fails later at git).
     assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
 
 
@@ -7571,10 +7670,9 @@ async def test_github_token_public_clone_tolerates_missing_credential(
 async def test_github_token_requires_credential_when_gh_capability_declared(
     monkeypatch,
 ) -> None:
-    import moonmind.auth.github_credentials as github_credentials
+    from moonmind.auth.github_credentials import ResolvedGitHubCredential
 
-    resolve = AsyncMock(return_value=SimpleNamespace(token=""))
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    _default_connection_credential(monkeypatch, ResolvedGitHubCredential())
 
     request = _execution_request(
         parameters={"repository": "org/repo", "requiredCapabilities": ["git", "gh"]}
@@ -7587,10 +7685,11 @@ async def test_github_token_requires_credential_when_gh_capability_declared(
 
 @pytest.mark.asyncio
 async def test_github_token_skipped_for_non_github_source(monkeypatch) -> None:
-    import moonmind.auth.github_credentials as github_credentials
+    from moonmind.auth.github_credentials import ResolvedGitHubCredential
 
-    resolve = AsyncMock(return_value=SimpleNamespace(token="unused"))
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    resolve = _default_connection_credential(
+        monkeypatch, ResolvedGitHubCredential(token="unused")
+    )
 
     # A non-GitHub remote with no gh capability needs no GitHub clone credential.
     request = _execution_request(

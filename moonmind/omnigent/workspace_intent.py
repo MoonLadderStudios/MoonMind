@@ -123,6 +123,19 @@ def authored_connection_ref(request: AgentExecutionRequest) -> str | None:
     return value or None
 
 
+def authored_anonymous_source(request: AgentExecutionRequest) -> bool:
+    """Whether the operator explicitly chose an anonymous repository read."""
+    spec = _spec(request)
+    for authored in (
+        spec.get("workspaceSource"),
+        spec.get("repositoryTarget"),
+        spec.get("repository"),
+    ):
+        if isinstance(authored, Mapping) and authored.get("accessMode") == "anonymous":
+            return True
+    return False
+
+
 def authored_revision_kind(request: AgentExecutionRequest) -> str | None:
     repository = _spec(request).get("repository")
     if not isinstance(repository, Mapping):

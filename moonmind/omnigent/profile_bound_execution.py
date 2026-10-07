@@ -89,6 +89,7 @@ from moonmind.omnigent.stock_agents import (
 )
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
+    authored_anonymous_source,
     authored_checkout_commit,
     authored_github_mutation_required,
     authored_repository_mutation_required,
@@ -3169,21 +3170,41 @@ class OmnigentProfileBoundExecutionCoordinator:
         clone_needs_credential = cls._github_repository_source(request) is not None
         if not gh_required and not clone_needs_credential:
             return None
-        from moonmind.auth.github_credentials import resolve_github_credential
-
-        repository = str((request.parameters or {}).get("repository") or "").strip()
-        resolved = await resolve_github_credential(repo=repository or None)
-        token = str(resolved.token or "").strip() if resolved else ""
-        if not token:
-            if gh_required:
-                raise OmnigentOAuthHostError(
-                    "GitHub credential is required for mounted gh readiness",
-                    code="github_auth_unavailable",
-                )
-            # A public GitHub clone can proceed unauthenticated; a private clone
-            # fails fast with an actionable error at materialization.
+        if not gh_required and authored_anonymous_source(request):
+            # An explicitly anonymous read admits no repository authority, so it
+            # never looks up (or forwards) any GitHub credential (#4011).
             return None
-        return token
+        from moonmind.auth.github_credentials import GitHubCredentialSource
+        from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+        # The profile-bound realizer admits only the default repository
+        # connection (see the execution-plan admission), so it reads only that
+        # connection's credential. Ambient worker tokens are never consulted
+        # while git-default is recorded (MoonLadderStudios/MoonMind#4011).
+        repository = str((request.parameters or {}).get("repository") or "").strip()
+        resolved = await (
+            managed_api_key_resolve.resolve_default_github_connection_credential(
+                repo=repository or None
+            )
+        )
+        token = str(resolved.token or "").strip()
+        if token:
+            return token
+        if resolved.source != GitHubCredentialSource.MISSING:
+            # A selected credential that failed is the result: it never
+            # downgrades to an anonymous or ambient-token clone.
+            raise OmnigentOAuthHostError(
+                f"selected GitHub credential is unavailable: {resolved.safe_summary}",
+                code="github_auth_unavailable",
+            )
+        if gh_required:
+            raise OmnigentOAuthHostError(
+                "GitHub credential is required for mounted gh readiness",
+                code="github_auth_unavailable",
+            )
+        # Nothing is configured, so no credential was selected: a public clone
+        # proceeds unauthenticated and a private clone fails at materialization.
+        return None
 
     @classmethod
     def _github_repository_source(cls, request: AgentExecutionRequest) -> str | None:
