@@ -6140,6 +6140,81 @@ async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_reference
     assert run_root.exists()
 
 
+async def test_agent_runtime_cleanup_reclaims_sandbox_workspace_of_closed_workflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio.client import WorkflowExecutionStatus
+
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    runtime_root = tmp_path / "agent_jobs"
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    finished = runtime_root / "temporal_sandbox" / "0123456789abcdef01234567"
+    running = runtime_root / "temporal_sandbox" / "fedcba9876543210fedcba98"
+    store = SandboxWorkspaceRecordStore(runtime_root)
+    for workspace, workflow_id in ((finished, "mm:finished"), (running, "mm:running")):
+        (workspace / "repo").mkdir(parents=True)
+        store.ensure(
+            SandboxWorkspaceRecord(
+                workspace_id=workspace.name,
+                workflow_id=workflow_id,
+                step_execution_id=f"{workflow_id}:step",
+                relative_path="repo",
+            )
+        )
+        owned = (workspace, workspace / "repo", *store.record_paths(workspace.name))
+        for path in owned:
+            os.utime(path, (old.timestamp(), old.timestamp()))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+
+    class _Controller:
+        async def collect_managed_runtime_cleanup_docker_references(self):
+            return {}
+
+    class _ClientAdapter:
+        async def describe_workflow(self, workflow_id: str):
+            if workflow_id == "mm:finished":
+                return SimpleNamespace(
+                    status=WorkflowExecutionStatus.COMPLETED, close_time=old
+                )
+            return SimpleNamespace(
+                status=WorkflowExecutionStatus.RUNNING, close_time=None
+            )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=ManagedRunStore(runtime_root / "managed_runs"),
+        session_controller=_Controller(),
+        client_adapter=_ClientAdapter(),
+    )
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 7,
+                "artifactRetentionDays": 7,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["deletedRoots"] == 1
+    assert not finished.exists()
+    assert store.load(finished.name) is None
+    assert running.exists()
+    assert store.load(running.name) is not None
+
+
 async def test_agent_runtime_cleanup_refreshes_docker_references_before_delete(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -6334,6 +6409,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         session_store: ManagedSessionStore,
         config: Any,
         docker_reference_provider: Any,
+        closed_workflow_provider: Any,
         progress_callback: Any,
     ) -> _CleanupResult:
         cleanup_calls.append(

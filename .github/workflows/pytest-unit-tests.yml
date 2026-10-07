@@ -521,7 +521,12 @@ jobs:
           # PostgreSQL/Temporal/MinIO stack, never a shared service stack.
           # DURATIONS_ARGS is the pre-validated flag list from the step
           # above (empty when hints are missing/unusable); word-splitting
-          # here is intentional.
+          # here is intentional. The marker expression is the provider-free
+          # universe shared with the ownership verifier and the duration
+          # import (RELIABILITY_MARKER_EXPR). Loading the evidence hook as a
+          # plugin records each case's exact pytest node ID and JUnit
+          # setup+call+teardown duration semantics for the per-row
+          # observations snapshot (MoonLadderStudios/MoonMind#4629).
           # Short reliability budgets with PR-vs-schedule differentiation
           # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
           # per-test timeout and a 10-min step ceiling; schedules keep
@@ -549,7 +554,8 @@ jobs:
           test_start=$SECONDS
           set +e
           timeout --signal=INT --kill-after=30s "${step_budget}s" python -m pytest tests/integration/reliability \
-            -m reliability_journey \
+            -m "reliability_journey and not provider_verification and not requires_credentials" \
+            -p tools.ci.write_backend_matrix_summary \
             --splits 4 --group "${{ matrix.shard }}" \
             --splitting-algorithm least_duration \
             $DURATIONS_ARGS \
@@ -598,7 +604,7 @@ jobs:
               outcome="${{ steps.run-reliability.outcome }}"
               seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt"
               status_file="/tmp/backend-${{ matrix.suite }}-test-status.txt"
-              effective_command="timeout --signal=INT --kill-after=30s <step budget> python -m pytest tests/integration/reliability -m reliability_journey --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule -o faulthandler_timeout=120 PR / 270 schedule --maxfail=1 (ordinary; omitted on schedule)"
+              effective_command="timeout --signal=INT --kill-after=30s <step budget> python -m pytest tests/integration/reliability -m 'reliability_journey and not provider_verification and not requires_credentials' -p tools.ci.write_backend_matrix_summary --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule -o faulthandler_timeout=120 PR / 270 schedule --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="150s PR / 300s schedule per-test"
               step_budget="600s PR / 660s schedule shell deadline (SIGINT, SIGKILL after 30s) within 12-min step and 20-min job" ;;
             *) selected="false"; outcome="skipped"; seconds_file=""; status_file=""; effective_command=""; pytest_timeout=""; step_budget="" ;;

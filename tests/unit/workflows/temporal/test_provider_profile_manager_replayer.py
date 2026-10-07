@@ -24,6 +24,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     LEASE_TOMBSTONE_PURGE_PATCH,
     LEASE_TRANSITION_CONTRACT_PATCH,
     ORPHANED_VALIDATION_CLEANUP_PATCH,
+    OWNER_RELEASE_ORDERING_PATCH,
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
 )
@@ -817,7 +818,13 @@ async def test_lease_cleanup_redrive_replays_with_outstanding_obligation() -> No
 
 
 @pytest.mark.asyncio
-async def test_the_lease_transition_contract_replays_from_its_own_history() -> None:
+@pytest.mark.parametrize(
+    "owner_release_ordering", [False, True], ids=["retained", "new"]
+)
+async def test_the_lease_transition_contract_replays_from_its_own_history(
+    monkeypatch: pytest.MonkeyPatch,
+    owner_release_ordering: bool,
+) -> None:
     """The durable ordering contract is pinned by production replay.
 
     MoonLadderStudios/MoonMind#3883: the grant must commit before the slot is
@@ -826,6 +833,19 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
     release that never reaches an explicit outcome must not free the slot.
     """
 
+    real_patched = workflow.patched
+    if not owner_release_ordering:
+        # Record the previous producer's commands with no new marker, then
+        # replay them against the unmodified current implementation below.
+        monkeypatch.setattr(
+            workflow,
+            "patched",
+            lambda marker: (
+                False
+                if marker == OWNER_RELEASE_ORDERING_PATCH
+                else real_patched(marker)
+            ),
+        )
     runtime_id = "opencode"
     activities = _ProfileActivities(runtime_id, fail_cleanup=False)
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -946,6 +966,8 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
     # grant, not the re-signal drain, not the release, not the reclamation.
     assert "save" not in commands
 
+    assert (OWNER_RELEASE_ORDERING_PATCH in patch_ids) is owner_release_ordering
+    monkeypatch.setattr(workflow, "patched", real_patched)
     await Replayer(
         workflows=[MoonMindProviderProfileManagerWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

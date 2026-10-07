@@ -12359,6 +12359,13 @@ export interface components {
             requiredEvidenceClasses: string[];
             /** Blockedreasons */
             blockedReasons: string[];
+            /**
+             * Targetselectorrequired
+             * @default false
+             */
+            targetSelectorRequired: boolean;
+            /** Targetselectoroptions */
+            targetSelectorOptions?: string[];
         };
         /** RemediationApprovalDecisionRequest */
         RemediationApprovalDecisionRequest: {

@@ -24,9 +24,6 @@ from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentRestoreMaterial,
 )
-from moonmind.omnigent.harness_platform.execution_plan import (
-    bind_unattended_launch_mode,
-)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
     remediation_for,
@@ -199,9 +196,7 @@ def bind_exact_host(
     omnigent["agent"] = agent
     omnigent["_moonmindProfileAuthorization"] = dict(profile_authorization)
     parameters["omnigent"] = omnigent
-    return bind_unattended_launch_mode(
-        request.model_copy(update={"parameters": parameters}), harness=harness
-    )
+    return request.model_copy(update={"parameters": parameters})
 
 
 def bind_candidate_workspace(

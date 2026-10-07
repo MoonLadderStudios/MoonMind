@@ -140,7 +140,20 @@ The collected reliability universe is split into four groups through pytest-spli
 
 `N` is 1 through 4. All shards use the same checkout, collection inputs, and advisory hints. `tools/ci/refresh_reliability_durations.py --validate-only` checks hint usability. Missing or unusable history warns and falls back consistently; it must not exclude new tests or make an otherwise correct test fail. The ownership verifier checks the actual plugin collections for complete, disjoint coverage.
 
-Refresh hints when a measured imbalance or changed corpus warrants it. Per-run timing artifacts are evidence, not a second correctness database or a requirement for automated timing commits. Do not rebuild sharding that is already present.
+#### Measured Duration Hints
+
+Every entry in `tests/.reliability-test-durations.json` is an **observed** cost: the exact pytest node ID (path, class, and parameter components) and its JUnit `total` duration, meaning setup + call + teardown of that case, recorded by one complete reliability matrix run. Cheap and expensive cases of one file or parameterization keep their own measurements; there are no file averages or seeded estimates. A collected node without an entry (new or renamed test) is **estimated** by pytest-split as the average of the observed entries for the collected nodes and is still selected exactly once. Entries for removed tests are ignored by the plugin until the next import drops them. Genuine sub-millisecond cases may be recorded as `0.0`; booleans, negative, and non-finite values make the file unusable, which falls back to the no-history partition on every shard.
+
+Each reliability row loads `tools/ci/write_backend_matrix_summary.py` as a pytest plugin (`-p tools.ci.write_backend_matrix_summary`), which records the exact node ID and duration semantics in its JUnit report. The same script writes the row's separate `pytest-backend-reliability-shard-N-durations.json` artifact with the run, attempt, and revision. The committed hints stay unchanged throughout a matrix run.
+
+Refresh hints when a measured imbalance or changed corpus warrants it, from one successful run whose four reliability rows all passed:
+
+```bash
+gh run download <run-id> -p 'pytest-reliability-shard-*-attempt-<n>' -D /tmp/reliability-durations
+python3 tools/ci/refresh_reliability_durations.py import /tmp/reliability-durations
+```
+
+The import accepts exactly one snapshot per shard from one run, attempt, and revision. Every shard must report success, every case must carry an exact node ID with a valid duration and the documented semantics, and no node may appear twice. Otherwise it prints the reasons and leaves the committed file byte-for-byte unchanged. An accepted import replaces the file atomically with only the observed entries and prints the source run/attempt/revision and per-shard observed cost. Record those in the PR evidence. Per-run timing artifacts are evidence, not a second correctness database or a requirement for automated timing commits. Do not rebuild sharding that is already present.
 
 ### Reliability Docker Fixture Layers
 
@@ -234,7 +247,7 @@ The same entrypoints accept other targeted paths or node IDs. Broader suites nor
 
 To reproduce a reliability partition in an already prepared, disposable host/CI test environment, use its recorded pytest command with `--splits 4 --group N --splitting-algorithm least_duration` and the same validated hints. Omitting the hints path reproduces the consistent no-history fallback. Service addresses, networks, and fixture prerequisites must match that isolated environment, not the installed deployment. The workflow contains the exact suite commands, marker expressions, and environment setup.
 
-`python3 tools/ci/refresh_reliability_durations.py` refreshes the advisory collection-based hints when needed. `python tools/verify_test_shard_ownership.py` checks the eligible provider-free universe in its supported environment. These are not broad local prerequisites to every PR.
+`python3 tools/ci/refresh_reliability_durations.py` validates the committed hints; its `import` subcommand refreshes them from observed CI timings (see [Measured Duration Hints](#measured-duration-hints)). `python tools/verify_test_shard_ownership.py` checks the eligible provider-free universe in its supported environment. These are not broad local prerequisites to every PR.
 
 The source-destroying checkpoint-resume journey still exercises durable capture/restore and idempotent recovery. It does not by itself prove the entire Temporal-to-managed-runtime journey. Use the appropriate owning integration boundary rather than treating one helper test as complete product verification.
 
