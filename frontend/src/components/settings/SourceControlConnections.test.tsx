@@ -588,6 +588,42 @@ describe('SourceControlConnections', () => {
   });
 
 
+  it.each(['edit', 'assignment'] as const)('keeps a newer disable when an earlier %s response arrives late', async (kind) => {
+    const initial = connection();
+    const state = { items: [initial] };
+    let finish: (value: unknown) => void = () => undefined;
+    const lateResponse = new Promise((resolve) => { finish = resolve; });
+    let loaded = false;
+    stubApi(state, {
+      'GET /api/v1/repository-connections': () => {
+        if (loaded) return new Promise(() => undefined);
+        loaded = true;
+        return json({ items: state.items });
+      },
+      'PATCH /api/v1/repository-connections/personal-github': () => lateResponse,
+      'POST /api/v1/repository-connections/personal-github/assignments': () => lateResponse,
+      'POST /api/v1/repository-connections/personal-github/disable': () => {
+        state.items = [connection({ lifecycle: 'disabled', policyRevision: 3, displayName: 'Current disabled name' })];
+        return json(state.items[0]);
+      },
+    });
+    const { queryClient } = renderSection();
+    const form = await screen.findByRole('form', { name: kind === 'edit' ? 'Edit connection' : 'Assign repository' });
+    fireEvent.change(within(form).getByLabelText(kind === 'edit' ? 'Connection name' : /Assign repository/), {
+      target: { value: kind === 'edit' ? 'Earlier saved name' : 'acme/widgets' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: kind === 'edit' ? 'Save changes' : 'Assign' }));
+    await waitFor(() => expect((within(form).getByRole('button', { name: kind === 'edit' ? 'Saving…' : 'Checking…' }) as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Disable connection' }));
+    await screen.findByRole('heading', { name: 'Current disabled name' });
+    await act(async () => {
+      finish(json(connection({ policyRevision: 2, displayName: 'Earlier saved name' })));
+    });
+    expect(queryClient.getQueryData<{ items: ConnectionFixture[] }>(SOURCE_CONTROL_QUERY_KEY)?.items[0]).toMatchObject({ lifecycle: 'disabled', policyRevision: 3 });
+    expect(screen.queryByRole('button', { name: 'Disable connection' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Current disabled name' })).toBeTruthy();
+  });
+
   it('supports token rotation without WebCrypto without replaying unverified token intent', async () => {
     vi.stubGlobal('crypto', { randomUUID: () => webcrypto.randomUUID() });
     const state = { items: [connection()] };

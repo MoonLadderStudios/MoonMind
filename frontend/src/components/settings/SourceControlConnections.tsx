@@ -197,6 +197,10 @@ export function SourceControlConnections({
   /** Show the committed server record before anything else is offered. */
   function showCommitted(connection: Connection) {
     queryClient.setQueryData<ConnectionList>(SOURCE_CONTROL_QUERY_KEY, (current) => {
+      const recorded = current?.items.find((item) => item.id === connection.id);
+      // Responses can arrive out of order across save, assignment and disable.
+      // A confirmed newer policy must never be replaced by an older projection.
+      if (recorded && recorded.policyRevision > connection.policyRevision) return current;
       const items = (current?.items ?? []).filter((item) => item.id !== connection.id);
       return {
         items: [...items, connection].sort((a, b) => a.displayName.localeCompare(b.displayName)),
@@ -634,6 +638,8 @@ function ConnectionDetail({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [rotationPending, setRotationPending] = useState(false);
   const pendingUpdate = useRef<PendingUpdate | null>(null);
+  const currentConnection = useRef(connection);
+  currentConnection.current = connection;
   const [repository, setRepository] = useState('');
   const [assignPublish, setAssignPublish] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
@@ -672,10 +678,12 @@ function ConnectionDetail({
 
   function acceptEdit(saved: Connection) {
     pendingUpdate.current = null;
+    setRotationPending(false);
+    if (currentConnection.current.policyRevision > saved.policyRevision) return false;
     setName(saved.displayName);
     setPublish(canPublish(saved.allowedOperations));
-    setRotationPending(false);
     onCommitted(saved);
+    return true;
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -713,8 +721,8 @@ function ConnectionDetail({
         ...body,
         ...(transient ? { token: transient } : {}),
       });
-      acceptEdit(saved);
-      if (isStillSelected(connection.id)) {
+      const isCurrent = acceptEdit(saved);
+      if (isCurrent && isStillSelected(connection.id)) {
         onNotice?.({ level: 'ok', text: transient ? 'Token replaced.' : 'Connection saved.' });
       }
     } catch (err) {
