@@ -264,6 +264,13 @@ from moonmind.workflows.executions.new_work_runtime import (
     new_work_evidence,
     resolve_new_work_selection,
 )
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_ABSENCE_STATES,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    provider_profile_id_token,
+    provider_profile_state_token,
+    provider_profile_summary_from_memo,
+)
 from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
@@ -445,6 +452,7 @@ _EXECUTION_SORT_FIELDS = {
 _EXECUTION_UPDATED_SORT_BUCKET_SECONDS = 60
 _EXECUTION_FACET_ATTRS = {
     "status": "mm_state",
+    "providerProfile": PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
     "targetRuntime": "mm_target_runtime",
     "targetSkill": "mm_target_skill",
     "repository": "mm_repo",
@@ -454,17 +462,28 @@ _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
     "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE: IndexedValueType.INDEXED_VALUE_TYPE_TEXT,
 }
 _UNSORTABLE_TEMPORAL_SEARCH_ATTRIBUTES = frozenset(
     {
         "mm_target_runtime",
         "mm_target_skill",
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
     }
 )
 _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS = 300.0
 _optional_temporal_search_attributes_cache: dict[
     tuple[str, int], tuple[float, frozenset[str]]
 ] = {}
+_PROVIDER_PROFILE_FILTER_ALIASES = frozenset(
+    {
+        "providerProfileIn",
+        "providerProfileNotIn",
+        "providerProfileStateIn",
+        "providerProfileStateNotIn",
+        "providerProfileBlank",
+    }
+)
 _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetRuntime": "mm_target_runtime",
     "targetRuntimeIn": "mm_target_runtime",
@@ -472,6 +491,7 @@ _EXECUTION_FILTER_ATTR_BY_ALIAS = {
     "targetSkillIn": "mm_target_skill",
     "targetSkillNotIn": "mm_target_skill",
     "titleContains": "mm_title",
+    **dict.fromkeys(_PROVIDER_PROFILE_FILTER_ALIASES, PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
 }
 _EXECUTION_FACET_FILTER_ALIASES = {
     "status": frozenset({"state", "stateIn", "stateNotIn"}),
@@ -483,6 +503,7 @@ _EXECUTION_FACET_FILTER_ALIASES = {
         {"repo", "repoExact", "repoIn", "repoNotIn", "repoContains", "repoBlank"}
     ),
     "integration": frozenset({"integration"}),
+    "providerProfile": _PROVIDER_PROFILE_FILTER_ALIASES,
 }
 _TEMPORAL_STATUS_VALUES = (
     "scheduled",
@@ -3124,6 +3145,97 @@ def _append_word_match_temporal_filter(
         query_parts.append(f'{attr} = "{_escape_temporal_value(token)}"')
 
 
+def _provider_profile_state_clause(absence: str, *, negate: bool) -> str:
+    attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    if absence == "not_recorded":
+        # Records that predate the projection carry no attribute at all.
+        return f"{attr} IS NOT NULL" if negate else f"{attr} IS NULL"
+    token = provider_profile_state_token(absence)
+    if negate:
+        return f'({attr} IS NULL OR {attr}!="{token}")'
+    return f'{attr}="{token}"'
+
+
+def _append_provider_profile_temporal_filter(
+    query_parts: list[str],
+    request: Request,
+    *,
+    excluded: Callable[[str], bool],
+) -> None:
+    """Apply recorded Provider Profile ID/state membership before pagination.
+
+    Positive IDs and absence states OR together within the column; every
+    excluded ID or state rejects matching workflows. ``providerProfileBlank``
+    is the aggregate absence shortcut and cannot be mixed with explicit lists.
+    """
+
+    def values(alias: str) -> list[str]:
+        return [] if excluded(alias) else _raw_query_values(request, alias, None)
+
+    include_ids = values("providerProfileIn")
+    exclude_ids = values("providerProfileNotIn")
+    include_states = values("providerProfileStateIn")
+    exclude_states = values("providerProfileStateNotIn")
+    blank_raw = (
+        None
+        if excluded("providerProfileBlank")
+        else request.query_params.get("providerProfileBlank")
+    )
+    blank = str(blank_raw).strip().lower() if blank_raw is not None else ""
+    if blank not in {"", "true", "false"}:
+        raise TemporalExecutionValidationError(
+            "providerProfileBlank must be true or false."
+        )
+    for alias, states in (
+        ("providerProfileStateIn", include_states),
+        ("providerProfileStateNotIn", exclude_states),
+    ):
+        unknown = [
+            absence for absence in states if absence not in PROVIDER_PROFILE_ABSENCE_STATES
+        ]
+        if unknown:
+            raise TemporalExecutionValidationError(
+                f"{alias} accepts only: "
+                + ", ".join(PROVIDER_PROFILE_ABSENCE_STATES)
+                + "."
+            )
+    if set(include_ids) & set(exclude_ids):
+        raise TemporalExecutionValidationError(
+            "A Provider Profile cannot be both included and excluded."
+        )
+    if set(include_states) & set(exclude_states):
+        raise TemporalExecutionValidationError(
+            "A Provider Profile state cannot be both included and excluded."
+        )
+    if blank and (include_ids or exclude_ids or include_states or exclude_states):
+        raise TemporalExecutionValidationError(
+            "providerProfileBlank cannot be combined with other Provider Profile "
+            "filters; use providerProfileStateIn or providerProfileStateNotIn."
+        )
+
+    attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    if blank == "true":
+        include_states = list(PROVIDER_PROFILE_ABSENCE_STATES)
+    elif blank == "false":
+        query_parts.append(f'{attr}="{provider_profile_state_token("recorded")}"')
+    positive = [
+        f'{attr}="{provider_profile_id_token(profile_id)}"' for profile_id in include_ids
+    ]
+    positive.extend(
+        _provider_profile_state_clause(absence, negate=False)
+        for absence in include_states
+    )
+    if len(positive) == 1:
+        query_parts.append(positive[0])
+    elif positive:
+        query_parts.append("(" + " OR ".join(positive) + ")")
+    for profile_id in exclude_ids:
+        token = provider_profile_id_token(profile_id)
+        query_parts.append(f'({attr} IS NULL OR {attr}!="{token}")')
+    for absence in exclude_states:
+        query_parts.append(_provider_profile_state_clause(absence, negate=True))
+
+
 def _build_temporal_execution_query(
     *,
     request: Request,
@@ -3266,6 +3378,8 @@ def _build_temporal_execution_query(
             include=target_skill_in_values,
             exclude=target_skill_not_in_values,
         )
+    if attr_available(PROVIDER_PROFILE_SEARCH_ATTRIBUTE):
+        _append_provider_profile_temporal_filter(query_parts, request, excluded=excluded)
     if not excluded("workflowId"):
         _append_exact_or_multi_temporal_filter(
             query_parts,
@@ -3389,6 +3503,102 @@ def _facet_label(facet: str, value: str) -> str:
     return value
 
 
+async def _listed_workflow_memo(workflow: object) -> Mapping[str, Any]:
+    memo_fn = getattr(workflow, "memo", None)
+    memo: object | None = None
+    if callable(memo_fn):
+        maybe_memo = memo_fn()
+        if hasattr(maybe_memo, "__await__"):
+            memo = await maybe_memo
+        else:
+            memo = maybe_memo
+    return memo if isinstance(memo, Mapping) else {}
+
+
+_PROVIDER_PROFILE_STATE_LABELS = {
+    "pending": "Pending selection",
+    "not_recorded": "Not recorded",
+    "not_applicable": "Not applicable",
+}
+
+
+async def _provider_profile_facet_response(
+    *,
+    client: Any,
+    base_query: str,
+    search_value: str | None,
+    page_size: int,
+    next_page_token: str | None,
+) -> ExecutionFacetResponse:
+    """Facet recorded Provider Profile IDs and absence states (#4640).
+
+    Values come from recorded workflow memos (including profiles no longer in
+    launch inventory); each count is one Visibility count over the stable-ID
+    token, so a workflow counts once per profile and totals may overlap.
+    """
+
+    iterator = client.list_workflows(
+        query=base_query,
+        page_size=page_size,
+        next_page_token=_decode_execution_facet_page_token(next_page_token),
+    )
+    await iterator.fetch_next_page()
+    labels: dict[str, str] = {}
+    needle = (search_value or "").lower()
+    for workflow in iterator.current_page or []:
+        summary = provider_profile_summary_from_memo(
+            await _listed_workflow_memo(workflow)
+        )
+        for profile in summary["profiles"]:
+            profile_id = profile["id"]
+            label = profile.get("label") or profile_id
+            if profile_id in labels or (
+                needle and needle not in f"{label} {profile_id}".lower()
+            ):
+                continue
+            labels[profile_id] = label
+
+    attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+    items = []
+    for profile_id, label in list(labels.items())[:page_size]:
+        count_info = await client.count_workflows(
+            query=_and_temporal_query(
+                base_query, f'{attr}="{provider_profile_id_token(profile_id)}"'
+            )
+        )
+        items.append(
+            ExecutionFacetItemModel(value=profile_id, label=label, count=count_info.count)
+        )
+    state_items = []
+    for absence in PROVIDER_PROFILE_ABSENCE_STATES:
+        count_info = await client.count_workflows(
+            query=_and_temporal_query(
+                base_query, _provider_profile_state_clause(absence, negate=False)
+            )
+        )
+        state_items.append(
+            ExecutionFacetItemModel(
+                value=absence,
+                label=_PROVIDER_PROFILE_STATE_LABELS[absence],
+                count=count_info.count,
+            )
+        )
+    return ExecutionFacetResponse(
+        facet="providerProfile",
+        items=items,
+        stateItems=state_items,
+        blankCount=sum(item.count for item in state_items),
+        truncated=bool(iterator.next_page_token),
+        nextPageToken=(
+            base64.b64encode(iterator.next_page_token).decode("utf-8")
+            if iterator.next_page_token
+            else None
+        ),
+        countMode="exact",
+        source="authoritative",
+    )
+
+
 async def _facet_value_from_workflow(workflow: object, facet: str) -> str:
     search_attributes = getattr(workflow, "search_attributes", {}) or {}
     if facet == "status":
@@ -3417,16 +3627,7 @@ async def _facet_value_from_workflow(workflow: object, facet: str) -> str:
         )
         if value:
             return value
-    memo_fn = getattr(workflow, "memo", None)
-    memo: object | None = None
-    if callable(memo_fn):
-        maybe_memo = memo_fn()
-        if hasattr(maybe_memo, "__await__"):
-            memo = await maybe_memo
-        else:
-            memo = maybe_memo
-    if not isinstance(memo, Mapping):
-        return ""
+    memo = await _listed_workflow_memo(workflow)
     if facet == "targetRuntime":
         return _coerce_temporal_scalar(
             memo.get("targetRuntime") or memo.get("target_runtime")
@@ -4360,6 +4561,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         waiting_reason=str(waiting_reason) if waiting_reason else None,
         attention_required=attention_required,
         target_runtime=target_runtime,
+        provider_profile=provider_profile_summary_from_memo(memo),
         target_skill=target_skill,
         task_skills=task_skills,
         repository=repository,
@@ -15019,6 +15221,18 @@ async def list_executions(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # Recorded Provider Profile filters (#4640). The shared query builder reads
+    # them from the request so repeated parameters and validation stay in one
+    # owner; declaring them here publishes the typed API contract.
+    provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
+    provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
+    provider_profile_state_in: Optional[str] = Query(
+        None, alias="providerProfileStateIn"
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None, alias="providerProfileStateNotIn"
+    ),
+    provider_profile_blank: Optional[str] = Query(None, alias="providerProfileBlank"),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15425,6 +15639,18 @@ async def get_execution_metrics(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # Recorded Provider Profile filters (#4640). The shared query builder reads
+    # them from the request so repeated parameters and validation stay in one
+    # owner; declaring them here publishes the typed API contract.
+    provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
+    provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
+    provider_profile_state_in: Optional[str] = Query(
+        None, alias="providerProfileStateIn"
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None, alias="providerProfileStateNotIn"
+    ),
+    provider_profile_blank: Optional[str] = Query(None, alias="providerProfileBlank"),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15656,6 +15882,7 @@ async def list_execution_facets(
     request: Request,
     facet: Literal[
         "status",
+        "providerProfile",
         "targetRuntime",
         "targetSkill",
         "repository",
@@ -15678,6 +15905,18 @@ async def list_execution_facets(
     target_runtime_not_in: Optional[str] = Query(None, alias="targetRuntimeNotIn"),
     target_skill_in: Optional[str] = Query(None, alias="targetSkillIn"),
     target_skill_not_in: Optional[str] = Query(None, alias="targetSkillNotIn"),
+    # Recorded Provider Profile filters (#4640). The shared query builder reads
+    # them from the request so repeated parameters and validation stay in one
+    # owner; declaring them here publishes the typed API contract.
+    provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
+    provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
+    provider_profile_state_in: Optional[str] = Query(
+        None, alias="providerProfileStateIn"
+    ),
+    provider_profile_state_not_in: Optional[str] = Query(
+        None, alias="providerProfileStateNotIn"
+    ),
+    provider_profile_blank: Optional[str] = Query(None, alias="providerProfileBlank"),
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
@@ -15818,6 +16057,15 @@ async def list_execution_facets(
                 nextPageToken=status_next_page_token,
                 countMode="exact",
                 source="authoritative",
+            )
+
+        if facet == "providerProfile":
+            return await _provider_profile_facet_response(
+                client=client,
+                base_query=base_query,
+                search_value=search_value,
+                page_size=page_size,
+                next_page_token=next_page_token,
             )
 
         token_bytes = _decode_execution_facet_page_token(next_page_token)
