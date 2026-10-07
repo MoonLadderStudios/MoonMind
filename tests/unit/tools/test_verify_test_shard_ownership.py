@@ -309,3 +309,62 @@ def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
     assert verify_physical_partitions(universe, groups) == []
     appearances = sum(new_node in nodes for nodes in groups.values())
     assert appearances == 1
+
+
+def test_plugin_cli_partitions_with_measured_stale_and_missing_hints(tmp_path) -> None:
+    """MoonLadderStudios/MoonMind#4629 AC3: with measured unequal hints that
+    also name a removed test (stale) and omit a new test (missing), the real
+    --group collections still cover every collected node exactly once, and
+    the same hints with the expensive cases spread across groups. Skipped
+    where pytest-split is not installed; CI installs it via .[tests]."""
+    import json
+    import sys
+
+    (tmp_path / "test_measured.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.parametrize('p', ['slow-1', 'slow-2', 'cheap-1', 'cheap-2', 'cheap-3'])\n"
+        "def test_case(p):\n    pass\n"
+    )
+    (tmp_path / "test_added_later.py").write_text("def test_new():\n    pass\n")
+    base = [sys.executable, "-m", "pytest"]
+    probe = _real_run_collection_command(base + ["--help"])
+    if "--splits" not in (probe.stdout + probe.stderr):
+        pytest.skip("pytest-split is not installed")
+    hints = {
+        "test_measured.py::test_case[slow-1]": 125.0,
+        "test_measured.py::test_case[slow-2]": 130.0,
+        "test_measured.py::test_case[cheap-1]": 0.3,
+        "test_measured.py::test_case[cheap-2]": 0.0,
+        "test_measured.py::test_case[cheap-3]": 0.2,
+        "test_removed.py::test_gone": 400.0,
+    }
+    durations_path = tmp_path / "durations.json"
+    durations_path.write_text(json.dumps(hints), encoding="utf-8")
+    proc = _real_run_collection_command(
+        base + ["--collect-only", "-q", "-p", "no:cacheprovider"], cwd=tmp_path
+    )
+    universe = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
+    assert len(universe) == 6
+    groups: dict[int, set[str]] = {}
+    for group in (1, 2, 3, 4):
+        proc = _real_run_collection_command(
+            base
+            + [
+                "--collect-only", "-q", "-p", "no:cacheprovider",
+                "--splits", "4", "--group", str(group),
+                "--splitting-algorithm", "least_duration",
+                "--durations-path", str(durations_path),
+            ],
+            cwd=tmp_path,
+        )
+        assert proc.returncode in (0, 5), proc.stderr[-500:]
+        groups[group] = {line.strip() for line in proc.stdout.splitlines() if "::" in line}
+    assert verify_physical_partitions(universe, groups) == []
+    slow_groups = {
+        group
+        for group, nodes in groups.items()
+        for node in nodes
+        if "[slow-" in node
+    }
+    assert len(slow_groups) == 2, groups
+    assert json.loads(durations_path.read_text(encoding="utf-8")) == hints
