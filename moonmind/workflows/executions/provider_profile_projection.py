@@ -194,6 +194,64 @@ def build_provider_profile_projection(
     return summary, " ".join(tokens)
 
 
+def merge_resolved_provider_profile(
+    summary: Mapping[str, Any] | None,
+    search_value: str | None,
+    profile_id: str | None,
+    *,
+    label: str | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    """Fold one launch-resolved Provider Profile into the admitted projection.
+
+    Admission records ``pending`` when no Provider Profile was selected yet; the
+    workflow folds in the profile its agent launch actually used so rows,
+    filters, and facets stop reporting an unresolved selection. Returns
+    ``None`` when nothing changes, including when no admission projection
+    exists (historical records stay ``not_recorded``). ``search_value`` is the
+    current ``mm_provider_profile`` value, which indexes IDs beyond the memo
+    display bound.
+    """
+
+    raw = _mapping(summary)
+    resolved_id = _text(profile_id)
+    if not resolved_id or raw.get("selectionState") not in _WRITTEN_STATES:
+        return None
+    profiles = [
+        dict(entry)
+        for entry in raw.get("profiles") or []
+        if isinstance(entry, Mapping) and _text(entry.get("id"))
+    ][:PROVIDER_PROFILE_SUMMARY_LIMIT]
+    id_tokens = [
+        token
+        for token in (search_value or "").split()
+        if not token.startswith(_STATE_TOKEN_PREFIX)
+    ]
+    if not id_tokens:
+        id_tokens = [provider_profile_id_token(entry["id"]) for entry in profiles]
+    resolved_token = provider_profile_id_token(resolved_id)
+    if raw.get("selectionState") == "recorded" and resolved_token in id_tokens:
+        return None
+    count = raw.get("profileCount")
+    if isinstance(count, bool) or not isinstance(count, int) or count < len(profiles):
+        count = len(profiles)
+    if resolved_token not in id_tokens:
+        id_tokens.append(resolved_token)
+        count += 1
+        if len(profiles) < PROVIDER_PROFILE_SUMMARY_LIMIT:
+            entry: dict[str, Any] = {"id": resolved_id}
+            resolved_label = _text(label)
+            if resolved_label:
+                entry["label"] = resolved_label[:_LABEL_LIMIT]
+            profiles.append(entry)
+    merged_summary = {
+        "selectionState": "recorded",
+        "profiles": profiles,
+        "profileCount": count,
+    }
+    tokens = [provider_profile_state_token("recorded"), *id_tokens]
+    return merged_summary, " ".join(tokens)
+
+
 def provider_profile_summary_from_memo(memo: Mapping[str, Any] | None) -> dict[str, Any]:
     """Read the recorded summary for a list row.
 

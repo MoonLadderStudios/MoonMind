@@ -1695,14 +1695,25 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [prefsMenuOpen]);
 
+  // The filter wrapper holds both the trigger and the popover, so focus is
+  // scoped to the popover itself. Closing returns focus to the originating
+  // filter button unless focus already moved elsewhere (e.g. an outside click).
   useEffect(() => {
     if (desktopFilterField === null) return;
+    const root = desktopFilterRef.current;
+    const trigger = root?.querySelector<HTMLElement>('.workflow-list-column-filter-button') ?? null;
     const frame = window.requestAnimationFrame(() => {
-      desktopFilterRef.current
+      root
+        ?.querySelector('.workflow-list-column-filter-popover')
         ?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), button:not([disabled])')
         ?.focus();
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      const active = document.activeElement;
+      const focusLeftWithPopover = !active || active === document.body || !active.isConnected;
+      if (trigger?.isConnected && focusLeftWithPopover) trigger.focus();
+    };
   }, [desktopFilterField]);
 
   // When the drawer opens, move focus to the first control of the requested
