@@ -2,7 +2,8 @@
 
 Source: MoonLadderStudios/MoonMind#3703 / #3709.
 
-Binds an :class:`OmnigentControlPlaneStore` over the seven control-plane tables.
+Binds an :class:`OmnigentControlPlaneStore` over the canonical control-plane
+and terminal-verification lookup tables.
 The ephemeral-PostgreSQL provisioning (``control_plane_postgres_url``) lives in
 ``tests/integration/conftest.py`` so every integration suite shares one owner.
 Both the decisive-invariant coverage in ``test_control_plane_postgres.py`` and the
@@ -30,6 +31,9 @@ from api_service.db.models import (
     OmnigentRuntimeBindingRecord,
     OmnigentSession,
     OmnigentTurnAttempt,
+    TemporalArtifact,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionRemediationLink,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 
@@ -50,6 +54,11 @@ _CONTROL_PLANE_TABLES = [
     OmnigentReconciliationDecision.__table__,
     OmnigentChatBindingAlias.__table__,
     OmnigentCleanupAuthority.__table__,
+    # Terminal commits continue pending remediation verification through its
+    # durable link ledger. Include the real foreign-key owners for that lookup.
+    TemporalExecutionCanonicalRecord.__table__,
+    TemporalArtifact.__table__,
+    TemporalExecutionRemediationLink.__table__,
 ]
 
 

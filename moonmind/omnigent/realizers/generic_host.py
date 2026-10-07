@@ -25,6 +25,7 @@ from moonmind.omnigent.credential_materializers import (
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     bind_omnigent_model_selection,
+    bind_unattended_launch_mode,
     execution_support_identity,
 )
 from moonmind.omnigent.harness_platform.failures import (
@@ -1645,7 +1646,10 @@ class GenericOmnigentHostRealizer:
         parameters["omnigent"] = omnigent
         parameters["executionPlanRef"] = plan.planRef
         parameters["runtimeBindingRef"] = binding.bindingId
-        return request.model_copy(update={"parameters": parameters})
+        return bind_unattended_launch_mode(
+            request.model_copy(update={"parameters": parameters}),
+            harness=plan.payload.harnessId,
+        )
 
     async def reconcile(self, plan_ref: str, runtime_binding_ref: str | None) -> None:
         if not runtime_binding_ref:

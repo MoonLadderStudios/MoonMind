@@ -392,7 +392,19 @@ describe('Workflow Detail Entrypoint', () => {
       contextArtifactRef: 'art_context_rich',
       selectedSteps: ['collect-context', 'repair-runtime'],
       currentTargetState: 'awaiting_external',
-      allowedActions: ['inspect_context', 'request_approval', 'terminate_session'],
+      allowedActions: ['execution.pause', 'host.restart'],
+      actionCapabilities: ['execution.pause', 'host.restart'].map((actionKind) => ({
+        actionKind,
+        requestable: actionKind === 'execution.pause',
+        dryRunSupported: false,
+        executionBackendReady: true,
+        approvalBackendReady: true,
+        verificationBackendReady: actionKind === 'execution.pause',
+        supportedTargetRuntimes: ['omnigent'],
+        supportedHostModes: [],
+        requiredEvidenceClasses: [],
+        blockedReasons: actionKind === 'execution.pause' ? [] : ['authoritative_verifier_unavailable'],
+      })),
       evidenceDegraded: true,
       unavailableEvidenceClasses: ['runtime_stderr', 'provider_snapshot'],
       liveObservation: {
@@ -7453,6 +7465,11 @@ describe('Workflow Detail Entrypoint', () => {
       actions: {},
     };
 
+    const scoped = richOutboundRemediationLink();
+    scoped.actionCapabilities.push({
+      ...scoped.actionCapabilities[0], actionKind: 'session.cancel',
+      targetSelectorRequired: true, targetSelectorOptions: ['bridgeSessionId', 'stepExecutionId'],
+    } as typeof scoped.actionCapabilities[number]);
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/executions/test-remediation-rich/remediations?direction=inbound')) {
@@ -7463,7 +7480,7 @@ describe('Workflow Detail Entrypoint', () => {
           ok: true,
           json: async () => ({
             direction: 'outbound',
-            items: [richOutboundRemediationLink()],
+            items: [scoped],
           }),
         } as Response);
       }
@@ -7482,7 +7499,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('mm:target-rich')).toBeTruthy();
     expect(screen.getByText('collect-context, repair-runtime')).toBeTruthy();
     expect(screen.getByText('awaiting_external')).toBeTruthy();
-    expect(screen.getByText('inspect_context, request_approval, terminate_session')).toBeTruthy();
+    const available = screen.getByText('Available Actions:').parentElement!;
+    expect(within(available).getByText(/Cancel session \(select a session\)/)).toBeTruthy();
+    expect(within(available).getByText(/Pause workflow/)).toBeTruthy();
+    expect(within(available).queryByText('host.restart')).toBeNull();
+    const diagnostics = screen.getByText(/Action diagnostics/).closest('details')!;
+    expect(within(diagnostics).getByText('host.restart')).toBeTruthy();
+    expect(within(diagnostics).getByText(/authoritative_verifier_unavailable/)).toBeTruthy();
     expect(screen.getByText(/Unavailable: runtime_stderr, provider_snapshot/)).toBeTruthy();
     expect(screen.getByText('Live observation active')).toBeTruthy();
     expect(screen.getByText('stdout:42')).toBeTruthy();

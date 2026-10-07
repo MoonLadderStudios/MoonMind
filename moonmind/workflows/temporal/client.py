@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription, WorkflowUpdateStage
 from temporalio.common import (
@@ -21,24 +20,21 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.config.settings import settings
+from moonmind.observability import temporal_tracing_interceptors
 from moonmind.schemas.container_job_models import (
     ContainerJobWorkflowInput,
     container_job_workflow_id,
+)
+from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.hard_switch_cutover import (
+    RENAMED_USER_WORKFLOW_TYPE,
+    resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.workers import (
     WORKFLOW_FLEET,
     TemporalWorkerTopology,
     describe_configured_worker,
 )
-from moonmind.workflows.temporal.hard_switch_cutover import (
-    RENAMED_USER_WORKFLOW_TYPE,
-    resolve_user_workflow_start_contract,
-)
-from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
-from moonmind.observability import temporal_tracing_interceptors
-
-if TYPE_CHECKING:
-    from moonmind.workflows.temporal.service import TemporalExecutionService
 
 # All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
 # so that drain metrics and batch signals only target our own workflows.
@@ -469,9 +465,15 @@ class TemporalClientAdapter:
             return client.get_workflow_handle(workflow_id, run_id=run_id)
         return client.get_workflow_handle(workflow_id)
 
-    async def cancel_workflow(self, workflow_id: str) -> None:
+    async def cancel_workflow(
+        self, workflow_id: str, *, run_id: str | None = None
+    ) -> None:
         """Cancel an existing workflow execution."""
-        handle = await self.get_workflow_handle(workflow_id)
+        handle = (
+            await self.get_workflow_handle(workflow_id, run_id=run_id)
+            if run_id is not None
+            else await self.get_workflow_handle(workflow_id)
+        )
         await handle.cancel()
 
     async def terminate_workflow(
@@ -497,13 +499,24 @@ class TemporalClientAdapter:
         await handle.signal("reschedule", scheduled_for.isoformat())
 
     async def update_workflow(
-        self, workflow_id: str, update_name: str, arg: Any = None
+        self,
+        workflow_id: str,
+        update_name: str,
+        arg: Any = None,
+        *,
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Any:
         """Execute an update on an existing workflow execution."""
-        handle = await self.get_workflow_handle(workflow_id)
+        handle = (
+            await self.get_workflow_handle(workflow_id, run_id=run_id)
+            if run_id is not None
+            else await self.get_workflow_handle(workflow_id)
+        )
+        options = {"id": idempotency_key} if idempotency_key is not None else {}
         if arg is not None:
-            return await handle.execute_update(update_name, arg)
-        return await handle.execute_update(update_name)
+            return await handle.execute_update(update_name, arg, **options)
+        return await handle.execute_update(update_name, **options)
 
     async def describe_workflow(
         self, workflow_id: str, *, run_id: str | None = None
