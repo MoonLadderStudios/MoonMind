@@ -91,7 +91,7 @@ try {
   await page.getByRole('heading', { name: 'Refresh the setup guide' }).waitFor();
   await page.getByText(detail.summary, { exact: true }).waitFor();
   await page.evaluate(() => document.fonts.ready);
-  await page.screenshot({ path: resolve(output, 'workflow-detail.png'), clip: { x: 0, y: 0, width: 1600, height: 900 } });
+  await page.screenshot({ path: resolve(output, 'workflow-detail.png'), clip: { x: 0, y: 0, width: 1600, height: 880 } });
   await writeFile(resolve(output, 'capture-evidence.json'), JSON.stringify({ theme: 'dark', viewport: { width: 1600, height: 1000 }, syntheticData: true, unknownRoutes: [...unknown], pageErrors: errors, requests }, null, 2));
   if (unknown.size) throw new Error(`Unexpected API routes: ${[...unknown].join(', ')}`);
   if (errors.length) throw new Error(errors.join('\n'));
