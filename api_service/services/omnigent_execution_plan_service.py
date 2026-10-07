@@ -787,6 +787,15 @@ def _native_review_graph(
         or set(tool) - {"id", "inputs", "requiredCapabilities"}
     ):
         return None
+    from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
+    from moonmind.workflows.temporal.story_output_tools import (
+        register_story_output_tool_handlers,
+    )
+
+    dispatcher = ToolActivityDispatcher()
+    register_story_output_tool_handlers(dispatcher)
+    if dispatcher.registered_skill_handler(skill_name=tool["id"]) is None:
+        return None
     inputs = tool.get("inputs")
     if (
         not isinstance(inputs, Mapping)
@@ -1037,13 +1046,8 @@ async def _admit_repository_plan_inputs(
             async with session_factory() as session:
                 yield session
 
-    if (
-        any(binding.consumer == "native" for binding in parent_bindings.values())
-        and not native_review
-    ):
-        raise ValueError(
-            "child cannot convert native repository authority to agent authority"
-        )
+    if any(binding.consumer == "native" for binding in parent_bindings.values()):
+        raise ValueError("native repository authority cannot be donated to a child")
     if not typed_authority and not native_review:
         # The profile-bound realizer reads only the legacy GitHub credential,
         # which migration 391 records as the default connection. Any other

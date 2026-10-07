@@ -297,7 +297,7 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
                     "instructions": "Reuse parent credentials",
                 }
             ]
-            with pytest.raises(ValueError, match="cannot convert native.*agent"):
+            with pytest.raises(ValueError, match="native repository authority.*child"):
                 await admit(parent_plan=compiled.envelope)
             assert len(store._plans) == 1
     finally:
