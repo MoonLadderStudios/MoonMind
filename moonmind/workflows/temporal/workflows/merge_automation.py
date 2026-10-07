@@ -1529,7 +1529,6 @@ class MoonMindMergeAutomationWorkflow:
 
     def _review_repository_authority(self) -> dict[str, Any]:
         return {
-            "principal": self._principal(),
             "executionOwner": self._resolver_parent_workflow_id(),
             "parentExecutionPlan": self._input.resolver_template.get(
                 "parentOmnigentExecutionPlan"

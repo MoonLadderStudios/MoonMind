@@ -629,8 +629,26 @@ async def test_production_publisher_uses_destination_connection_before_remote_co
         )
 
 
+@pytest.fixture
+def native_review_activity(monkeypatch):
+    from temporalio import activity
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="merge-automation:review-only", workflow_run_id="review-run-1"
+        ),
+    )
+
+
+@pytest.mark.parametrize("owner_principal", ["user-1", "system"])
+@pytest.mark.parametrize(
+    "repository_consumers", ["https://github.com", "https://github.com/"], indirect=True
+)
 async def test_native_review_uses_selected_plan_authority_and_rejects_revocation(
     repository_consumers,
+    owner_principal,
+    native_review_activity,
 ):
     from moonmind.workflows.temporal.merge_automation_repository_access import (
         merge_automation_repository_token,
@@ -652,10 +670,17 @@ async def test_native_review_uses_selected_plan_authority_and_rejects_revocation
         },
     )
     authority = {
-        "principal": "user-1",
+        "principal": owner_principal,
         "executionOwner": "merge-automation:review-only",
         "parentExecutionPlan": compiled.binding.model_dump(by_alias=True),
     }
+    with pytest.raises(ValueError, match="executing workflow"):
+        async with merge_automation_repository_token(
+            {**authority, "executionOwner": "other-workflow"},
+            repository=_REPOSITORY,
+            operation="read",
+        ):
+            pytest.fail("a different execution acquired credentials")
     for operation in ("read", "review_request"):
         async with merge_automation_repository_token(
             authority, repository=_REPOSITORY, operation=operation
@@ -681,7 +706,7 @@ async def test_native_review_uses_selected_plan_authority_and_rejects_revocation
             pytest.fail("revoked authority acquired credentials")
 
 
-async def test_native_review_cannot_broaden_read_only_plan(repository_consumers):
+async def test_native_review_cannot_broaden_read_only_plan(repository_consumers, native_review_activity):
     from moonmind.workflows.temporal.merge_automation_repository_access import (
         merge_automation_repository_token,
     )
@@ -707,7 +732,7 @@ async def test_native_review_cannot_broaden_read_only_plan(repository_consumers)
     "repository_consumers", ["https://github.enterprise.test"], indirect=True
 )
 async def test_native_review_rejects_host_mismatch_before_acquisition(
-    repository_consumers, monkeypatch
+    repository_consumers, monkeypatch, native_review_activity
 ):
     from moonmind.workflows.temporal.merge_automation_repository_access import (
         merge_automation_repository_token,
