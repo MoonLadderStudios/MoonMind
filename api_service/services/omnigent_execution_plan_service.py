@@ -1008,13 +1008,19 @@ async def _admit_repository_plan_inputs(
             raise ValueError(
                 "native review graph target conflicts with admitted repository"
             )
+    # A publishing merge-automation resolver child re-admits Auto collaboration
+    # authority against this plan, so a coordinator whose own publication is
+    # None must still hold that push authority (fix_only pushes too).
+    resolver_publishes = bool(merge_automation) and not review_only
     slots = {} if native_review else {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
-    if (requires_github or review_only) and mode != AccessMode.ANONYMOUS:
+    if (
+        requires_github or review_only or resolver_publishes
+    ) and mode != AccessMode.ANONYMOUS:
         operations = ("read",)
         if review_only:
             operations = ("read", "review_request")
-        elif publish_mode in {"auto", "pr"}:
+        elif publish_mode in {"auto", "pr"} or resolver_publishes:
             operations = ("read", "write", "branch_write", "review_request")
         elif publish_mode == "branch":
             operations = ("read", "write", "branch_write")
