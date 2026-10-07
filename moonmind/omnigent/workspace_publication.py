@@ -165,6 +165,32 @@ class OmnigentWorkspacePublicationService:
             must_exist=must_exist,
         )
 
+    def _owned_sandbox_workspace_id(self, request: AgentExecutionRequest) -> str:
+        from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        workflow_id, step_id = execution_identity(request)
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(
+            (request.workspace_spec or {}).get("workspaceLocator")
+        )
+        expected_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+        if not isinstance(locator, SandboxWorkspaceLocator) or locator.workspace_id != expected_id:
+            raise HarnessPlatformError("local workspace authority is required", code=WORKSPACE_LOCATOR_UNSUPPORTED)
+        return expected_id
+
+    async def retain_unsaved_request_workspace(self, request, *, reason_code):
+        """Record that this execution's workspace is the only copy of its work."""
+        workspace_id = self._owned_sandbox_workspace_id(request)
+        return await asyncio.to_thread(
+            SandboxWorkspaceRecordStore(self._workspace_root).mark_unsaved,
+            workspace_id, reason_code=reason_code, recorded_at=datetime.now(UTC),
+        )
+
+    async def release_unsaved_request_workspace(self, request):
+        """Return a durably saved workspace to ordinary retention."""
+        workspace_id = self._owned_sandbox_workspace_id(request)
+        await asyncio.to_thread(
+            SandboxWorkspaceRecordStore(self._workspace_root).clear_unsaved, workspace_id
+        )
+
     async def restore_saved_request_workspace(self, request, saved):
         """Resume the same finalization owner after its local volume was lost."""
         from moonmind.omnigent.realizers.turn_delivery import execution_identity

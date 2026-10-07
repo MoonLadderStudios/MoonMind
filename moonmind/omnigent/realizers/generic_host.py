@@ -1115,8 +1115,7 @@ class GenericOmnigentHostRealizer:
         if "publication" in phases:
             return AgentRunResult.model_validate(phases["publication"])
         if "workspace" in phases and "saved" not in phases:
-            checkpoint = await self._workspace_publisher.save_request_workspace(request)
-            await sink.record_phase("saved", checkpoint)
+            await self._save(request, sink)
         saved = (sink.binding.phaseResults or {}).get("saved")
         if saved:
             result = result.model_copy(update={"metadata": {
@@ -1159,15 +1158,59 @@ class GenericOmnigentHostRealizer:
         await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
         return result
 
+    async def _save(self, request, sink):
+        checkpoint = await self._workspace_publisher.save_request_workspace(request)
+        await sink.record_phase("saved", checkpoint)
+        if "saveDeferred" in (sink.binding.phaseResults or {}):
+            # The retained local copy is no longer the only one.
+            await self._workspace_publisher.release_unsaved_request_workspace(request)
+
     async def _ensure_saved(self, request, binding):
         async with self._runtime_bindings.finalization(binding.bindingId) as current:
             phases = current.phaseResults or {}
             if "workspace" not in phases or "saved" in phases:
                 return current
-            checkpoint = await self._workspace_publisher.save_request_workspace(request)
             sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, current)
-            await sink.record_phase("saved", checkpoint)
+            await self._save(request, sink)
             return sink.binding
+
+    async def _save_or_retain(self, request, binding):
+        """Save before release; a failed save keeps files, never capacity.
+
+        The host is stopped and credentials and provider capacity are still
+        released after confirmed consumer shutdown. The workspace volume is
+        caller-owned and survives host removal, so a durable unsaved decision
+        keeps that only copy from cleanup for the bounded #4017 window while
+        finalization retries just the save. Without that decision recorded,
+        cleanup stays pending exactly as before.
+        """
+
+        try:
+            return await self._ensure_saved(request, binding)
+        except Exception as exc:
+            code = str(getattr(exc, "code", "") or type(exc).__name__)
+            logger.warning(
+                "Saving generic Omnigent workspace failed (%s); retaining it unsaved",
+                code,
+                exc_info=True,
+            )
+            retention = await self._workspace_publisher.retain_unsaved_request_workspace(
+                request, reason_code=code
+            )
+            async with self._runtime_bindings.finalization(binding.bindingId) as current:
+                phases = current.phaseResults or {}
+                if "saved" in phases:
+                    # The save committed although its acknowledgement failed;
+                    # the workspace is no longer the only copy.
+                    await self._workspace_publisher.release_unsaved_request_workspace(
+                        request
+                    )
+                    return current
+                if "saveDeferred" in phases:
+                    return current
+                sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, current)
+                await sink.record_phase("saveDeferred", dict(retention))
+                return sink.binding
 
     async def _cleanup(
         self,
@@ -1229,7 +1272,7 @@ class GenericOmnigentHostRealizer:
             cleanup_evidence["session"] = await self._session_cleanup.drain(
                 binding.omnigentSessionId
             )
-        binding = await self._ensure_saved(request, binding)
+        binding = await self._save_or_retain(request, binding)
         if host_lease is not None and host_lease.status != "cleaned":
             host_lease = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
@@ -1708,7 +1751,9 @@ class GenericOmnigentHostRealizer:
                     )
                 if step_plan and "omnigentExecutionPlan" not in saved_request:
                     saved_request["omnigentExecutionPlan"] = step_plan
-                binding = await self._ensure_saved(AgentExecutionRequest.model_validate(saved_request), binding)
+                binding = await self._save_or_retain(
+                    AgentExecutionRequest.model_validate(saved_request), binding
+                )
             claimed = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )
