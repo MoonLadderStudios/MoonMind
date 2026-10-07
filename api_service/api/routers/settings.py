@@ -27,6 +27,7 @@ from api_service.services.settings_catalog import (
     settings_error,
     settings_permissions_for_user,
 )
+from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 SETTINGS_CURRENT_USER_DEP = get_current_user()
@@ -69,6 +70,8 @@ async def probe_github_token(
     repo: str,
     mode: str,
     base_branch: str | None = None,
+    connection: Any | None = None,
+    revision_reader: Any | None = None,
 ) -> dict[str, Any]:
     from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -76,7 +79,34 @@ async def probe_github_token(
         repo=repo,
         mode=mode,
         base_branch=base_branch,
+        connection=connection,
+        revision_reader=revision_reader,
     )
+
+
+async def _selected_probe_connection(connection_id: str, *, user: Any) -> Any | None:
+    """Load only the connection this principal may discover and probe.
+
+    Keep its endpoint and typed credential together through acquisition;
+    neither a missing connection nor acquisition failure permits fallback.
+    """
+
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+
+    principal = str(getattr(user, "id", "") or "").strip()
+    if not principal:
+        return None
+    async with db_base.async_session_maker() as session:
+        try:
+            return await RepositoryConnectionService(session).get_connection(
+                connection_id,
+                principal_ref=principal,
+                principal_scope=("system", None),
+            )
+        except RepositoryRouteError:
+            return None
 
 
 def _permission_denied_response(permission: str) -> JSONResponse:
@@ -566,11 +596,39 @@ async def github_token_probe(
     denied = _require_permission(user, "settings.effective.read")
     if denied is not None:
         return denied
-    return await probe_github_token(
+    connection_id = (payload.connection_id or "").strip()
+    if not connection_id:
+        return await probe_github_token(
+            repo=payload.repo,
+            mode=payload.mode,
+            base_branch=payload.base_branch,
+        )
+    connection = await _selected_probe_connection(connection_id, user=user)
+    if connection is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Repository connection not found."},
+        )
+
+    async def _read_active_revision(selected_id: str) -> Any:
+        from moonmind.auth.bound_acquisition import BOUND_REVOKED, BoundAccessError
+        from moonmind.auth.github_app_wiring import revision_reader_for
+
+        current = await _selected_probe_connection(selected_id, user=user)
+        if current is None:
+            raise BoundAccessError(
+                BOUND_REVOKED, "Repository connection is unavailable"
+            )
+        return await revision_reader_for({selected_id: current})(selected_id)
+
+    result = await probe_github_token(
         repo=payload.repo,
         mode=payload.mode,
         base_branch=payload.base_branch,
+        connection=connection,
+        revision_reader=_read_active_revision,
     )
+    return {**result, "connectionId": connection_id}
 
 
 @router.get("/audit")

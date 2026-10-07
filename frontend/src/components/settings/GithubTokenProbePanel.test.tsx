@@ -1,72 +1,68 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { GithubTokenProbePanel, type GithubTokenProbePanelProps } from './GithubTokenProbePanel';
+import {
+  GithubTokenProbePanel,
+  type GithubTokenProbePanelProps,
+  type ProbeConnection,
+} from './GithubTokenProbePanel';
 
-interface RenderOptions {
-  canRunProbe?: boolean;
-  onNotice?: GithubTokenProbePanelProps['onNotice'];
-  initialRepo?: string;
-}
+const CONNECTION_A: ProbeConnection = {
+  id: 'personal-github',
+  displayName: 'Personal GitHub',
+  policyRevision: 1,
+  credentialRevision: 1,
+  assignmentCount: 1,
+  lifecycle: 'active',
+};
 
-function renderPanel(props: RenderOptions = {}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+const CONNECTION_B: ProbeConnection = {
+  id: 'work-github',
+  displayName: 'Work GitHub',
+  policyRevision: 3,
+  credentialRevision: 2,
+  assignmentCount: 0,
+  lifecycle: 'active',
+};
+
+function renderPanel(props: Partial<GithubTokenProbePanelProps> = {}) {
   const onNotice = props.onNotice ?? vi.fn();
-  const utils = render(
-    <QueryClientProvider client={queryClient}>
-      <GithubTokenProbePanel
-        canRunProbe={props.canRunProbe ?? true}
-        onNotice={onNotice}
-        {...(props.initialRepo !== undefined ? { initialRepo: props.initialRepo } : {})}
-      />
-    </QueryClientProvider>,
+  const element = (connection: ProbeConnection) => (
+    <GithubTokenProbePanel
+      connection={connection}
+      canRunProbe={props.canRunProbe ?? true}
+      onNotice={onNotice}
+      initialRepo={props.initialRepo ?? 'owner/repo'}
+    />
   );
-  return { ...utils, onNotice };
+  const utils = render(element(props.connection ?? CONNECTION_A));
+  return {
+    ...utils,
+    onNotice,
+    select: (connection: ProbeConnection) => utils.rerender(element(connection)),
+  };
 }
 
-const PUBLISH_RESPONSE = {
+const READ_RESPONSE = {
+  connectionId: 'personal-github',
   repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'settings_token_ref',
-    sourceName: 'MOONMIND_GITHUB_TOKEN_REF',
-    resolved: true,
-  },
+  credentialSource: { sourceKind: 'secret_ref_env', sourceName: 'personal-github', resolved: true },
   repositoryAccessible: true,
   defaultBranchAccessible: true,
   pullRequestAccessible: true,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'passed' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'passed' },
-    { permission: 'Workflows', level: 'write', required: false, status: 'not_checked' },
-    { permission: 'Commit statuses', level: 'read', required: false, status: 'not_checked' },
-    { permission: 'Checks', level: 'read', required: false, status: 'not_checked' },
-    { permission: 'Issues', level: 'read', required: false, status: 'not_checked' },
-  ],
+  remoteDefaultBranch: 'trunk',
+  observations: { read: 'verified', write: 'untested' },
   diagnostics: [],
-  limitations: [
-    'Fine-grained personal access tokens must target the repository resource owner and include the selected repository.',
-  ],
+  limitations: [],
 };
 
-const PENDING_ORG_RESPONSE = {
-  repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'settings_token_ref',
-    sourceName: 'MOONMIND_GITHUB_TOKEN_REF',
-    resolved: true,
-  },
+const DENIED_RESPONSE = {
+  ...READ_RESPONSE,
   repositoryAccessible: false,
-  defaultBranchAccessible: false,
-  pullRequestAccessible: false,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'failed' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'failed' },
-  ],
+  defaultBranchAccessible: null,
+  pullRequestAccessible: null,
+  remoteDefaultBranch: null,
+  observations: { read: 'denied', write: 'untested' },
   diagnostics: [
     {
       operation: 'repository',
@@ -74,190 +70,201 @@ const PENDING_ORG_RESPONSE = {
       message: 'Resource not accessible by integration — organization approval pending for the selected token.',
       retryable: false,
     },
-    {
-      operation: 'branch',
-      httpStatus: 404,
-      message: 'Branch main is not visible to this token; the repository may belong to a different owner or not be selected in the PAT.',
-      retryable: false,
-    },
   ],
-  limitations: [],
 };
 
-const MISSING_CREDENTIAL_RESPONSE = {
-  repo: 'owner/repo',
-  mode: 'publish',
-  credentialSource: {
-    sourceKind: 'missing',
-    sourceName: null,
-    resolved: false,
-  },
+const OUTAGE_RESPONSE = {
+  ...READ_RESPONSE,
   repositoryAccessible: null,
   defaultBranchAccessible: null,
   pullRequestAccessible: null,
-  permissionChecklist: [
-    { permission: 'Contents', level: 'write', required: true, status: 'not_checked' },
-    { permission: 'Pull requests', level: 'write', required: true, status: 'not_checked' },
-  ],
-  diagnostics: [
-    {
-      operation: 'resolve_github_credential',
-      message:
-        'GitHub auth is not configured for owner/repo; set GITHUB_TOKEN, GH_TOKEN, WORKFLOW_GITHUB_TOKEN, GITHUB_TOKEN_SECRET_REF, WORKFLOW_GITHUB_TOKEN_SECRET_REF, or MOONMIND_GITHUB_TOKEN_REF.',
-      retryable: false,
-    },
-  ],
-  limitations: [],
+  remoteDefaultBranch: null,
+  observations: { read: 'unavailable', write: 'untested' },
+  diagnostics: [{ operation: 'repository', message: 'ConnectError', retryable: true }],
 };
 
-function stubFetch(response: unknown, init: { ok?: boolean; status?: number } = {}) {
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok: init.ok ?? true,
-    status: init.status ?? 200,
-    json: async () => response,
-  });
+function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {}) {
+  return { ok: init.ok ?? true, status: init.status ?? 200, json: async () => body };
+}
+
+function stubFetch(body: unknown, init: { ok?: boolean; status?: number } = {}) {
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body, init));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
 
-describe('GithubTokenProbePanel', () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
+function deferredFetch() {
+  const pending: Array<(value: unknown) => void> = [];
+  const fetchMock = vi.fn(
+    () =>
+      new Promise((resolve) => {
+        pending.push(resolve);
+      }),
+  );
+  vi.stubGlobal('fetch', fetchMock);
+  return { fetchMock, pending };
+}
 
+function requestBody(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const init = (fetchMock.mock.calls[index]?.[1] ?? {}) as RequestInit;
+  return JSON.parse(String(init.body ?? '{}'));
+}
+
+describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('AC-1: renders the per-mode permission checklist and repo/branch/PR accessibility for a successful publish probe', async () => {
-    const fetchMock = stubFetch(PUBLISH_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.change(screen.getByLabelText(/MoonMind mode/i), {
-      target: { value: 'publish' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/v1/settings/github/token-probe',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
-        }),
-      );
-    });
-    const firstCall = fetchMock.mock.calls[0];
-    const init = (firstCall?.[1] ?? {}) as RequestInit;
-    const body = JSON.parse(String(init.body ?? '{}'));
-    expect(body).toMatchObject({ repo: 'owner/repo', mode: 'publish' });
-
-    // Checklist rows present with status badges
-    expect(await screen.findByText('Contents')).toBeTruthy();
-    expect(screen.getByText('Pull requests')).toBeTruthy();
-    expect(screen.getByText('Workflows')).toBeTruthy();
-    expect(screen.getAllByText(/required/i).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(/optional/i).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(/passed/i).length).toBeGreaterThanOrEqual(2);
-
-    // Repo/branch/PR-endpoint pills
-    expect(screen.getByText(/Repository accessible/i)).toBeTruthy();
-    expect(screen.getByText(/Default branch accessible/i)).toBeTruthy();
-    expect(screen.getByText(/Pull request endpoint accessible/i)).toBeTruthy();
-  });
-
-  it('AC-2: renders specific diagnostics for pending org approval / wrong owner / unselected repo without collapsing to a generic message', async () => {
-    stubFetch(PENDING_ORG_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    expect(
-      await screen.findByText(/organization approval pending/i),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(/repository may belong to a different owner or not be selected in the PAT/i),
-    ).toBeTruthy();
-    expect(screen.getByText(/HTTP 403/)).toBeTruthy();
-    expect(screen.getByText(/HTTP 404/)).toBeTruthy();
-    expect(screen.queryByText(/invalid token/i)).toBeNull();
-  });
-
-  it('AC-2b: surfaces missing-credential diagnostics from resolve_github_credential', async () => {
-    stubFetch(MISSING_CREDENTIAL_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    expect(
-      await screen.findByText(/GitHub auth is not configured for owner\/repo/i),
-    ).toBeTruthy();
-    expect(screen.queryByText(/invalid token/i)).toBeNull();
-  });
-
-  it('AC-3: never renders raw token material — only the credentialSource kind + name', async () => {
-    stubFetch(PUBLISH_RESPONSE);
-    const { container } = renderPanel({ initialRepo: 'owner/repo' });
-
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
-
-    await screen.findByText(/MOONMIND_GITHUB_TOKEN_REF/);
-    expect(container.querySelector('input[type="password"]')).toBeNull();
-    expect(screen.queryByLabelText(/token/i)).toBeNull();
-    expect(screen.queryByText(/ghp_/)).toBeNull();
-    expect(screen.queryByText(/github_pat_/)).toBeNull();
-  });
-
-  it('AC-4: documents the SecretRef alias precedence in user-facing copy', () => {
+  it('tests the selected connection and reports a read without claiming write access', async () => {
+    const fetchMock = stubFetch(READ_RESPONSE);
     renderPanel();
 
-    // Either rendered inline or behind a stable accessible label.
-    const helpRegion = screen.getByLabelText(/SecretRef alias precedence/i);
-    const text = helpRegion.textContent ?? '';
-    expect(text).toMatch(/GITHUB_TOKEN/);
-    expect(text).toMatch(/GH_TOKEN/);
-    expect(text).toMatch(/WORKFLOW_GITHUB_TOKEN/);
-    expect(text).toMatch(/GITHUB_TOKEN_SECRET_REF/);
-    expect(text).toMatch(/WORKFLOW_GITHUB_TOKEN_SECRET_REF/);
-    expect(text).toMatch(/MOONMIND_GITHUB_TOKEN_REF/);
-    expect(text).toMatch(/settings\.github\.github_token_secret_ref/);
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText('Read access verified')).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/settings/github/token-probe',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(requestBody(fetchMock)).toEqual({
+      repo: 'owner/repo',
+      mode: 'publish',
+      connectionId: 'personal-github',
+    });
+    expect(screen.getByText(/Write access not tested/i)).toBeTruthy();
+    expect(screen.getByText('trunk')).toBeTruthy();
   });
 
-  it('AC-5: disables Run probe when canRunProbe is false', () => {
-    renderPanel({ canRunProbe: false, initialRepo: 'owner/repo' });
+  it('renders a transport outage as unknown access, never as denied', async () => {
+    stubFetch(OUTAGE_RESPONSE);
+    renderPanel();
 
-    const runButton = screen.getByRole('button', { name: /Run probe/i });
-    expect((runButton as HTMLButtonElement).disabled).toBe(true);
-    expect(
-      screen.getByText(/Workspace admin permission required to run the GitHub token probe/i),
-    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(/This is not a denial/i)).toBeTruthy();
+    expect(screen.queryByText(/Read access denied/i)).toBeNull();
+    expect(screen.queryByText('not readable')).toBeNull();
   });
 
-  it('contains the permission checklist table in a scrollable region on narrow viewports', async () => {
-    stubFetch(PUBLISH_RESPONSE);
-    renderPanel({ initialRepo: 'owner/repo' });
+  it('renders specific provider diagnostics for a denied read', async () => {
+    stubFetch(DENIED_RESPONSE);
+    renderPanel();
 
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
 
-    const permissionCell = await screen.findByText('Contents');
-    const table = permissionCell.closest('table');
-    expect(table).toBeTruthy();
-    expect(table?.parentElement?.className).toContain('overflow-x-auto');
+    expect(await screen.findByText(/Read access denied/i)).toBeTruthy();
+    expect(screen.getByText(/organization approval pending/i)).toBeTruthy();
+    expect(screen.getByText(/HTTP 403/)).toBeTruthy();
+  });
+
+  it('explains that zero assignments grants no repository authority', async () => {
+    stubFetch({ ...READ_RESPONSE, connectionId: 'work-github' });
+    renderPanel({ connection: CONNECTION_B });
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(/no assigned repositories/i)).toBeTruthy();
+  });
+
+  it('discards a late response after switching A to B and back to A', async () => {
+    const { fetchMock, pending } = deferredFetch();
+    const { select } = renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    select(CONNECTION_B);
+    select(CONNECTION_A);
+
+    await act(async () => {
+      pending[0]?.(jsonResponse(READ_RESPONSE));
+    });
+
+    expect(screen.queryByText('Read access verified')).toBeNull();
+    expect(screen.queryByLabelText('Connection test result')).toBeNull();
+    expect((screen.getByRole('button', { name: /Test connection/i }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('applies only the latest of two overlapping tests', async () => {
+    const { fetchMock, pending } = deferredFetch();
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    fireEvent.change(screen.getByLabelText(/Repository \(owner\/repo\)/i), {
+      target: { value: 'owner/other' },
+    });
+    fireEvent.submit(screen.getByLabelText(/Repository \(owner\/repo\)/i).closest('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      pending[1]?.(jsonResponse(OUTAGE_RESPONSE));
+    });
+    await act(async () => {
+      pending[0]?.(jsonResponse(READ_RESPONSE));
+    });
+
+    expect(screen.getByText(/This is not a denial/i)).toBeTruthy();
+    expect(screen.queryByText('Read access verified')).toBeNull();
+  });
+
+  it('marks a displayed result stale when the inputs change', async () => {
+    stubFetch(READ_RESPONSE);
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    await screen.findByText('Read access verified');
+    fireEvent.change(screen.getByLabelText(/Branch/i), { target: { value: 'release' } });
+
+    expect(screen.getByText(/inputs changed after this test/i)).toBeTruthy();
+  });
+
+  it('clears a result when the selected connection credential is rotated', async () => {
+    stubFetch(READ_RESPONSE);
+    const { select } = renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    await screen.findByText('Read access verified');
+    select({ ...CONNECTION_A, policyRevision: 2, credentialRevision: 2 });
+
+    expect(screen.queryByText('Read access verified')).toBeNull();
+  });
+
+  it('never renders token material, global-token precedence, or retired mode copy', async () => {
+    stubFetch(READ_RESPONSE);
+    const { container } = renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    await screen.findByText('Read access verified');
+
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/GITHUB_TOKEN|GH_TOKEN|SecretRef/);
+    expect(text).not.toMatch(/Indexing|Validates write access/i);
+    expect(text).not.toMatch(/ghp_|github_pat_/);
+    expect(container.querySelector('table')).toBeNull();
+  });
+
+  it('disables testing without permission or for a disabled connection', () => {
+    const { select } = renderPanel({ canRunProbe: false });
+    const button = () => screen.getByRole('button', { name: /Test connection/i }) as HTMLButtonElement;
+    expect(button().disabled).toBe(true);
+    expect(screen.getByText(/requires the settings.effective.read permission/i)).toBeTruthy();
+    select({ ...CONNECTION_A, lifecycle: 'disabled' });
+    expect(button().disabled).toBe(true);
   });
 
   it('renders backend error responses with their detail and surfaces a notice', async () => {
-    stubFetch({ detail: 'Permission denied' }, { ok: false, status: 403 });
+    stubFetch({ detail: 'Repository connection not found.' }, { ok: false, status: 404 });
     const onNotice = vi.fn();
-    renderPanel({ initialRepo: 'owner/repo', onNotice });
+    renderPanel({ onNotice });
 
-    fireEvent.click(screen.getByRole('button', { name: /Run probe/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
 
     await waitFor(() => {
-      expect(onNotice).toHaveBeenCalledWith(
-        expect.objectContaining({ level: 'error' }),
-      );
+      expect(onNotice).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
     });
-    expect(screen.getByText(/Permission denied/)).toBeTruthy();
+    expect(screen.getByText(/Repository connection not found/)).toBeTruthy();
   });
 });
