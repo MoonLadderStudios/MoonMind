@@ -45,6 +45,85 @@ def build_github_token_git_environment(
     return env
 
 
+# Transport routing and trust a deployment legitimately supplies to Git. No
+# credential, credential helper, header, askpass, or config override survives.
+_ISOLATED_GIT_ENV_PASSTHROUGH = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "TMPDIR",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    "CURL_CA_BUNDLE",
+)
+_ISOLATED_GIT_CREDENTIAL_ENV = "MOONMIND_GIT_CREDENTIAL"
+_ISOLATED_GIT_CREDENTIAL_HELPER = (
+    '!f() { test "$1" = get || exit 0; '
+    f'echo username=x-access-token; echo password="${_ISOLATED_GIT_CREDENTIAL_ENV}"; '
+    "}; f"
+)
+
+
+def build_isolated_git_environment(
+    token: str | None,
+    *,
+    base_env: Mapping[str, str] | None = None,
+    host: str = "github.com",
+) -> dict[str, str]:
+    """Return a Git process environment that admits only ``token``.
+
+    Unlike :func:`build_github_token_git_environment`, which layers a helper
+    over an inherited environment, this starts from transport routing only:
+    ambient ``GITHUB_TOKEN``/``GH_TOKEN``, ``GIT_ASKPASS``, injected config
+    (``GIT_CONFIG_PARAMETERS``/``GIT_CONFIG_COUNT``), global/system config
+    helpers and ``http.extraHeader``, and ``~/.netrc`` cannot reach Git. Without
+    a token the process is anonymous. The caller's own ``HOME`` is untouched;
+    only this Git process reads an empty one.
+    """
+
+    source = base_env or {}
+    env = {
+        key: str(source[key]) for key in _ISOLATED_GIT_ENV_PASSTHROUGH if key in source
+    }
+    env.update(
+        {
+            "HOME": "/nonexistent",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    entries = [("credential.helper", ""), ("http.extraHeader", "")]
+    normalized_token = str(token or "").strip()
+    if normalized_token:
+        normalized_host = str(host or "").strip().lower() or "github.com"
+        env[_ISOLATED_GIT_CREDENTIAL_ENV] = normalized_token
+        entries.append(
+            (
+                f"credential.https://{normalized_host}.helper",
+                _ISOLATED_GIT_CREDENTIAL_HELPER,
+            )
+        )
+    env["GIT_CONFIG_COUNT"] = str(len(entries))
+    for index, (key, value) in enumerate(entries):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    return env
+
+
 __all__ = [
     "build_github_token_git_environment",
+    "build_isolated_git_environment",
 ]
