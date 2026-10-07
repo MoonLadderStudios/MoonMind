@@ -702,6 +702,45 @@ def bind_omnigent_model_selection(
     return request.model_copy(update={"parameters": parameters})
 
 
+_CLAUDE_PERMISSION_LAUNCH_FLAGS = frozenset(
+    {"--permission-mode", "--dangerously-skip-permissions"}
+)
+
+
+def bind_unattended_launch_mode(
+    request: AgentExecutionRequest, *, harness: str
+) -> AgentExecutionRequest:
+    """Launch a workflow-step Claude session without interactive permission gates.
+
+    No human answers prompts in a workflow step's terminal; launching the
+    workflow is the operator's authorization. Without an explicit mode Claude
+    Code uses the account default (``auto``), whose classifier refuses ordinary
+    requested work such as queueing pr-resolver children. Omnigent policy hooks
+    still enforce deployment DENY rules in this mode, and an explicitly
+    authored permission flag is preserved. The authored request is never mutated.
+    """
+
+    if harness != "claude-native":
+        return request
+    parameters = dict(request.parameters or {})
+    omnigent = dict(parameters.get("omnigent") or {})
+    session = dict(omnigent.get("session") or {})
+    launch_args = list(session.get("terminalLaunchArgs") or [])
+    if any(
+        str(arg).split("=", 1)[0] in _CLAUDE_PERMISSION_LAUNCH_FLAGS
+        for arg in launch_args
+    ):
+        return request
+    session["terminalLaunchArgs"] = [
+        *launch_args,
+        "--permission-mode",
+        "bypassPermissions",
+    ]
+    omnigent["session"] = session
+    parameters["omnigent"] = omnigent
+    return request.model_copy(update={"parameters": parameters})
+
+
 def execution_support_identity(
     envelope: OmnigentExecutionPlanEnvelope,
 ) -> dict[str, Any]:

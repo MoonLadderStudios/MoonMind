@@ -10,11 +10,12 @@ import os
 import re
 import secrets
 import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
@@ -140,6 +141,10 @@ class ArtifactReadPolicy:
     preview_artifact_ref: ArtifactRef | None
     default_read_ref: ArtifactRef
 
+# One hourly lifecycle pass keeps draining pages for at most this long; the
+# activity's start-to-close timeout leaves headroom for the final page.
+LIFECYCLE_SWEEP_TIME_BUDGET = timedelta(minutes=40)
+
 @dataclass(slots=True, frozen=True)
 class LifecycleSweepSummary:
     """Lifecycle sweep results."""
@@ -151,6 +156,11 @@ class LifecycleSweepSummary:
     skipped_in_use_count: int = 0
     reconciled_deletion_count: int = 0
     pruned_claim_count: int = 0
+    hard_delete_candidate_count: int = 0
+    pages: int = 1
+    # False when expired, soft-deleted or deletion-intent work remains for the
+    # next pass.
+    drained: bool = True
 
 @dataclass(slots=True, frozen=True)
 class _StorageLifecycleConfig:
@@ -3692,10 +3702,24 @@ class TemporalArtifactService:
         limit: int = 500,
     ) -> int:
         """Converge persisted deletion intents after failures/restarts."""
+        reconciled, _examined = await self._reconcile_deletion_intent_page(
+            principal=principal, limit=limit
+        )
+        return reconciled
+
+    async def _reconcile_deletion_intent_page(
+        self,
+        *,
+        principal: str,
+        limit: int,
+        on_progress: Callable[[], None] | None = None,
+    ) -> tuple[int, int]:
+        """Reconcile one page of intents; return (reconciled, examined)."""
         reconciled = 0
-        for intent in await self._repository.list_pending_deletion_intents(
-            limit=limit
-        ):
+        intents = await self._repository.list_pending_deletion_intents(limit=limit)
+        for intent in intents:
+            if on_progress is not None:
+                on_progress()
             try:
                 artifact = await self._repository.get_artifact(intent.artifact_id)
             except TemporalArtifactNotFoundError:
@@ -3729,7 +3753,7 @@ class TemporalArtifactService:
             await self._repository.clear_deletion_intent(artifact.artifact_id)
             reconciled += 1
         await self._repository.commit()
-        return reconciled
+        return reconciled, len(intents)
 
     async def hard_delete(
         self,
@@ -3810,8 +3834,13 @@ class TemporalArtifactService:
         run_id: str | None = None,
         now: datetime | None = None,
         limit: int = 500,
+        on_progress: Callable[[], None] | None = None,
     ) -> LifecycleSweepSummary:
-        """Bounded, paginated, idempotent, observable lifecycle sweep."""
+        """Bounded, paginated, idempotent, observable lifecycle sweep.
+
+        ``on_progress`` runs before each candidate so a caller can heartbeat
+        while one page performs slow database and object-store work.
+        """
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
         page_size = max(1, int(limit))
@@ -3823,6 +3852,8 @@ class TemporalArtifactService:
         soft_deleted = 0
         skipped_in_use = 0
         for artifact in expired:
+            if on_progress is not None:
+                on_progress()
             artifact = await self._repository.get_artifact_for_update(
                 artifact.artifact_id
             )
@@ -3854,6 +3885,8 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
+            if on_progress is not None:
+                on_progress()
             await self._repository.lock_storage_references(
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
@@ -3912,8 +3945,8 @@ class TemporalArtifactService:
                 await self._repository.commit()
             hard_deleted += 1
 
-        reconciled = await self.reconcile_deletion_intents(
-            principal=principal, limit=page_size
+        reconciled, intent_count = await self._reconcile_deletion_intent_page(
+            principal=principal, limit=page_size, on_progress=on_progress
         )
         await self._repository.commit()
         logger.info(
@@ -3931,6 +3964,65 @@ class TemporalArtifactService:
             skipped_in_use_count=skipped_in_use,
             reconciled_deletion_count=reconciled,
             pruned_claim_count=pruned,
+            hard_delete_candidate_count=len(hard_candidates),
+            drained=all(
+                count < page_size
+                for count in (len(expired), len(hard_candidates), intent_count)
+            ),
+        )
+
+    async def drain_lifecycle(
+        self,
+        *,
+        principal: str,
+        time_budget: timedelta,
+        run_id: str | None = None,
+        limit: int = 500,
+        on_page: Callable[[LifecycleSweepSummary], None] | None = None,
+        on_progress: Callable[[], None] | None = None,
+    ) -> LifecycleSweepSummary:
+        """Repeat bounded sweep pages until drained or the budget is spent.
+
+        A single page per hourly pass could not keep pace with artifact
+        creation, so expired blobs accumulated until the object store filled.
+        Pages repeat while a full page still made progress; a page whose
+        candidates are all protected stops the pass instead of spinning on
+        them. Remaining work is reported and resumed by the next pass.
+        """
+        lifecycle_run_id = run_id or str(uuid4())
+        deadline = time.monotonic() + max(0.0, time_budget.total_seconds())
+        pages: list[LifecycleSweepSummary] = []
+        while True:
+            page = await self.sweep_lifecycle(
+                principal=principal,
+                run_id=lifecycle_run_id,
+                limit=limit,
+                on_progress=on_progress,
+            )
+            pages.append(page)
+            if on_page is not None:
+                on_page(page)
+            progressed = (
+                page.soft_deleted_count
+                + page.hard_deleted_count
+                + page.reconciled_deletion_count
+                > 0
+            )
+            if page.drained or not progressed or time.monotonic() >= deadline:
+                break
+        return LifecycleSweepSummary(
+            run_id=lifecycle_run_id,
+            expired_candidate_count=sum(p.expired_candidate_count for p in pages),
+            soft_deleted_count=sum(p.soft_deleted_count for p in pages),
+            hard_deleted_count=sum(p.hard_deleted_count for p in pages),
+            skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
+            reconciled_deletion_count=sum(p.reconciled_deletion_count for p in pages),
+            pruned_claim_count=sum(p.pruned_claim_count for p in pages),
+            hard_delete_candidate_count=sum(
+                p.hard_delete_candidate_count for p in pages
+            ),
+            pages=len(pages),
+            drained=pages[-1].drained,
         )
 
     async def compute_preview(
@@ -5310,7 +5402,28 @@ class TemporalArtifactActivities:
         principal: str,
         run_id: str | None = None,
     ) -> LifecycleSweepSummary:
-        return await self._service.sweep_lifecycle(principal=principal, run_id=run_id)
+        from temporalio import activity
+
+        pages_done = 0
+
+        def heartbeat() -> None:
+            if activity.in_activity():
+                activity.heartbeat({"pages": pages_done})
+
+        def page_done(_page: LifecycleSweepSummary) -> None:
+            nonlocal pages_done
+            pages_done += 1
+            heartbeat()
+
+        # Heartbeat per candidate as well as per page: one page of sequential
+        # database and object-store work can outlast the heartbeat timeout.
+        return await self._service.drain_lifecycle(
+            principal=principal,
+            run_id=run_id,
+            time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
+            on_page=page_done,
+            on_progress=heartbeat,
+        )
 
     async def artifact_sweep_lifecycle(
         self,

@@ -99,6 +99,8 @@ Before runtime launch, persist exact source report, candidate, attempt, Skill/co
 
 Both remediation and verification agent requests expose the controller's current loop ID, candidate checkpoint, role, attempt, and attempt limit. The runtime projects that compact context into the agent prompt from the materialized node inputs and annotations; runtime defaults cannot replace the current candidate. The `run-remediation-attempt-context-inputs-v1` cutover preserves the request shape recorded by older Temporal histories.
 
+Current controller `gateResultRef` and `remainingWorkRef` also replace inherited runtime defaults. An explicit absent remaining-work reference clears the inherited value. The `run-remediation-current-evidence-inputs-v1` cutover retains older recorded request payloads.
+
 An Activity retry retries the same effect. A restore retry continues the same destination reservation. A semantic repair attempt gets a new Step Execution and increments its admitted attempt count. A verification-only retry reuses the candidate without running the repair again.
 
 ## 9. Dashboard expectations
@@ -128,6 +130,10 @@ A repeated artifact write reconciles committed bytes/digest. A changed payload u
 ## 12. Preset and skill instruction requirements
 
 Use an explicitly named canonical remediation Skill, not `auto` selection that may resolve to an empty bundle. Supply the exact latest `gateResultRef` and `remainingWorkRef` as compact direct inputs. The trusted Activity materializes complete permitted bytes outside history and supplies readable `gateResultPath` and `remainingWorkPath` to the runtime.
+
+Other admitted `inputRefs`, including the original objective and a corrected instruction brief, use the same attachment projector. Their `inputPath<n>` entries join the existing first-message path handoff so explicit repair instructions retain access to the complete source material.
+
+Ready-workspace retries re-admit and project ordinary attachments as well as named verifier inputs. They retain readable input paths and candidate edits without cloning or replaying the saved implementation.
 
 Instruct remediation to consume all safe current gaps, exercise the actual production boundary requested by the verifier, record per-gap decisions and targeted checks, and stop without mutation when the input verdict is terminal. A test-only dictionary, fabricated success field, or helper mock does not satisfy a requirement about real workflow/Activity/adapter/persistence wiring.
 

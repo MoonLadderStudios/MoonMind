@@ -92,7 +92,6 @@ from api_service.db.models import (
 from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
-    checkpoint_branch_turn_owner_operational,
     get_checkpoint_branch_artifact_service,
 )
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
@@ -118,7 +117,10 @@ from api_service.services.provider_profile_runtime import (
     load_provider_profile_for_runtime,
     require_provider_profile_runtime,
 )
-from api_service.services.remediation_actions import build_remediation_action_executor
+from api_service.services.remediation_capabilities import (
+    project_remediation_action_inputs,
+    remediation_link_capabilities,
+)
 from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_store import (
     BridgeChatBindingAmbiguousError,
@@ -126,9 +128,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     _chat_binding_logical_step_id,
 )
-from moonmind.omnigent.cutover import (
-    assert_runtime_new_admission,
-)
+from moonmind.omnigent.cutover import assert_runtime_new_admission
 from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
 from moonmind.omnigent.settings import (
     resolved_native_ui_serving_enabled,
@@ -214,9 +214,7 @@ from moonmind.schemas.temporal_models import (
     normalize_dependency_ids,
 )
 from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetModel
-from moonmind.services.control_stop_continuation import (
-    admit_control_stop_continuation,
-)
+from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
@@ -226,9 +224,7 @@ from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows import get_temporal_artifact_service
-from moonmind.workflows.checkpoint_branches import (
-    CheckpointBranchGitBindingError,
-)
+from moonmind.workflows.checkpoint_branches import CheckpointBranchGitBindingError
 from moonmind.workflows.executions.checkpoint_promotion import (
     bounded_checkpoint_metric_tags,
 )
@@ -335,14 +331,6 @@ from moonmind.workflows.temporal.publication_recovery import (
     publication_recovery_workflow_id,
     saved_work_publication_operation_key,
     saved_work_publication_workflow_id,
-)
-from moonmind.workflows.temporal.remediation_actions import (
-    RemediationCapabilityContext,
-    remediation_action_capability_matrix,
-    remediation_action_kinds,
-)
-from moonmind.workflows.temporal.remediation_verification import (
-    verification_backend_operational,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -878,6 +866,8 @@ class RemediationActionCapabilityModel(BaseModel):
     supportedHostModes: list[str]
     requiredEvidenceClasses: list[str]
     blockedReasons: list[str]
+    targetSelectorRequired: bool = False
+    targetSelectorOptions: list[str] = Field(default_factory=list)
 
 
 class RemediationOperatorControlsModel(BaseModel):
@@ -12543,9 +12533,7 @@ async def _create_execution_from_workflow_request(
                 db_session=session,
             )
         except Exception as exc:
-            from moonmind.omnigent.harness_platform.failures import (
-                HarnessPlatformError,
-            )
+            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
             if not isinstance(exc, (HarnessPlatformError, ValueError)):
                 raise
@@ -13617,57 +13605,7 @@ def _serialize_remediation_link_summary(
         actor_can_approve_high_risk=actor_can_approve_high_risk,
     )
 
-    policy_actions = _bounded_string_list(getattr(link, "allowed_actions", None))
-    target_state = str(getattr(link, "current_target_state", "") or "").strip()
-    unavailable_evidence = set(
-        _bounded_string_list(getattr(link, "unavailable_evidence_classes", None)) or []
-    )
-    known_evidence = {
-        "execution_state",
-        "workflow_history",
-        "target_identity",
-        "action_result",
-        "continuity_boundary",
-    } - unavailable_evidence
-    approval_backend_ready = authority_mode in {"admin_auto", "approval_gated"}
-    executor = build_remediation_action_executor()
-    backend_readiness = {
-        action_kind: action_kind in executor._adapters
-        for action_kind in (row["actionKind"] for row in remediation_action_capability_matrix())
-    }
-    checkpoint_action = "checkpoint_branch.create_from_remediation_context"
-    checkpoint_owner_ready = bool(
-        getattr(link, "checkpoint_branch_owner_ready", False)
-    )
-    checkpoint_verifier_ready = bool(
-        getattr(link, "checkpoint_branch_verifier_ready", False)
-    )
-    backend_readiness[checkpoint_action] = (
-        checkpoint_owner_ready and checkpoint_verifier_ready
-    )
-    verifier_readiness = {
-        str(row["actionKind"]): True
-        for row in remediation_action_capability_matrix()
-    }
-    verifier_readiness[checkpoint_action] = checkpoint_verifier_ready
-    capability_context = RemediationCapabilityContext(
-        target_runtime=(str(getattr(link, "target_runtime", "") or "").strip() or None),
-        host_mode=(str(getattr(link, "host_mode", "") or "").strip() or None),
-        target_state_eligible=target_state.lower() not in {"unknown", "missing"},
-        current_evidence_classes=tuple(sorted(known_evidence)),
-        require_current_evidence=bool(getattr(link, "evidence_degraded", False)),
-        # Missing persisted policy projection is not permission to advertise
-        # every catalog action. Fail closed until the owning projection supplies
-        # the immutable target-policy intersection.
-        policy_allowed_action_kinds=tuple(policy_actions or ()),
-        caller_allowed_action_kinds=tuple(policy_actions or ()),
-        execution_backend_readiness=backend_readiness,
-        approval_backend_ready=approval_backend_ready,
-        verification_backend_readiness=verifier_readiness,
-    )
-    capability_matrix = [
-        dict(row) for row in remediation_action_capability_matrix(context=capability_context)
-    ]
+    capability_matrix = remediation_link_capabilities(link)
 
     return RemediationLinkSummaryModel(
         remediationWorkflowId=str(getattr(link, "remediation_workflow_id", "")),
@@ -13979,41 +13917,10 @@ async def _attach_remediation_capability_projection(
 ) -> None:
     """Resolve exact-target inputs that are intentionally absent from the link row."""
 
-    target = await session.get(
-        db_models.TemporalExecutionCanonicalRecord,
-        str(getattr(link, "target_workflow_id", "")),
-    )
-    remediation = await session.get(
-        db_models.TemporalExecutionCanonicalRecord,
-        str(getattr(link, "remediation_workflow_id", "")),
-    )
-    if target is None or remediation is None:
-        link.current_target_state = "missing"
-        link.allowed_actions = ()
-        link.evidence_degraded = True
-        link.unavailable_evidence_classes = ("target_identity",)
+    remediation = await project_remediation_action_inputs(link, session=session)
+    if remediation is None:
         return
-
-    link.current_target_state = _enum_value(getattr(target, "state", None))
-    target_parameters = dict(getattr(target, "parameters", None) or {})
-    target_workflow = target_parameters.get("workflow") or target_parameters.get(
-        "task"
-    )
-    target_workflow = target_workflow if isinstance(target_workflow, Mapping) else {}
-    runtime = target_workflow.get("runtime")
-    runtime = runtime if isinstance(runtime, Mapping) else {}
-    search_attributes = dict(getattr(target, "search_attributes", None) or {})
-    link.target_runtime = (
-        str(
-            runtime.get("mode")
-            or target_parameters.get("targetRuntime")
-            or search_attributes.get("mm_target_runtime")
-            or ""
-        ).strip()
-        or None
-    )
-
-    remediation_parameters = dict(getattr(remediation, "parameters", None) or {})
+    remediation_parameters = dict(remediation.parameters or {})
     remediation_workflow = remediation_parameters.get(
         "workflow"
     ) or remediation_parameters.get("task")
@@ -14023,52 +13930,8 @@ async def _attach_remediation_capability_projection(
     link.authored_contract = _authored_remediation_contract(
         remediation_parameters, remediation_workflow
     )
-    policy = remediation_workflow.get("remediation")
+    policy = remediation_workflow.get("remediation") or {}
     policy = policy if isinstance(policy, Mapping) else {}
-    link.allowed_actions = (
-        remediation_action_kinds()
-        if policy.get("actionPolicyRef") == "admin_healer_default"
-        else ()
-    )
-
-    bridge = (
-        await session.execute(
-            select(db_models.OmnigentBridgeSession)
-            .where(
-                db_models.OmnigentBridgeSession.moonmind_workflow_id
-                == link.target_workflow_id,
-                db_models.OmnigentBridgeSession.moonmind_run_id == link.target_run_id,
-            )
-            .order_by(db_models.OmnigentBridgeSession.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    launch = (
-        bridge.effective_launch_snapshot_json
-        if bridge is not None
-        and isinstance(bridge.effective_launch_snapshot_json, Mapping)
-        else {}
-    )
-    link.host_mode = str(launch.get("hostMode") or "").strip() or None
-    link.evidence_degraded = False
-    link.unavailable_evidence_classes = ()
-    link.checkpoint_branch_owner_ready = bool(
-        bridge is not None
-        and checkpoint_branch_turn_owner_operational()
-        and all(
-            str(launch.get(field) or "").strip()
-            for field in (
-                "providerProfileId",
-                "executionProfileRef",
-                "launchPolicyRef",
-            )
-        )
-    )
-    # The verifier is an independent authority boundary. Keep its readiness
-    # separate so graph/executor availability cannot advertise repair proof.
-    link.checkpoint_branch_verifier_ready = verification_backend_operational(
-        "checkpoint_branch.create_from_remediation_context"
-    )
     actions = _build_action_capabilities(remediation)
     link.operator_controls = {
         "canCancel": bool(actions.can_cancel),
@@ -15751,7 +15614,9 @@ async def get_execution_metrics(
 
         terminal = completed + failed + canceled
         success_rate = completed / terminal if terminal else None
-        from moonmind.workflows.executions.objective_metrics import objective_sample_metrics
+        from moonmind.workflows.executions.objective_metrics import (
+            objective_sample_metrics,
+        )
         return ExecutionMetricsResponse(
             totalRuns=total,
             completedRuns=completed,
@@ -20368,9 +20233,7 @@ async def _get_saved_work_repository_connections(
     session: AsyncSession = Depends(get_async_session),
 ) -> Callable[[], Any]:
     """Open the repository-connection owner only for a saved-work request."""
-    from api_service.services.repository_connections import (
-        RepositoryConnectionService,
-    )
+    from api_service.services.repository_connections import RepositoryConnectionService
 
     return lambda: RepositoryConnectionService(session)
 
