@@ -43,7 +43,6 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "frontend_static": "false",
         "frontend_browser_chromium": "false",
         "frontend_browser_firefox": "false",
-        "frontend_browser_webkit": "false",
         "full_frontend": "false",
     }
 
@@ -87,29 +86,6 @@ def test_package_lock_selects_full_frontend() -> None:
     assert outputs["frontend_static"] == "true"
     assert outputs["frontend_browser_chromium"] == "true"
     assert outputs["frontend_browser_firefox"] == "true"
-
-
-def test_webkit_leg_stays_targeted_to_form_surfaces() -> None:
-    # MoonLadderStudios/MoonMind#4559: the WebKit leg covers the reported
-    # form/fieldset/overlay cases, not every frontend change.
-    for path in (
-        "package.json",
-        "package-lock.json",
-        "frontend/vitest.browser.config.ts",
-        "frontend/src/browser/mobileOverflow.browser.test.tsx",
-        "frontend/src/components/tables/DataTable.tsx",
-        "frontend/src/entrypoints/omnigent-inventory.tsx",
-        "frontend/src/components/settings/ProviderProfilesManager.tsx",
-    ):
-        outputs = _outputs([path])
-        assert outputs["frontend_browser_webkit"] == "true"
-
-    outputs = _outputs(["frontend/src/components/Workflow.tsx"])
-    assert outputs["frontend_browser_chromium"] == "true"
-    assert outputs["frontend_browser_webkit"] == "false"
-
-    outputs = _outputs(["api_service/services/execution_service.py"])
-    assert outputs["frontend_browser_webkit"] == "false"
 
 
 def test_api_router_change_selects_unit_fast_and_component() -> None:
@@ -740,10 +716,11 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     # Unselected gates must report skipped; anything else fails.
     assert "elif [[ \"$result\" != \"skipped\" ]]; then" in workflow
     assert "was not selected but ended with result=" in workflow
-    # Always-required gates (selector itself, shard ownership, frontend and
-    # generated-contract aggregators) fail on any non-success.
+    # Always-required gates (selector itself, preflight invariants including
+    # shard ownership, frontend and generated-contract aggregators) fail on
+    # any non-success.
     assert '"select-test-suites"' in workflow
-    assert '"verify-test-shard-ownership"' in workflow
+    assert '"preflight-policy"' in workflow
     assert '"test-frontend"' in workflow
     assert '"check-generated-contracts"' in workflow
     # Every selected backend gate is aggregated through require_selected.

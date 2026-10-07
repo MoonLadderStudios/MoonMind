@@ -56,7 +56,7 @@ git submodule update --init moonspec
 Two guards keep the vendored copies honest, both requiring a submodule
 checkout at the pinned commit:
 
-- the `moonspec-projection` CI job runs `tools/sync_moonspec.py --check`;
+- the always-run `preflight-policy` CI job runs `tools/sync_moonspec.py --check`;
 - `tests/unit/tools/test_sync_moonspec.py` asserts the committed projection
   matches the pinned bundle.
 
