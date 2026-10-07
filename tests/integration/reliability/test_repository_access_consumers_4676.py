@@ -692,6 +692,10 @@ async def test_native_review_cannot_broaden_read_only_plan(repository_consumers)
         "executionOwner": "merge-automation:review-only",
         "parentExecutionPlan": compiled.binding.model_dump(by_alias=True),
     }
+    async with merge_automation_repository_token(
+        authority, repository=_REPOSITORY, operation="read"
+    ) as token:
+        assert token == "selected-credential-canary"
     with pytest.raises(ValueError, match="operation or role is not admitted"):
         async with merge_automation_repository_token(
             authority, repository=_REPOSITORY, operation="review_request"

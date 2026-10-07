@@ -51,7 +51,9 @@ _OPERATION_PERMISSIONS: dict[str, dict[str, str]] = {
     "write": {"contents": "write"},
     "branch_write": {"contents": "write"},
     "lock": {"issues": "read"},
-    "review_request": {"pull_requests": "read"},
+    # Posting a PR's review-request comment requires collaboration write
+    # permission; it does not require contents/branch publication authority.
+    "review_request": {"pull_requests": "write"},
     "merge_request": {"pull_requests": "write", "contents": "write"},
 }
 

@@ -1738,6 +1738,11 @@ class MoonMindMergeAutomationWorkflow:
             readiness_payload["repositoryAuthority"] = (
                 self._review_repository_authority()
             )
+            # Review completion is independent of CI, including unavailable
+            # check APIs under a deliberately limited repository connection.
+            readiness_payload["mergeAutomationConfig"]["gate"]["github"][
+                "checks"
+            ] = "disabled"
         # Always publish the *live* request state so a restored input can never
         # make a settled request look active again.
         readiness_payload["activeReviewRequest"] = (
