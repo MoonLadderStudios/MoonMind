@@ -739,7 +739,8 @@ async def test_rolled_back_terminal_write_never_notifies(tmp_path, monkeypatch):
             "moonmind.workflows.temporal.remediation_tools.resume_pending_action_verifications",
             notify,
         )
-        with pytest.raises(ValueError, match="abort write"):
+
+        async def abort_terminal_write():
             async with store.transaction() as repos:
                 canonical = await repos.sessions.get("session-3624")
                 await repos.sessions.mark_terminal(
@@ -750,6 +751,9 @@ async def test_rolled_back_terminal_write_never_notifies(tmp_path, monkeypatch):
                     terminal_evidence_ref="artifact://cancellation",
                 )
                 raise ValueError("abort write")
+
+        with pytest.raises(ValueError, match="abort write"):
+            await abort_terminal_write()
         notify.assert_not_awaited()
         async with store.transaction() as repos:
             canonical = await repos.sessions.get("session-3624")
