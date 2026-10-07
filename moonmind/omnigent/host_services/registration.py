@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -24,6 +26,13 @@ from moonmind.omnigent.harness_platform.failures import (
 # host lifecycle implementations.
 HOST_REGISTRATION_ATTEMPTS = 91
 HOST_REGISTRATION_INTERVAL_SECONDS = 2.0
+# Once the exact host is online, its harness readiness is the host's own
+# verdict. Stock Omnigent re-runs the full (auth-inclusive) readiness probe
+# every 60 seconds, so a value that is still unready after one full refresh
+# plus margin will not change by waiting out the rest of the registration
+# budget; fail with that verdict instead of a registration timeout.
+HOST_HARNESS_READINESS_SETTLE_SECONDS = 75.0
+_READINESS_TOKEN = re.compile(r"[a-z][a-z0-9-]{0,31}")
 _HOST_REGISTRATION_BASE_DELAY_SECONDS = 0.5
 _HOST_REGISTRATION_MAX_DELAY_SECONDS = 2.0
 # MoonLadderStudios/MoonMind#3878: every waiter reads the same whole-inventory
@@ -163,6 +172,16 @@ def _harness_ready(
     return credentialless and str(value).lower() == "needs-auth"
 
 
+def _observed_readiness_label(value: Any) -> str:
+    """Return a bounded, secret-free label for a host readiness value."""
+    if value is None:
+        return "unlisted"
+    if value is False:
+        return "unavailable"
+    text = str(value).strip().lower()
+    return text if _READINESS_TOKEN.fullmatch(text) else "unrecognized"
+
+
 class OmnigentHostRegistrationService:
     def __init__(
         self,
@@ -173,6 +192,7 @@ class OmnigentHostRegistrationService:
         interval_seconds: float = HOST_REGISTRATION_INTERVAL_SECONDS,
         inventory_reader: OmnigentHostInventoryReader | None = None,
         backend: Any | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = client
         self._owner = expected_owner.strip()
@@ -180,6 +200,7 @@ class OmnigentHostRegistrationService:
         self._interval = interval_seconds
         self._inventory = inventory_reader or _SHARED_INVENTORY_READER
         self._backend = backend
+        self._clock = clock
         if not self._owner:
             raise HarnessPlatformError(
                 "generic host registration requires an expected Omnigent owner",
@@ -286,6 +307,7 @@ class OmnigentHostRegistrationService:
     ) -> dict[str, Any]:
         from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
+        unready_online_since: float | None = None
         for attempt in range(self._attempts):
             await self._check_host_process(correlation_name)
             try:
@@ -308,11 +330,40 @@ class OmnigentHostRegistrationService:
                 )
                 if verified is not None:
                     return verified
+                if str(host.get("status") or "").lower() == "online":
+                    now = self._clock()
+                    if unready_online_since is None:
+                        unready_online_since = now
+                    elif now - unready_online_since >= (
+                        HOST_HARNESS_READINESS_SETTLE_SECONDS
+                    ):
+                        raise self._unready_harness_error(host, harness_id)
+                else:
+                    unready_online_since = None
             if attempt + 1 < self._attempts:
                 await asyncio.sleep(self._registration_delay(attempt))
         raise HarnessPlatformError(
             "exact launched Omnigent host did not register ready before timeout",
             code=HarnessPlatformFailure.OMNIGENT_HOST_REGISTRATION_TIMEOUT,
+        )
+
+    @staticmethod
+    def _unready_harness_error(
+        host: dict[str, Any], harness_id: str
+    ) -> HarnessPlatformError:
+        label = _observed_readiness_label(_harness_readiness(host, harness_id))
+        if label == "needs-auth":
+            return HarnessPlatformError(
+                f"launched host is online but harness {harness_id!r} reports "
+                "'needs-auth': the Provider Profile login materialized on the "
+                "host is missing or unusable; re-authenticate the Provider "
+                "Profile",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+            )
+        return HarnessPlatformError(
+            f"launched host is online but harness {harness_id!r} reports "
+            f"{label!r}",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
         )
 
     def _verify_targeted_host(
