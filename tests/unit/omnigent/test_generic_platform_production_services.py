@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1361,6 +1362,163 @@ async def test_host_volume_initializers_use_setup_authority(
         capability_name + "_FILE": (f"/run/moonmind-host-auth/{capability_file}"),
     }
     assert script_inputs["control_credential_available"] is bool(host_api_token)
+
+
+@pytest.mark.asyncio
+async def test_capability_renewal_replaces_control_files_from_running_host_image() -> (
+    None
+):
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    host_image = "sha256:" + "a" * 64
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append((list(argv), dict(kwargs)))
+            if argv[:2] == ["docker", "inspect"]:
+                return (0, host_image + "\n", "")
+            return (0, "", "")
+
+    launcher = DockerOmnigentHostLauncher(
+        backend=Backend(),
+        runtime_scripts=object(),
+        server_url="http://omnigent:8000",
+        host_api_token="host-control-token",
+    )
+
+    renewed = await launcher.renew_capability_files(
+        container_name="mm-host-1",
+        control_volume="mm-omnigent-control-1",
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "fresh-container-token",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "fresh-fanout-token",
+        },
+    )
+
+    assert set(renewed) == {"container-jobs", "execution-fanout"}
+    inspect_argv = calls[0][0]
+    assert inspect_argv[:2] == ["docker", "inspect"]
+    assert inspect_argv[-1] == "mm-host-1"
+    writers = [(argv, kwargs) for argv, kwargs in calls if argv[:2] == ["docker", "run"]]
+    assert sorted(kwargs["input_bytes"] for _argv, kwargs in writers) == [
+        b"fresh-container-token",
+        b"fresh-fanout-token",
+    ]
+    for argv, _kwargs in writers:
+        # The writer uses the image the running host was launched from, owns
+        # no network, and swaps the file in one rename so the CLI never reads
+        # a truncated token mid-write.
+        assert host_image in argv
+        assert argv[argv.index("--network") + 1] == "none"
+        assert "type=volume,src=mm-omnigent-control-1,dst=/control" in argv
+        assert "mv -f" in argv[-1]
+    assert "fresh-container-token" not in json.dumps([argv for argv, _ in calls])
+    assert b"host-control-token" not in [
+        kwargs.get("input_bytes") for _argv, kwargs in calls
+    ]
+
+
+@pytest.mark.asyncio
+async def test_capability_renewal_without_bearers_touches_nothing() -> None:
+    backend = SimpleNamespace(run=AsyncMock(return_value=(0, "", "")))
+    launcher = DockerOmnigentHostLauncher(
+        backend=backend,
+        runtime_scripts=object(),
+        server_url="http://omnigent:8000",
+    )
+
+    assert (
+        await launcher.renew_capability_files(
+            container_name="mm-host-1",
+            control_volume="mm-omnigent-control-1",
+            runtime_environment={"MOONMIND_URL": "http://api:8000"},
+        )
+        == ()
+    )
+    backend.run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_runtime_renews_capability_from_persisted_host_context() -> None:
+    """A long session gets a freshly minted capability for the same scope."""
+
+    from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+    from moonmind.security.container_job_capabilities import (
+        verify_container_job_session_capability,
+    )
+
+    renewals: list[dict[str, object]] = []
+
+    class Launcher:
+        server_url = "http://omnigent:8000"
+
+        async def renew_capability_files(self, **kwargs):
+            renewals.append(kwargs)
+            return ("container-jobs",)
+
+    runtime = GenericOmnigentHostRuntime(
+        launcher=Launcher(),
+        workspace_service=object(),
+        skill_service=object(),
+        tool_service=object(),
+        github_credential_service=object(),
+        egress_service=object(),
+        runtime_environment_service=OmnigentRuntimeEnvironmentService(
+            moonmind_url="http://api:8000",
+            signing_secret="test-secret",
+        ),
+        registration_waiter=object(),
+        host_attestor=object(),
+        cleanup_service=object(),
+    )
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "workflow-1",
+            "idempotencyKey": "step-1",
+            "parameters": {"requiredCapabilities": ["docker"]},
+            "workspaceSpec": {
+                "workspaceLocator": {"kind": "sandbox", "workspaceId": "sandbox-1"}
+            },
+            "stepExecution": {
+                "workflowId": "workflow-1",
+                "runId": "run-1",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "workflow-1:run-1:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    before = int(time.time())
+
+    renewed = await runtime.renew_runtime_capabilities(
+        request=request,
+        plan=_plan("test/model"),
+        host_lease_ref="lease-1",
+        host_context={
+            "containerName": "mm-host-1",
+            "controlVolumeRef": "mm-omnigent-control-1",
+            "capabilityRenewal": {
+                "lifetimeSeconds": 5400,
+                "workspaceAccessMode": "read-only",
+            },
+        },
+    )
+
+    assert renewed == ("container-jobs",)
+    (renewal,) = renewals
+    assert renewal["container_name"] == "mm-host-1"
+    assert renewal["control_volume"] == "mm-omnigent-control-1"
+    capability = verify_container_job_session_capability(
+        renewal["runtime_environment"]["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
+        secret="test-secret",
+    )
+    assert capability.session_id == "lease-1"
+    assert capability.workspace_id == "sandbox-1"
+    assert capability.workspace_read_only is True
+    assert capability.expires_at >= before + 5400
 
 
 @pytest.mark.parametrize(
@@ -2847,10 +3005,14 @@ async def _generic_publication_harness(
     publication: dict[str, object],
     *,
     execution_state_notifier=None,
+    capability_renewal: dict[str, object] | None = None,
+    failing_renewals: int = 0,
+    session_seconds: float = 0.03,
 ) -> SimpleNamespace:
     """Build the real generic-host realizer around one publication outcome."""
 
     events: list[str] = []
+    renewals: list[dict[str, object]] = []
 
     class CountingRuntimeBindings(InMemoryStableRuntimeBindingStore):
         def __init__(self) -> None:
@@ -2868,9 +3030,11 @@ async def _generic_publication_harness(
         def __init__(self) -> None:
             super().__init__()
             self.heartbeat_count = 0
+            self.heartbeat_ref = None
 
         async def heartbeat(self, lease_ref, **kwargs):
             self.heartbeat_count += 1
+            self.heartbeat_ref = lease_ref
             return await super().heartbeat(lease_ref, **kwargs)
 
     host_leases = CountingHostLeases()
@@ -2972,7 +3136,21 @@ async def _generic_publication_harness(
                 "hostHarnessAttestationRef": "artifact://host",
                 "modelOptionAttestationRef": "artifact://models",
                 "hostCleanupRef": "host-cleanup:one",
+                **(
+                    {
+                        "controlVolumeRef": "mm-control-1",
+                        "capabilityRenewal": capability_renewal,
+                    }
+                    if capability_renewal is not None
+                    else {}
+                ),
             }
+
+        async def renew_runtime_capabilities(self, **kwargs):
+            renewals.append(kwargs)
+            if len(renewals) <= failing_renewals:
+                raise RuntimeError("docker daemon unavailable")
+            return ("container-jobs",)
 
         async def cleanup(self, **_kwargs):
             events.append("host-cleaned")
@@ -3035,7 +3213,7 @@ async def _generic_publication_harness(
         assert authorization["credentialGeneration"] == 4
         assert authorization["hostBindingRef"]
         assert authorization["hostLeaseRef"]
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(session_seconds)
         events.append("message-completed")
         return AgentRunResult(
             summary="done", metadata={"omnigentSessionId": "session-1"}
@@ -3112,6 +3290,7 @@ async def _generic_publication_harness(
         realizer=realizer,
         publish_request=publish_request,
         events=events,
+        renewals=renewals,
         runtime_store=runtime_store,
         host_leases=host_leases,
         acquired=acquired,
@@ -3119,7 +3298,9 @@ async def _generic_publication_harness(
     )
 
 
-async def _prime_attested_host_binding(harness, plan, *, admission_epoch=0) -> None:
+async def _prime_attested_host_binding(
+    harness, plan, *, admission_epoch=0, host_context_extra=None
+) -> None:
     """Leave one durable binding on an attested, ready host.
 
     This is the state a retry of an interrupted generic execution actually
@@ -3211,6 +3392,7 @@ async def _prime_attested_host_binding(harness, plan, *, admission_epoch=0) -> N
             "containerName": "mm-host-1",
             "stateVolumeRef": "mm-state-1",
             "launchGeneration": host_lease.launchGeneration,
+            **(host_context_extra or {}),
         },
     )
     await harness.runtime_store.update(
@@ -3226,6 +3408,78 @@ async def _prime_attested_host_binding(harness, plan, *, admission_epoch=0) -> N
             },
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_long_session_renews_capabilities_before_they_expire() -> None:
+    """A session outliving its launch timeout keeps a valid capability."""
+
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        capability_renewal={"lifetimeSeconds": 1, "workspaceAccessMode": "read-write"},
+        failing_renewals=1,
+        session_seconds=0.8,
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.summary == "done"
+    # The first renewal at half-life failed; the session kept running and the
+    # next heartbeat renewed again instead of letting the token lapse.
+    assert len(harness.renewals) >= 2
+    renewal = harness.renewals[-1]
+    assert renewal["host_lease_ref"] == harness.host_leases.heartbeat_ref
+    assert renewal["host_context"]["controlVolumeRef"] == "mm-control-1"
+    assert renewal["host_context"]["capabilityRenewal"] == {
+        "lifetimeSeconds": 1,
+        "workspaceAccessMode": "read-write",
+    }
+    assert renewal["request"].idempotency_key == harness.publish_request.idempotency_key
+
+
+@pytest.mark.asyncio
+async def test_short_session_does_not_renew_capabilities() -> None:
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        capability_renewal={
+            "lifetimeSeconds": 5400,
+            "workspaceAccessMode": "read-write",
+        },
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.summary == "done"
+    assert harness.renewals == []
+
+
+@pytest.mark.asyncio
+async def test_resumed_host_renews_capabilities_on_first_heartbeat() -> None:
+    """A retried activity cannot know how much of the old token remains."""
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+    await _prime_attested_host_binding(
+        harness,
+        plan,
+        host_context_extra={
+            "controlVolumeRef": "mm-control-1",
+            "capabilityRenewal": {
+                "lifetimeSeconds": 5400,
+                "workspaceAccessMode": "read-write",
+            },
+        },
+    )
+
+    result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+
+    assert result.summary == "done"
+    assert len(harness.renewals) == 1
+    assert harness.renewals[0]["host_context"]["controlVolumeRef"] == "mm-control-1"
 
 
 @pytest.mark.asyncio

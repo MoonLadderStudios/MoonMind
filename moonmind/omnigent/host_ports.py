@@ -249,6 +249,14 @@ class OmnigentHostLauncherPort(Protocol):
         runtime_environment: Mapping[str, str] | None = None,
     ) -> dict[str, Any]: ...
 
+    async def renew_capability_files(
+        self,
+        *,
+        container_name: str,
+        control_volume: str,
+        runtime_environment: Mapping[str, str],
+    ) -> tuple[str, ...]: ...
+
 
 @runtime_checkable
 class OmnigentRuntimeEnvironmentPort(Protocol):
@@ -261,6 +269,17 @@ class OmnigentRuntimeEnvironmentPort(Protocol):
         plan: OmnigentExecutionPlanEnvelope,
         host_lease_ref: str,
         launch_policy: LaunchPolicy,
+        workspace_attachment: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, str]:
+        raise NotImplementedError
+
+    def mint(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        capability_lifetime_seconds: int,
         workspace_attachment: Mapping[str, Any] | None = None,
     ) -> Mapping[str, str]:
         raise NotImplementedError

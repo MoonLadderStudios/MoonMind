@@ -1057,7 +1057,15 @@ with migration guidance.
 An authenticated deployment must not expose a shared or deployment-wide token
 to managed sessions. The token is signed by the trusted session launcher,
 expires with the bounded session lifetime, and is accepted only by
-`/mcp/container/tools/call`. Its claims bind the owner, runtime, agent run, and
+`/mcp/container/tools/call`. A generic Omnigent host receives it as a file in
+its lease-owned control volume, minted for the launch policy's
+`timeoutSeconds`. Its session can outlive that timeout, because the session
+runs until the execute activity deadline while it makes progress. So the
+realizer re-mints the same scope at half the lifetime on its host-lease
+heartbeat and atomically replaces the file. A resumed host renews at its first
+heartbeat. A failed renewal is logged and retried at the next heartbeat
+without ending the session. After the lease stops heartbeating, the last token
+lapses within one lifetime. Its claims bind the owner, runtime, agent run, and
 session; submissions whose logical workspace or correlation differs from those
 claims fail before job creation. It is transported over the API's TLS/loopback
 transport, never placed in URLs, and never accepted as a MoonMind browser

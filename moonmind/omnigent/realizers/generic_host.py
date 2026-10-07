@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from contextlib import suppress
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
@@ -65,6 +65,15 @@ _CLEANUP_NOT_OWNED = object()
 #: saved work is reported unpublished; other failures keep the short schedule.
 _PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
 _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
+
+
+@dataclass(frozen=True)
+class _CapabilityRenewalSchedule:
+    """When a live host's lease-scoped capabilities are next re-minted."""
+
+    renew: Callable[[], Awaitable[tuple[str, ...]]]
+    interval_seconds: float
+    due_at: float
 
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
@@ -587,6 +596,11 @@ class GenericOmnigentHostRealizer:
                     "materializedInputPaths": dict(
                         host_context.get("materializedInputPaths") or {}
                     ),
+                    **(
+                        {"capabilityRenewal": host_context["capabilityRenewal"]}
+                        if host_context.get("capabilityRenewal")
+                        else {}
+                    ),
                 },
             )
             attestations = {
@@ -627,6 +641,13 @@ class GenericOmnigentHostRealizer:
                     sink=sink,
                     host_lease=host_lease,
                     plan=plan,
+                    capability_renewal=self._capability_renewal_schedule(
+                        request=request,
+                        plan=plan,
+                        host_lease_ref=host_lease.leaseRef,
+                        host_context=host_context,
+                        renew_first=False,
+                    ),
                 )
             finally:
                 binding = sink.binding
@@ -914,6 +935,15 @@ class GenericOmnigentHostRealizer:
                         sink=sink,
                         host_lease=host_lease,
                         plan=plan,
+                        # A retry cannot tell how much of the launched
+                        # capability lifetime remains, so renew at once.
+                        capability_renewal=self._capability_renewal_schedule(
+                            request=request,
+                            plan=plan,
+                            host_lease_ref=host_lease.leaseRef,
+                            host_context=host_context,
+                            renew_first=True,
+                        ),
                     )
                 finally:
                     current = sink.binding
@@ -1457,6 +1487,60 @@ class GenericOmnigentHostRealizer:
             updates=updates,
         )
 
+    def _capability_renewal_schedule(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        host_context: dict[str, Any],
+        renew_first: bool,
+    ) -> _CapabilityRenewalSchedule | None:
+        """Renew capabilities at half their lifetime while the host is live.
+
+        Capabilities are minted for the launch timeout, while the session runs
+        until its activity deadline as long as it makes progress.
+        """
+
+        renewal = host_context.get("capabilityRenewal")
+        if not isinstance(renewal, dict) or not host_context.get("controlVolumeRef"):
+            return None
+
+        async def renew() -> tuple[str, ...]:
+            return await self._host_runtime.renew_runtime_capabilities(
+                request=request,
+                plan=plan,
+                host_lease_ref=host_lease_ref,
+                host_context=host_context,
+            )
+
+        interval = float(renewal["lifetimeSeconds"]) / 2
+        return _CapabilityRenewalSchedule(
+            renew=renew,
+            interval_seconds=interval,
+            due_at=time.monotonic() + (0.0 if renew_first else interval),
+        )
+
+    @staticmethod
+    async def _renew_capabilities(
+        schedule: _CapabilityRenewalSchedule,
+    ) -> _CapabilityRenewalSchedule | None:
+        try:
+            renewed = await schedule.renew()
+        except Exception as exc:
+            # The current capability is still valid; a failed renewal must not
+            # end the session, so the next heartbeat tries again.
+            logger.warning(
+                "generic host capability renewal failed; retrying at the next "
+                "heartbeat: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            return schedule
+        if not renewed:
+            return None
+        return replace(schedule, due_at=time.monotonic() + schedule.interval_seconds)
+
     async def _drive_session(
         self,
         *,
@@ -1464,6 +1548,7 @@ class GenericOmnigentHostRealizer:
         sink: RuntimeBindingSessionAuthoritySink,
         host_lease: Any,
         plan: OmnigentExecutionPlanEnvelope,
+        capability_renewal: _CapabilityRenewalSchedule | None = None,
     ) -> AgentRunResult:
         """Keep both durable ownership leases fresh while a turn is active."""
 
@@ -1484,6 +1569,7 @@ class GenericOmnigentHostRealizer:
             ) | {"workspaceSpec": dict(request.workspace_spec)})
 
         async def heartbeat_loop() -> None:
+            renewal = capability_renewal
             while True:
                 try:
                     await asyncio.wait_for(
@@ -1497,6 +1583,8 @@ class GenericOmnigentHostRealizer:
                         expected_generation=host_lease.generation,
                         ttl_seconds=self._heartbeat_ttl,
                     )
+                    if renewal is not None and time.monotonic() >= renewal.due_at:
+                        renewal = await self._renew_capabilities(renewal)
 
         async def deliver_continuation(ordinal, instruction, recorded_result):
             from moonmind.omnigent.control_plane.turn_sources import TurnSource

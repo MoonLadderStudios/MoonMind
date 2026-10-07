@@ -65,6 +65,13 @@ def _image_owned_executables(
     return tuple(sorted(paths))
 
 
+# Lease-scoped bearer capabilities delivered as files in the control volume.
+_CAPABILITY_BEARER_FILES = {
+    "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "execution-fanout",
+    "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "container-jobs",
+}
+
+
 class DockerOmnigentHostLauncher:
     def __init__(
         self,
@@ -118,6 +125,77 @@ class DockerOmnigentHostLauncher:
             "targetPath": "/run/moonmind-host-auth",
             "accessMode": "read-only",
         }
+
+    async def _write_capability_file(
+        self,
+        *,
+        control_volume: str,
+        image_ref: str,
+        filename: str,
+        bearer: str,
+    ) -> None:
+        # Write beside the target and rename so a running host never reads a
+        # truncated capability while it is being replaced.
+        staged = f"/control/.{filename}.next"
+        await self._backend.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--mount",
+                f"type=volume,src={control_volume},dst=/control",
+                "--entrypoint",
+                "/bin/sh",
+                image_ref,
+                "-ceu",
+                f"umask 077; cat > {staged}; chown 1000:1000 {staged}; "
+                f"chmod 0400 {staged}; mv -f {staged} /control/{filename}",
+            ],
+            input_bytes=bearer.encode("utf-8"),
+        )
+
+    async def renew_capability_files(
+        self,
+        *,
+        container_name: str,
+        control_volume: str,
+        runtime_environment: Mapping[str, str],
+    ) -> tuple[str, ...]:
+        """Replace a running host's capability files with freshly minted ones.
+
+        The writer runs from the image the host itself was created from, so
+        renewal never pulls or resolves a different image mid-session.
+        """
+
+        bearers = {
+            filename: str(runtime_environment.get(key) or "").strip()
+            for key, filename in _CAPABILITY_BEARER_FILES.items()
+        }
+        bearers = {filename: bearer for filename, bearer in bearers.items() if bearer}
+        if not bearers:
+            return ()
+        _code, image_id, _stderr = await self._backend.run(
+            ["docker", "inspect", "--format", "{{.Image}}", container_name]
+        )
+        image_ref = str(image_id or "").strip()
+        if not image_ref:
+            raise HarnessPlatformError(
+                "generic host image is unavailable for capability renewal",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        for filename, bearer in bearers.items():
+            await self._write_capability_file(
+                control_volume=control_volume,
+                image_ref=image_ref,
+                filename=filename,
+                bearer=bearer,
+            )
+        return tuple(bearers)
 
     async def _image_present(self, image_ref: str) -> bool:
         try:
@@ -270,10 +348,7 @@ class DockerOmnigentHostLauncher:
                 filename,
                 str(supplied_runtime_environment.pop(key, "") or "").strip(),
             )
-            for key, filename in {
-                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "execution-fanout",
-                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "container-jobs",
-            }.items()
+            for key, filename in _CAPABILITY_BEARER_FILES.items()
         }
         allowed_runtime_environment = {
             "MOONMIND_URL",
@@ -362,28 +437,13 @@ class DockerOmnigentHostLauncher:
                         input_bytes=self._host_api_token.encode("utf-8"),
                     )
                 for _key, (filename, bearer) in capability_bearers.items():
-                    if not bearer:
-                        continue
-                    await self._backend.run(
-                        [
-                            "docker",
-                            "run",
-                            "--rm",
-                            "-i",
-                            "--user",
-                            "0:0",
-                            "--network",
-                            "none",
-                            "--mount",
-                            f"type=volume,src={control_volume},dst=/control",
-                            "--entrypoint",
-                            "/bin/sh",
-                            launch_image,
-                            "-ceu",
-                            f"umask 077; cat > /control/{filename}; chown 1000:1000 /control/{filename}; chmod 0400 /control/{filename}",
-                        ],
-                        input_bytes=bearer.encode("utf-8"),
-                    )
+                    if bearer:
+                        await self._write_capability_file(
+                            control_volume=control_volume,
+                            image_ref=launch_image,
+                            filename=filename,
+                            bearer=bearer,
+                        )
             # Initialize the writable host-state volume before a read-only-root launch.
             await self._backend.run(
                 [

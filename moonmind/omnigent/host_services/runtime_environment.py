@@ -65,6 +65,25 @@ class OmnigentRuntimeEnvironmentService:
         launch_policy: LaunchPolicy,
         workspace_attachment: Mapping[str, Any] | None = None,
     ) -> Mapping[str, str]:
+        return self.mint(
+            request=request,
+            plan=plan,
+            host_lease_ref=host_lease_ref,
+            capability_lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
+            workspace_attachment=workspace_attachment,
+        )
+
+    def mint(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        capability_lifetime_seconds: int,
+        workspace_attachment: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, str]:
+        """Mint the lease-scoped environment; renewal re-mints the same scope."""
+
         required_capabilities = authored_required_capabilities(request)
         needs_fanout = EXECUTION_FANOUT_REQUIRED_CAPABILITY in required_capabilities
         needs_containers = "docker" in required_capabilities
@@ -144,7 +163,7 @@ class OmnigentRuntimeEnvironmentService:
                         workspace_id=locator.workspace_id,
                         workspace_relative_path=locator.relative_path,
                         workspace_read_only=access_mode == "read-only",
-                        lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
+                        lifetime_seconds=capability_lifetime_seconds,
                     ),
                     "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
                     "MOONMIND_CONTAINER_JOBS_SESSION_ID": host_lease_ref,
@@ -163,7 +182,7 @@ class OmnigentRuntimeEnvironmentService:
                     session_id=host_lease_ref,
                     runtime_id=runtime_id,
                     source_kind="omnigent",
-                    lifetime_seconds=int(launch_policy.limits["timeoutSeconds"]),
+                    lifetime_seconds=capability_lifetime_seconds,
                 )
             )
         repository_connection_ref = authored_connection_ref(request)
