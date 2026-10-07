@@ -14,12 +14,16 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { QueryClient } from '@tanstack/react-query';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderWithClient } from '../../utils/test-utils';
-import { ProviderProfilesManager, type ProviderProfile } from './ProviderProfilesManager';
+import { DashboardToastProvider } from '../dashboard/DashboardToast';
+import {
+  PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY,
+  ProviderProfilesManager,
+  type ProviderProfile,
+} from './ProviderProfilesManager';
 
 type CreationCapabilities = NonNullable<ProviderProfile['creation_capabilities']>;
 
@@ -315,29 +319,80 @@ function savedProfileFor(creationClass: CreationClass, profileId: string): Provi
   };
 }
 
+// Backend creation choices (#4001): OpenCode also advertises custom providers.
+const CREATION_CHOICES = {
+  version: 'provider-profile-creation-v1',
+  profile_id_max_length: 128,
+  harnesses: [
+    {
+      runtime_id: 'codex_cli',
+      label: 'Codex CLI',
+      providers: [{ provider_id: 'openai', label: 'OpenAI' }],
+      custom_provider_allowed: false,
+    },
+    {
+      runtime_id: 'claude_code',
+      label: 'Claude Code',
+      providers: [
+        { provider_id: 'anthropic', label: 'Anthropic' },
+        { provider_id: 'minimax', label: 'MiniMax' },
+      ],
+      custom_provider_allowed: false,
+    },
+    {
+      runtime_id: 'opencode',
+      label: 'OpenCode',
+      providers: [
+        { provider_id: 'opencode', label: 'OpenCode' },
+        { provider_id: 'opencode-go', label: 'OpenCode Go' },
+      ],
+      custom_provider_allowed: true,
+    },
+  ],
+};
+
 function renderManager(profiles: ProviderProfile[] = []) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const choicesClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  choicesClient.setQueryData(PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY, CREATION_CHOICES);
   const onNotice = vi.fn();
-  renderWithClient(
-    <ProviderProfilesManager
-      profiles={profiles}
-      secretSlugs={['OPENAI_API_KEY']}
-      onNotice={onNotice}
-      queryClient={queryClient}
-      defaultTaskModelByRuntime={{}}
-    />,
+  render(
+    <QueryClientProvider client={choicesClient}>
+      <DashboardToastProvider>
+        <ProviderProfilesManager
+          profiles={profiles}
+          secretSlugs={['OPENAI_API_KEY']}
+          onNotice={onNotice}
+          queryClient={queryClient}
+          defaultTaskModelByRuntime={{}}
+        />
+      </DashboardToastProvider>
+    </QueryClientProvider>,
   );
   return { onNotice, queryClient };
 }
 
+/** Select backend choices; providers the Harness does not list use its custom path. */
+function chooseHarnessAndProvider(runtimeId: string, providerId: string) {
+  fireEvent.change(screen.getByLabelText('Harness'), { target: { value: runtimeId } });
+  const listed = CREATION_CHOICES.harnesses
+    .find((harness) => harness.runtime_id === runtimeId)!
+    .providers.some((provider) => provider.provider_id === providerId);
+  if (listed) {
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: providerId } });
+    return;
+  }
+  fireEvent.change(screen.getByLabelText('Provider'), {
+    target: { value: '__custom_provider__' },
+  });
+  fireEvent.change(screen.getByLabelText('Custom provider ID'), {
+    target: { value: providerId },
+  });
+}
+
 async function startStandardCreation(creationClass: CreationClass, profileId: string) {
   fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: profileId } });
-  fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-    target: { value: creationClass.runtimeId },
-  });
-  fireEvent.change(screen.getByLabelText(/Provider ID/), {
-    target: { value: creationClass.providerId },
-  });
+  chooseHarnessAndProvider(creationClass.runtimeId, creationClass.providerId);
   fireEvent.click(await screen.findByLabelText(creationClass.methodLabel));
   await screen.findByText(new RegExp(`Backend preset ${presetFor(creationClass).version} loaded`));
   // Flush passive effects so the save mutation observes the loaded preset,
@@ -821,8 +876,7 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'conformance-minimax-env-bundle' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'claude_code' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'minimax' } });
+    chooseHarnessAndProvider('claude_code', 'minimax');
     fireEvent.click(await screen.findByLabelText('MiniMax API key (expert)'));
     await screen.findByText('Use the authorized manual profile path.');
 
