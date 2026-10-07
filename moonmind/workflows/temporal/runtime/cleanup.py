@@ -46,6 +46,7 @@ ManagedRuntimeCleanupClassification = Literal[
     "protected_recent",
     "protected_shared",
     "protected_unreadable_owner",
+    "protected_unsaved",
     "eligible",
     "deleted",
     "budget_exhausted",
@@ -187,6 +188,8 @@ class SandboxWorkspaceOwner:
     claim_grantees: tuple[str, ...] = ()
     record_paths: tuple[Path, ...] = ()
     error: str | None = None
+    # A required save has not completed; the workspace is the only copy.
+    unsaved_until: datetime | None = None
 
     @property
     def workflow_ids(self) -> tuple[str, ...]:
@@ -253,6 +256,7 @@ class ManagedRuntimeCleanupResult:
     skipped_unsafe_path: int
     skipped_ambiguous_owner: int
     skipped_unreadable_owner: int
+    skipped_unsaved: int
     unreadable_owner_records: int
     delete_budget_exhausted: int
     errors: tuple[str, ...]
@@ -281,6 +285,7 @@ class ManagedRuntimeCleanupResult:
             "skippedUnsafePath": self.skipped_unsafe_path,
             "skippedAmbiguousOwner": self.skipped_ambiguous_owner,
             "skippedUnreadableOwner": self.skipped_unreadable_owner,
+            "skippedUnsaved": self.skipped_unsaved,
             "unreadableOwnerRecords": self.unreadable_owner_records,
             "deleteBudgetExhausted": self.delete_budget_exhausted,
             "errors": list(_bounded_cleanup_errors(self.errors)),
@@ -424,6 +429,10 @@ class _SandboxWorkspaceClaimed(Exception):
     """A sandbox workspace gained an open claim before it could be removed."""
 
 
+class _SandboxWorkspaceUnsaved(Exception):
+    """A sandbox workspace became the only copy of unsaved work before removal."""
+
+
 class ManagedRuntimeWorkspaceJanitor:
     """Classify and optionally delete retained managed-runtime filesystem state."""
 
@@ -484,6 +493,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
                 skipped_unreadable_owner=0,
+                skipped_unsaved=0,
                 unreadable_owner_records=unreadable_count,
                 scanned_record_files=0,
                 delete_budget_exhausted=0,
@@ -726,6 +736,7 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_unsafe_path=0,
             skipped_ambiguous_owner=0,
             skipped_unreadable_owner=0,
+            skipped_unsaved=0,
             unreadable_owner_records=0,
             scanned_record_files=0,
             delete_budget_exhausted=0,
@@ -878,6 +889,7 @@ class ManagedRuntimeWorkspaceJanitor:
         try:
             grantees = store.active_claim_grantees(workspace_id, now=self._now())
             record_paths = store.record_paths(workspace_id)
+            unsaved = store.read_unsaved(workspace_id)
         except (OSError, ValueError) as exc:
             return SandboxWorkspaceOwner(
                 workspace_id=workspace_id,
@@ -889,6 +901,17 @@ class ManagedRuntimeWorkspaceJanitor:
             workflow_id=record.workflow_id,
             claim_grantees=grantees,
             record_paths=record_paths,
+            unsaved_until=(
+                datetime.fromisoformat(unsaved["retainUntil"]) if unsaved else None
+            ),
+        )
+
+    def _unsaved_protects(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
+        owner = candidate.sandbox_owner
+        return (
+            owner is not None
+            and owner.unsaved_until is not None
+            and self._now() < owner.unsaved_until
         )
 
     def _refresh_closed_workflows(
@@ -1113,6 +1136,14 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "protected_active", "live Docker reference"
                 )
+            if self._unsaved_protects(candidate):
+                assert candidate.sandbox_owner is not None
+                return self._decision(
+                    candidate,
+                    "protected_unsaved",
+                    "required save incomplete (locally_retained_but_unsaved) "
+                    f"until {candidate.sandbox_owner.unsaved_until.isoformat()}",
+                )
             newest = self._newest_activity(candidate)
             if newest is None:
                 return self._decision(
@@ -1173,6 +1204,10 @@ class ManagedRuntimeWorkspaceJanitor:
             except _SandboxWorkspaceClaimed as exc:
                 return self._decision(
                     candidate, "protected_shared", str(exc), newest, estimated_bytes
+                )
+            except _SandboxWorkspaceUnsaved as exc:
+                return self._decision(
+                    candidate, "protected_unsaved", str(exc), newest, estimated_bytes
                 )
             if not deleted:
                 return self._decision(
@@ -1418,8 +1453,10 @@ class ManagedRuntimeWorkspaceJanitor:
             for fresh in current:
                 if fresh.kind == candidate.kind and fresh.path == candidate.path:
                     self._refresh_closed_workflows((fresh,))
-                    if self._has_active_owner(fresh) or self._has_live_docker_reference(
-                        fresh, docker_state
+                    if (
+                        self._has_active_owner(fresh)
+                        or self._has_live_docker_reference(fresh, docker_state)
+                        or self._unsaved_protects(fresh)
                     ):
                         return True
                     newest = self._newest_activity(fresh)
@@ -1482,6 +1519,13 @@ class ManagedRuntimeWorkspaceJanitor:
                 if any(grantee not in self._closed_workflows for grantee in grantees):
                     raise _SandboxWorkspaceClaimed(
                         "workspace was claimed before delete"
+                    )
+                unsaved = store.read_unsaved(owner.workspace_id)
+                if unsaved and self._now() < datetime.fromisoformat(
+                    unsaved["retainUntil"]
+                ):
+                    raise _SandboxWorkspaceUnsaved(
+                        "required save became incomplete before delete"
                     )
                 candidate.path.rename(quarantine)
                 store.discard(owner.workspace_id)
@@ -1571,6 +1615,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     "protected_recent",
                     "protected_shared",
                     "protected_unreadable_owner",
+                    "protected_unsaved",
                 }
             ),
             eligible_roots=sum(1 for d in decisions if d.classification == "eligible"),
@@ -1611,6 +1656,9 @@ class ManagedRuntimeWorkspaceJanitor:
                 1
                 for d in decisions
                 if d.classification == "protected_unreadable_owner"
+            ),
+            skipped_unsaved=sum(
+                1 for d in decisions if d.classification == "protected_unsaved"
             ),
             unreadable_owner_records=unreadable_owner_records,
             delete_budget_exhausted=sum(

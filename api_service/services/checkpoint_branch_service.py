@@ -788,6 +788,7 @@ class CheckpointBranchService:
             }
         )
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, branch)
         await self._session.flush()
         await self._session.refresh(branch)
         return await self._branch_graph(branch)
@@ -857,6 +858,7 @@ class CheckpointBranchService:
         branch.workspace_policy = workspace_policy
         branch.runtime_context_policy = runtime_context_policy
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, branch)
         await self._session.flush()
         return turn
 
@@ -941,6 +943,7 @@ class CheckpointBranchService:
             }
         )
         child.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, child)
         await self._session.flush()
         await self._session.refresh(child)
         return await self._branch_graph(child)
@@ -1395,39 +1398,65 @@ class CheckpointBranchService:
                 raise ValueError(
                     "immutable terminal field provider_session_id cannot be changed"
                 )
-            if checkpoint_ref and branch.current_head_checkpoint_ref != checkpoint_ref:
+            # Turns finalized before their own candidate was recorded on the
+            # turn could only have advanced the branch head with it.
+            recorded_ref, recorded_digest = (
+                (
+                    existing_diagnostics.get("checkpointRef"),
+                    existing_diagnostics.get("checkpointDigest"),
+                )
+                if "checkpointRef" in existing_diagnostics
+                else (
+                    branch.current_head_checkpoint_ref,
+                    branch.current_head_checkpoint_digest,
+                )
+            )
+            if checkpoint_ref and recorded_ref != checkpoint_ref:
                 raise ValueError(
                     "immutable terminal field checkpoint_ref cannot be changed"
                 )
-            if (
-                checkpoint_digest
-                and branch.current_head_checkpoint_digest != checkpoint_digest
-            ):
+            if checkpoint_digest and recorded_digest != checkpoint_digest:
                 raise ValueError(
                     "immutable terminal field checkpoint_digest cannot be changed"
                 )
             await self._notify_terminal_turn(workflow_id, turn)
             return turn
+        # A turn owns the branch head only while the head it started from is
+        # still current. A late turn whose source was superseded keeps its own
+        # outcome and candidate on the turn, but never replaces newer work.
+        # The head version fences an ABA rollback to the same source ref by
+        # another owner. Turns created before the version was recorded keep
+        # the ref-only check until they drain.
+        owns_head = branch.current_head_checkpoint_ref in {
+            None,
+            turn.source_checkpoint_ref,
+        } and (
+            "sourceHeadVersion" not in existing_diagnostics
+            or existing_diagnostics["sourceHeadVersion"]
+            == branch.current_head_version
+        )
         if normalized == "succeeded":
             turn.status = CheckpointBranchTurnState.CHECKING.value
-            branch.state = CheckpointBranchState.ACTIVE.value
+            branch_state = CheckpointBranchState.ACTIVE.value
             delivery_stage = "delivered_verification_pending"
             verification_pending = True
         elif normalized == "canceled":
             turn.status = CheckpointBranchTurnState.CANCELED.value
-            branch.state = CheckpointBranchState.BLOCKED.value
+            branch_state = CheckpointBranchState.BLOCKED.value
             delivery_stage = "canceled"
             verification_pending = False
         elif normalized == "blocked":
             turn.status = CheckpointBranchTurnState.BLOCKED.value
-            branch.state = CheckpointBranchState.BLOCKED.value
+            branch_state = CheckpointBranchState.BLOCKED.value
             delivery_stage = "blocked"
             verification_pending = False
         else:
             turn.status = CheckpointBranchTurnState.FAILED.value
-            branch.state = CheckpointBranchState.FAILED.value
+            branch_state = CheckpointBranchState.FAILED.value
             delivery_stage = "failed"
             verification_pending = False
+        if owns_head:
+            branch.state = branch_state
         turn.provider_session_id = provider_session_id
         turn.completed_at = turn.completed_at or datetime.now(UTC)
         turn.diagnostics = {
@@ -1439,6 +1468,9 @@ class CheckpointBranchService:
             "agentResultRef": agent_result_ref,
             "diagnosticsRef": diagnostics_ref,
             "terminalDisposition": terminal_disposition or delivery_stage,
+            "checkpointRef": checkpoint_ref,
+            "checkpointDigest": checkpoint_digest,
+            "headAdvanced": bool(checkpoint_ref) and owns_head,
             **({"saveCommit": dict(save_commit)} if save_commit is not None else {}),
             **(
                 {"verificationHandoff": dict(verification_handoff)}
@@ -1446,25 +1478,28 @@ class CheckpointBranchService:
                 else {}
             ),
         }
-        if checkpoint_ref:
-            branch.current_head_checkpoint_ref = checkpoint_ref
-            branch.current_head_checkpoint_digest = checkpoint_digest
-            branch.current_head_version = (branch.current_head_version or 0) + 1
-            branch.current_head_attempt_ordinal = (
-                branch.current_head_attempt_ordinal or 0
-            ) + 1
-        branch.artifact_refs = {
-            **(branch.artifact_refs or {}),
-            "latestBranchTurnResult": agent_result_ref,
-            "latestBranchTurnDiagnostics": diagnostics_ref,
-        }
-        if checkpoint_ref:
-            branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
-        if verification_handoff is not None:
-            # Index the terminal handoff beside the result refs so the #3622
-            # result-verification owner can discover completed candidates
-            # without replaying the Temporal workflow result.
-            branch.artifact_refs["latestBranchTurnVerificationHandoff"] = branch_turn_id
+        if owns_head:
+            if checkpoint_ref:
+                branch.current_head_checkpoint_ref = checkpoint_ref
+                branch.current_head_checkpoint_digest = checkpoint_digest
+                branch.current_head_version = (branch.current_head_version or 0) + 1
+                branch.current_head_attempt_ordinal = (
+                    branch.current_head_attempt_ordinal or 0
+                ) + 1
+            branch.artifact_refs = {
+                **(branch.artifact_refs or {}),
+                "latestBranchTurnResult": agent_result_ref,
+                "latestBranchTurnDiagnostics": diagnostics_ref,
+            }
+            if checkpoint_ref:
+                branch.artifact_refs["latestBranchTurnCheckpoint"] = checkpoint_ref
+            if verification_handoff is not None:
+                # Index the terminal handoff beside the result refs so the
+                # #3622 result-verification owner can discover completed
+                # candidates without replaying the Temporal workflow result.
+                branch.artifact_refs["latestBranchTurnVerificationHandoff"] = (
+                    branch_turn_id
+                )
         for kind, ref, digest in (
             ("runtime.branch_turn.agent_result.json", agent_result_ref, None),
             ("output.branch_turn.diagnostics.json", diagnostics_ref, None),
@@ -1558,6 +1593,17 @@ class CheckpointBranchService:
         self._session.add(artifact)
         await self._session.flush()
         return artifact
+
+    @staticmethod
+    def _record_source_head(
+        turn: WorkflowCheckpointBranchTurn, branch: WorkflowCheckpointBranch
+    ) -> None:
+        """Remember the head version this turn started from."""
+
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "sourceHeadVersion": branch.current_head_version,
+        }
 
     async def create_turn(
         self,

@@ -314,8 +314,10 @@ def _finish_realizer(store, *, publish):
 
 
 @pytest.mark.asyncio
-async def test_failed_compute_with_valid_save_is_not_upgraded():
-    """MoonLadderStudios/MoonMind#3825 REQ-04: a valid save never upgrades failed compute."""
+@pytest.mark.parametrize("failure_class", ["execution_error", "canceled"])
+async def test_failed_compute_with_valid_save_is_not_upgraded(failure_class):
+    """MoonLadderStudios/MoonMind#3825 REQ-04: a valid save never upgrades failed
+    or canceled compute (#4016)."""
 
     from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
 
@@ -338,13 +340,13 @@ async def test_failed_compute_with_valid_save_is_not_upgraded():
     realizer = _finish_realizer(store, publish=publish)
     failed = AgentRunResult(
         summary="provider turn failed",
-        failure_class="execution_error",
+        failure_class=failure_class,
         provider_error_code="PROVIDER_TURN_FAILED",
         retry_recommendation="do_not_retry",
     )
     finished = await realizer._finish_owned_execution(request, sink, failed)
     assert published == []
-    assert finished.failure_class == "execution_error"
+    assert finished.failure_class == failure_class
     assert finished.provider_error_code == "PROVIDER_TURN_FAILED"
     assert finished.metadata["workPreserved"] is True
     assert finished.metadata["savedWorkspaceCheckpoint"] == saved
@@ -414,6 +416,88 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
     )
     assert resumed == finished
     assert published == [1, 1, 1]
+
+
+@pytest.mark.asyncio
+async def test_publication_resumes_remaining_budget_after_lost_receipt(monkeypatch):
+    """#4016: only the unfinished publication phase retries.
+
+    A replacement worker resumes the remaining publication budget after a
+    recorded failure; a publish whose receipt write is lost is reconciled
+    through the same publisher, never by saving or computing again.
+    """
+
+    import asyncio
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    async def no_sleep(delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    class ReceiptLosingStore(InMemoryStableRuntimeBindingStore):
+        lose_publication_receipt = True
+
+        async def update(self, binding_id, **kwargs):
+            phases = (kwargs.get("updates") or {}).get("phaseResults") or {}
+            if "publication" in phases and self.lose_publication_receipt:
+                self.lose_publication_receipt = False
+                raise ConnectionError("database lost before the receipt committed")
+            return await super().update(binding_id, **kwargs)
+
+    store = ReceiptLosingStore()
+    request = _finish_request(idempotency_key="publication-resume")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "e" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {"checkpointRef": "artifact://saved-checkpoint", "archiveRef": "artifact://saved"}
+    await sink.record_phase("saved", saved)
+    await sink.record_phase(
+        "publication_failure:0", {"code": "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"}
+    )
+    remote: list[str] = []
+    attempts: list[str] = []
+
+    async def publish(bound, result):
+        attempts.append("publish")
+        if len(attempts) == 1:
+            raise HarnessPlatformError(
+                "remote publication unavailable",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+            )
+        # The publisher reconciles remote state before any repeated effect.
+        if not remote:
+            remote.append("pushed")
+        return result.model_copy(update={"summary": f"remote verified {len(remote)}"})
+
+    realizer = _finish_realizer(store, publish=publish)
+    with pytest.raises(ConnectionError):
+        await realizer._finish_owned_execution(
+            request, sink, AgentRunResult(summary="verified compute")
+        )
+    resumed = await realizer._finish_owned_execution(
+        request,
+        RuntimeBindingSessionAuthoritySink(store, await store.get(binding.bindingId)),
+        AgentRunResult(summary="verified compute"),
+    )
+
+    assert attempts == ["publish", "publish", "publish"]
+    assert remote == ["pushed"]
+    assert resumed.failure_class is None
+    assert resumed.summary == "remote verified 1"
+    assert resumed.metadata["savedWorkspaceCheckpoint"] == saved
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert stored["saved"] == saved
+    assert {key for key in stored if key.startswith("publication_failure:")} == {
+        "publication_failure:0",
+        "publication_failure:1",
+    }
+    assert AgentRunResult.model_validate(stored["publication"]) == resumed
 
 
 async def _session_ready_sink(idempotency_key: str):
