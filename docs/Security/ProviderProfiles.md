@@ -1582,6 +1582,15 @@ free the slot. A failed Activity, a structured error, or a stale fence leaves th
 slot spent and records the owner for a bounded retry against the same lease
 identity. A logged warning never announces reuse.
 
+An owner re-admitted while its earlier release is unresolved must wait for a
+fresh fenced grant. The manager records that release obligation before awaiting
+the ledger, so neither a duplicate signal nor an acquisition can reuse the
+revoked generation. Only requests that preceded the release are withdrawn;
+later same-owner requests survive persistence and release redelivery. The
+`provider-profile-manager-owner-release-ordering-v1` marker preserves the
+previous command order for retained histories. Unresolved obligations and queued
+readmissions survive Continue-As-New through the existing snapshot.
+
 **Expiry and terminal ownership request cleanup.** Lease expiry is not evidence
 that the holder stopped: it transitions the row to `cleanup_requested` and
 leaves the slot spent, so the resource owner can reclaim what the run held
