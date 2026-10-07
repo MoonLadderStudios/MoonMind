@@ -332,6 +332,8 @@ type ProviderProfileDisplay = {
   primary: string;
   secondary?: string | undefined;
   title: string;
+  // Recorded profiles sort before absence states, then unavailable rows.
+  sortRank: number;
   sortKey: string;
   tieBreakId: string;
 };
@@ -355,7 +357,8 @@ function providerProfileDisplay(
     return {
       primary: 'Unavailable',
       title: 'Provider Profile information is unavailable for this row.',
-      sortKey: '~unavailable',
+      sortRank: 2,
+      sortKey: 'unavailable',
       tieBreakId: '',
     };
   }
@@ -363,7 +366,7 @@ function providerProfileDisplay(
   if (!first) {
     const state = summary.selectionState === 'recorded' ? 'not_recorded' : summary.selectionState;
     const label = PROVIDER_PROFILE_STATE_LABELS[state];
-    return { primary: label, title: label, sortKey: `~${label.toLowerCase()}`, tieBreakId: '' };
+    return { primary: label, title: label, sortRank: 1, sortKey: label.toLowerCase(), tieBreakId: '' };
   }
   const firstLabel = providerProfileLabel(first, ambiguousLabels);
   const describe = summary.profiles
@@ -379,6 +382,7 @@ function providerProfileDisplay(
       primary: 'Multiple profiles',
       secondary: `${firstLabel} +${hidden}`,
       title: `Multiple profiles: ${describe}${total > summary.profiles.length ? ' and more' : ''}`,
+      sortRank: 0,
       sortKey: `multiple profiles ${firstLabel.toLowerCase()}`,
       tieBreakId: first.id,
     };
@@ -388,6 +392,7 @@ function providerProfileDisplay(
     primary: firstLabel,
     secondary: harness ? `Harness: ${harness}` : undefined,
     title: describe + (harness ? ` · Harness: ${harness}` : ''),
+    sortRank: 0,
     sortKey: firstLabel.toLowerCase(),
     tieBreakId: first.id,
   };
@@ -767,6 +772,7 @@ function sortRows(
       const leftDisplay = providerProfileDisplay(left.providerProfile, ambiguousLabels);
       const rightDisplay = providerProfileDisplay(right.providerProfile, ambiguousLabels);
       const compare =
+        leftDisplay.sortRank - rightDisplay.sortRank ||
         leftDisplay.sortKey.localeCompare(rightDisplay.sortKey) ||
         leftDisplay.tieBreakId.localeCompare(rightDisplay.tieBreakId);
       if (compare !== 0) return dir * compare;
@@ -1458,27 +1464,35 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
   // This reuses the existing single-facet backend contract without API changes.
-  const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => ({
-    queryKey: ['workflow-list-facet', facet, filters] as const,
-    enabled:
-      listEnabled &&
-      filterValidationErrors.length === 0 &&
-      (drawerOpen || facetForFilterField(desktopFilterField) === facet),
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      params.set('source', 'temporal');
-      params.set('facet', facet);
-      params.set('pageSize', '50');
-      appendFilterParams(params, filters);
-      const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch facets: ${response.statusText}`);
-      }
-      return ExecutionFacetResponseSchema.parse(await response.json());
-    },
-    staleTime: listPollMs,
-    retry: false,
-  });
+  const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => {
+    // A facet describes values outside its own selection, so the Provider
+    // Profile facet omits every Provider Profile ID/state parameter.
+    const facetFilters =
+      facet === 'providerProfile'
+        ? { ...filters, providerProfile: emptyProviderProfileFilter() }
+        : filters;
+    return {
+      queryKey: ['workflow-list-facet', facet, facetFilters] as const,
+      enabled:
+        listEnabled &&
+        filterValidationErrors.length === 0 &&
+        (drawerOpen || facetForFilterField(desktopFilterField) === facet),
+      queryFn: async () => {
+        const params = new URLSearchParams();
+        params.set('source', 'temporal');
+        params.set('facet', facet);
+        params.set('pageSize', '50');
+        appendFilterParams(params, facetFilters);
+        const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch facets: ${response.statusText}`);
+        }
+        return ExecutionFacetResponseSchema.parse(await response.json());
+      },
+      staleTime: listPollMs,
+      retry: false,
+    };
+  };
 
   const facetByField = {
     status: useQuery(getFacetQueryOptions('status')),
@@ -1720,23 +1734,25 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return items.filter((row) => rowMatchesProgressFilter(row, filters.progress));
   }, [data?.items, filters.progress]);
 
-  // Recorded Provider Profile labels known from the current page and facet.
-  // Selected IDs absent from both still render by stable ID.
+  // Recorded Provider Profile labels seen on loaded pages and facets during this
+  // visit, so chips stay readable while a filtered page refetches. IDs never
+  // seen with a label render by stable ID.
   const providerProfileFacetItems = facetByField.providerProfile.data?.items;
+  const seenProviderProfileLabelsRef = useRef(new Map<string, string>());
   const knownProviderProfiles = useMemo(() => {
-    const entries: ProviderProfileRef[] = [];
+    const labels = seenProviderProfileLabelsRef.current;
+    const remember = (entry: ProviderProfileRef) => {
+      const label = (entry.label || '').trim();
+      if (label) labels.set(entry.id, label);
+    };
     for (const row of data?.items || []) {
-      for (const profile of row.providerProfile?.profiles || []) entries.push(profile);
+      for (const profile of row.providerProfile?.profiles || []) remember(profile);
     }
     for (const item of providerProfileFacetItems || []) {
-      entries.push({ id: item.value, label: item.label === item.value ? null : item.label });
+      remember({ id: item.value, label: item.label === item.value ? null : item.label });
     }
-    const labels = new Map<string, string>();
-    for (const entry of entries) {
-      const label = (entry.label || '').trim();
-      if (label && !labels.has(entry.id)) labels.set(entry.id, label);
-    }
-    return { labels, ambiguous: ambiguousProviderProfileLabels(entries) };
+    const entries = Array.from(labels, ([id, label]) => ({ id, label }));
+    return { labels: new Map(labels), ambiguous: ambiguousProviderProfileLabels(entries) };
   }, [data?.items, providerProfileFacetItems]);
   const formatProviderProfileId = useCallback(
     (id: string) =>
