@@ -84,6 +84,7 @@ from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_hosts import (
+    HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
 )
 from moonmind.omnigent.codex_execution_decisions import bind_exact_host
@@ -7505,6 +7506,58 @@ async def test_omnigent_canceled_host_rerun_waits_for_admission(
     assert admitted == resolved_lease
     assert hosts.create_or_get_host_lease.await_count == 2
     assert emit.await_args.kwargs["code"] == expected["busyCode"]
+    assert (
+        emit.await_args.kwargs["remediation_action"]
+        == expected["remediationAction"]
+    )
+
+
+async def test_omnigent_recovery_dispatch_waits_for_janitor_drained_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:20f53104 after a worker restart left its host lease silent."""
+
+    replay_id = "omnigent-recovery-janitor-drained-host"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    binding = _oauth_binding().model_copy(
+        update={"provider_profile_id": manifest["providerProfileId"]}
+    )
+    draining = _oauth_host_lease().model_copy(
+        update={"lease_id": manifest["hostLeaseRef"], "status": "draining"}
+    )
+    stopped = draining.model_copy(update={"status": "stopped"})
+    hosts = SimpleNamespace(
+        create_or_get_host_lease=AsyncMock(return_value=draining),
+        get_host_lease=AsyncMock(side_effect=[draining, stopped]),
+    )
+    emit = AsyncMock()
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_POLL_SECONDS",
+        0.0,
+    )
+
+    admitted = await coordinator._create_host_lease_after_profile_idle(
+        binding=binding,
+        provider_lease=SimpleNamespace(lease_id=manifest["incidentChildWorkflowId"]),
+        workflow_id=manifest["incidentWorkflowId"],
+        step_execution_id="step-recovery",
+        idempotency_key="recovery-dispatch",
+        emit=emit,
+    )
+
+    assert admitted.status == expected["resolvedHostStatus"]
+    assert expected["waitCode"] == HOST_CLEANUP_CLAIMED_ERROR_CODE
+    assert emit.await_args.kwargs["code"] == expected["waitCode"]
     assert (
         emit.await_args.kwargs["remediation_action"]
         == expected["remediationAction"]

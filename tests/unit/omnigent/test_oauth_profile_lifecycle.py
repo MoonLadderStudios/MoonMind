@@ -4172,6 +4172,99 @@ async def test_coordinator_waits_for_canceled_host_cleanup_before_rerun(
 
 
 @pytest.mark.asyncio
+async def test_coordinator_waits_for_janitor_drain_before_restarting_host(
+    monkeypatch,
+) -> None:
+    """A recovered dispatch never reuses a host lease the janitor is draining.
+
+    A worker restart left the execute activity silent, the janitor claimed its
+    stale host lease, and the workflow's recovery dispatch then heartbeated
+    the draining lease and failed with "host lease cleanup is owned by the
+    janitor". The recovery waits for that cleanup to stop the host and returns
+    the terminal lease so the caller restarts the same lease identity.
+    """
+
+    binding = _binding()
+    draining = _host_lease().model_copy(update={"status": "draining"})
+    stopped = draining.model_copy(update={"status": "stopped"})
+    hosts = SimpleNamespace(
+        create_or_get_host_lease=AsyncMock(return_value=draining),
+        get_host_lease=AsyncMock(side_effect=[draining, stopped]),
+    )
+    emit = AsyncMock()
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_POLL_SECONDS",
+        0.0,
+    )
+
+    resolved = await coordinator._create_host_lease_after_profile_idle(
+        binding=binding,
+        provider_lease=SimpleNamespace(lease_id=draining.provider_lease_id),
+        workflow_id="workflow-1",
+        step_execution_id="step-1",
+        idempotency_key="idem-1",
+        emit=emit,
+    )
+
+    assert resolved == stopped
+    assert hosts.get_host_lease.await_count == 2
+    assert [call.kwargs["code"] for call in emit.await_args_list] == [
+        HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        HOST_CLEANUP_CLAIMED_ERROR_CODE,
+    ]
+    assert {
+        call.kwargs["remediation_action"] for call in emit.await_args_list
+    } == {"wait_for_host_cleanup"}
+
+
+@pytest.mark.asyncio
+async def test_coordinator_reports_janitor_drain_that_never_finishes(
+    monkeypatch,
+) -> None:
+    """The drain wait is bounded and keeps the cleanup-claimed diagnosis."""
+
+    draining = _host_lease().model_copy(update={"status": "draining"})
+    hosts = SimpleNamespace(
+        create_or_get_host_lease=AsyncMock(return_value=draining),
+        get_host_lease=AsyncMock(return_value=draining),
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=SimpleNamespace(),
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.profile_bound_execution.HOST_PROFILE_BUSY_WAIT_SECONDS",
+        0.0,
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as captured:
+        await coordinator._create_host_lease_after_profile_idle(
+            binding=_binding(),
+            provider_lease=SimpleNamespace(lease_id=draining.provider_lease_id),
+            workflow_id="workflow-1",
+            step_execution_id="step-1",
+            idempotency_key="idem-1",
+            emit=AsyncMock(),
+        )
+
+    assert captured.value.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
+
+
+@pytest.mark.asyncio
 async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     actions: list[str] = []
     lifecycle: list[tuple[str, str | None]] = []
