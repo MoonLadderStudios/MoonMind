@@ -5286,7 +5286,7 @@ export function ProviderProfilesManager({
                     Retry loading choices
                   </button>
                 </div>
-              ) : harnessChoices === null && canWriteProviderProfiles ? (
+              ) : harnessChoices === null ? (
                 <p>Loading Harness and Provider choices…</p>
               ) : harnessChoices?.length === 0 ? (
                 <p>No Harness currently supports new Provider Profiles.</p>
