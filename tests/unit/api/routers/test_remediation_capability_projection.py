@@ -3,7 +3,41 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from api_service.api.routers.executions import _serialize_remediation_link_summary
+
+
+@pytest.mark.parametrize(
+    "state,paused,expected",
+    [
+        ("failed", False, []),
+        ("executing", False, ["execution.pause"]),
+        ("executing", True, ["execution.resume"]),
+    ],
+)
+def test_control_projection_matches_the_actual_target_state(state, paused, expected):
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    link = SimpleNamespace(
+        remediation_workflow_id="repair",
+        remediation_run_id="repair-run",
+        target_workflow_id="target",
+        target_run_id="source-run",
+        mode="repair",
+        authority_mode="approval_gated",
+        status="created",
+        allowed_actions=["execution.pause", "execution.resume"],
+        current_target_state=state,
+        target_paused=paused,
+        target_runtime="omnigent",
+        created_at=now,
+        updated_at=now,
+    )
+    result = _serialize_remediation_link_summary(link)
+    assert result.allowedActions == expected
+    assert [
+        row.actionKind for row in result.actionCapabilities if row.requestable
+    ] == expected
 
 
 def test_remediation_link_publishes_complete_evaluated_capability_matrix() -> None:

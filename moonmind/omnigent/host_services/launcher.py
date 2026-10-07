@@ -429,6 +429,10 @@ class DockerOmnigentHostLauncher:
                 item.harnessId == "opencode-native"
                 for item in host_class.declaredHarnessImplementations
             ),
+            enable_claude_runtime=any(
+                item.harnessId == "claude-native"
+                for item in host_class.declaredHarnessImplementations
+            ),
             runtime_environment=supplied_runtime_environment,
         )
         command = [

@@ -440,9 +440,17 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                     artifact_service=artifacts,
                 )
                 for _ in range(2):
-                    await materializer.materialize(
+                    attachment = await materializer.materialize(
                         request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
                     )
+                    assert any(
+                        (workspace / path).read_bytes()
+                        == json.dumps(evidence_body).encode()
+                        for path in attachment["materializedInputPaths"].values()
+                    )
+                    assert (
+                        workspace / "candidate.txt"
+                    ).read_text() == "saved implementation"
                 assert any(
                     p.is_file() and p.read_bytes() == json.dumps(evidence_body).encode()
                     for p in workspace.rglob("*")

@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -84,6 +84,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
@@ -493,6 +494,12 @@ class TemporalExecutionNotFoundError(TemporalExecutionError):
 
 class TemporalExecutionValidationError(TemporalExecutionError):
     """Raised when lifecycle invariants are violated."""
+
+
+class TemporalExecutionTargetRunChangedError(
+    TemporalExecutionValidationError, ValueError
+):
+    """The requested run changed before a control crossed its effect boundary."""
 
 
 class TemporalExecutionRerunSkillSnapshotError(TemporalExecutionValidationError):
@@ -2125,6 +2132,7 @@ class TemporalExecutionService:
         _skip_pause_guard: bool = False,
         _workflow_id: str | None = None,
         _run_id: str | None = None,
+        _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2449,7 +2457,54 @@ class TemporalExecutionService:
             )
         if remediation_link is not None:
             self._session.add(remediation_link)
+        recovery_input_links: list[TemporalArtifactLink] = []
         try:
+            if _recovery_artifact_source is not None:
+                # Recovery inherits the admitted source inputs and retained step
+                # evidence, but has a new execution identity. Commit their links
+                # with the destination record before Temporal can launch it.
+                source_family = f"{_recovery_artifact_source.workflow_id}:"
+                links = (
+                    (
+                        await self._session.execute(
+                            select(TemporalArtifactLink).where(
+                                TemporalArtifactLink.namespace
+                                == _recovery_artifact_source.namespace,
+                                or_(
+                                    TemporalArtifactLink.workflow_id
+                                    == _recovery_artifact_source.workflow_id,
+                                    and_(
+                                        TemporalArtifactLink.workflow_id.startswith(
+                                            source_family, autoescape=True
+                                        ),
+                                        TemporalArtifactLink.workflow_id
+                                        != source_family,
+                                    ),
+                                ),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                artifact_repository = TemporalArtifactRepository(self._session)
+                inherited: set[str] = set()
+                for link in links:
+                    if link.artifact_id in inherited:
+                        continue
+                    inherited.add(link.artifact_id)
+                    recovery_input_links.append(
+                        await artifact_repository.add_link(
+                            artifact_id=link.artifact_id,
+                            execution=ExecutionRef(
+                                namespace=self._namespace,
+                                workflow_id=workflow_id,
+                                run_id=run_id,
+                                link_type="input.recovery",
+                                created_by_activity_type="workflow.recovery.inherit",
+                            ),
+                        )
+                    )
             await self._session.commit()
         except IntegrityError as exc:
             await self._session.rollback()
@@ -2464,6 +2519,11 @@ class TemporalExecutionService:
             if existing is None:
                 raise exc
             return await self._sync_projection_best_effort(existing)
+        except Exception:
+            # Never leave an idempotency-visible destination without its input
+            # grants if admission fails before the atomic commit.
+            await self._session.rollback()
+            raise
         await self._session.refresh(record)
 
         if remediation_link is not None:
@@ -2520,6 +2580,8 @@ class TemporalExecutionService:
                 # via _sync_projection_best_effort, so no projection lifecycle
                 # field is written outside mutate_execution_projection.
                 record.run_id = start_run_id
+                for input_link in recovery_input_links:
+                    input_link.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id
                     if remediation_link.context_artifact_ref:
@@ -2987,6 +3049,7 @@ class TemporalExecutionService:
         parameters_patch: dict[str, Any] | None = None,
         title: str | None = None,
         idempotency_key: str | None = None,
+        expected_run_id: str | None = None,
     ) -> dict[str, Any]:
         if update_name in RETIRED_MANIFEST_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
@@ -3000,6 +3063,8 @@ class TemporalExecutionService:
             )
 
         record = await self._require_source_execution(workflow_id)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
 
         if (
             record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
@@ -3017,6 +3082,11 @@ class TemporalExecutionService:
             cached = record.last_update_response
             if isinstance(cached, dict):
                 return dict(cached)
+
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
 
         if update_name == "RequestRerun":
             if (
@@ -3073,13 +3143,22 @@ class TemporalExecutionService:
             }
             update_arg = {k: v for k, v in update_arg.items() if v is not None}
             try:
+                control_options = {}
+                if expected_run_id is not None:
+                    control_options["run_id"] = expected_run_id
+                    if idempotency_key is not None:
+                        control_options["idempotency_key"] = idempotency_key
                 await self._client_adapter.update_workflow(
-                    record.workflow_id, update_name, update_arg
+                    record.workflow_id, update_name, update_arg, **control_options
                 )
             except Exception as exc:
                 if update_name == "RequestRerun" and self._is_terminal_update_error(
                     exc
                 ):
+                    if expected_run_id is not None:
+                        raise TemporalExecutionTargetRunChangedError(
+                            "The admitted target run closed before rerun dispatch"
+                        ) from exc
                     logger.info(
                         "Temporal rerun update found closed workflow %s; creating fresh rerun: %s",
                         record.workflow_id,
@@ -3175,15 +3254,21 @@ class TemporalExecutionService:
         *,
         workflow_id: str,
         idempotency_key: str,
+        expected_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a distinct rerun execution through the canonical service boundary."""
 
         record = await self._require_source_execution(workflow_id)
-        if (
-            idempotency_key == record.last_update_idempotency_key
-            and isinstance(record.last_update_response, dict)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+        if idempotency_key == record.last_update_idempotency_key and isinstance(
+            record.last_update_response, dict
         ):
             return dict(record.last_update_response)
+        if expected_run_id is not None and record.run_id != expected_run_id:
+            raise TemporalExecutionTargetRunChangedError(
+                "Target run changed before rerun dispatch"
+            )
         response = await self._create_fresh_rerun_execution(
             record,
             input_artifact_ref=None,
@@ -3213,12 +3298,20 @@ class TemporalExecutionService:
         signal_name: str,
         payload: dict[str, Any] | None,
         payload_artifact_ref: str | None,
+        expected_run_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if signal_name not in ALLOWED_SIGNAL_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported signal name: {signal_name}"
             )
         record = await self._require_source_execution(workflow_id)
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+            if record.run_id != expected_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "Target run changed before control dispatch"
+                )
         if signal_name == "Resume":
             self._validate_execution_targets(record.parameters or {})
             if self._integration_state(record) is not None:
@@ -3258,13 +3351,18 @@ class TemporalExecutionService:
             elif operator_message is not None:
                 update_arg = {"message": operator_message}
             try:
+                control_options = {}
+                if expected_run_id is not None:
+                    control_options["run_id"] = expected_run_id
+                if idempotency_key is not None:
+                    control_options["idempotency_key"] = idempotency_key
                 if update_arg:
                     await self._client_adapter.update_workflow(
-                        record.workflow_id, signal_name, update_arg
+                        record.workflow_id, signal_name, update_arg, **control_options
                     )
                 else:
                     await self._client_adapter.update_workflow(
-                        record.workflow_id, signal_name
+                        record.workflow_id, signal_name, **control_options
                     )
             except Exception as exc:
                 raise TemporalExecutionValidationError(
@@ -3742,7 +3840,9 @@ class TemporalExecutionService:
             self._supported_integration_name(integration_name)
         return correlation, record
 
-    async def _require_processable_graceful_cancellation(self, workflow_id: str) -> bool:
+    async def _require_processable_graceful_cancellation(
+        self, workflow_id: str, *, run_id: str | None = None
+    ) -> bool:
         """Refuse to report a cancel the execution cannot currently process.
 
         Graceful cancellation is delivered through a workflow task: Temporal
@@ -3762,7 +3862,9 @@ class TemporalExecutionService:
         """
 
         try:
-            description = await self._client_adapter.describe_workflow(workflow_id)
+            description = await self._client_adapter.describe_workflow(
+                workflow_id, **({"run_id": run_id} if run_id is not None else {})
+            )
         except Exception:
             # This check only decides how the outcome is reported. A describe
             # failure must not turn an accepted cancellation request into an
@@ -3867,10 +3969,17 @@ class TemporalExecutionService:
         reason: str | None,
         graceful: bool,
         action: str = "cancel",
+        expected_run_id: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_cancel_target_execution(
             workflow_id, include_orphaned=not graceful
         )
+        if expected_run_id is not None:
+            await self._session.refresh(record)
+            if record.run_id != expected_run_id:
+                raise TemporalExecutionTargetRunChangedError(
+                    "Target run changed before control dispatch"
+                )
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -3906,7 +4015,12 @@ class TemporalExecutionService:
                 # Cancel the execution itself so Temporal propagates
                 # cancellation through child-workflow ownership and runs the
                 # AgentRun cleanup path that releases provider leases.
-                await self._client_adapter.cancel_workflow(record.workflow_id)
+                if expected_run_id is None:
+                    await self._client_adapter.cancel_workflow(record.workflow_id)
+                else:
+                    await self._client_adapter.cancel_workflow(
+                        record.workflow_id, run_id=expected_run_id
+                    )
             else:
                 # A local terminal flag can be an old cancellation acceptance,
                 # not a Temporal close. Always reach Temporal for force cancel,
@@ -3923,8 +4037,15 @@ class TemporalExecutionService:
         cancellation_confirmed = False
         if graceful:
             # The request is now durable in Temporal whatever this reports.
-            cancellation_confirmed = await self._require_processable_graceful_cancellation(
-                record.workflow_id
+            cancellation_confirmed = (
+                await self._require_processable_graceful_cancellation(
+                    record.workflow_id,
+                    **(
+                        {"run_id": expected_run_id}
+                        if expected_run_id is not None
+                        else {}
+                    ),
+                )
             )
 
         if cancellation_confirmed or not graceful:
@@ -5609,6 +5730,7 @@ class TemporalExecutionService:
                 if recovery_mode == "selected_step"
                 else f"Recovered from failed step of {record.workflow_id}."
             ),
+            _recovery_artifact_source=record,
         )
         return {
             "accepted": True,

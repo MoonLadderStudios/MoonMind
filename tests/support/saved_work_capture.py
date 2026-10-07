@@ -57,6 +57,9 @@ class CapturedSavedWork:
     source_repo: Path
     objects: dict[str, tuple[bytes, str]] = field(default_factory=dict)
     reads: list[str] = field(default_factory=list)
+    workspace_evidence: dict = field(default_factory=dict)
+    workflow_id: str = "mm:source"
+    run_id: str = "source-run"
 
     async def read(self, ref: str, content_types: frozenset[str]) -> bytes:
         self.reads.append(ref)
@@ -78,6 +81,9 @@ async def capture_saved_work(
     mutate: Callable[[Path], None],
     *,
     artifact_service: Any = None,
+    workflow_id: str = "mm:source",
+    run_id: str = "source-run",
+    logical_step_id: str = "implement",
 ) -> CapturedSavedWork:
     repo = tmp_path / "source-runs" / "agent-run-1" / "repo"
     repo.mkdir(parents=True)
@@ -93,10 +99,10 @@ async def capture_saved_work(
     store.save(
         ManagedRunRecord(
             runId="agent-run-1",
-            workflowId="mm:source",
+            workflowId=workflow_id,
             agentId="codex_cli",
-            ownerRunId="source-run",
-            logicalStepId="implement",
+            ownerRunId=run_id,
+            logicalStepId=logical_step_id,
             executionOrdinal=1,
             runtimeId="codex_cli",
             status="completed",
@@ -124,9 +130,9 @@ async def capture_saved_work(
         {
             "schemaVersion": "v1",
             "identity": {
-                "workflowId": "mm:source",
-                "runId": "source-run",
-                "logicalStepId": "implement",
+                "workflowId": workflow_id,
+                "runId": run_id,
+                "logicalStepId": logical_step_id,
                 "executionOrdinal": 1,
             },
             "boundary": "after_execution",
@@ -157,4 +163,7 @@ async def capture_saved_work(
         baseline_commit=baseline,
         source_repo=repo,
         objects=objects,
+        workspace_evidence=result["workspace"],
+        workflow_id=workflow_id,
+        run_id=run_id,
     )

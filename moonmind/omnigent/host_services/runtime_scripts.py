@@ -49,6 +49,14 @@ _OPENCODE_RUNTIME_ENV = {
     "OPENCODE_DISABLE_AUTOUPDATE": "1",
 }
 
+_CLAUDE_RUNTIME_ENV = {
+    # MoonMind settles a step when the Claude turn ends and then removes the
+    # host, so no owner resumes the session when a background subagent or
+    # shell finishes. Keep that work in the foreground, matching the direct
+    # print-mode launcher's launch-mode restriction.
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+}
+
 # Every on-demand host receives these values from the sandbox egress boundary.
 # Omnigent deliberately filters the host environment before spawning a runner,
 # so their *names* must survive the host -> runner hop for every harness; a
@@ -108,6 +116,7 @@ class OmnigentRuntimeScriptService:
         control_attachment: dict[str, Any] | None = None,
         control_credential_available: bool = True,
         enable_opencode_runtime: bool = False,
+        enable_claude_runtime: bool = False,
         runtime_environment: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
@@ -184,6 +193,8 @@ class OmnigentRuntimeScriptService:
         if opencode_runtime:
             environment["MOONMIND_OPENCODE_RUNTIME"] = "1"
             environment.update(_OPENCODE_RUNTIME_ENV)
+        if enable_claude_runtime:
+            environment.update(_CLAUDE_RUNTIME_ENV)
         github_host = "github.com"
         if github_credential_attachment is not None:
             if (
@@ -208,6 +219,7 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
             *(_OPENCODE_RUNTIME_ENV if opencode_runtime else {}),
+            *(_CLAUDE_RUNTIME_ENV if enable_claude_runtime else {}),
             *_EGRESS_PROXY_ENV_NAMES,
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
             *supplied_runtime_environment,
