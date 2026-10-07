@@ -143,6 +143,74 @@ class SandboxWorkspaceRecordStore:
         if not self.is_materialized(workspace_id):
             self.mark_materialized(workspace_id)
 
+    def _unsaved_marker_path(self, workspace_id: str) -> Path:
+        candidate = (self.store_root / f"{workspace_id}.unsaved.json").resolve()
+        if candidate.parent != self.store_root.resolve():
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace unsaved marker escapes its authority",
+            )
+        return candidate
+
+    def read_unsaved(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the durable unsaved-work decision for this workspace, if any."""
+
+        path = self._unsaved_marker_path(workspace_id)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            datetime.fromisoformat(payload["retainUntil"])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "sandbox workspace unsaved marker is invalid",
+            ) from exc
+        return payload
+
+    def mark_unsaved(
+        self, workspace_id: str, *, reason_code: str, recorded_at: datetime
+    ) -> dict[str, Any]:
+        """Keep the only copy of work whose required save has not completed.
+
+        The first recording fixes the bounded retention window; a repeated
+        failure reports the same decision instead of extending it.
+        """
+
+        from moonmind.schemas.saved_work_retention import (
+            SAVED_WORK_UNSAVED_LOCAL_RETENTION,
+        )
+
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self.claims_locked(workspace_id):
+            existing = self.read_unsaved(workspace_id)
+            if existing is not None:
+                return existing
+            payload = {
+                "version": "unsaved-v1",
+                "availability": "locally_retained_but_unsaved",
+                "reasonCode": str(reason_code),
+                "recordedAt": recorded_at.astimezone(UTC).isoformat(),
+                "retainUntil": (
+                    recorded_at + SAVED_WORK_UNSAVED_LOCAL_RETENTION
+                ).astimezone(UTC).isoformat(),
+            }
+            # Publish atomically: a torn marker would leave the decision unreadable.
+            path = self._unsaved_marker_path(workspace_id)
+            staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, sort_keys=True))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(staging, path)
+            return payload
+
+    def clear_unsaved(self, workspace_id: str) -> None:
+        """Release the unsaved decision once the required save is durable."""
+
+        self._unsaved_marker_path(workspace_id).unlink(missing_ok=True)
+
     def _claims_dir(self, workspace_id: str) -> Path:
         candidate = (self.store_root / f"{workspace_id}.grants").resolve()
         if candidate.parent != self.store_root.resolve():
@@ -401,6 +469,7 @@ class SandboxWorkspaceRecordStore:
                 self._record_path(workspace_id),
                 self._completion_marker_path(workspace_id),
                 self._readiness_marker_path(workspace_id),
+                self._unsaved_marker_path(workspace_id),
                 self._claims_dir(workspace_id),
             )
             if path.exists()
