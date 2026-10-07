@@ -65,6 +65,10 @@ def _image_owned_executables(
     return tuple(sorted(paths))
 
 
+# Renewal runs while a session is live; keep each Docker command well below the
+# host-lease heartbeat TTL so a stalled daemon only delays the next attempt.
+_CAPABILITY_RENEWAL_COMMAND_TIMEOUT_SECONDS = 60.0
+
 # Lease-scoped bearer capabilities delivered as files in the control volume.
 _CAPABILITY_BEARER_FILES = {
     "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "execution-fanout",
@@ -133,6 +137,7 @@ class DockerOmnigentHostLauncher:
         image_ref: str,
         filename: str,
         bearer: str,
+        timeout_seconds: float = 600.0,
     ) -> None:
         # Write beside the target and rename so a running host never reads a
         # truncated capability while it is being replaced.
@@ -157,6 +162,7 @@ class DockerOmnigentHostLauncher:
                 f"chmod 0400 {staged}; mv -f {staged} /control/{filename}",
             ],
             input_bytes=bearer.encode("utf-8"),
+            timeout_seconds=timeout_seconds,
         )
 
     async def renew_capability_files(
@@ -180,7 +186,8 @@ class DockerOmnigentHostLauncher:
         if not bearers:
             return ()
         _code, image_id, _stderr = await self._backend.run(
-            ["docker", "inspect", "--format", "{{.Image}}", container_name]
+            ["docker", "inspect", "--format", "{{.Image}}", container_name],
+            timeout_seconds=_CAPABILITY_RENEWAL_COMMAND_TIMEOUT_SECONDS,
         )
         image_ref = str(image_id or "").strip()
         if not image_ref:
@@ -194,6 +201,7 @@ class DockerOmnigentHostLauncher:
                 image_ref=image_ref,
                 filename=filename,
                 bearer=bearer,
+                timeout_seconds=_CAPABILITY_RENEWAL_COMMAND_TIMEOUT_SECONDS,
             )
         return tuple(bearers)
 

@@ -1404,6 +1404,11 @@ async def test_capability_renewal_replaces_control_files_from_running_host_image
         b"fresh-container-token",
         b"fresh-fanout-token",
     ]
+    # Renewal runs while the session is live, so every Docker command is
+    # bounded well below the host-lease heartbeat TTL.
+    assert all(
+        0 < float(kwargs["timeout_seconds"]) <= 60 for _argv, kwargs in calls
+    )
     for argv, _kwargs in writers:
         # The writer uses the image the running host was launched from, owns
         # no network, and swaps the file in one rename so the CLI never reads
@@ -3007,12 +3012,14 @@ async def _generic_publication_harness(
     execution_state_notifier=None,
     capability_renewal: dict[str, object] | None = None,
     failing_renewals: int = 0,
+    hanging_renewal: bool = False,
     session_seconds: float = 0.03,
 ) -> SimpleNamespace:
     """Build the real generic-host realizer around one publication outcome."""
 
     events: list[str] = []
     renewals: list[dict[str, object]] = []
+    renewal_started: list[int] = []
 
     class CountingRuntimeBindings(InMemoryStableRuntimeBindingStore):
         def __init__(self) -> None:
@@ -3148,6 +3155,9 @@ async def _generic_publication_harness(
 
         async def renew_runtime_capabilities(self, **kwargs):
             renewals.append(kwargs)
+            if hanging_renewal:
+                renewal_started.append(host_leases.heartbeat_count)
+                await asyncio.Event().wait()
             if len(renewals) <= failing_renewals:
                 raise RuntimeError("docker daemon unavailable")
             return ("container-jobs",)
@@ -3291,6 +3301,7 @@ async def _generic_publication_harness(
         publish_request=publish_request,
         events=events,
         renewals=renewals,
+        renewal_started=renewal_started,
         runtime_store=runtime_store,
         host_leases=host_leases,
         acquired=acquired,
@@ -3458,7 +3469,7 @@ async def test_short_session_does_not_renew_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resumed_host_renews_capabilities_on_first_heartbeat() -> None:
+async def test_resumed_host_renews_capabilities_before_session_starts() -> None:
     """A retried activity cannot know how much of the old token remains."""
 
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
@@ -3475,11 +3486,42 @@ async def test_resumed_host_renews_capabilities_on_first_heartbeat() -> None:
         },
     )
 
+    renewals_when_session_started: list[int] = []
+    session_driver = harness.realizer._session_driver
+
+    async def recording_session_driver(*args, **kwargs):
+        renewals_when_session_started.append(len(harness.renewals))
+        return await session_driver(*args, **kwargs)
+
+    harness.realizer._session_driver = recording_session_driver
+
     result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
 
     assert result.summary == "done"
     assert len(harness.renewals) == 1
     assert harness.renewals[0]["host_context"]["controlVolumeRef"] == "mm-control-1"
+    # The resumed agent may call `moonmind container` immediately, so the
+    # renewal completes before the session is driven, not at a later heartbeat.
+    assert renewals_when_session_started == [1]
+
+
+@pytest.mark.asyncio
+async def test_stalled_capability_renewal_does_not_block_lease_heartbeats() -> None:
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        capability_renewal={"lifetimeSeconds": 1, "workspaceAccessMode": "read-write"},
+        hanging_renewal=True,
+        session_seconds=0.8,
+    )
+
+    result = await asyncio.wait_for(
+        harness.realizer.execute(harness.publish_request, _plan("opencode-go/model")),
+        timeout=10,
+    )
+
+    assert result.summary == "done"
+    (heartbeats_when_renewal_stalled,) = harness.renewal_started
+    assert harness.host_leases.heartbeat_count > heartbeats_when_renewal_stalled + 5
 
 
 @pytest.mark.asyncio

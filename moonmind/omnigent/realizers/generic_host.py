@@ -1521,22 +1521,24 @@ class GenericOmnigentHostRealizer:
             due_at=time.monotonic() + (0.0 if renew_first else interval),
         )
 
-    @staticmethod
     async def _renew_capabilities(
+        self,
         schedule: _CapabilityRenewalSchedule,
     ) -> _CapabilityRenewalSchedule | None:
         try:
             renewed = await schedule.renew()
         except Exception as exc:
-            # The current capability is still valid; a failed renewal must not
-            # end the session, so the next heartbeat tries again.
+            # A failed renewal must not end the session; try again after one
+            # heartbeat interval while the current capability remains valid.
             logger.warning(
-                "generic host capability renewal failed; retrying at the next "
-                "heartbeat: %s: %s",
+                "generic host capability renewal failed; retrying in %ss: %s: %s",
+                self._heartbeat_interval,
                 type(exc).__name__,
                 exc,
             )
-            return schedule
+            return replace(
+                schedule, due_at=time.monotonic() + self._heartbeat_interval
+            )
         if not renewed:
             return None
         return replace(schedule, due_at=time.monotonic() + schedule.interval_seconds)
@@ -1569,7 +1571,6 @@ class GenericOmnigentHostRealizer:
             ) | {"workspaceSpec": dict(request.workspace_spec)})
 
         async def heartbeat_loop() -> None:
-            renewal = capability_renewal
             while True:
                 try:
                     await asyncio.wait_for(
@@ -1583,8 +1584,21 @@ class GenericOmnigentHostRealizer:
                         expected_generation=host_lease.generation,
                         ttl_seconds=self._heartbeat_ttl,
                     )
-                    if renewal is not None and time.monotonic() >= renewal.due_at:
-                        renewal = await self._renew_capabilities(renewal)
+
+        async def renewal_loop(
+            schedule: _CapabilityRenewalSchedule | None,
+        ) -> None:
+            # Separate from the ownership heartbeats so a slow Docker command
+            # during renewal can never let the leases lapse.
+            while schedule is not None:
+                try:
+                    await asyncio.wait_for(
+                        stop.wait(),
+                        timeout=max(0.0, schedule.due_at - time.monotonic()),
+                    )
+                    return
+                except TimeoutError:
+                    schedule = await self._renew_capabilities(schedule)
 
         async def deliver_continuation(ordinal, instruction, recorded_result):
             from moonmind.omnigent.control_plane.turn_sources import TurnSource
@@ -1635,8 +1649,14 @@ class GenericOmnigentHostRealizer:
                 await sink.record_phase("compute", result.model_dump(by_alias=True, mode="json", exclude_none=True))
             return await self._finish_execution(request, sink, result)
 
+        renewal = capability_renewal
+        if renewal is not None and time.monotonic() >= renewal.due_at:
+            # A resumed agent may call `moonmind container` at once, so an
+            # already-due renewal completes before the session is driven.
+            renewal = await self._renew_capabilities(renewal)
         driver_task = asyncio.create_task(complete_attempt())
         heartbeat_task = asyncio.create_task(heartbeat_loop())
+        renewal_task = asyncio.create_task(renewal_loop(renewal))
         try:
             done, _pending = await asyncio.wait(
                 {driver_task, heartbeat_task},
@@ -1657,7 +1677,7 @@ class GenericOmnigentHostRealizer:
             return result
         finally:
             stop.set()
-            for task in (driver_task, heartbeat_task):
+            for task in (driver_task, heartbeat_task, renewal_task):
                 if not task.done():
                     task.cancel()
                     with suppress(asyncio.CancelledError):

@@ -255,7 +255,8 @@ class OmnigentHostLauncherPort(Protocol):
         container_name: str,
         control_volume: str,
         runtime_environment: Mapping[str, str],
-    ) -> tuple[str, ...]: ...
+    ) -> tuple[str, ...]:
+        raise NotImplementedError
 
 
 @runtime_checkable

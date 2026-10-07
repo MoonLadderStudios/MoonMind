@@ -1718,6 +1718,42 @@ def test_explicit_verifier_rerun_retries_unrecoverable_no_determination(
     )
 
 
+def test_explicit_evidence_rerun_is_limited_to_verifier_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reviewed implementation step never repeats its paid work this way."""
+
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _p: True)
+    gate = SimpleNamespace(
+        verdict="NO_DETERMINATION",
+        recommended_next_action="reattempt_current_step",
+        recoverable_in_current_runtime=False,
+    )
+    verifier = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+            }
+        ],
+    )
+    implementation = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[{"id": "implement", "tool": {"name": "moonspec-implement"}}],
+    )
+
+    assert MoonMindRunWorkflow._gate_transition_admits_evidence_rerun(verifier)
+    assert implementation.disposition == "generic"
+    assert not MoonMindRunWorkflow._gate_transition_admits_evidence_rerun(
+        implementation
+    )
+
+
 def test_moonspec_gate_transition_handles_initial_final_and_malformed_topology(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
