@@ -510,6 +510,10 @@ function AppConnectForm({
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [setupUrl, setSetupUrl] = useState<string | null>(null);
+  const requestedRepositories = Array.from(new Set(repositories.split(/[\s,]+/).filter(Boolean)));
+  const validRepositories = requestedRepositories.length > 0 && requestedRepositories.every(
+    (repository) => /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(repository),
+  );
 
   function discard() {
     setName('');
@@ -534,6 +538,10 @@ function AppConnectForm({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!validRepositories) {
+      setError('Enter at least one repository in owner/repo form.');
+      return;
+    }
     const connectionId = connectionIdFor(name);
     setStarting(true);
     setError(null);
@@ -544,10 +552,7 @@ function AppConnectForm({
         displayName: name.trim(),
         appSlug: appSlug.trim(),
         appId: appId.trim(),
-        permittedRepositories: repositories
-          .split(/[\s,]+/)
-          .map((item) => item.trim())
-          .filter(Boolean),
+        permittedRepositories: requestedRepositories,
       });
       window.sessionStorage.setItem(
         PENDING_APP_KEY,
@@ -566,8 +571,9 @@ function AppConnectForm({
     <form aria-label="Connect GitHub App" className="space-y-3" onSubmit={submit}>
       <h4 className="text-base font-semibold text-slate-900 dark:text-white">Connect GitHub App</h4>
       <p className="text-sm text-slate-600 dark:text-slate-400">
-        You will install the App on GitHub, then return here. MoonMind verifies the installation
-        before saving it.
+        Enter explicit owner/repo names, separated by commas. You will install the App on GitHub,
+        then return here. MoonMind verifies that each named repository belongs to that installation
+        before saving this connection. Empty scope never grants access to all repositories.
       </p>
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-slate-700 dark:text-slate-200">Connection name</span>
@@ -590,18 +596,19 @@ function AppConnectForm({
         />
       </label>
       <label className="flex flex-col gap-1 text-sm">
-        <span className="font-medium text-slate-700 dark:text-slate-200">Limit to repositories (optional)</span>
+        <span className="font-medium text-slate-700 dark:text-slate-200">Repositories this connection may use</span>
         <input
           className={inputClass}
           value={repositories}
           onChange={(e) => setRepositories(e.target.value)}
           placeholder="owner/repo, owner/other"
+          required
           autoComplete="off"
         />
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
-        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim()}>
+        <button type="submit" className={primaryButton} disabled={starting || !name.trim() || !appSlug.trim() || !appId.trim() || !validRepositories}>
           {starting ? 'Opening GitHub…' : 'Install on GitHub'}
         </button>
         <button type="button" className={secondaryButton} onClick={() => { discard(); onCancel(); }}>

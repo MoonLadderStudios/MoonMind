@@ -522,8 +522,9 @@ async def test_update_receipt_checks_exact_request_identity_and_admission(harnes
 
 
 @pytest.mark.parametrize("revoke_during_issuance", [False, True])
+@pytest.mark.parametrize("permitted_repository", ["acme/widgets", "ACME/Widgets"])
 async def test_app_repository_assignment_uses_its_bound_read_credential(
-    harness, monkeypatch, revoke_during_issuance
+    harness, monkeypatch, revoke_during_issuance, permitted_repository
 ):
     from datetime import datetime, timedelta, timezone
 
@@ -551,7 +552,7 @@ async def test_app_repository_assignment_uses_its_bound_read_credential(
                 "installationRef": "456",
                 "keyRef": "db://app-key",
                 "account": "acme",
-                "permittedRepositories": ["acme/widgets"],
+                "permittedRepositories": [permitted_repository],
             },
             "ownership": {"ownerRef": "principal:operator", "scopeType": "system"},
         }
@@ -587,14 +588,17 @@ async def test_app_repository_assignment_uses_its_bound_read_credential(
 
     def handler(request):
         requests.append(request)
-        if request.url.path == "/app/installations/456":
+        if request.url.path in {
+            "/app/installations/456",
+            f"/repos/{permitted_repository}/installation",
+        }:
             return httpx.Response(
                 200,
                 json={
                     "id": 456,
                     "app_id": 123,
-                    "account": {"login": "acme"},
-                    "repository_selection": "all",
+                    "account": {"id": 10, "login": "acme"},
+                    "repository_selection": "selected",
                     "suspended_at": None,
                 },
             )
@@ -634,13 +638,16 @@ async def test_app_repository_assignment_uses_its_bound_read_credential(
     )
     if revoke_during_issuance:
         assert assigned.status_code in (403, 422)
-        assert not any("/repos/" in request.url.path for request in requests)
+        assert not any(
+            request.headers.get("Authorization") == "Bearer app-installation-fixture"
+            for request in requests
+        )
         assert await _count(harness.maker, RepositoryConnectionAssignment) == 0
         return
     assert assigned.status_code == 200, assigned.text
     assert assigned.json()["assignments"][0]["providerRepoId"] == "7"
     assert assigned.json()["assignments"][0]["operations"] == ["read"]
-    assert len(requests) == 3
+    assert len(requests) == 4
     assert "app-installation-fixture" not in assigned.text
     requests.clear()
     denied = await harness.client.post(
