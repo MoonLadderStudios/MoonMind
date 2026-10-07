@@ -138,8 +138,21 @@ async def link_verified_execution_plan_inputs(
             # Historical non-artifact policy refs are not artifact authority.
             if not str(ref).startswith(("artifact:", "art_")):
                 continue
+            artifact_id = TemporalOmnigentArtifactGateway._artifact_id(ref)
+            # Readiness polls and Activity retries reuse this same grant.
+            # Serialize the check/insert through the artifact row so concurrent
+            # admissions cannot append duplicate links on PostgreSQL either.
+            await repository.get_artifact_for_update(artifact_id)
+            if any(
+                link.namespace == "default"
+                and link.workflow_id == workflow_id
+                and link.run_id == run_id
+                and link.link_type == "input.execution_plan"
+                for link in await repository.list_links(artifact_id)
+            ):
+                continue
             await service.link_artifact(
-                artifact_id=TemporalOmnigentArtifactGateway._artifact_id(ref),
+                artifact_id=artifact_id,
                 principal="service:omnigent-generic-host",
                 execution_ref=ExecutionRef(
                     namespace="default",

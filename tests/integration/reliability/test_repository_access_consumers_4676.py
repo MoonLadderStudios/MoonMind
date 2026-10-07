@@ -306,6 +306,70 @@ async def test_frozen_plan_delegates_only_its_snapshots_to_each_concrete_occurre
 
 
 @pytest.mark.parametrize(
+    "existing_namespace,existing_type",
+    [
+        ("default", "input.execution_plan"),
+        ("default", "input.other"),
+        ("other", "input.execution_plan"),
+    ],
+)
+async def test_repeated_native_plan_reads_do_not_duplicate_execution_links(
+    repository_consumers, existing_namespace, existing_type
+):
+    from sqlalchemy import select
+    from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+    context = repository_consumers
+    compiled = await context.compile(profile_tools=("gh",))
+    source = compiled.envelope.payload.resolvedTools["repositoryAccess"]["source"]
+    # A partial prior admission is reused; a different link type/namespace
+    # must not masquerade as this execution-plan grant.
+    async with context.sessions() as session:
+        await TemporalArtifactService(TemporalArtifactRepository(session)).link_artifact(
+            artifact_id=context.gateway._artifact_id(source["artifactRef"]),
+            principal="service:omnigent-generic-host",
+            execution_ref=ExecutionRef(
+                namespace=existing_namespace,
+                workflow_id=_WORKFLOW,
+                run_id="run-1",
+                link_type=existing_type,
+            ),
+        )
+
+    async def plan_links(run_id):
+        async with context.sessions() as session:
+            result = await session.execute(select(models.TemporalArtifactLink).where(
+                models.TemporalArtifactLink.namespace == "default",
+                models.TemporalArtifactLink.workflow_id == _WORKFLOW,
+                models.TemporalArtifactLink.run_id == run_id,
+                models.TemporalArtifactLink.link_type == "input.execution_plan",
+            ))
+            return [(row.id, row.artifact_id) for row in result.scalars()]
+
+    await reader._load_verified_execution_plan(
+        compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+    )
+    initial = await plan_links("run-1")
+    assert len(initial) == len({artifact_id for _id, artifact_id in initial}) > 1
+    for _poll in range(3):
+        await reader._load_verified_execution_plan(
+            compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+        )
+    assert set(await plan_links("run-1")) == set(initial)
+
+    # A later occurrence needs its own exact execution links.
+    await reader._load_verified_execution_plan(
+        compiled.binding, workflow_id=_WORKFLOW, run_id="run-2"
+    )
+    later = await plan_links("run-2")
+    assert {artifact_id for _id, artifact_id in later} == {
+        artifact_id for _id, artifact_id in initial
+    }
+    assert len(later) == len(initial)
+    assert set(await plan_links("run-1")) == set(initial)
+
+
+@pytest.mark.parametrize(
     "denial", ["unlinked_execution", "unadmitted_ref", "restricted", "quarantined"]
 )
 async def test_snapshot_delegation_keeps_artifact_access_controls(
