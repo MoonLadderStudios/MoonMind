@@ -57,7 +57,7 @@ For optional settings, use [`.env-template`](.env-template). For startup checks 
 - **PostgreSQL and MinIO** store application records and artifacts. No vector database is required.
 - **Docker Compose** runs the local stack. The [service inventory](docs/FirstRunServiceInventory.md) lists its services, ports, and optional profiles.
 
-Some older execution paths remain for compatibility. Available harness and profile combinations depend on the deployment's qualification state. See the [Omnigent docs](docs/Omnigent/README.md) and [runtime support policy](docs/Omnigent/RuntimeProviderRollout.md) for the details.
+Some older execution paths remain for compatibility. Available harness and profile combinations depend on what your deployment supports. See the [Omnigent docs](docs/Omnigent/README.md) and [runtime support policy](docs/Omnigent/RuntimeProviderRollout.md) for the details.
 
 ## Operating notes
 
