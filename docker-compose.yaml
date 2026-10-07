@@ -1015,8 +1015,8 @@ services:
       - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-}
-      # With an installed standalone controller, deployment.update_compose_stack
-      # only submits and observes the controller's operation (#4502).
+      # deployment.update_compose_stack only submits and observes the
+      # standalone controller's operation; without one it is refused (#4502).
       - MOONMIND_CONTROLLER_STATE_DIR=/workspace/deployment_state/controller
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       # Omnigent release migration runs in this worker: it needs the same

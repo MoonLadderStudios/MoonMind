@@ -14,14 +14,11 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
 
 
 _DEFAULT_CONTROLLER_URL = os.environ.get(
@@ -42,8 +39,6 @@ _CONTROLLER_SUBMIT_ATTEMPTS = 2
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
 _MAX_PUBLISHED_ANCESTOR_SEARCH = 20
-_LEGACY_TRANSPORT_LEASE_TIMEOUT_SECONDS = 30
-_LEGACY_TRANSPORT_LEASE_READY = "MOONMIND_TRANSPORT_LEASE_READY"
 
 # Bounded wait for the fetched tip's in-flight image publish, tried before
 # selection falls back to a published ancestor so the exact requested commit
@@ -271,12 +266,6 @@ def main(argv=None):
         "(default <repo>/deploy/state/controller/secrets/controller-bearer "
         "or $MOONMIND_CONTROLLER_SECRET_FILE)",
     )
-    parser.add_argument(
-        "--legacy-direct", action="store_true",
-        help="Transitional: confirm the legacy application-owned updater for "
-        "a deployment without an installed controller (for example to resume "
-        "a legacy submission). Refused once a controller owns the deployment.",
-    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--local-build", action="store_true",
@@ -310,6 +299,7 @@ def main(argv=None):
                         "action": "resume_release",
                         "submissionId": submission_id,
                         "image": record["image"],
+                        **_controller_plan(repo, _controller_image(record)),
                     }
                 )
             )
@@ -325,6 +315,12 @@ def main(argv=None):
                         "branch": args.branch,
                         "checkoutMutation": False,
                         "imageSource": args.image_repository + ":sha-<fetched-commit>",
+                        **_controller_plan(
+                            repo,
+                            _controller_image_for(
+                                args.image_repository, "<fetched-commit>"
+                            ),
+                        ),
                     }
                 )
             )
@@ -409,7 +405,6 @@ def main(argv=None):
         repo,
         controller_url=args.controller_url,
         secret_file=args.controller_secret_file,
-        legacy_direct=args.legacy_direct,
         controller_url_explicit=(
             bool(os.environ.get("MOONMIND_CONTROLLER_URL"))
             or any(
@@ -417,7 +412,6 @@ def main(argv=None):
                 for arg in requested_args
             )
         ),
-        is_resume=args.resume is not None,
     )
 
 
@@ -427,66 +421,44 @@ def _submit_release(
     *,
     controller_url,
     secret_file,
-    legacy_direct,
     controller_url_explicit=False,
-    is_resume=False,
 ):
-    """Route the recorded submission to its installed execution owner.
+    """Route the recorded submission to the deployment's standalone controller.
 
-    An installed (or explicitly selected) standalone controller owns the
-    update. Until a deployment installs it, the application-owned updater
-    remains the supported default so a bare invocation still updates.
-
-    A resume never takes that automatic fallback on its own: the original
-    submission may still be owned by the controller, and forking the legacy
-    updater would create two deployment writers. Resume requires the owner
-    to be reconciled first via an explicit selection.
+    The controller is the only updater. A deployment without one installs
+    and starts it through its own bootstrap first; a controller that cannot
+    be installed fails the update instead of launching another writer. An
+    installed controller that owns recorded work or a container keeps its
+    recovery authority: it is restored, never replaced around.
     """
     explicit_controller = bool(
         secret_file
         or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
         or controller_url_explicit
     )
+    if not explicit_controller:
+        default_secret = _default_controller_secret_file(repo)
+        if not default_secret.exists():
+            _install_controller(record, repo)
+        else:
+            secret = default_secret.read_text(encoding="utf-8").strip()
+            try:
+                _controller_call(
+                    _installed_controller_url(repo, controller_url),
+                    secret,
+                    "GET",
+                    "/v1/healthz",
+                    timeout=5,
+                )
+            except ControllerUnreachableError:
+                # Bootstrap may have written a secret and Compose file before
+                # its image could start. Only a controller that never recorded
+                # an operation and owns no container is installed again.
+                if not _controller_never_started(repo):
+                    raise
+                _install_controller(record, repo)
     if not controller_url_explicit:
-        identity = _controller_identity(repo)
-        port = identity.get("port") if identity else None
-        if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
-            controller_url = f"http://127.0.0.1:{port}"
-    default_secret = _default_controller_secret_file(repo)
-    legacy_notice = None
-    if not explicit_controller and not default_secret.exists():
-        # The notice stays free of secret material (CodeQL clear-text
-        # logging): it names no secret path or value, only the installer.
-        legacy_notice = (
-            "Standalone controller is not installed; updating through the "
-            "application-owned updater. Install the controller with "
-            "`python3 deploy/controller/bootstrap.py install` to use it."
-        )
-    elif not explicit_controller:
-        secret = default_secret.read_text(encoding="utf-8").strip()
-        try:
-            _controller_call(controller_url, secret, "GET", "/v1/healthz", timeout=5)
-        except ControllerUnreachableError:
-            # Bootstrap may have written a secret and Compose file before its
-            # unpublished image could start. Fall back only if that controller
-            # never recorded an operation and owns no container; a stopped
-            # controller with durable work must retain its recovery authority.
-            if not _controller_never_started(repo):
-                if legacy_direct:
-                    _refuse_legacy_direct()
-                raise
-            legacy_notice = (
-                "Standalone controller bootstrap did not start a service; "
-                "updating through the application-owned updater."
-            )
-    if legacy_direct:
-        if legacy_notice is None:
-            _refuse_legacy_direct()
-        return _submit_legacy_direct(record, repo)
-    if legacy_notice is not None:
-        _reject_automatic_resume(is_resume)
-        print(legacy_notice, flush=True)
-        return _submit_legacy_direct(record, repo)
+        controller_url = _installed_controller_url(repo, controller_url)
     return _submit_via_controller(
         record,
         repo,
@@ -495,24 +467,91 @@ def _submit_release(
     )
 
 
-def _refuse_legacy_direct():
-    raise RuntimeError(
-        "Refusing --legacy-direct: a standalone controller owns this "
-        "deployment, and a second updater could compete with its "
-        "operation. Omit --legacy-direct to update through the controller."
-    )
+def _installed_controller_url(repo, default_url):
+    """Return the loopback endpoint recorded by this deployment's bootstrap."""
+    identity = _controller_identity(repo)
+    port = identity.get("port") if identity else None
+    if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+        return f"http://127.0.0.1:{port}"
+    return default_url
 
 
-def _reject_automatic_resume(is_resume):
-    if is_resume:
+def _controller_image_for(image_repository, revision):
+    """Name the controller image published with a release revision.
+
+    The release workflow publishes ``<app repository>-controller`` with the
+    same ``sha-<commit>`` tag as the application image, so the controller
+    follows the selected release. ``MOONMIND_CONTROLLER_IMAGE`` overrides it.
+    """
+    explicit = os.environ.get("MOONMIND_CONTROLLER_IMAGE", "").strip()
+    if explicit:
+        return explicit
+    return f"{image_repository}-controller:sha-{revision}"
+
+
+def _controller_image(record):
+    inputs = record.get("inputs") or {}
+    image = inputs.get("image") or {}
+    repository = image.get("repository") or str(record.get("image", "")).split("@", 1)[0]
+    return _controller_image_for(repository, inputs.get("sourceRevision") or "latest")
+
+
+def _controller_plan(repo, controller_image):
+    """Describe the controller route without creating controller state."""
+    return {
+        "executionOwner": "standalone-controller",
+        "controllerInstalled": bool(
+            os.environ.get("MOONMIND_CONTROLLER_URL")
+            or _default_controller_secret_file(repo).exists()
+        ),
+        "controllerImageSource": controller_image,
+    }
+
+
+def _install_controller(record, repo):
+    """Install and start this deployment's controller through its bootstrap.
+
+    The deployment checkout's ``deploy/controller/bootstrap.py`` owns the
+    controller lifecycle: it creates the deployment-owned secret, derives the
+    project, endpoint, and API link network, pins the image to a digest, and
+    starts the separate Compose project. Its output streams to the operator.
+    """
+    bootstrap = repo / "deploy" / "controller" / "bootstrap.py"
+    if not bootstrap.is_file():
         raise RuntimeError(
-            "Refusing to resume with the legacy application-owned "
-            "updater: the original submission may still be owned by the "
-            "standalone controller. Reconcile controller ownership "
-            "first, then resume with --legacy-direct to confirm the "
-            "legacy path or --controller-secret-file to resume through "
-            "the controller."
+            f"This checkout has no controller bootstrap at {bootstrap}; the "
+            "standalone controller cannot be installed and no other updater "
+            "was started."
         )
+    image = _controller_image(record)
+    print(
+        f"Standalone controller is not installed; installing {image}.",
+        flush=True,
+    )
+    for command in ("install", "start"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(bootstrap),
+                command,
+                "--repo",
+                str(repo),
+                "--image",
+                image,
+                "--target-project",
+                record["project"],
+            ],
+            cwd=repo,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                f"Controller {command} failed (exit {result.returncode}) for "
+                f"{image}; no other updater was started. Resolve the "
+                "bootstrap error above (for example an unpublished or "
+                "unreadable controller image), then rerun this command; "
+                "MOONMIND_CONTROLLER_IMAGE selects another controller image."
+            )
 
 
 def _default_controller_secret_file(repo):
@@ -806,447 +845,6 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
                 "controller operation directly."
             )
         _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
-
-
-@contextmanager
-def _legacy_transport_lease(command, repo, env):
-    """Hold the updater's existing kernel lock independently of its proxy.
-
-    The trusted rendered deployment-control service supplies its state mount and
-    lock directory. Its stdin lifetime holds the same lease used by release
-    jobs, including legacy-owner protection; the host needs no lock algorithm
-    or Docker socket mounted into another container.
-    """
-    name = "moonmind-transport-lease-" + uuid.uuid4().hex
-    script = (
-        "import asyncio, os, sys\n"
-        "from moonmind.workflows.skills.deployment_execution import "
-        "FileDeploymentUpdateLockManager\n"
-        "async def hold():\n"
-        "    manager = FileDeploymentUpdateLockManager("
-        "os.environ.get('MOONMIND_DEPLOYMENT_LOCK_DIR') or "
-        "'/workspace/deployment_state/locks')\n"
-        "    async with await manager.acquire('moonmind'):\n"
-        f"        print({_LEGACY_TRANSPORT_LEASE_READY!r}, flush=True)\n"
-        "        sys.stdin.buffer.read()\n"
-        "asyncio.run(hold())\n"
-    )
-    holder = [
-        *command,
-        "run",
-        "--rm",
-        "--no-deps",
-        "-T",
-        "--name",
-        name,
-        "--entrypoint",
-        "python",
-        "temporal-worker-deployment-control",
-        "-u",
-        "-c",
-        script,
-    ]
-    # File polling works for attached child output on Windows and Linux;
-    # select() on a subprocess pipe does not work on Windows.
-    with tempfile.TemporaryDirectory(prefix="moonmind-transport-lease-") as temp:
-        log = Path(temp) / "holder.log"
-        with log.open("wb") as output:
-            try:
-                process = subprocess.Popen(
-                    holder,
-                    cwd=repo,
-                    env=env,
-                    stdin=subprocess.PIPE,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                )
-            except OSError as exc:
-                raise RuntimeError(
-                    "Shared deployment lock holder could not start: "
-                    + _redact_diagnostics(str(exc))
-                ) from None
-            try:
-                deadline = time.monotonic() + _LEGACY_TRANSPORT_LEASE_TIMEOUT_SECONDS
-                while True:
-                    diagnostic = log.read_text(errors="replace")
-                    if (
-                        _LEGACY_TRANSPORT_LEASE_READY in diagnostic.splitlines()
-                        and process.poll() is None
-                    ):
-                        break
-                    if process.poll() is not None or time.monotonic() >= deadline:
-                        raise RuntimeError(
-                            "Shared deployment lock was not acquired before proxy repair.\n"
-                            + _redact_diagnostics(diagnostic)[-_MAX_DIAGNOSTIC_CHARS:]
-                        )
-                    _sleep(0.1)
-
-                def held():
-                    if process.poll() is not None:
-                        raise RuntimeError(
-                            "Shared deployment lock holder exited before proxy repair.\n"
-                            + _redact_diagnostics(log.read_text(errors="replace"))[
-                                -_MAX_DIAGNOSTIC_CHARS:
-                            ]
-                        )
-
-                yield held
-            finally:
-                # EOF releases the kernel lease before the release handoff.
-                # If that acknowledgment is lost, stop only our named holder.
-                primary_error = sys.exc_info()[0] is not None
-                status = None
-                try:
-                    try:
-                        process.stdin.close()
-                    except OSError:
-                        # A broken pipe can mean the holder already exited;
-                        # its exit or container removal still needs observing.
-                        pass
-                    try:
-                        status = process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        status = None
-                    if status != 0:
-                        try:
-                            result = subprocess.run(
-                                ["docker", "rm", "--force", name],
-                                cwd=repo,
-                                env=env,
-                                capture_output=True,
-                                text=True,
-                                timeout=10,
-                            )
-                            if result.returncode and "no such container" not in (
-                                f"{result.stdout or ''}\n{result.stderr or ''}".lower()
-                            ):
-                                raise RuntimeError(
-                                    _redact_diagnostics(
-                                        f"{result.stdout or ''}\n{result.stderr or ''}"
-                                    ).strip()[-_MAX_DIAGNOSTIC_CHARS:]
-                                    or "Docker did not confirm lock holder removal"
-                                )
-                        finally:
-                            if process.poll() is None:
-                                process.kill()
-                            process.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
-                    message = (
-                        "Shared deployment lock holder cleanup unavailable: "
-                        + _redact_diagnostics(str(exc))
-                    )
-                    if not primary_error:
-                        raise RuntimeError(message) from None
-                    print(message, flush=True)
-                if status not in (None, 0):
-                    message = (
-                        f"Shared deployment lock holder exited with status {status}.\n"
-                        + _redact_diagnostics(log.read_text(errors="replace"))[
-                            -_MAX_DIAGNOSTIC_CHARS:
-                        ]
-                    )
-                    if not primary_error:
-                        raise RuntimeError(message)
-                    print(message, flush=True)
-
-
-def _ensure_legacy_docker_transport(command, repo, env):
-    service = "temporal-worker-deployment-control"
-    rendered = json.loads(
-        run([*command, "config", "--format", "json"], cwd=repo, env=env)
-    )
-    worker_image = rendered.get("services", {}).get(service, {}).get("image")
-    # The target image was already acquired and verified by the host. A
-    # distinct worker image retains its deployment-owned acquisition policy,
-    # platform and build configuration through Compose, before probes disable
-    # registry access. The client version command needs no Docker API access.
-    if worker_image and worker_image != env.get("MOONMIND_IMAGE"):
-        run(
-            [
-                *command,
-                "run",
-                "--rm",
-                "--no-deps",
-                "-T",
-                "--entrypoint",
-                "docker",
-                service,
-                "--version",
-            ],
-            cwd=repo,
-            env=env,
-        )
-    # Compose run lacks --pull on supported older V2 releases, so an overlay
-    # disables pulls without altering the deployment-owned service boundary.
-    with tempfile.TemporaryDirectory(prefix="moonmind-transport-policy-") as temp:
-        path = Path(temp) / "compose.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "services": {
-                        "temporal-worker-deployment-control": {"pull_policy": "never"},
-                    }
-                }
-            )
-        )
-        _check_legacy_docker_transport([*command, "-f", str(path)], repo, env)
-
-
-def _check_legacy_docker_transport(command, repo, env):
-    """Prove the child transport, repairing only its unavailable proxy.
-
-    Host Docker access does not prove that a Compose one-off can reach Docker.
-    In particular, a stopped Desktop proxy can retain a stale WSL socket bind.
-    Keep a working proxy intact; try starting it before one bounded recreation
-    refreshes its mounts and network from the deployment-owned configuration.
-    """
-    service = "temporal-worker-deployment-control"
-    rendered = json.loads(
-        run([*command, "config", "--format", "json"], cwd=repo, env=env)
-    )
-    configured = rendered.get("services", {})
-    endpoint = configured.get(service, {}).get("environment", {}).get("DOCKER_HOST", "")
-    probe = [
-        *command,
-        "run",
-        "--rm",
-        "--no-deps",
-        "-T",
-        "--entrypoint",
-        "docker",
-        service,
-        "info",
-        "--format",
-        "{{.ServerVersion}}",
-    ]
-    errors = []
-    transport_failed = False
-    probe_timed_out = False
-
-    def attempt(args, phase, *, timeout=30):
-        nonlocal transport_failed, probe_timed_out
-        if phase == "Docker access probe":
-            transport_failed = probe_timed_out = False
-        try:
-            result = subprocess.run(
-                args, cwd=repo, env=env, capture_output=True, text=True, timeout=timeout
-            )
-        except subprocess.TimeoutExpired:
-            detail = f"{phase} timed out after {timeout} seconds"
-            probe_timed_out = phase == "Docker access probe"
-        else:
-            if result.returncode == 0 and (
-                phase != "Docker access probe" or result.stdout.strip()
-            ):
-                return True
-            if phase == "Docker access probe":
-                diagnostic = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
-                # Compose image-pull/start errors must not authorize proxy
-                # replacement. Identify the child's Docker endpoint or its
-                # direct API error, rather than generic registry DNS/503 text.
-                transport_failed = (
-                    (
-                        "lookup docker-proxy" in diagnostic
-                        and "no such host" in diagnostic
-                    )
-                    or (
-                        "docker-proxy:" in diagnostic
-                        and any(
-                            marker in diagnostic
-                            for marker in (
-                                "failed to connect to the docker api",
-                                "cannot connect to the docker daemon",
-                                "connection refused",
-                                "connection reset by peer",
-                            )
-                        )
-                    )
-                    or bool(
-                        re.search(r"error response from daemon:\s*503\b", diagnostic)
-                    )
-                    or (
-                        result.returncode == 0
-                        and "503 service unavailable" in diagnostic
-                    )
-                )
-            detail = _redact_diagnostics(
-                f"{phase} failed (exit {result.returncode}): "
-                f"{result.stdout or ''}\n{result.stderr or ''}"
-            ).strip()[-_MAX_DIAGNOSTIC_CHARS:]
-        errors.append(detail)
-        print(detail, flush=True)
-        return False
-
-    def ready():
-        for index in range(3):
-            if index:
-                _sleep(1)
-            if attempt(probe, "Docker access probe"):
-                return True
-        return False
-
-    def fail():
-        raise RuntimeError(
-            "Updater Docker transport is unavailable; release handoff did not start.\n"
-            + "\n".join(errors)
-        )
-
-    if attempt(probe, "Docker access probe"):
-        return
-    # A timeout alone does not prove proxy failure. Reconcile it, and never
-    # repair the proxy for a one-off's own image, mount, or startup error.
-    if probe_timed_out and ready():
-        return
-    if not transport_failed:
-        fail()
-    # An explicitly configured external/socket endpoint retains its authority.
-    # Starting the local proxy cannot repair it and must not replace it.
-    if (
-        urlsplit(endpoint or "").hostname == "docker-proxy"
-        and "docker-proxy" in configured
-    ):
-        try:
-            with _legacy_transport_lease(command, repo, env) as held:
-                # Another updater may have restored it while we acquired the
-                # shared lock. Reconcile before any host mutation.
-                if attempt(probe, "Docker access probe"):
-                    held()
-                    return
-                if transport_failed:
-                    print(
-                        "Restoring the updater's Docker proxy before release handoff.",
-                        flush=True,
-                    )
-                    repair = [
-                        *command,
-                        "up",
-                        "-d",
-                        "--no-deps",
-                        "--no-build",
-                        "--pull",
-                        "missing",
-                    ]
-                    held()
-                    attempt(
-                        [*repair, "--no-recreate", "docker-proxy"],
-                        "Start Docker proxy",
-                        timeout=60,
-                    )
-                    held()
-                    # A failed acknowledgment can still have started it.
-                    if ready():
-                        held()
-                        return
-                    if transport_failed:
-                        print(
-                            "Docker proxy is still unavailable; recreating only that service once.",
-                            flush=True,
-                        )
-                        held()
-                        attempt(
-                            [*repair, "--force-recreate", "docker-proxy"],
-                            "Recreate Docker proxy",
-                            timeout=60,
-                        )
-                        held()
-                        if ready():
-                            held()
-                            return
-        except RuntimeError as exc:
-            errors.append(_redact_diagnostics(str(exc)))
-    fail()
-
-
-def _submit_legacy_direct(record, repo):
-    """Transitional escape hatch: the old application-owned updater container.
-
-    Establishes the target image's container Docker transport from the host
-    before handing off. Prefer the independently owned standalone controller.
-    """
-    compose = run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--network",
-            "none",
-            "--entrypoint",
-            "python",
-            record["image"],
-            "-c",
-            "from pathlib import Path; print(Path('/app/release/docker-compose.yaml').read_text())",
-        ],
-        cwd=repo,
-    )
-    # No source checkout/reset is involved. Relative deployment configuration and
-    # existing operator-owned .env still resolve against the installed project.
-    with tempfile.TemporaryDirectory(prefix="moonmind-release-") as temp:
-        path = Path(temp) / "compose.yaml"
-        path.write_text(compose)
-        command = [
-            "docker",
-            "compose",
-            "--project-name",
-            record["project"],
-            "--project-directory",
-            str(repo),
-            "-f",
-            str(path),
-        ]
-        # Propagate the deployment's selected Compose file set (the same
-        # resolution the controller path carries). The release image already
-        # supplies the base file, so only the additional selected files are
-        # layered here; omitting them would reconcile without custom services
-        # while `--remove-orphans` may remove them.
-        compose_selection = os.environ.get("COMPOSE_FILE", "")
-        if compose_selection.strip():
-            for name in _resolve_compose_files(repo):
-                if name in ("docker-compose.yaml", "docker-compose.yml"):
-                    continue
-                command.extend(["-f", str(repo / name)])
-        else:
-            for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
-                override = repo / name
-                if override.exists():
-                    command.extend(["-f", str(override)])
-                    break
-        env = {
-            **os.environ,
-            "MOONMIND_IMAGE": record["image"],
-            "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
-        }
-        _ensure_legacy_docker_transport(command, repo, env)
-        command.extend(
-            [
-                "run",
-                "--rm",
-                "--no-deps",
-                "-T",
-                "--entrypoint",
-                "python",
-                "-e",
-                f"MOONMIND_DEPLOYMENT_PROJECT_NAME={record['project']}",
-                "-e",
-                f"MOONMIND_DEPLOYMENT_PROJECT_DIR={repo}",
-                # Same substrate protection as the process environment below,
-                # stated explicitly: `run -e` wins over service interpolation,
-                # so the deployment-control submitter and everything it
-                # launches inherit the exclusion even if interpolation drifts.
-                "-e",
-                "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres",
-                "temporal-worker-deployment-control",
-                "-m",
-                "moonmind.workflows.skills.deployment_release",
-                "--submit",
-                json.dumps({"inputs": record["inputs"], "context": record["context"]}),
-            ]
-        )
-        return subprocess.run(
-            command,
-            cwd=repo,
-            env=env,
-            check=False,
-        ).returncode
 
 
 def _compose_ps_state(*, repo, project):

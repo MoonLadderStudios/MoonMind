@@ -134,20 +134,21 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     assert "resolvedDigest" in image_schema["properties"]
 
     output_schema = definition.output_schema
+    # The tool reports the standalone controller's operation.
     assert output_schema["required"] == [
         "status",
         "stack",
         "requestedImage",
-        "updatedServices",
-        "runningServices",
+        "owner",
+        "operationId",
     ]
+    assert output_schema["properties"]["owner"]["enum"] == ["controller"]
     assert output_schema["properties"]["status"]["enum"] == [
         "SUCCEEDED",
         "FAILED",
         "PARTIALLY_VERIFIED",
+        "SUPERSEDED",
     ]
-    assert "verificationArtifactRef" in output_schema["properties"]
-    assert "audit" in output_schema["properties"]
 
 
 def test_ops_diagnose_stack_tool_definition_matches_mm925_contract() -> None:
