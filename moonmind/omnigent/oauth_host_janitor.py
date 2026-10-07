@@ -387,11 +387,6 @@ class OmnigentOAuthHostJanitor:
                 cleanup_evidence = await self._stop_host_with_authority(
                     binding=binding, lease=host_lease
                 )
-                stopped_lease = await self._repository.mark_host_lease_stopped(
-                    host_lease.lease_id
-                )
-                if stopped_lease is not None:
-                    host_lease = stopped_lease
                 provider_released = await self._release_provider_lease(
                     binding=binding,
                     lease=host_lease,
@@ -406,6 +401,14 @@ class OmnigentOAuthHostJanitor:
                     lease_released=provider_released,
                 )
                 await self._complete_runtime_binding_cleanup(runtime_binding_state)
+                # Publish ``stopped`` only after the whole cleanup handoff: a
+                # recovering owner restarts a stopped lease, so it must never observe
+                # one whose capacity release or binding cleanup is still pending.
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    host_lease.lease_id
+                )
+                if stopped_lease is not None:
+                    host_lease = stopped_lease
                 if provider_released:
                     actions.append(
                         {
@@ -693,11 +696,6 @@ class OmnigentOAuthHostJanitor:
                 cleanup_evidence = await self._stop_host_with_authority(
                     binding=binding, lease=lease
                 )
-                stopped_lease = await self._repository.mark_host_lease_stopped(
-                    lease.lease_id
-                )
-                if stopped_lease is not None:
-                    lease = stopped_lease
                 provider_released = await self._release_provider_lease(
                     binding=binding, lease=lease
                 )
@@ -710,6 +708,14 @@ class OmnigentOAuthHostJanitor:
                 await self._complete_runtime_binding_cleanup(
                     runtime_binding_state
                 )
+                # Publish ``stopped`` only after the whole cleanup handoff: a
+                # recovering owner restarts a stopped lease, so it must never observe
+                # one whose capacity release or binding cleanup is still pending.
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    lease.lease_id
+                )
+                if stopped_lease is not None:
+                    lease = stopped_lease
             except Exception as exc:
                 await self._record_terminal_cleanup(
                     lease=lease,
@@ -894,11 +900,6 @@ class OmnigentOAuthHostJanitor:
                     cleanup_evidence = await self._stop_host_with_authority(
                         binding=binding, lease=lease
                     )
-                    stopped_lease = await self._repository.mark_host_lease_stopped(
-                        lease.lease_id
-                    )
-                    if stopped_lease is not None:
-                        lease = stopped_lease
                     provider_released = await self._release_provider_lease(
                         binding=binding, lease=lease
                     )
@@ -918,6 +919,14 @@ class OmnigentOAuthHostJanitor:
                     lease_released=provider_released,
                 )
                 await self._complete_runtime_binding_cleanup(runtime_binding_state)
+                # Publish ``stopped`` only after the whole cleanup handoff: a
+                # recovering owner restarts a stopped lease, so it must never observe
+                # one whose capacity release or binding cleanup is still pending.
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    lease.lease_id
+                )
+                if stopped_lease is not None:
+                    lease = stopped_lease
                 actions.append(
                     {
                         "hostLeaseRef": lease.lease_id,

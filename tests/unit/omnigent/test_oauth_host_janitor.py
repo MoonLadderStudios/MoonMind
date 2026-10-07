@@ -40,7 +40,7 @@ class _Repository:
         return self.lease if lease_id == self.lease.lease_id else None
 
     async def mark_host_lease_stopped(self, lease_id):
-        self.order.append("lease_released")
+        self.order.append("host_lease_stopped")
         self.stopped.append(lease_id)
         self.lease.status = "stopped"
         return self.lease
@@ -403,8 +403,8 @@ async def test_pre_host_binding_cleanup_requires_its_exact_provider_lease(
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
     state = await binding_store.get_state(initial.runtimeBindingRef)
     assert state.state == "cleanup_complete"
@@ -485,8 +485,8 @@ async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidenc
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
 
 
@@ -604,6 +604,36 @@ async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
 
 
 @pytest.mark.asyncio
+async def test_janitor_publishes_stopped_only_after_cleanup_handoff() -> None:
+    """A failed capacity release never exposes a restartable stopped lease.
+
+    A recovering owner waits for a draining lease to stop and then restarts
+    it. Publishing ``stopped`` before the Provider Profile release would let
+    that owner relaunch while capacity cleanup was still unverified.
+    """
+
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+
+    class _FailingLeaseClient(_LeaseClient):
+        async def release_lease(self, lease):
+            raise RuntimeError("manager unavailable")
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=_FailingLeaseClient(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result["actions"][-1]["action"] == "cleanup_failed"
+    assert runtime.stopped == 1
+    assert repository.stopped == []
+    assert repository.lease.status == "draining"
+
+
+@pytest.mark.asyncio
 async def test_janitor_ignores_missing_container_during_fresh_launch() -> None:
     lease = _lease()
     lease.status = "starting"
@@ -702,8 +732,8 @@ async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
 
 
@@ -737,8 +767,8 @@ async def test_janitor_releases_capacity_left_on_already_stopped_host() -> None:
     assert result["actions"][-1]["action"] == "provider_lease_reconciliation"
     assert repository.order == [
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
     assert runtime.stopped == 1
 
@@ -792,7 +822,7 @@ async def test_janitor_reconciles_each_durable_embedded_abandonment_class(
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
+        "host_lease_stopped",
     ]
 
 
@@ -829,8 +859,8 @@ async def test_pre_upgrade_restricted_lease_uses_bounded_cleanup_cutover() -> No
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
 
 
@@ -911,8 +941,8 @@ async def test_unlaunched_restricted_host_releases_capacity_after_verified_absen
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
     assert len(lease_client.released) == 1
 
@@ -1034,8 +1064,8 @@ async def test_credential_validator_without_egress_authority_releases_capacity()
     assert repository.order == [
         "cleanup_claimed",
         "host_stopped",
-        "lease_released",
         "provider_released",
+        "host_lease_stopped",
     ]
 
 
