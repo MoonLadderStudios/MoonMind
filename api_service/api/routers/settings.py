@@ -70,7 +70,8 @@ async def probe_github_token(
     repo: str,
     mode: str,
     base_branch: str | None = None,
-    credential: Any | None = None,
+    connection: Any | None = None,
+    revision_reader: Any | None = None,
 ) -> dict[str, Any]:
     from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -78,39 +79,34 @@ async def probe_github_token(
         repo=repo,
         mode=mode,
         base_branch=base_branch,
-        credential=credential,
+        connection=connection,
+        revision_reader=revision_reader,
     )
 
 
-async def _selected_connection_credential(
-    connection_id: str, *, repo: str, user: Any
-) -> Any | None:
-    """Resolve only the selected connection's credential (#4019).
+async def _selected_probe_connection(connection_id: str, *, user: Any) -> Any | None:
+    """Load only the connection this principal may discover and probe.
 
-    Returns ``None`` when the admitted principal cannot discover the
-    connection; the probe never substitutes another GitHub credential.
+    Keep its endpoint and typed credential together through acquisition;
+    neither a missing connection nor acquisition failure permits fallback.
     """
 
     from api_service.services.repository_connections import (
         RepositoryConnectionService,
     )
-    from moonmind.auth.github_credentials import resolve_connection_github_credential
 
     principal = str(getattr(user, "id", "") or "").strip()
     if not principal:
         return None
     async with db_base.async_session_maker() as session:
         try:
-            connection = await RepositoryConnectionService(session).get_connection(
+            return await RepositoryConnectionService(session).get_connection(
                 connection_id,
                 principal_ref=principal,
                 principal_scope=("system", None),
             )
         except RepositoryRouteError:
             return None
-    if connection is None:
-        return None
-    return await resolve_connection_github_credential(connection, repo=repo)
 
 
 def _permission_denied_response(permission: str) -> JSONResponse:
@@ -607,19 +603,30 @@ async def github_token_probe(
             mode=payload.mode,
             base_branch=payload.base_branch,
         )
-    credential = await _selected_connection_credential(
-        connection_id, repo=payload.repo, user=user
-    )
-    if credential is None:
+    connection = await _selected_probe_connection(connection_id, user=user)
+    if connection is None:
         return JSONResponse(
             status_code=404,
             content={"detail": "Repository connection not found."},
         )
+
+    async def _read_active_revision(selected_id: str) -> Any:
+        from moonmind.auth.bound_acquisition import BOUND_REVOKED, BoundAccessError
+        from moonmind.auth.github_app_wiring import revision_reader_for
+
+        current = await _selected_probe_connection(selected_id, user=user)
+        if current is None:
+            raise BoundAccessError(
+                BOUND_REVOKED, "Repository connection is unavailable"
+            )
+        return await revision_reader_for({selected_id: current})(selected_id)
+
     result = await probe_github_token(
         repo=payload.repo,
         mode=payload.mode,
         base_branch=payload.base_branch,
-        credential=credential,
+        connection=connection,
+        revision_reader=_read_active_revision,
     )
     return {**result, "connectionId": connection_id}
 
