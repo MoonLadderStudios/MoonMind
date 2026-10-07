@@ -60,6 +60,12 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
 
+#: Waits between the three publication attempts. A git hosting outage is
+#: partial and lasts minutes, so a remote-side failure waits it out before the
+#: saved work is reported unpublished; other failures keep the short schedule.
+_PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
+_TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
+
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     """Return the bounded cleanup outcome for one terminal execution.
@@ -1122,6 +1128,8 @@ class GenericOmnigentHostRealizer:
                 **(result.metadata or {}), "savedWorkspaceCheckpoint": saved, "workPreserved": True,
             }})
         if result.failure_class is None:
+            from moonmind.utils.logging import redact_sensitive_text
+
             # Only retry this unfinished boundary. The publisher reconciles
             # remote branch/PR state and verifies the exact head on every call.
             for attempt in range(3):
@@ -1136,18 +1144,36 @@ class GenericOmnigentHostRealizer:
                         "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
                     }:
                         raise
-                    await sink.record_phase(f"publication_failure:{attempt}", {"code": str(exc.code)})
+                    message = redact_sensitive_text(str(exc))[:1024]
+                    transient = exc.transient
+                    await sink.record_phase(
+                        f"publication_failure:{attempt}",
+                        {"code": str(exc.code), "message": message, "transient": transient},
+                    )
+                    logger.warning(
+                        "Repository publication attempt %s/3 failed (transient=%s): %s",
+                        attempt + 1, transient, message,
+                    )
                     if attempt < 2:
-                        await asyncio.sleep(2 ** attempt)
+                        delays = (
+                            _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
+                            if transient
+                            else _PUBLICATION_RETRY_DELAYS_SECONDS
+                        )
+                        await asyncio.sleep(delays[attempt])
             else:
+                last_failure = (sink.binding.phaseResults or {})["publication_failure:2"]
+                summary = "Agent work is saved; repository publication exhausted its retry budget"
                 result = result.model_copy(
                     update={
                         "failure_class": "integration_error",
-                        "provider_error_code": (sink.binding.phaseResults or {})[
-                            "publication_failure:2"
-                        ]["code"],
+                        "provider_error_code": last_failure["code"],
                         "retry_recommendation": "do_not_retry",
-                        "summary": "Agent work is saved; repository publication exhausted its retry budget.",
+                        "summary": (
+                            f"{summary}: {last_failure['message']}"
+                            if last_failure.get("message")
+                            else f"{summary}."
+                        ),
                         "metadata": {
                             **(result.metadata or {}),
                             "unfinishedPhase": "publication",
