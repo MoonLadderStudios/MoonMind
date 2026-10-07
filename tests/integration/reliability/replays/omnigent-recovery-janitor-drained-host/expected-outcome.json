@@ -1,0 +1,6 @@
+{
+  "invariant": "a recovery dispatch waits for janitor cleanup of its idempotent host lease and restarts that lease instead of failing on the draining state",
+  "waitCode": "OMNIGENT_HOST_CLEANUP_CLAIMED",
+  "remediationAction": "wait_for_host_cleanup",
+  "resolvedHostStatus": "stopped"
+}
