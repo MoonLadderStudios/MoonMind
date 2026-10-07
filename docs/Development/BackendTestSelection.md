@@ -94,6 +94,23 @@ from observed setup, testing, and bounded diagnostics/cleanup:
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
 | Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
+Each invocation also sets a faulthandler stack-dump threshold below its
+terminating per-test timeout (`-o faulthandler_timeout=`: 45s unit-fast,
+90s API/component and Temporal, 120s ordinary and 270s scheduled
+reliability). The dump only writes every thread's stack into the teed log,
+including from xdist workers; pytest-timeout still terminates the test. The
+`faulthandler_timeout = 300` in `pyproject.toml` is the local default only.
+
+The reliability dependency-start step (Compose pull, `up --wait` and address
+inspection) has a 5-minute native step bound; the 180-second readiness wait
+alone does not bound the pull. The reliability shell deadline sends SIGINT
+so pytest tears down owned stacks and writes its JUnit report, then
+escalates to SIGKILL after a 30-second grace that still ends inside the
+native step bound. Every row records its test command's exit status, and the
+evidence summary reports the termination as a cooperative deadline stop
+(124), a hard kill (137), an ordinary pytest exit, or unavailable when the
+native step bound, cancellation or runner loss stopped the step first.
+
 Fast 15-minute jobs cover observed setup (~2-3 minutes: checkout,
 Python, dependencies, submodules), the 7-minute test step, and bounded
 reporting (2-minute caps that typically finish in seconds). Reliability
@@ -127,15 +144,15 @@ Refresh hints when a measured imbalance or changed corpus warrants it. Per-run t
 
 ### Reliability Docker Fixture Layers
 
-The Compose dependency file uses registry images. That does **not** mean the test corpus builds no local images: `test_automatic_release_availability.py` at the reviewed baseline generates a Python/Temporal Dockerfile and builds case-specific images. Conversely, the presence of those builds does not prove that dependency layers are repeatedly rebuilt. Native Docker caching may already reuse them.
+The Compose dependency file uses pinned registry images, and the reliability corpus no longer builds case-specific images. The former `test_automatic_release_availability.py` fixture, which generated a Python/Temporal Dockerfile per case, was removed with the retained-cohort release machinery in #4451; #4376 was closed as superseded for that reason.
 
-First check whether the fixture survives the authorized deployment simplification. Do not build a cache for retired release machinery or restore a deleted fixture to satisfy an old optimization issue. For surviving expensive builds, inspect actual cold/warm build output and separate build cost from routing waits and startup. Prefer native layer caching; add only a small immutable dependency fixture if a material remaining cost is demonstrated.
+Do not build a cache for retired release machinery or restore a deleted fixture to satisfy an old optimization issue. If a surviving test adds an expensive build, inspect actual cold/warm build output and separate build cost from routing waits and startup. Prefer native layer caching; add only a small immutable dependency fixture if a material remaining cost is demonstrated.
 
 Mutable release records, images under test, containers, volumes, queues, and workspaces remain case/shard-owned. A cached base must not make an intentionally removed case image appear restored. Cold execution must remain correct, and cleanup must not remove another case's resources or use global Docker prune. The existing integration/exact-artifact build caches remain separate from this measurement question.
 
 ### Logs And Diagnostic Evidence
 
-The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter. Continue relevant work in the existing #4371 implementation PR.
+The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter. #4371 delivered this path and is closed; remaining interruption-evidence work belongs to #4369 and the #4365 coordinator.
 
 Keep normal success evidence small: tested revision, suite/shard and attempt identity, real output, any JUnit report, and useful slow-case timings. Existing artifacts use finite retention and distinct shard/attempt names. Richer service diagnostics belong on the failure path where useful, from known test-owned locations with redaction. Do not collect whole environments, source trees, tokens, or unrelated host files.
 
