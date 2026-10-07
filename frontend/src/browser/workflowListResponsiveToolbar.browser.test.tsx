@@ -257,7 +257,13 @@ describe('workflow list recorded Provider Profile', () => {
   it('keeps one replacement column and wraps long or equal names on desktop', async () => {
     mockRows(rows);
     await page.viewport(DESKTOP.width, DESKTOP.height);
-    const { unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
+    // The data slab bleeds into the production shell's inline padding, so the
+    // layout check renders inside the real `.dashboard-root` container.
+    const { container, unmount } = renderWithClient(
+      <main className="dashboard-root">
+        <WorkflowListPage payload={payload} />
+      </main>,
+    );
     cleanupRender = unmount;
 
     await screen.findByRole('row', { name: /Long profile run/ });
@@ -266,10 +272,20 @@ describe('workflow list recorded Provider Profile', () => {
     for (const retired of ['Runtime', 'Harness', 'Backend', 'Host', 'Container']) {
       expect(headers.some((text) => text.trim().startsWith(retired))).toBe(false);
     }
-    expect(screen.getByText('Work · acct-a')).toBeTruthy();
-    expect(screen.getByText('Work · acct-b')).toBeTruthy();
-    const longCell = screen.getAllByText(longLabel)[0]!.closest('td') as HTMLElement;
+    // The mobile cards share the DOM, so equal-name checks are scoped to the desktop table.
+    const table = within(screen.getByRole('table'));
+    expect(table.getByText('Work · acct-a')).toBeTruthy();
+    expect(table.getByText('Work · acct-b')).toBeTruthy();
+    const longCell = table.getByText(longLabel).closest('td') as HTMLElement;
     expect(longCell.scrollWidth).toBeLessThanOrEqual(longCell.clientWidth + 1);
+    const rootBox = (container.querySelector('.dashboard-root') as HTMLElement).getBoundingClientRect();
+    const tableWrapper = container.querySelector('.queue-table-wrapper') as HTMLElement;
+    expect(tableWrapper.scrollWidth).toBeLessThanOrEqual(tableWrapper.clientWidth + 1);
+    for (const slabPart of container.querySelectorAll('.queue-table-wrapper, .workflow-list-results-footer')) {
+      const box = slabPart.getBoundingClientRect();
+      expect(box.left).toBeGreaterThanOrEqual(rootBox.left - 1);
+      expect(box.right).toBeLessThanOrEqual(rootBox.right + 1);
+    }
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
     // Current-page sort by recorded display text; pending sorts after names.
@@ -302,6 +318,7 @@ describe('workflow list recorded Provider Profile', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Provider Profile filter' })).toBeNull();
     });
+    await waitFor(() => expect(document.activeElement).toBe(filterButton));
   });
 
   it('keeps narrow cards readable and filters usable when facets fail', async () => {

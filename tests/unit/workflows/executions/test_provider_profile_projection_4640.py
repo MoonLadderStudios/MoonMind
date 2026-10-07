@@ -8,6 +8,7 @@ from pathlib import Path
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_MEMO_KEY,
     build_provider_profile_projection,
+    merge_resolved_provider_profile,
     provider_profile_id_token,
     provider_profile_state_token,
     provider_profile_summary_from_memo,
@@ -160,3 +161,90 @@ def test_tokens_are_single_lowercase_alphanumeric_terms() -> None:
     for state in ("recorded", "pending", "not_applicable"):
         token = provider_profile_state_token(state)
         assert token.isalnum() and token == token.lower()
+
+
+def test_launch_resolved_profile_turns_pending_into_recorded() -> None:
+    pending, pending_value = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli", "runtime": {"mode": "codex_cli"}}
+    )
+
+    merged = merge_resolved_provider_profile(
+        pending, pending_value, "acct-used", label="Work"
+    )
+
+    assert merged is not None
+    summary, search_value = merged
+    assert summary == {
+        "selectionState": "recorded",
+        "profiles": [{"id": "acct-used", "label": "Work"}],
+        "profileCount": 1,
+    }
+    assert search_value.split() == [
+        provider_profile_state_token("recorded"),
+        provider_profile_id_token("acct-used"),
+    ]
+    row = provider_profile_summary_from_memo({PROVIDER_PROFILE_MEMO_KEY: summary})
+    assert row["selectionState"] == "recorded"
+    assert row["profiles"][0] == {"id": "acct-used", "label": "Work", "harness": None}
+
+
+def test_launch_resolution_of_already_recorded_profile_is_a_no_op() -> None:
+    recorded, value = build_provider_profile_projection(
+        {"targetRuntime": "omnigent", "profileId": "acct-1"},
+        labels={"acct-1": "Admitted name"},
+    )
+
+    assert (
+        merge_resolved_provider_profile(recorded, value, "acct-1", label="Live name")
+        is None
+    )
+
+
+def test_launch_resolved_profile_adds_a_distinct_recorded_association() -> None:
+    recorded, value = build_provider_profile_projection(
+        {"targetRuntime": "omnigent", "profileId": "acct-1"},
+        labels={"acct-1": "Admitted name"},
+    )
+
+    merged = merge_resolved_provider_profile(recorded, value, "acct-2")
+
+    assert merged is not None
+    summary, search_value = merged
+    assert summary["selectionState"] == "recorded"
+    assert summary["profiles"] == [
+        {"id": "acct-1", "label": "Admitted name"},
+        {"id": "acct-2"},
+    ]
+    assert summary["profileCount"] == 2
+    tokens = search_value.split()
+    assert tokens.count(provider_profile_state_token("recorded")) == 1
+    assert provider_profile_id_token("acct-1") in tokens
+    assert tokens.count(provider_profile_id_token("acct-2")) == 1
+    # Folding the same launch again counts once.
+    assert merge_resolved_provider_profile(summary, search_value, "acct-2") is None
+
+
+def test_launch_resolution_beyond_display_bound_uses_indexed_membership() -> None:
+    steps = [
+        {"runtime": {"mode": "omnigent", "providerProfileRef": f"profile-{index}"}}
+        for index in range(12)
+    ]
+    summary, value = build_provider_profile_projection(
+        {"targetRuntime": "omnigent", "task": {"steps": steps}}
+    )
+
+    # profile-11 is indexed but beyond the memo bound: already recorded.
+    assert merge_resolved_provider_profile(summary, value, "profile-11") is None
+    merged = merge_resolved_provider_profile(summary, value, "profile-new")
+    assert merged is not None
+    assert len(merged[0]["profiles"]) == 8
+    assert merged[0]["profileCount"] == 13
+    assert provider_profile_id_token("profile-new") in merged[1].split()
+    assert provider_profile_id_token("profile-11") in merged[1].split()
+
+
+def test_launch_resolution_never_invents_a_missing_admission_projection() -> None:
+    assert merge_resolved_provider_profile(None, None, "acct-1") is None
+    assert merge_resolved_provider_profile({"title": "Old run"}, None, "acct-1") is None
+    pending, value = build_provider_profile_projection({"targetRuntime": "codex_cli"})
+    assert merge_resolved_provider_profile(pending, value, "  ") is None

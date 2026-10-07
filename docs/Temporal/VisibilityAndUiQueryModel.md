@@ -87,7 +87,7 @@ MoonMind currently registers 21 custom Search Attributes in the Temporal namespa
 | `mm_target_runtime` | KeywordList | API/workflow start path; workflow repair | One-item list containing canonical runtime id for filtering/facets. |
 | `mm_target_skill` | KeywordList | API/workflow start path; workflow repair | One-item list containing primary skill id/slug/name for filtering/facets. |
 | `mm_title` | KeywordList | Workflow start/lifecycle logic | Tokenized title word search. Must be materialized before relying on title search. |
-| `mm_provider_profile` | Text | API/workflow start path | Recorded Provider Profile membership: opaque state and hashed-ID tokens for Workflows list filters/facets ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). Not sortable. |
+| `mm_provider_profile` | Text | API/workflow start path; workflow upsert when a launch resolves the Provider Profile | Recorded Provider Profile membership: opaque state and hashed-ID tokens for Workflows list filters/facets ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). Not sortable. |
 | `mm_has_dependencies` | Bool | Dependency lifecycle | Dependency presence signal. Re-evaluate if unused by production queries. |
 | `mm_dependency_count` | Int | Dependency lifecycle | Bounded dependency count. Re-evaluate if unused by production queries. |
 | `SessionEpoch` | Int | Managed session workflows | Managed-session clear/reset/epoch correlation. |
@@ -179,7 +179,7 @@ Rules:
 | `mm_target_skill` | KeywordList | No | Workflow start path when primary skill is known; workflow lifecycle logic if it resolves later | One-item list containing singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute. |
 | `mm_scheduled_for` | Datetime | No | Delayed start / schedule-backed execution | Queryable expected start time. |
 | `mm_title` | KeywordList | No | Workflow start/lifecycle title materialization | Tokenized title word search. Verify materialization before relying on this filter. |
-| `mm_provider_profile` | Text | No | Workflow start path for user workflows | Space-separated lowercase alphanumeric tokens (`ppst<state>` plus `ppid<sha256 prefix>` per recorded Provider Profile ID), matched with exact single-term `=`/`!=`. Absent on records admitted before the projection. Never a display label or credential. |
+| `mm_provider_profile` | Text | No | Workflow start path for user workflows; updated by the workflow when a launch resolves a pending selection | Space-separated lowercase alphanumeric tokens (`ppst<state>` plus `ppid<sha256 prefix>` per recorded Provider Profile ID), matched with exact single-term `=`/`!=`. Absent on records admitted before the projection. Never a display label or credential. |
 
 Runtime and skill Search Attributes are optional during migration. The API must confirm that `mm_target_runtime` and `mm_target_skill` are registered as `KeywordList` before issuing Temporal Visibility queries that reference them. When they are unavailable, runtime/skill filters are not authoritative and facets return degraded metadata rather than failing the list page.
 

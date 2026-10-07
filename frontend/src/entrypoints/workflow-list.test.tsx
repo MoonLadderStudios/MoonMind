@@ -200,6 +200,29 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('moves focus into a column filter popover and returns it to the filter button on Escape', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const statusFilter = screen.getByRole('button', { name: 'Status filter. No filter applied.' });
+    statusFilter.focus();
+    fireEvent.click(statusFilter);
+
+    const popover = screen.getByRole('dialog', { name: 'Status filter' });
+    await waitFor(() => {
+      expect(popover.contains(document.activeElement)).toBe(true);
+    });
+
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Status filter. No filter applied.' }),
+      );
+    });
+  });
+
   it('traps Tab focus inside the open advanced filter drawer', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
