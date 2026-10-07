@@ -136,10 +136,15 @@ def test_app_request_sends_exact_restrictions() -> None:
     ("operations", "permissions"),
     [
         (["read"], {"contents": "read", "metadata": "read"}),
-        (["review_request"], {"pull_requests": "write"}),
+        (["review_request"], {"pull_requests": "write", "issues": "read"}),
         (
             ["read", "review_request"],
-            {"contents": "read", "metadata": "read", "pull_requests": "write"},
+            {
+                "contents": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+                "issues": "read",
+            },
         ),
     ],
 )
@@ -149,8 +154,9 @@ def test_app_review_request_can_post_comments_without_source_write_authority(
     from moonmind.auth.github_app import build_installation_token_request
 
     # Review requests POST an issue comment on the PR, which requires
-    # pull_requests:write. Reading a source must not acquire that permission,
-    # and requesting a review must not acquire contents/branch write access.
+    # pull_requests:write; observing clean-review reactions needs issues:read.
+    # Reading a source must not acquire either collaboration permission, and
+    # requesting a review must not acquire contents/branch write access.
     assert build_installation_token_request(
         operations=operations, repositories=REPOS
     ) == {"repositories": ["repo"], "permissions": permissions}
@@ -188,7 +194,12 @@ def test_app_request_serializes_numeric_ids_as_repository_ids() -> None:
         (
             ("read", "review_request"),
             "collaboration",
-            {"contents": "read", "metadata": "read", "pull_requests": "write"},
+            {
+                "contents": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+                "issues": "read",
+            },
         ),
     ],
 )

@@ -1339,6 +1339,7 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-validation-v1"
 # PR #4557 review: deriving a stable container-job idempotency key changes the
 # submit activity arguments. Replay-gate the derivation so in-flight histories
 # that recorded the old request shape keep replaying it.
@@ -12609,6 +12610,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "plan_ref is required for execution stage: the planning stage must "
                 "produce a plan artifact reference before execution can proceed. "
                 "Ensure the planning activity returns a non-None 'plan_ref'."
+            )
+        if parameters.get("omnigentExecutionPlan") and workflow.patched(
+            RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH
+        ):
+            # Detect native grants from durable authority inside the Activity,
+            # never from an authored marker or the mutable current finish mode.
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.validate")
+            await workflow.execute_activity(
+                "plan.validate",
+                {
+                    "plan_ref": plan_ref,
+                    "principal": self._principal(),
+                    "omnigent_execution_plan": parameters["omnigentExecutionPlan"],
+                    "execution_parameters": parameters,
+                },
+                **self._execute_kwargs_for_route(route),
             )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
 

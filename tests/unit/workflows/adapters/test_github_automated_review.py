@@ -793,6 +793,82 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reaction_path", ["issues/comments/98765/reactions", "issues/350/reactions"]
+)
+async def test_app_review_permissions_allow_request_bound_reaction_completion(
+    reaction_path,
+):
+    from moonmind.auth.github_app import build_installation_token_request
+
+    payload = build_installation_token_request(
+        operations=["read", "review_request"], repositories=[_REPO]
+    )
+    permissions = payload["permissions"]
+    seen_reaction_paths = []
+    reaction = {
+        "id": 55,
+        "content": "+1",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.headers["Authorization"] == "Bearer synthetic-app-token"
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path in {"pulls/350/reviews", "issues/350/comments"}:
+            body = []
+        elif path in {"issues/comments/98765/reactions", "issues/350/reactions"}:
+            seen_reaction_paths.append(path)
+            # GitHub's two issue-reaction reads require Issues read, unlike
+            # issue-comment reads that also accept Pull requests read.
+            if permissions.get("issues") not in {"read", "write"}:
+                return httpx.Response(
+                    403,
+                    json={"message": "Resource not accessible by integration"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            body = [reaction] if path == reaction_path else []
+        else:
+            raise AssertionError(f"Unexpected GitHub endpoint: {path}")
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-app-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "reaction"
+    assert result.automated_review_completion_id == 55
+    assert result.ready is True
+    assert seen_reaction_paths == (
+        ["issues/comments/98765/reactions"]
+        if reaction_path == "issues/comments/98765/reactions"
+        else ["issues/comments/98765/reactions", "issues/350/reactions"]
+    )
+    assert payload == {
+        "repositories": ["MoonMind"],
+        "permissions": {
+            "contents": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "issues": "read",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_requested_review_reports_stale_when_head_moves(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     moved_prefix = [
