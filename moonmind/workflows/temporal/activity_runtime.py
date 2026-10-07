@@ -5022,6 +5022,7 @@ class TemporalIntegrationActivities:
                 attempt_started_at=reconcile_from.isoformat(),
                 recorded_comment_id=entry.request_comment_id,
                 github_token=github_token,
+                **({"expires_at": payload["expiresAt"]} if "expiresAt" in payload else {}),
             )
             outcome = result.model_dump(by_alias=True, mode="json")
             posted = outcome.get("status") in {"requested", "reconciled", "recorded"}

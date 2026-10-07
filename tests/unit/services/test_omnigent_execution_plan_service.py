@@ -2786,8 +2786,9 @@ def _assert_review_only_repository_plan(plan, artifacts):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile_tools", [(), ("gh",)])
 async def test_review_only_plan_and_child_admit_only_read_and_review_requests(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, profile_tools
 ) -> None:
     repository, engine, sessions = await _configure_github_repository_plan_test(
         monkeypatch, tmp_path
@@ -2815,7 +2816,7 @@ async def test_review_only_plan_and_child_admit_only_read_and_review_requests(
             launch_policy_ref="opencode-on-demand@1",
             plan_store=_PlanStore(object()),
             session_factory=sessions,
-            profile_tools=("gh",),
+            profile_tools=profile_tools,
             extra_parameters=parameters,
             workflow_id="mm:review-only-parent",
         )
@@ -2827,7 +2828,7 @@ async def test_review_only_plan_and_child_admit_only_read_and_review_requests(
             launch_policy_ref="opencode-on-demand@1",
             plan_store=_PlanStore(object()),
             session_factory=sessions,
-            profile_tools=("gh",),
+            profile_tools=profile_tools,
             extra_parameters=parameters,
             workflow_id="mm:review-only-child",
             parent_repository_plan=parent.envelope,
@@ -2837,6 +2838,47 @@ async def test_review_only_plan_and_child_admit_only_read_and_review_requests(
         )
         for slot in ("source", "collaboration"):
             assert child_access[slot]["snapshotRef"] != access[slot]["snapshotRef"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_none_without_github_cannot_donate_review_authority(
+    monkeypatch, tmp_path
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            extra_parameters={"repository": repository},
+            workflow_id="mm:source-only-parent",
+        )
+        assert set(parent.envelope.payload.resolvedTools["repositoryAccess"]) == {"source"}
+        with pytest.raises(ValueError, match="cannot synthesize an unbound repository slot collaboration"):
+            await _compile_opencode_plan(
+                monkeypatch,
+                artifacts=artifacts,
+                launch_policy_ref="opencode-on-demand@1",
+                plan_store=_PlanStore(object()),
+                session_factory=sessions,
+                extra_parameters={
+                    "repository": repository,
+                    "mergeAutomation": {
+                        "enabled": True,
+                        "finishMode": "review_only",
+                        "reviewLoop": {"enabled": True, "provider": "codex"},
+                    },
+                },
+                workflow_id="mm:review-child",
+                parent_repository_plan=parent.envelope,
+            )
     finally:
         await engine.dispose()
 

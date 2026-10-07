@@ -1533,14 +1533,13 @@ class MoonMindMergeAutomationWorkflow:
         *,
         head_sha: str,
         progress_signature: str | None = None,
+        expires_at: datetime | None = None,
     ) -> dict[str, Any] | None:
         """Post through the existing owning activity and durable request ledger."""
 
         config = self._review_loop_config()
         self._input.pull_request.head_sha = head_sha
-        made_progress = self._register_progress_signature(
-            progress_signature
-        )
+        made_progress = self._register_progress_signature(progress_signature)
         if (
             not made_progress
             and self._no_progress_cycles >= config.max_consecutive_no_progress_cycles
@@ -1587,6 +1586,7 @@ class MoonMindMergeAutomationWorkflow:
                     "principal": self._principal(),
                     "admittedParentWorkflowId": self._input.parent_workflow_id,
                     "parentRunId": self._input.parent_run_id,
+                    **({"expiresAt": expires_at.isoformat()} if expires_at else {}),
                 }
             )
         try:
@@ -1611,6 +1611,11 @@ class MoonMindMergeAutomationWorkflow:
 
         outcome_map = dict(outcome) if isinstance(outcome, Mapping) else {}
         status = str(outcome_map.get("status") or "").strip()
+        if status == "expired" and self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            self._status = STATE_EXPIRED
+            self._summary = "Review deadline expired before a new request was posted."
+            self._publish_visibility()
+            return await self._finish()
         if status not in REVIEW_REQUEST_POSTED_STATUSES:
             if status in REVIEW_REQUEST_RETRY_GATE_STATUSES:
                 if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
@@ -1740,6 +1745,9 @@ class MoonMindMergeAutomationWorkflow:
             readiness_payload["mergeAutomationConfig"]["gate"]["github"][
                 "checks"
             ] = "disabled"
+            readiness_payload["mergeAutomationConfig"]["gate"]["jira"][
+                "status"
+            ] = "disabled"
         # Always publish the *live* request state so a restored input can never
         # make a settled request look active again.
         readiness_payload["activeReviewRequest"] = (
@@ -1823,6 +1831,12 @@ class MoonMindMergeAutomationWorkflow:
             observed = evaluation if isinstance(evaluation, Mapping) else {}
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=False)
+            # Readiness and artifact Activities may outlast the remaining budget;
+            # neither a new request nor late completion can extend the objective.
+            if expire_at is not None and workflow.now() >= expire_at:
+                self._status = STATE_EXPIRED
+                self._publish_visibility()
+                return await self._finish()
             if (
                 observed.get("headSha") != self._input.pull_request.head_sha
                 or observed.get("automatedReviewRequestStale") is True
@@ -1870,13 +1884,9 @@ class MoonMindMergeAutomationWorkflow:
                     b.kind == "external_state_unavailable" for b in self._blockers
                 )
             ):
-                # Readiness/artifact Activities may outlast the remaining budget.
-                if expire_at is not None and workflow.now() >= expire_at:
-                    self._status = STATE_EXPIRED
-                    self._publish_visibility()
-                    return await self._finish()
                 terminal = await self._post_automated_review(
-                    head_sha=self._input.pull_request.head_sha
+                    head_sha=self._input.pull_request.head_sha,
+                    expires_at=expire_at,
                 )
                 if terminal is not None:
                     return terminal
