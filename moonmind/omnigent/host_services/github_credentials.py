@@ -26,6 +26,16 @@ from moonmind.workflows.executions.repository_contract import (
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _TARGET_PATH = "/run/mm-credentials/github"
+# Positional arguments: runtime uid, runtime gid, GitHub host; token on stdin.
+_HOSTS_WRITER_SCRIPT = (
+    "set -eu; umask 077; mkdir -p /config; "
+    'tmp="/config/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
+    "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
+    "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
+    'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
+    'mv -f "$tmp" /config/hosts.yml; '
+    'chown "$1:$2" /config; chmod 0700 /config'
+)
 _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
@@ -465,6 +475,19 @@ class OmnigentGithubCredentialService:
                 "GitHub credential volume identity is unsafe",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
+        owner_inspect = [
+            "docker",
+            "volume",
+            "inspect",
+            "--format",
+            '{{ index .Labels "moonmind.owner_digest" }}',
+            volume,
+        ]
+        # A same-owner retry or refresh reuses the live projection. Its prior
+        # complete hosts.yml must survive a failed rewrite, so only a volume
+        # created by this call is removed on failure (#4011).
+        existed_code, _out, _err = await self._backend.run(owner_inspect, check=False)
+        created_here = existed_code != 0
         await self._backend.run(
             [
                 "docker",
@@ -479,14 +502,7 @@ class OmnigentGithubCredentialService:
             failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
         _code, observed_owner, _error = await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "inspect",
-                "--format",
-                '{{ index .Labels "moonmind.owner_digest" }}',
-                volume,
-            ],
+            owner_inspect,
             failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
         if observed_owner.strip() != str(attachment["ownerDigest"]):
@@ -494,15 +510,10 @@ class OmnigentGithubCredentialService:
                 "GitHub credential projection is owned by another lease",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
-        script = (
-            "set -eu; umask 077; mkdir -p /config; "
-            "printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\" "
-            "> /config/hosts.yml; "
-            "cat >> /config/hosts.yml; "
-            "printf '\\n    git_protocol: https\\n' >> /config/hosts.yml; "
-            'chown -R "$1:$2" /config; '
-            "chmod 0700 /config; chmod 0600 /config/hosts.yml"
-        )
+        # Write the complete configuration beside the live file and rename it
+        # into place, so an interrupted writer never leaves a mounted reader a
+        # truncated or partial hosts.yml for the current issuance.
+        script = _HOSTS_WRITER_SCRIPT
         # Same-repo SHA drift recovery as credential writers: reuse a qualified
         # deployment image when the plan-pinned digest is absent, avoiding a
         # 7GB exact pull for patch rebuilds. Qualification (digest pin plus
@@ -586,9 +597,10 @@ class OmnigentGithubCredentialService:
                 ),
             )
         except BaseException:
-            await self._backend.run(
-                ["docker", "volume", "rm", volume], check=False
-            )
+            if created_here:
+                await self._backend.run(
+                    ["docker", "volume", "rm", volume], check=False
+                )
             raise
         return attachment
 

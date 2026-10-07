@@ -1207,6 +1207,162 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     ]
 
 
+class _ProjectionBackend:
+    """Docker double that records the projection writer and fails on request."""
+
+    def __init__(self, *, existing: bool, fail_writer: bool = False) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self.existing = existing
+        self.fail_writer = fail_writer
+        self.digest = hashlib.sha256(b"lease-owner-1").hexdigest()[:32]
+
+    async def run(self, argv, **kwargs):
+        self.calls.append((list(argv), dict(kwargs)))
+        if argv[1:3] == ["volume", "create"]:
+            self.existing = True
+        if argv[1:3] == ["volume", "inspect"]:
+            if not self.existing:
+                return 1, "", "Error: no such volume"
+            return 0, self.digest, ""
+        if kwargs.get("input_bytes") and self.fail_writer:
+            raise HarnessPlatformError(
+                "writer interrupted",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        return 0, "", ""
+
+
+async def _materialize_projection(monkeypatch, backend, secret: str):
+    async def acquire(**_kwargs):
+        return SimpleNamespace(
+            credential=EphemeralCredential(secret.encode()),
+            binding=SimpleNamespace(endpoint="https://github.com"),
+        )
+
+    service = OmnigentGithubCredentialService(backend)
+    monkeypatch.setattr(service, "acquire_repository_use", acquire)
+    return await service.materialize(
+        request=_request(),
+        resolved_tools={
+            "tools": ["gh", "git"],
+            "repositoryAccess": {
+                "collaboration": {"snapshotRef": "admitted-test-snapshot"}
+            },
+        },
+        owner_ref="lease-owner-1",
+        writer_image_ref="ghcr.io/example/opencode:latest",
+        runtime_uid=1000,
+        runtime_gid=1000,
+    )
+
+
+def _projection_writer(backend, config_dir: Path) -> list[str]:
+    """Return the production writer process, retargeted at a local volume."""
+    argv = next(argv for argv, kwargs in backend.calls if kwargs.get("input_bytes"))
+    script = argv[argv.index("-ceu") + 1]
+    host = argv[-1]
+    uid, gid = (
+        (argv[-3], argv[-2]) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    )
+    return [
+        "sh",
+        "-ceu",
+        script.replace("/config", str(config_dir)),
+        "--",
+        str(uid),
+        str(gid),
+        host,
+    ]
+
+
+def _real_gh_token(config_dir: Path) -> str:
+    """Read the projected credential with the real gh, as the mounted host does."""
+    import shutil
+
+    gh = shutil.which("gh") or "/opt/moonmind-tools/bin/gh"
+    gh_home = config_dir.parent / "gh-home"
+    gh_home.mkdir(exist_ok=True)
+    (gh_home / "hosts.yml").write_bytes((config_dir / "hosts.yml").read_bytes())
+    (gh_home / "config.yml").write_text('version: "1"\n')
+    ambient = {
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+    }
+    environment = {
+        key: value for key, value in os.environ.items() if key not in ambient
+    }
+    environment.update(
+        {"GH_CONFIG_DIR": str(gh_home), "GH_HOST": "github.com", "HOME": str(gh_home)}
+    )
+    result = subprocess.run(
+        [gh, "auth", "token"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+@pytest.mark.asyncio
+async def test_github_projection_interrupted_refresh_keeps_complete_issuance(
+    monkeypatch, tmp_path
+) -> None:
+    # MoonLadderStudios/MoonMind#4011: the mounted reader must only ever see a
+    # complete hosts.yml for a live issuance, even when a refresh is killed.
+    config = tmp_path / "volume"
+    first = _ProjectionBackend(existing=False)
+    await _materialize_projection(monkeypatch, first, "selected-token-B1")
+    subprocess.run(
+        _projection_writer(first, config), input=b"selected-token-B1", check=True
+    )
+    complete = (config / "hosts.yml").read_bytes()
+    assert _real_gh_token(config) == "selected-token-B1"
+
+    refresh = _ProjectionBackend(existing=True)
+    await _materialize_projection(monkeypatch, refresh, "selected-token-B2")
+    writer = subprocess.Popen(
+        _projection_writer(refresh, config), stdin=subprocess.PIPE
+    )
+    assert writer.stdin is not None
+    writer.stdin.write(b"selected-tok")
+    writer.stdin.flush()
+    # Kill the writer once it has consumed the partial token from stdin.
+    for _ in range(200):
+        started = [path for path in config.iterdir() if path.name != "hosts.yml"]
+        if started or (config / "hosts.yml").read_bytes() != complete:
+            break
+        await asyncio.sleep(0.01)
+    writer.kill()
+    writer.wait()
+
+    assert (config / "hosts.yml").read_bytes() == complete
+    assert _real_gh_token(config) == "selected-token-B1"
+
+    subprocess.run(
+        _projection_writer(refresh, config), input=b"selected-token-B2", check=True
+    )
+    assert _real_gh_token(config) == "selected-token-B2"
+    assert oct((config / "hosts.yml").stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.asyncio
+async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
+    monkeypatch,
+) -> None:
+    live = _ProjectionBackend(existing=True, fail_writer=True)
+    with pytest.raises(HarnessPlatformError):
+        await _materialize_projection(monkeypatch, live, "selected-token-B")
+    assert not any(argv[1:3] == ["volume", "rm"] for argv, _kwargs in live.calls)
+
+    fresh = _ProjectionBackend(existing=False, fail_writer=True)
+    with pytest.raises(HarnessPlatformError):
+        await _materialize_projection(monkeypatch, fresh, "selected-token-B")
+    assert fresh.calls[-1][0][1:3] == ["volume", "rm"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "capability_name,capability_file",
