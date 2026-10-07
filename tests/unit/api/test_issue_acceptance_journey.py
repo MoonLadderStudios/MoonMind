@@ -140,6 +140,25 @@ def github_boundary(candidate, pull_request, monkeypatch):
         return "test-credential", None
 
     monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(token))
+    # Repository readers select the admitted run's connection; this fixture's
+    # runs author none, so the unrecorded default uses the deployment token.
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    async def admitted_access(_workflow_id):
+        return "", False
+
+    async def unrecorded_default(_connection_ref, *, repository=None):
+        return None
+
+    monkeypatch.setattr(
+        managed_api_key_resolve, "load_admitted_repository_access", admitted_access
+    )
+    monkeypatch.setattr(
+        managed_api_key_resolve,
+        "load_repository_connection_for_launch",
+        unrecorded_default,
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "test-credential")
     return state, requests
 
 

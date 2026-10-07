@@ -401,6 +401,44 @@ def repository_name_from_value(
     return name.strip() if isinstance(name, str) else ""
 
 
+def authored_repository_access(parameters: Mapping[str, Any]) -> tuple[str, bool]:
+    """Return the ``(connectionRef, anonymous)`` a run's parameters authored.
+
+    The single reader of the recorded run parameters for repository authority:
+    plan admission and admitted-work repository readers share it. An omitted
+    reference is ``""``; callers apply their own default.
+    """
+
+    workflow = parameters.get("workflow") or parameters.get("task") or {}
+    workflow = workflow if isinstance(workflow, Mapping) else {}
+    workspace = (
+        parameters.get("workspaceSpec")
+        or parameters.get("workspace")
+        or workflow.get("workspace")
+        or {}
+    )
+    workspace = workspace if isinstance(workspace, Mapping) else {}
+    target = (
+        parameters.get("repository")
+        or workspace.get("repositoryTarget")
+        or workspace.get("repository")
+    )
+    authored = workspace.get("workspaceSource") or {}
+    authored = authored if isinstance(authored, Mapping) else {}
+    source_target = authored.get("repositoryTarget") or target
+    connection_ref = str(
+        (
+            source_target.get("connectionRef")
+            if isinstance(source_target, Mapping)
+            else None
+        )
+        or authored.get("connectionRef")
+        or workspace.get("connectionRef")
+        or ""
+    ).strip()
+    return connection_ref, authored.get("accessMode") == "anonymous"
+
+
 def github_repository_name_from_value(value: object) -> str:
     """Project supported GitHub repository forms to ``owner/repository``."""
 

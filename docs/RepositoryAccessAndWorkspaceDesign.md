@@ -314,6 +314,27 @@ destination authority fails before publication; typed repository plans do not
 fall back to ambient credentials. Historical plans without repository snapshots
 retain their existing credential path.
 
+Server-side repository readers (`GitHubService.read_pull_request`,
+`read_repository_target`, and `commit_is_ancestor`) read with the connection
+admitted for the work. A caller supplies that connection or names the admitted
+run. Tools and Activities name the run that owns them. A merge gate acting for
+its parent run names the parent. The reader takes the run's recorded
+`connectionRef` from its canonical parameters. As at launch, an omitted
+reference means `repository-connection:git-default`, and an unrecorded default
+derives from the deployment declaration. Selection uses the launch selector, so
+a deleted, disabled, or unassigned connection fails there.
+
+The selected connection's endpoint must be trusted before any credential is
+read. An App connection issues through the bound acquirer. A PAT connection
+reads only its own SecretRef. A missing or unreadable credential fails without
+substituting an ambient token. A run that authored anonymous access reads with
+no credential. Retries and reconciliation reads in the same Activity reuse the
+same admitted run.
+
+Pull-request and issue mutation helpers still take an explicit token and fall
+back to deployment resolution when it is omitted. Review-only merge automation
+and saved publication already supply admitted credentials.
+
 ### INV-004 Ambient identity cannot override admitted identity
 
 Git and hosting CLI execution isolate home/configuration state and scrub token variables, inherited authorization headers, credential helpers, `.netrc`, and login caches unless explicitly supplied by the admitted adapter. Helpers validate protocol, host, and repository path and use path-sensitive matching where required. Environment credentials cannot override selected `gh` configuration.

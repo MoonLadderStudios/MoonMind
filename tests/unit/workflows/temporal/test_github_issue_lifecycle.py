@@ -45,7 +45,7 @@ def _bind_verified_target(service, candidate):
     current = acceptance_helpers.portable.capture(repo, "example/repo", "release", target_mode=True)
     report["validatedRefs"]["acceptance"]["completionTarget"] = current["completionTarget"]
 
-    async def read_target(repository, ref):
+    async def read_target(repository, ref, **_):
         assert repository == "example/repo"
         assert ref == ""
         return acceptance_helpers.portable.capture(repo, repository, "release", target_mode=True)["completionTarget"]
