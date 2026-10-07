@@ -185,7 +185,7 @@ async def test_selected_app_probe_acquires_bound_installation_token(
     probe_route.secret.assert_not_called()
     base = (
         "https://api.github.com"
-        if endpoint.endswith("github.com")
+        if endpoint == "https://github.com"
         else f"{endpoint}/api/v3"
     )
     assert [str(request.url) for request in probe_route.requests] == [
