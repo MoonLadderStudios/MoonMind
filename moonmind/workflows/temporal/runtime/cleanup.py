@@ -256,6 +256,7 @@ class ManagedRuntimeCleanupResult:
     skipped_unsafe_path: int
     skipped_ambiguous_owner: int
     skipped_unreadable_owner: int
+    skipped_unsaved: int
     unreadable_owner_records: int
     delete_budget_exhausted: int
     errors: tuple[str, ...]
@@ -284,6 +285,7 @@ class ManagedRuntimeCleanupResult:
             "skippedUnsafePath": self.skipped_unsafe_path,
             "skippedAmbiguousOwner": self.skipped_ambiguous_owner,
             "skippedUnreadableOwner": self.skipped_unreadable_owner,
+            "skippedUnsaved": self.skipped_unsaved,
             "unreadableOwnerRecords": self.unreadable_owner_records,
             "deleteBudgetExhausted": self.delete_budget_exhausted,
             "errors": list(_bounded_cleanup_errors(self.errors)),
@@ -491,6 +493,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
                 skipped_unreadable_owner=0,
+                skipped_unsaved=0,
                 unreadable_owner_records=unreadable_count,
                 scanned_record_files=0,
                 delete_budget_exhausted=0,
@@ -733,6 +736,7 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_unsafe_path=0,
             skipped_ambiguous_owner=0,
             skipped_unreadable_owner=0,
+            skipped_unsaved=0,
             unreadable_owner_records=0,
             scanned_record_files=0,
             delete_budget_exhausted=0,
@@ -1611,6 +1615,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     "protected_recent",
                     "protected_shared",
                     "protected_unreadable_owner",
+                    "protected_unsaved",
                 }
             ),
             eligible_roots=sum(1 for d in decisions if d.classification == "eligible"),
@@ -1651,6 +1656,9 @@ class ManagedRuntimeWorkspaceJanitor:
                 1
                 for d in decisions
                 if d.classification == "protected_unreadable_owner"
+            ),
+            skipped_unsaved=sum(
+                1 for d in decisions if d.classification == "protected_unsaved"
             ),
             unreadable_owner_records=unreadable_owner_records,
             delete_budget_exhausted=sum(

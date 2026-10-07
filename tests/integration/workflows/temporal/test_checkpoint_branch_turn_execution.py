@@ -2478,6 +2478,108 @@ async def test_terminal_activity_keeps_child_saved_candidate_on_parent_capture_f
     await engine.dispose()
 
 
+async def test_terminal_activity_retains_saved_manifest_dependencies(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restoring a saved candidate needs the artifacts its manifest names.
+
+    The saved manifest embeds the Git history bundle and staged index
+    patch. Both must be retained with the candidate and projected beside
+    it, so they cannot expire while the top-level refs stay pinned.
+    """
+
+    engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session), store=store
+        )
+
+        async def _seed(body: bytes, content_type: str) -> str:
+            artifact, _upload = await artifacts.create(
+                principal="service:test",
+                content_type=content_type,
+                size_bytes=len(body),
+                sha256=None,
+                retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
+                metadata_json={"kind": "seed.saved-dependency"},
+            )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="service:test",
+                payload=body,
+                content_type=content_type,
+            )
+            return f"artifact://{artifact.artifact_id}"
+
+        history_ref = await _seed(b"bundle", "application/x-git-bundle")
+        index_ref = await _seed(
+            b"index", "application/vnd.moonmind.git-index-patch"
+        )
+        manifest_ref = await _seed(
+            json.dumps(
+                {
+                    "schemaVersion": "v1",
+                    "kind": "worktree_archive",
+                    "archiveRef": refs["workspace"],
+                    "gitHistory": {"ref": history_ref, "headCommit": "def456"},
+                    "git": {"indexPatch": {"ref": index_ref, "paths": ["a.py"]}},
+                }
+            ).encode(),
+            "application/json",
+        )
+        await session.commit()
+
+    saved = {
+        "kind": "worktree_archive",
+        "baseCommit": "def456",
+        "archiveRef": refs["workspace"],
+        "manifestRef": manifest_ref,
+        "checkpointRef": refs["checkpoint"],
+    }
+    result = await persist_checkpoint_branch_turn_terminal(
+        {
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "outcome": "failed",
+            "agentResult": {
+                "summary": "child saved before the parent capture failed",
+                "metadata": {"savedWorkspaceCheckpoint": saved},
+            },
+            "checkpoint": {},
+            "saveCommit": {
+                "status": "incomplete",
+                "reason": "workspace-capture-failed",
+                "orphanAction": "reconcile-with-finalization-owner",
+            },
+        }
+    )
+
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session), store=store
+        )
+        _artifact, body = await artifacts.read(
+            artifact_id=result["agentResultRef"].removeprefix("artifact://"),
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        candidate = json.loads(body)["metadata"]["savedWorkspaceCheckpoint"]
+        assert candidate["dependencyRefs"] == [history_ref, index_ref]
+        for ref in (manifest_ref, history_ref, index_ref):
+            _metadata, _links, pinned, _policy = await artifacts.get_metadata(
+                artifact_id=ref.removeprefix("artifact://"),
+                principal="service:checkpoint-branch-turn",
+            )
+            assert pinned, ref
+    await engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("agent_result", "expected_disposition"),
     [

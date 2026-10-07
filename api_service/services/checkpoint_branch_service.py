@@ -788,6 +788,7 @@ class CheckpointBranchService:
             }
         )
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, branch)
         await self._session.flush()
         await self._session.refresh(branch)
         return await self._branch_graph(branch)
@@ -857,6 +858,7 @@ class CheckpointBranchService:
         branch.workspace_policy = workspace_policy
         branch.runtime_context_policy = runtime_context_policy
         branch.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, branch)
         await self._session.flush()
         return turn
 
@@ -941,6 +943,7 @@ class CheckpointBranchService:
             }
         )
         child.current_head_checkpoint_ref = turn.source_checkpoint_ref
+        self._record_source_head(turn, child)
         await self._session.flush()
         await self._session.refresh(child)
         return await self._branch_graph(child)
@@ -1421,10 +1424,17 @@ class CheckpointBranchService:
         # A turn owns the branch head only while the head it started from is
         # still current. A late turn whose source was superseded keeps its own
         # outcome and candidate on the turn, but never replaces newer work.
+        # The head version fences an ABA rollback to the same source ref by
+        # another owner. Turns created before the version was recorded keep
+        # the ref-only check until they drain.
         owns_head = branch.current_head_checkpoint_ref in {
             None,
             turn.source_checkpoint_ref,
-        }
+        } and (
+            "sourceHeadVersion" not in existing_diagnostics
+            or existing_diagnostics["sourceHeadVersion"]
+            == branch.current_head_version
+        )
         if normalized == "succeeded":
             turn.status = CheckpointBranchTurnState.CHECKING.value
             branch_state = CheckpointBranchState.ACTIVE.value
@@ -1583,6 +1593,17 @@ class CheckpointBranchService:
         self._session.add(artifact)
         await self._session.flush()
         return artifact
+
+    @staticmethod
+    def _record_source_head(
+        turn: WorkflowCheckpointBranchTurn, branch: WorkflowCheckpointBranch
+    ) -> None:
+        """Remember the head version this turn started from."""
+
+        turn.diagnostics = {
+            **(turn.diagnostics or {}),
+            "sourceHeadVersion": branch.current_head_version,
+        }
 
     async def create_turn(
         self,

@@ -327,12 +327,15 @@ exception.
 A branch turn keeps its child's actual result once child compute has
 succeeded. If the parent capture or checkpoint fails, or the turn is canceled,
 the turn is recorded failed or canceled with `saveCommit.status: incomplete`.
-The child's own verified saved candidate (`savedWorkspaceCheckpoint`
-refs and digests) is retained in the stored agent result. Preservation never
+The child's own verified saved candidate (`savedWorkspaceCheckpoint` refs and
+digests, plus the history bundle and index patch its manifest names as
+`dependencyRefs`) is retained in the stored agent result. Preservation never
 upgrades that outcome. A turn advances the branch head only while the head it
-started from is still current. A later turn that finishes after the head moved
-keeps its outcome and checkpoint on the turn (`headAdvanced: false`) without
-replacing newer work, the latest-result index, or the branch state.
+started from, both its checkpoint ref and head version, is still current, so a
+rollback to the same ref by another owner is never overwritten. A later turn
+that finishes after the head moved keeps its outcome and checkpoint on the turn
+(`headAdvanced: false`) without replacing newer work, the latest-result index,
+or the branch state.
 
 ---
 

@@ -391,3 +391,59 @@ async def test_failed_save_retains_workspace_without_holding_capacity():
 
 async def _none():
     return None
+
+
+@pytest.mark.asyncio
+async def test_save_committed_with_lost_acknowledgement_releases_unsaved_marker():
+    """A save that committed before its acknowledgement failed is durable.
+
+    The failure path records an unsaved decision before it can observe the
+    committed ``saved`` phase. Once it does, the marker must be lifted so
+    the already-durable workspace returns to ordinary retention instead of
+    being held for the full unsaved window.
+    """
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="lost-save-ack")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "5" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase(
+        "workspace", {"workspaceSpec": {"workspaceLocator": {"workspaceId": "ws-1"}}}
+    )
+    binding = sink.binding
+    realizer = _cleanup_realizer(store, order=[], calls={"save": 0})
+    saved = {"checkpointRef": "artifact://committed-save"}
+    retained: list[str] = []
+    released: list[int] = []
+
+    async def save_request_workspace(_request):
+        # The save commits, then its acknowledgement is lost.
+        await RuntimeBindingSessionAuthoritySink(
+            store, await store.get(binding.bindingId)
+        ).record_phase("saved", saved)
+        raise ConnectionError("acknowledgement lost")
+
+    async def retain_unsaved_request_workspace(_request, *, reason_code):
+        retained.append(reason_code)
+        return {"availability": "locally_retained_but_unsaved"}
+
+    async def release_unsaved_request_workspace(_request):
+        released.append(1)
+
+    realizer._workspace_publisher = SimpleNamespace(
+        save_request_workspace=save_request_workspace,
+        retain_unsaved_request_workspace=retain_unsaved_request_workspace,
+        release_unsaved_request_workspace=release_unsaved_request_workspace,
+    )
+
+    result = await realizer._save_or_retain(request, binding)
+
+    phases = result.phaseResults or {}
+    assert phases["saved"] == saved
+    assert "saveDeferred" not in phases
+    assert retained == ["ConnectionError"]
+    assert released == [1]
