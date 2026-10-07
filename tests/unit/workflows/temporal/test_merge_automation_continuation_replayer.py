@@ -514,6 +514,19 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
         "resolve_github_token",
         AsyncMock(return_value=("fixture-only", None)),
     )
+    # The gate reads with its owning run's admitted connection: the default,
+    # unrecorded here, so the deployment declaration supplies the fixture token.
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_admitted_repository_access",
+        AsyncMock(return_value=("", False)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-only")
 
     @activity.defn(name="merge_automation.evaluate_readiness")
     async def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:

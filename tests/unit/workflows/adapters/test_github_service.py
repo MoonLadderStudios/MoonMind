@@ -1311,6 +1311,13 @@ async def test_readiness_activity_preserves_required_review_for_retained_gate(
         activity_runtime.temporal_activity, "info",
         lambda: SimpleNamespace(activity_id="readiness-341"),
     )
+    # The gate reads with the default connection, unrecorded here, so the
+    # deployment declaration supplies the fixture token (#4010).
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        AsyncMock(return_value=None),
+    )
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     requested_urls = []
@@ -2553,3 +2560,244 @@ def test_authored_repository_access_reads_recorded_parameters(parameters, expect
     )
 
     assert authored_repository_access(parameters) == expected
+
+
+# ---------------------------------------------------------------------------
+# Admitted pull-request writers (MoonLadderStudios/MoonMind#4010)
+# ---------------------------------------------------------------------------
+
+
+def _writer_transport(monkeypatch):
+    """Record every provider request; answer merges and base updates."""
+
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PUT" and request.url.path.endswith("/pulls/7/merge"):
+            return httpx.Response(200, json={"merged": True, "sha": "c" * 40})
+        if request.method == "PATCH" and request.url.path.endswith("/pulls/7"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handle), **kwargs
+        ),
+    )
+    return requests
+
+
+async def _call_writer(service: GitHubService, writer: str, **authority):
+    if writer == "merge":
+        result = await service.merge_pull_request(
+            pr_url=_PR_URL, expected_head_sha="a" * 40, **authority
+        )
+        return result.merged, result.summary
+    if writer == "update_base":
+        return await service.update_pull_request_base(
+            pr_url=_PR_URL, new_base="main", **authority
+        )
+    if writer == "readiness":
+        result = await service.evaluate_pull_request_readiness(
+            repo="acme/repo", pr_number=7, head_sha="a" * 40, **authority
+        )
+        return result.ready, " ".join(str(b.get("summary") or "") for b in result.blockers)
+    if writer == "review_request":
+        result = await service.request_automated_review(
+            repo="acme/repo",
+            pr_number=7,
+            expected_head_sha="a" * 40,
+            provider="codex",
+            attempt_started_at="2026-10-07T00:00:00Z",
+            **authority,
+        )
+        return result.status == "requested", result.summary
+    result = await service.resolve_pull_request_selector(
+        repo="acme/repo", selector="feature", **authority
+    )
+    return result.resolved, result.summary
+
+
+_WRITERS = ["merge", "update_base", "readiness", "review_request", "selector"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer", _WRITERS)
+async def test_admitted_writer_uses_selected_pat_over_ambient_token(monkeypatch, writer):
+    """The work's writes use the same selected PAT B as its reads, never ambient A."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    requests = _writer_transport(monkeypatch)
+    seen = _select_admitted(
+        monkeypatch,
+        access=("repository-connection:pat-b", False),
+        connection=_pat_connection_b(),
+    )
+    _secrets(monkeypatch, {_PAT_B_REF: "selected-token-b"})
+
+    await _call_writer(GitHubService(), writer, admitted_workflow_id="mm:run-b")
+
+    assert seen["workflow_id"] == "mm:run-b"
+    assert seen["connection_ref"] == "repository-connection:pat-b"
+    assert requests
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer", _WRITERS)
+async def test_missing_selected_pat_writer_sends_nothing(monkeypatch, writer):
+    """A missing B is unavailable at the writer; ambient A is never substituted."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    requests = _writer_transport(monkeypatch)
+    _select_admitted(
+        monkeypatch,
+        access=("repository-connection:pat-b", False),
+        connection=_pat_connection_b(),
+    )
+    reads = _secrets(monkeypatch, {})
+
+    succeeded, summary = await _call_writer(
+        GitHubService(), writer, admitted_workflow_id="mm:run-b"
+    )
+
+    assert succeeded is False
+    assert "no other GitHub credential is used" in summary
+    assert "ambient-token-a" not in summary
+    assert reads == [_PAT_B_REF]
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["disabled", "deleted", "unassigned"])
+async def test_revoked_selection_merge_writes_nothing(monkeypatch, state):
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_DENIED,
+        RepositoryRouteError,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    requests = _writer_transport(monkeypatch)
+    _select_admitted(
+        monkeypatch,
+        access=("repository-connection:pat-b", False),
+        error=RepositoryRouteError(REPOSITORY_DENIED, f"connection is {state}"),
+    )
+    reads = _secrets(monkeypatch, {_PAT_B_REF: "selected-token-b"})
+
+    merged, summary = await _call_writer(
+        GitHubService(), "merge", admitted_workflow_id="mm:run-b"
+    )
+
+    assert merged is False
+    assert "no other GitHub credential is used" in summary
+    assert reads == []
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_anonymous_run_cannot_merge(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    requests = _writer_transport(monkeypatch)
+    _select_admitted(monkeypatch, access=("", True))
+    reads = _secrets(monkeypatch, {})
+
+    merged, summary = await _call_writer(
+        GitHubService(), "merge", admitted_workflow_id="mm:anonymous"
+    )
+
+    assert merged is False
+    assert "anonymous run cannot merge_request" in summary
+    assert reads == []
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_admitted_writer_rejects_connection_for_another_host(monkeypatch):
+    """A GitHub.com pull request is never written with another host's credential."""
+
+    requests = _writer_transport(monkeypatch)
+    _select_admitted(
+        monkeypatch,
+        access=("repository-connection:pat-b", False),
+        connection=_pat_connection_b(endpointRef="https://ghe.example.test"),
+    )
+    _secrets(monkeypatch, {_PAT_B_REF: "selected-token-b"})
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "ghe.example.test")
+
+    merged, summary = await _call_writer(
+        GitHubService(), "merge", admitted_workflow_id="mm:run-b"
+    )
+
+    assert merged is False
+    assert "does not serve https://api.github.com" in summary
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("writer", "operation"),
+    [
+        ("merge", "merge_request"),
+        ("update_base", "merge_request"),
+        ("readiness", "read"),
+        ("review_request", "review_request"),
+        ("selector", "read"),
+    ],
+)
+async def test_admitted_app_writer_acquires_only_its_operation(
+    monkeypatch, writer, operation
+):
+    """App connections issue through the bound acquirer for exactly the write."""
+
+    app_connection = _pat_connection_b(
+        id="repository-connection:app-b",
+        credential={
+            "source": "github_app",
+            "appRef": "github-app:b",
+            "installationRef": "installation:b",
+        },
+    )
+    requests = _writer_transport(monkeypatch)
+    _select_admitted(
+        monkeypatch,
+        access=("repository-connection:app-b", False),
+        connection=app_connection,
+    )
+    reads = _secrets(monkeypatch, {})
+    acquired: list[tuple[str, tuple[str, ...]]] = []
+
+    async def bound_headers(self, connection, *, repository, operations=("read",), **_):
+        acquired.append((connection.id, tuple(operations)))
+        return {"Authorization": "Bearer app-installation-b"}
+
+    monkeypatch.setattr(GitHubService, "bound_app_headers_for_connection", bound_headers)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+
+    await _call_writer(GitHubService(), writer, admitted_workflow_id="mm:run-b")
+
+    assert acquired == [("repository-connection:app-b", (operation,))]
+    assert reads == []
+    assert {r.headers["Authorization"] for r in requests} == {
+        "Bearer app-installation-b"
+    }
+
+
+@pytest.mark.asyncio
+async def test_writer_without_admitted_authority_keeps_explicit_token(monkeypatch):
+    """Callers that supply their own admitted token keep it (review-only, publication)."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    requests = _writer_transport(monkeypatch)
+    seen = _select_admitted(monkeypatch)
+
+    await _call_writer(GitHubService(), "merge", github_token="explicit-token")
+
+    assert seen == {}
+    assert [r.headers["Authorization"] for r in requests] == ["Bearer explicit-token"]
