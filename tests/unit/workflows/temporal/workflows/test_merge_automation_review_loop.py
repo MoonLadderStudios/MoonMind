@@ -1293,7 +1293,18 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
         "info",
         lambda: SimpleNamespace(activity_id="review-only-readiness"),
     )
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def selected_token(authority, *, repository, operation):
+        assert authority["executionOwner"] == MERGE_AUTOMATION_WORKFLOW_ID
+        assert repository == "MoonLadderStudios/MoonMind"
+        assert operation == "read"
+        yield "github-token-fixture"
+
+    monkeypatch.setattr(
+        activity_runtime, "merge_automation_repository_token", selected_token
+    )
 
     def github_response(request):
         path = request.url.path
@@ -1621,4 +1632,59 @@ async def test_review_only_restored_completed_cycle_requires_fresh_completion(
     assert result["status"] in {"blocked", "expired"}
     assert harness.request_payloads == []
     assert result["latestHeadSha"] == HEAD_1
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_restored_completion_waits_for_live_pr_observation(
+    monkeypatch,
+):
+    """Saved completion cannot prove the target head is still open during an outage."""
+    payload = _review_only_payload()
+    payload["reviewCycles"] = [
+        {
+            "cycle": 1,
+            "provider": "codex",
+            "headSha": HEAD_1,
+            "requestKey": build_review_request_key(
+                parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+                repository="MoonLadderStudios/MoonMind",
+                pr_number=350,
+                head_sha=HEAD_1,
+                provider="codex",
+            ),
+            "requestCommentId": 98765,
+            "requestedAt": "2026-08-24T22:15:00Z",
+            "completionKind": "review",
+            "completionId": 45678,
+            "completedAt": "2026-08-24T22:19:00Z",
+            "status": "completed",
+        }
+    ]
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[
+            _awaiting_review(
+                HEAD_1,
+                pullRequestOpen=None,
+                automatedReviewComplete=None,
+                blockers=[
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "GitHub pull request state could not be fetched (HTTP 503).",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            ),
+            _ready(HEAD_1),
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert len(harness.readiness_payloads) == 2
+    assert harness.wait_calls == 1
+    assert harness.request_payloads == []
     _assert_review_only_has_no_resolver(harness, result)

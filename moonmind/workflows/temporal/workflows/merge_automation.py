@@ -228,6 +228,7 @@ class MoonMindMergeAutomationWorkflow:
             )
         payload = {
             "status": self._status,
+            "finishMode": self._finish_mode(),
             "prNumber": pr.number if pr is not None else None,
             "prUrl": pr.url if pr is not None else None,
             "cycles": len(self._resolver_child_workflow_ids),
@@ -1526,6 +1527,15 @@ class MoonMindMergeAutomationWorkflow:
             progress_signature=continuation.get("progressSignature"),
         )
 
+    def _review_repository_authority(self) -> dict[str, Any]:
+        return {
+            "principal": self._principal(),
+            "executionOwner": self._resolver_parent_workflow_id(),
+            "parentExecutionPlan": self._input.resolver_template.get(
+                "parentOmnigentExecutionPlan"
+            ),
+        }
+
     async def _post_automated_review(
         self,
         *,
@@ -1577,6 +1587,11 @@ class MoonMindMergeAutomationWorkflow:
                     "expectedHeadSha": head_sha,
                     "provider": config.provider,
                     "requestKey": request_key,
+                    **(
+                        {"repositoryAuthority": self._review_repository_authority()}
+                        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY
+                        else {}
+                    ),
                 },
                 start_to_close_timeout=timedelta(minutes=2),
                 task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -1719,6 +1734,10 @@ class MoonMindMergeAutomationWorkflow:
                 actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
             )
         readiness_payload = self._input.model_dump(by_alias=True, mode="json")
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            readiness_payload["repositoryAuthority"] = (
+                self._review_repository_authority()
+            )
         # Always publish the *live* request state so a restored input can never
         # make a settled request look active again.
         readiness_payload["activeReviewRequest"] = (
@@ -1821,7 +1840,8 @@ class MoonMindMergeAutomationWorkflow:
                 return await self._finish()
             cycle = self._review_cycles[-1] if self._review_cycles else None
             if (
-                cycle is not None
+                observed.get("pullRequestOpen") is True
+                and cycle is not None
                 and cycle.get("status") == "completed"
                 and self._review_only_request_is_bound(cycle)
                 and _review_completion_is_fresh(
@@ -1867,6 +1887,7 @@ class MoonMindMergeAutomationWorkflow:
                     timeout=timeout,
                 )
             except TimeoutError:
+                # No callback arrived; reconcile the same request on the next poll.
                 pass
 
     async def _recover_after_resolver_issue(

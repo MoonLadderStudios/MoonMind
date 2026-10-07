@@ -8152,6 +8152,77 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it.each([
+    ['execution detail', 'waiting', 'review_only', 'Waiting for fresh review of the current PR head.'],
+    ['execution detail', 'awaiting_child', 'review_only', 'Waiting for fresh review of the current PR head.'],
+    ['execution detail', 'review_complete', undefined, 'Review complete. No resolver was launched.'],
+    ['run summary', 'waiting', 'review_only', 'Waiting for fresh review of the current PR head.'],
+    ['run summary', 'review_complete', 'review_only', 'Review complete. No resolver was launched.'],
+    ...['blocked', 'failed', 'expired', 'canceled'].map((status): [string, string, string, string] => [
+      'execution detail', status, 'review_only', 'Review-only automation does not launch pr-resolver.',
+    ]),
+  ])('renders review-only automation from %s in %s state', async (source, status, finishMode, message) => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-review-only/overview?source=temporal');
+    const mergeAutomation = {
+      enabled: true,
+      workflowId: 'merge-automation:test-review-only',
+      status,
+      finishMode,
+      prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/4719',
+      latestHeadSha: 'reviewed-head',
+      blockers: status === 'review_complete'
+        ? [{ kind: 'review_findings', summary: 'Review reported findings.' }]
+        : [],
+      resolverChildWorkflowIds: [],
+      resolverChildren: [],
+    };
+    const mockExecution = {
+      taskId: 'test-review-only',
+      workflowId: 'test-review-only',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      entry: 'user_workflow',
+      title: 'Review-only task',
+      summary: 'Fresh review of the PR',
+      status: ['waiting', 'awaiting_child'].includes(status) ? 'running' : 'completed',
+      state: ['waiting', 'awaiting_child'].includes(status) ? 'awaiting_external' : 'succeeded',
+      publishMode: 'none',
+      mergeAutomation: source === 'execution detail' ? mergeAutomation : undefined,
+      summaryArtifactRef: source === 'run summary' ? 'art-summary-review-only' : undefined,
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-review-only/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => JSON.stringify({ mergeAutomation }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(message)).toBeTruthy();
+    });
+    expect(screen.queryByText('Waiting for required checks before launching pr-resolver.')).toBeNull();
+    expect(screen.queryByText('Resolver Children')).toBeNull();
+    if (status === 'review_complete') {
+      expect(screen.getByText('Review reported findings.')).toBeTruthy();
+    }
+  });
+
   it('accepts null merge automation artifact refs from execution detail', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs/overview?source=temporal');
     const mockExecution = {
