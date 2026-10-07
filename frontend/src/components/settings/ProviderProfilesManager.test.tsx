@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
@@ -26,8 +27,10 @@ import {
   resolveAdvancedRecommendedText,
   PENDING_DEFAULT_INTENT_STORAGE_KEY,
   ProviderProfileRequestError,
+  PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY,
+  suggestProfileId,
 } from './ProviderProfilesManager';
-import { renderWithClient } from '../../utils/test-utils';
+import { DashboardToastProvider } from '../dashboard/DashboardToast';
 import { runtimeDefaultTierDraft } from '../../utils/providerProfileTiers';
 
 afterEach(() => {
@@ -52,19 +55,82 @@ function deferredResponse(ok = true) {
   };
 }
 
+/** Backend creation choices (#4001) as the creation-choices endpoint projects them. */
+const TEST_CREATION_CHOICES = {
+  version: 'provider-profile-creation-v1',
+  profile_id_max_length: 128,
+  harnesses: [
+    {
+      runtime_id: 'codex_cli',
+      label: 'Codex CLI',
+      providers: [
+        { provider_id: 'openai', label: 'OpenAI' },
+        { provider_id: 'minimax', label: 'MiniMax' },
+        { provider_id: 'openrouter', label: 'OpenRouter' },
+      ],
+      custom_provider_allowed: false,
+    },
+    {
+      runtime_id: 'claude_code',
+      label: 'Claude Code',
+      providers: [
+        { provider_id: 'anthropic', label: 'Anthropic' },
+        { provider_id: 'minimax', label: 'MiniMax' },
+      ],
+      custom_provider_allowed: false,
+    },
+    {
+      runtime_id: 'opencode',
+      label: 'OpenCode',
+      providers: [
+        { provider_id: 'opencode', label: 'OpenCode' },
+        { provider_id: 'opencode-go', label: 'OpenCode Go' },
+      ],
+      custom_provider_allowed: true,
+    },
+  ],
+};
+
+/** A client whose creation choices are already loaded, as after the first fetch. */
+function choicesQueryClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  queryClient.setQueryData(PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY, TEST_CREATION_CHOICES);
+  return queryClient;
+}
+
+async function chooseOption(label: string, value: string) {
+  await waitFor(() =>
+    expect(
+      Array.from((screen.getByLabelText(label) as HTMLSelectElement).options).some(
+        (option) => option.value === value,
+      ),
+    ).toBe(true),
+  );
+  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+
 async function chooseHarnessAndProvider(runtimeId: string, providerId: string) {
-  fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-    target: { value: runtimeId },
-  });
-  fireEvent.change(screen.getByLabelText(/Provider ID/), {
-    target: { value: providerId },
-  });
+  await chooseOption('Harness', runtimeId);
+  await chooseOption('Provider', providerId);
 }
 
 async function chooseProvider(providerId: string) {
-  fireEvent.change(screen.getByLabelText(/Provider ID/), {
-    target: { value: providerId },
-  });
+  await chooseOption('Provider', providerId);
+}
+
+/** Like `renderWithClient`, with the creation choices already loaded. */
+function renderWithChoices(ui: ReactElement) {
+  return render(
+    <QueryClientProvider client={choicesQueryClient()}>
+      <DashboardToastProvider>{ui}</DashboardToastProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
@@ -77,7 +143,7 @@ function renderProviderProfilesManager(profiles: ProviderProfile[] = []) {
   });
   const onNotice = vi.fn();
 
-  renderWithClient(
+  renderWithChoices(
     <ProviderProfilesManager
       profiles={profiles}
       secretSlugs={['OPENAI_API_KEY']}
@@ -100,7 +166,7 @@ function renderReadOnlyProviderProfilesManager(profiles: ProviderProfile[] = [])
   });
   const onNotice = vi.fn();
 
-  renderWithClient(
+  renderWithChoices(
     <ProviderProfilesManager
       profiles={profiles}
       secretSlugs={['OPENAI_API_KEY']}
@@ -123,6 +189,7 @@ function renderProviderProfilesManagerWithQuery(profiles: ProviderProfile[] = []
     },
   });
   queryClient.setQueryData(PROVIDER_PROFILE_QUERY_KEY, profiles);
+  queryClient.setQueryData(PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY, TEST_CREATION_CHOICES);
   const onNotice = vi.fn();
 
   function ProviderProfilesHarness() {
@@ -299,12 +366,7 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'preset-profile' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
@@ -466,12 +528,7 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'manual-openrouter' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openrouter' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openrouter');
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText('Use the authorized manual profile path.');
@@ -619,12 +676,7 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'stale-preset-profile' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText(/provider-profile-create-v1-old loaded/);
@@ -1225,12 +1277,8 @@ describe('ProviderProfilesManager form controls', () => {
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'codex-default' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'unknown-runtime' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'unknown-provider' },
-    });
+    // A projected pair whose capability lookup reports no supported method.
+    await chooseHarnessAndProvider('codex_cli', 'openrouter');
     await screen.findByText('No validated creation preset exists for this runtime and provider.');
     // MoonLadderStudios/MoonMind#4002: missing valid choices disable the
     // action with the specific reason instead of submitting.
@@ -2169,12 +2217,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
   }
 
   async function selectOpenAiApiKeyCreation() {
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     const apiKey = await screen.findByLabelText('API key');
     fireEvent.click(apiKey);
   }
@@ -2413,12 +2456,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.change(screen.getByLabelText(/Profile ID/), {
       target: { value: 'codex-guided-oauth' },
     });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('OAuth'));
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
     // MoonLadderStudios/MoonMind#4002: guided OAuth continuation.
@@ -2529,12 +2567,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     renderProviderProfilesManager();
 
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), {
-      target: { value: 'codex_cli' },
-    });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), {
-      target: { value: 'openai' },
-    });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('OAuth'));
     fireEvent.click(screen.getByLabelText('Show advanced options'));
     fireEvent.click(screen.getByRole('button', { name: 'Use an existing credential volume' }));
@@ -3095,8 +3128,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       throw new Error(`Unexpected ${url}`);
     });
     renderProviderProfilesManager();
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Show advanced options'));
@@ -3200,8 +3232,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
 
     renderProviderProfilesManager();
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'intent-profile' } });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Runtime default'));
@@ -3329,8 +3360,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       throw new Error(`Unexpected ${url}`);
     });
     renderProviderProfilesManager();
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Show advanced options'));
@@ -3811,8 +3841,7 @@ describe('MoonLadderStudios/MoonMind#4002 save reconciliation', () => {
     });
     const { onNotice } = renderProviderProfilesManager();
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'identity-profile' } });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
@@ -3892,8 +3921,7 @@ describe('MoonLadderStudios/MoonMind#4002 save reconciliation', () => {
     });
     const { onNotice } = renderProviderProfilesManager();
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'ambiguous-profile' } });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
@@ -4026,8 +4054,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
 
   async function fillCreateForm(profileId: string) {
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: profileId } });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
   }
@@ -4607,8 +4634,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       throw new Error(`Unexpected fetch: ${url}`);
     });
     const { onNotice } = renderProviderProfilesManager();
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Show advanced options'));
@@ -4707,8 +4733,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     });
     const { onNotice } = renderProviderProfilesManager();
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'conflict-review-profile' } });
-    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
-    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    await chooseHarnessAndProvider('codex_cli', 'openai');
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-current loaded/);
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
@@ -4938,5 +4963,282 @@ describe('OpenCode enrollment validation progress', () => {
     renderProviderProfilesManager([opencodeSavedProfile(profileId)]);
     await openOpencodePaste(profileId);
     expect(await screen.findByText(/running workflow is using this profile/)).toBeTruthy();
+  });
+});
+
+describe('suggestProfileId', () => {
+  it('joins canonical runtime and provider IDs with a normalized account label', () => {
+    expect(suggestProfileId('codex_cli', 'openai', 'Team Account', 128)).toBe(
+      'codex_cli-openai-team-account',
+    );
+    expect(suggestProfileId('opencode', 'opencode-go', '  Équipe #2 ', 128)).toBe(
+      'opencode-opencode-go-equipe-2',
+    );
+  });
+
+  it('still suggests from runtime and provider when the account label is empty or unusable', () => {
+    expect(suggestProfileId('claude_code', 'anthropic', '', 128)).toBe('claude_code-anthropic');
+    expect(suggestProfileId('claude_code', 'anthropic', '!!!', 128)).toBe('claude_code-anthropic');
+  });
+
+  it('suggests nothing until both canonical IDs are chosen', () => {
+    expect(suggestProfileId('codex_cli', '', 'Team', 128)).toBe('');
+    expect(suggestProfileId('', 'openai', 'Team', 128)).toBe('');
+  });
+
+  it('respects the backend length limit without a dangling separator', () => {
+    const suggestion = suggestProfileId('codex_cli', 'openai', 'a'.repeat(200), 20);
+    expect(suggestion).toBe('codex_cli-openai-aaa');
+    expect(suggestProfileId('codex_cli', 'openai', 'team', 17)).toBe('codex_cli-openai');
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4001 backend Harness/Provider choices and Profile ID suggestion', () => {
+  const harnessSelect = () => screen.getByLabelText('Harness') as HTMLSelectElement;
+  const providerSelect = () => screen.getByLabelText('Provider') as HTMLSelectElement;
+  const profileIdInput = () => screen.getByLabelText(/Profile ID/) as HTMLInputElement;
+  const optionLabels = (select: HTMLSelectElement) =>
+    Array.from(select.options)
+      .filter((option) => option.value !== '')
+      .map((option) => [option.value, option.textContent]);
+
+  const codexOpenAiCapabilities = {
+    version: 'provider-profile-creation-v1',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    supported: true,
+    authentication_methods: [
+      {
+        id: 'api_key',
+        label: 'API key',
+        setup_action: 'api_key',
+        launch_ready_after_setup: true,
+        fields: {
+          credential_source: { value: 'secret_ref', source: 'runtime_provider_strategy', editable: false, lock_reason: 'Locked.' },
+          runtime_materialization_mode: { value: 'api_key_env', source: 'runtime_provider_strategy', editable: false, lock_reason: 'Locked.' },
+        },
+        secret_roles: [{ role: 'openai_api_key', label: 'OpenAI API key', required: true, compatible_schemes: ['db'] }],
+        imported_volume: { supported: false, mount_path: null, source: 'runtime_provider_strategy', lock_reason: 'Not used.' },
+      },
+    ],
+    diagnostics: [],
+  };
+
+  function identityFetch(
+    url: string,
+    init?: RequestInit,
+    onCreate?: (payload: Record<string, unknown>) => Response,
+  ): Response {
+    if (url === '/api/v1/provider-profiles/creation-choices') {
+      return { ok: true, json: async () => TEST_CREATION_CHOICES } as Response;
+    }
+    if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+      const params = new URL(url, 'https://moonmind.test').searchParams;
+      return {
+        ok: true,
+        json: async () => ({
+          ...codexOpenAiCapabilities,
+          runtime_id: params.get('runtime_id'),
+          provider_id: params.get('provider_id'),
+        }),
+      } as Response;
+    }
+    if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+      return { ok: false, json: async () => ({ detail: 'Model choices unavailable in test.' }) } as Response;
+    }
+    if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+      const params = new URL(url, 'https://moonmind.test').searchParams;
+      return {
+        ok: true,
+        json: async () => ({
+          version: 'provider-profile-creation-v1',
+          supported: true,
+          runtime_id: params.get('runtime_id'),
+          provider_id: params.get('provider_id'),
+          authentication_method: params.get('authentication_method'),
+          fields: {},
+          diagnostics: [],
+          manual_creation_allowed: false,
+          required_manual_fields: [],
+        }),
+      } as Response;
+    }
+    if (url === '/api/v1/provider-profiles' && init?.method === 'POST' && onCreate) {
+      return onCreate(JSON.parse(String(init.body)) as Record<string, unknown>);
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }
+
+  function renderFirstProfileForm() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProviderProfilesManager
+          profiles={[]}
+          secretSlugs={[]}
+          onNotice={vi.fn()}
+          queryClient={queryClient}
+          defaultTaskModelByRuntime={{}}
+        />
+      </QueryClientProvider>,
+    );
+    return queryClient;
+  }
+
+  it('offers backend Harness/Provider choices for the first profile and submits canonical IDs', async () => {
+    let createPayload: Record<string, unknown> | null = null;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) =>
+      identityFetch(String(input), init, (payload) => {
+        createPayload = payload;
+        return { ok: false, json: async () => ({ detail: 'Stop after capturing the request.' }) } as Response;
+      }),
+    );
+    renderFirstProfileForm();
+
+    await waitFor(() => expect(optionLabels(harnessSelect())).toHaveLength(3));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/provider-profiles/creation-choices',
+      expect.anything(),
+    );
+    expect(screen.queryByLabelText(/Runtime ID/)).toBeNull();
+    expect(optionLabels(harnessSelect())).toEqual([
+      ['codex_cli', 'Codex CLI'],
+      ['claude_code', 'Claude Code'],
+      ['opencode', 'OpenCode'],
+    ]);
+    expect(providerSelect().disabled).toBe(true);
+
+    fireEvent.change(harnessSelect(), { target: { value: 'claude_code' } });
+    expect(optionLabels(providerSelect())).toEqual([
+      ['anthropic', 'Anthropic'],
+      ['minimax', 'MiniMax'],
+    ]);
+
+    fireEvent.change(harnessSelect(), { target: { value: 'codex_cli' } });
+    fireEvent.change(providerSelect(), { target: { value: 'openai' } });
+    expect(profileIdInput().value).toBe('codex_cli-openai');
+    fireEvent.change(screen.getByLabelText(/Account label/), { target: { value: 'Team Account' } });
+    expect(profileIdInput().value).toBe('codex_cli-openai-team-account');
+
+    await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    await waitFor(() => expect(createPayload).not.toBeNull());
+    expect(createPayload).toEqual(
+      expect.objectContaining({
+        profile_id: 'codex_cli-openai-team-account',
+        runtime_id: 'codex_cli',
+        provider_id: 'openai',
+        account_label: 'Team Account',
+      }),
+    );
+  });
+
+  it('clears a Provider the new Harness does not offer and keeps a compatible one', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => identityFetch(String(input), init));
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'minimax');
+    fireEvent.change(harnessSelect(), { target: { value: 'claude_code' } });
+    expect(providerSelect().value).toBe('minimax');
+
+    fireEvent.change(providerSelect(), { target: { value: 'anthropic' } });
+    fireEvent.change(harnessSelect(), { target: { value: 'codex_cli' } });
+    expect(providerSelect().value).toBe('');
+    expect(profileIdInput().value).toBe('');
+  });
+
+  it('accepts a custom provider only where the backend advertises it', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => identityFetch(String(input), init));
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    expect(within(providerSelect()).queryByRole('option', { name: 'Other provider…' })).toBeNull();
+    expect(screen.queryByLabelText('Custom provider ID')).toBeNull();
+
+    fireEvent.change(harnessSelect(), { target: { value: 'opencode' } });
+    fireEvent.change(providerSelect(), { target: { value: '__custom_provider__' } });
+    fireEvent.change(screen.getByLabelText('Custom provider ID'), { target: { value: 'groq' } });
+    expect(profileIdInput().value).toBe('opencode-groq');
+  });
+
+  it('stops updating an edited or cleared suggestion until Use suggested ID is chosen', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => identityFetch(String(input), init));
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    expect(profileIdInput().value).toBe('codex_cli-openai');
+    expect(screen.queryByRole('button', { name: 'Use suggested ID' })).toBeNull();
+
+    fireEvent.change(profileIdInput(), { target: { value: 'my-codex' } });
+    fireEvent.change(screen.getByLabelText(/Account label/), { target: { value: 'Ops' } });
+    expect(profileIdInput().value).toBe('my-codex');
+
+    fireEvent.change(profileIdInput(), { target: { value: '' } });
+    fireEvent.change(providerSelect(), { target: { value: 'minimax' } });
+    // Capability and preset responses for the new identity never restore an ID.
+    await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
+    expect(profileIdInput().value).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use suggested ID' }));
+    expect(profileIdInput().value).toBe('codex_cli-minimax-ops');
+    fireEvent.change(screen.getByLabelText(/Account label/), { target: { value: 'Platform' } });
+    expect(profileIdInput().value).toBe('codex_cli-minimax-platform');
+  });
+
+  it('keeps the draft and focuses Profile ID on an ID conflict without retrying or suffixing', async () => {
+    let createRequests = 0;
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) =>
+      identityFetch(String(input), init, () => {
+        createRequests += 1;
+        return {
+          ok: false,
+          json: async () => ({
+            detail: {
+              code: 'provider_profile_id_conflict',
+              field: 'profile_id',
+              message: 'Profile already exists',
+            },
+          }),
+        } as Response;
+      }),
+    );
+    renderProviderProfilesManager();
+
+    await chooseHarnessAndProvider('codex_cli', 'openai');
+    fireEvent.change(screen.getByLabelText(/Account label/), { target: { value: 'Team' } });
+    await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+
+    await waitFor(() => expect(document.activeElement).toBe(profileIdInput()));
+    expect(createRequests).toBe(1);
+    expect(profileIdInput().value).toBe('codex_cli-openai-team');
+    expect((screen.getByLabelText(/Account label/) as HTMLInputElement).value).toBe('Team');
+    expect(harnessSelect().value).toBe('codex_cli');
+    expect(providerSelect().value).toBe('openai');
+    expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('explains a choice failure, keeps the draft, and offers retry instead of free text', async () => {
+    let choiceRequests = 0;
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/v1/provider-profiles/creation-choices') {
+        choiceRequests += 1;
+        if (choiceRequests === 1) {
+          return { ok: false, json: async () => ({ detail: 'Choices backend unavailable.' }) } as Response;
+        }
+      }
+      return identityFetch(url, init);
+    });
+    renderFirstProfileForm();
+
+    fireEvent.change(profileIdInput(), { target: { value: 'authored-id' } });
+    expect(await screen.findByText(/Choices backend unavailable\./)).toBeTruthy();
+    expect(harnessSelect().disabled).toBe(true);
+    expect(screen.queryByLabelText(/Runtime ID/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading choices' }));
+    await waitFor(() => expect(harnessSelect().disabled).toBe(false));
+    expect(profileIdInput().value).toBe('authored-id');
   });
 });
