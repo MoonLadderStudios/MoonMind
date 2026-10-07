@@ -20,26 +20,18 @@ _HEAD = "abc1234abc1234abc1234abc1234abc1234abc12"
 
 class _FakeService:
     def __init__(
-        self,
-        *,
-        resolution: PullRequestSelectorResult,
-        pull_request: dict[str, Any] | None = None,
+        self, *, resolution: PullRequestSelectorResult, token: str = "t"
     ) -> None:
         self._resolution = resolution
-        self._pull_request = pull_request or {}
-        self.reads: list[tuple[str, Any]] = []
+        self._token = token
 
-    async def resolve_pull_request_selector(self, **kwargs: Any):
-        self.reads.append(("selector", kwargs.get("admitted_workflow_id")))
+    async def resolve_pull_request_selector(self, **_kwargs: Any):
         return self._resolution
 
-    async def read_pull_request(self, repository, url, *, admitted_workflow_id=""):
-        self.reads.append(("pull_request", admitted_workflow_id))
-        assert url == f"https://github.com/{repository}/pull/350"
-        return self._pull_request
-
     async def resolve_github_token(self, *_args: Any, **_kwargs: Any):
-        pytest.fail("pull request target reads must not resolve ambient auth")
+        if self._token:
+            return self._token, None
+        return "", "GitHub auth is not configured."
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -74,23 +66,27 @@ def _response(body: dict, status_code: int = 200) -> httpx.Response:
 
 
 async def test_open_pull_request_emits_publish_context_values() -> None:
-    service = _FakeService(
-        resolution=_resolved(),
-        pull_request={
-            "state": "open",
-            "merged": False,
-            "draft": False,
-            "html_url": f"https://github.com/{_REPO}/pull/350",
-            "head": {"sha": _HEAD, "ref": "feature"},
-            "base": {"ref": "main"},
-        },
+    mock_client = _client(
+        _response(
+            {
+                "state": "open",
+                "merged": False,
+                "draft": False,
+                "html_url": f"https://github.com/{_REPO}/pull/350",
+                "head": {"sha": _HEAD, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
+        )
     )
 
-    result = await resolve_pull_request_target(
-        {"repository": _REPO, "pullRequest": "350"},
-        {"workflow_id": "mm:run-b"},
-        github_service_factory=lambda: service,
-    )
+    with patch(
+        "moonmind.workflows.temporal.story_output_tools.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await resolve_pull_request_target(
+            {"repository": _REPO, "pullRequest": "350"},
+            github_service_factory=lambda: _FakeService(resolution=_resolved()),
+        )
 
     assert result.status == "COMPLETED"
     # These exact output keys are what MoonMind.UserWorkflow records as the
@@ -99,26 +95,29 @@ async def test_open_pull_request_emits_publish_context_values() -> None:
     assert result.outputs["head_sha"] == _HEAD
     assert result.outputs["branch"] == "feature"
     assert result.outputs["push_base_ref"] == "main"
-    # Both reads use the run's admitted connection, never an ambient token.
-    assert service.reads == [("selector", "mm:run-b"), ("pull_request", "mm:run-b")]
 
 
 async def test_merged_pull_request_is_a_blocker() -> None:
-    service = _FakeService(
-        resolution=_resolved(),
-        pull_request={
-            "state": "closed",
-            "merged": True,
-            "html_url": f"https://github.com/{_REPO}/pull/350",
-            "head": {"sha": _HEAD, "ref": "feature"},
-            "base": {"ref": "main"},
-        },
+    mock_client = _client(
+        _response(
+            {
+                "state": "closed",
+                "merged": True,
+                "html_url": f"https://github.com/{_REPO}/pull/350",
+                "head": {"sha": _HEAD, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
+        )
     )
 
-    result = await resolve_pull_request_target(
-        {"repository": _REPO, "pullRequest": "350"},
-        github_service_factory=lambda: service,
-    )
+    with patch(
+        "moonmind.workflows.temporal.story_output_tools.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await resolve_pull_request_target(
+            {"repository": _REPO, "pullRequest": "350"},
+            github_service_factory=lambda: _FakeService(resolution=_resolved()),
+        )
 
     assert result.status == "FAILED"
     assert "not open" in result.outputs["summary"]
@@ -226,123 +225,3 @@ async def test_invalid_review_authority_never_falls_back_to_ambient(monkeypatch)
             {"repositoryAuthority": {}},
         )
     client.get.assert_not_awaited()
-
-
-async def _run_target_in_owning_run(monkeypatch, tmp_path, *, secret, assigned):
-    """Resolve a branch selector inside the recorded run's Activity (#4010).
-
-    Uses the production connection records, selector, and repository reader;
-    only the provider is replaced by a transport that records each request.
-    """
-
-    import dataclasses
-
-    from temporalio.testing import ActivityEnvironment
-
-    from tests.helpers.repository_connections import (
-        github_pat_connection,
-        github_repository_assignment,
-        record_repository_connections,
-    )
-
-    owner = "mm:owner-run"
-    pr = {
-        "number": 350,
-        "state": "open",
-        "merged": False,
-        "draft": False,
-        "html_url": f"https://github.com/{_REPO}/pull/350",
-        "head": {"sha": _HEAD, "ref": "feature", "repo": {"full_name": _REPO}},
-        "base": {"ref": "main", "repo": {"full_name": _REPO}},
-    }
-    requests: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == f"/repos/{_REPO}/pulls":
-            return httpx.Response(200, json=[pr])
-        if request.url.path == f"/repos/{_REPO}/pulls/350":
-            return httpx.Response(200, json=pr)
-        raise AssertionError(f"Unexpected provider request: {request.url}")
-
-    original_client = httpx.AsyncClient
-    monkeypatch.setattr(
-        httpx,
-        "AsyncClient",
-        lambda **kwargs: original_client(
-            transport=httpx.MockTransport(handle), **kwargs
-        ),
-    )
-    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
-    monkeypatch.setenv("GH_TOKEN", "ambient-token-a")
-    if secret:
-        monkeypatch.setenv("TEAM_B_PAT", secret)
-    else:
-        monkeypatch.delenv("TEAM_B_PAT", raising=False)
-    engine = await record_repository_connections(
-        monkeypatch,
-        tmp_path,
-        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
-        assignments=(
-            [github_repository_assignment("repository-connection:team-b", _REPO)]
-            if assigned
-            else []
-        ),
-        admitted_runs={
-            owner: {
-                "repository": {
-                    "provider": "git",
-                    "connectionRef": "repository-connection:team-b",
-                    "repository": {"name": _REPO},
-                }
-            }
-        },
-    )
-    env = ActivityEnvironment()
-    env.info = dataclasses.replace(env.info, workflow_id=owner)
-    try:
-        result = await env.run(
-            resolve_pull_request_target,
-            {"repository": _REPO, "pullRequest": "feature"},
-            {"workflow_id": owner},
-        )
-    finally:
-        await engine.dispose()
-    return result, requests
-
-
-async def test_ordinary_run_resolves_target_with_selected_pat_over_ambient(
-    monkeypatch, tmp_path
-):
-    result, requests = await _run_target_in_owning_run(
-        monkeypatch, tmp_path, secret="selected-token-b", assigned=True
-    )
-
-    assert result.status == "COMPLETED", result.outputs
-    assert result.outputs["headSha"] == _HEAD
-    assert [r.url.path for r in requests] == [
-        f"/repos/{_REPO}/pulls",
-        f"/repos/{_REPO}/pulls/350",
-    ]
-    assert {r.headers["Authorization"] for r in requests} == {
-        "Bearer selected-token-b"
-    }
-
-
-@pytest.mark.parametrize(
-    ("secret", "assigned"),
-    [("", True), ("selected-token-b", False)],
-    ids=["missing-credential", "revoked-assignment"],
-)
-async def test_ordinary_run_without_selected_pat_sends_nothing(
-    monkeypatch, tmp_path, secret, assigned
-):
-    result, requests = await _run_target_in_owning_run(
-        monkeypatch, tmp_path, secret=secret, assigned=assigned
-    )
-
-    assert result.status == "FAILED"
-    assert result.outputs["reasonCode"] == "auth_unavailable"
-    assert "no other GitHub credential is used" in result.outputs["summary"]
-    assert "ambient-token-a" not in str(result.outputs)
-    assert requests == []

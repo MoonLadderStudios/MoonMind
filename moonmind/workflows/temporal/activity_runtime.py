@@ -4437,31 +4437,19 @@ async def _merge_automation_repository_credential(
     )
 
 
-def _admitted_activity_workflow_id() -> str:
-    """The run executing this Activity, whose admitted repository authority it uses.
-
-    A child workflow acts with its recorded owning run (resolved by the
-    repository reader); outside an Activity no run is recorded, which selects
-    the default connection rather than an ambient token.
-    """
-    return temporal_activity.info().workflow_id if temporal_activity.in_activity() else ""
-
-
 @contextlib.asynccontextmanager
-async def _merge_automation_github_access(payload, *, repository, operation):
-    """Yield the ``GitHubService`` authority arguments for one gate operation."""
+async def _merge_automation_github_token(payload, *, repository, operation):
     acquired = await _merge_automation_repository_credential(
         payload, repository=repository, operation=operation,
     )
     if acquired is None:
-        # Merge/fix gates use their owning run's admitted connection.
-        yield {"admitted_workflow_id": _admitted_activity_workflow_id()}
+        yield payload.get("githubToken")
         return
     try:
         token = acquired.credential.use_now(lambda value: value.decode("utf-8").strip())
         if not token:
             raise TemporalActivityRuntimeError("selected collaboration credential is empty")
-        yield {"github_token": token}
+        yield token
     finally:
         acquired.credential.clear()
 
@@ -5043,15 +5031,15 @@ class TemporalIntegrationActivities:
             active_review_request = None
 
         repository = str(pull_request.get("repo") or "")
-        async with _merge_automation_github_access(
+        async with _merge_automation_github_token(
             payload, repository=repository, operation="read",
-        ) as github_access:
+        ) as github_token:
             readiness = await GitHubService().evaluate_pull_request_readiness(
                 repo=repository,
                 pr_number=int(pull_request.get("number") or 0),
                 head_sha=str(pull_request.get("headSha") or ""),
                 policy=dict(policy),
-                **github_access,
+                github_token=github_token,
                 review_loop_enabled=bool(review_loop.get("enabled")),
                 review_request=dict(active_review_request)
                 if active_review_request
@@ -5131,9 +5119,9 @@ class TemporalIntegrationActivities:
                 "that does not match its request identity"
             )
 
-        async with _merge_automation_github_access(
+        async with _merge_automation_github_token(
             payload, repository=repository, operation="review_request",
-        ) as github_access:
+        ) as github_token:
             async with get_async_session_context() as session:
                 entry = await MergeAutomationReviewRequestStore(session).claim(
                     request_key=expected_request_key,
@@ -5176,7 +5164,7 @@ class TemporalIntegrationActivities:
                 provider=provider_record.provider,
                 attempt_started_at=reconcile_from.isoformat(),
                 recorded_comment_id=entry.request_comment_id,
-                **github_access,
+                github_token=github_token,
                 **({"expires_at": payload["expiresAt"]} if "expiresAt" in payload else {}),
             )
             outcome = result.model_dump(by_alias=True, mode="json")
@@ -5651,7 +5639,6 @@ class TemporalIntegrationActivities:
         result = await GitHubService().resolve_pull_request_selector(
             repo=repository,
             selector=selector,
-            admitted_workflow_id=_admitted_activity_workflow_id(),
         )
         return result.model_dump(by_alias=True, mode="json")
 
@@ -5677,7 +5664,6 @@ class TemporalIntegrationActivities:
             pr_number=pr_number,
             head_sha=str(payload.get("headSha") or ""),
             policy=dict(payload.get("policy") or {}),
-            admitted_workflow_id=_admitted_activity_workflow_id(),
         )
         result = readiness.model_dump(by_alias=True, mode="json")
         result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
@@ -5697,14 +5683,11 @@ class TemporalIntegrationActivities:
         repository = str(payload.get("repository") or "").strip()
         pr_number = int(payload.get("prNumber") or 0)
         expected_head = str(payload.get("headSha") or "").strip()
-        # The readiness read and the merge use the same admitted connection.
-        admitted = _admitted_activity_workflow_id()
         readiness = await service.evaluate_pull_request_readiness(
             repo=repository,
             pr_number=pr_number,
             head_sha=expected_head,
             policy=dict(payload.get("policy") or {}),
-            admitted_workflow_id=admitted,
         )
         if readiness.pull_request_merged is True:
             return {
@@ -5731,7 +5714,6 @@ class TemporalIntegrationActivities:
             pr_url=str(payload.get("prUrl") or ""),
             merge_method=str(payload.get("mergeMethod") or "squash"),
             expected_head_sha=expected_head or None,
-            admitted_workflow_id=admitted,
         )
         output = result.model_dump(by_alias=True, mode="json")
         output["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
