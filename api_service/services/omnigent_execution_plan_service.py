@@ -692,6 +692,72 @@ def _build_v2_profile(
     )
 
 
+def _has_native_review_repository_consumer(workflow: Mapping[str, Any]) -> bool:
+    """Qualify only the closed graph dispatched to the trusted PR-read handler."""
+    from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
+    from moonmind.workflows.temporal.story_output_tools import (
+        GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME,
+        register_story_output_tool_handlers,
+    )
+
+    steps = workflow.get("steps")
+    if workflow.get("plan") or not isinstance(steps, list) or not steps:
+        return False
+    dispatcher = ToolActivityDispatcher()
+    register_story_output_tool_handlers(dispatcher)
+    if (
+        dispatcher.registered_skill_handler(
+            skill_name=GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME
+        )
+        is None
+    ):
+        return False
+    # Nested or replacement execution would add an unqualified consumer.
+    execution_overrides = {
+        "executor",
+        "activity_type",
+        "activityType",
+        "selector",
+        "steps",
+        "children",
+        "workflow",
+        "task",
+        "delegation",
+        "delegate",
+        "agent",
+        "skill",
+        "skills",
+        "selectedSkill",
+        "remediationLoop",
+    }
+    for step in steps:
+        if not isinstance(step, Mapping) or step.get("type") != "tool":
+            return False
+        tool = step.get("tool")
+        if (
+            not isinstance(tool, Mapping)
+            or tool.get("id") != GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME
+            or tool.get("type") not in {None, "skill"}
+            or tool.get("name")
+            not in {None, GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME}
+            or step.get("repositoryOperation") != "read"
+            or execution_overrides.intersection(step)
+            or execution_overrides.intersection(tool)
+            or step.get("options")
+            or step.get("annotations")
+            or any(
+                isinstance(tool.get(container), Mapping)
+                and (
+                    tool[container].get("annotations")
+                    or execution_overrides.intersection(tool[container])
+                )
+                for container in ("inputs", "args")
+            )
+        ):
+            return False
+    return True
+
+
 async def _admit_repository_plan_inputs(
     *,
     session_factory: Any,
@@ -706,12 +772,13 @@ async def _admit_repository_plan_inputs(
 ) -> dict[str, Any]:
     """Derive transport/tool roles and freeze selection through existing owners.
 
-    Without ``typed_authority`` the selected realizer is model-only: nothing is
-    admitted, and only a selection its legacy credential can honor is accepted.
+    Model-only realizers receive no repository credentials. A closed native
+    review graph may instead retain authority for its trusted tool consumer.
     """
     from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
     from moonmind.omnigent.harness_platform.credential_bindings import (
+        RepositoryAuthorityBinding,
         attenuate_repository_binding_for_child,
         repository_bindings_of,
     )
@@ -727,6 +794,11 @@ async def _admit_repository_plan_inputs(
     workflow = (
         initial_parameters.get("workflow") or initial_parameters.get("task") or {}
     )
+    if parent_plan is not None and any(
+        isinstance(access, Mapping) and "nativeBinding" in access
+        for access in parent_plan.payload.resolvedTools.get("repositoryAccess", {}).values()
+    ):
+        raise ValueError("native repository authority cannot be donated to a child")
     workspace = dict(
         initial_parameters.get("workspaceSpec")
         or initial_parameters.get("workspace")
@@ -828,6 +900,11 @@ async def _admit_repository_plan_inputs(
             raise ValueError("review_only requires publication mode none")
         if mode == AccessMode.ANONYMOUS:
             raise ValueError("anonymous source cannot admit review-request authority")
+    native_consumer = (
+        not typed_authority
+        and review_only
+        and _has_native_review_repository_consumer(workflow)
+    )
     slots = {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
     if (requires_github or review_only) and mode != AccessMode.ANONYMOUS:
@@ -866,7 +943,7 @@ async def _admit_repository_plan_inputs(
             async with session_factory() as session:
                 yield session
 
-    if not typed_authority:
+    if not typed_authority and not native_consumer:
         # The profile-bound realizer reads only the legacy GitHub credential,
         # which migration 391 records as the default connection. Any other
         # selected or routed connection would be silently substituted.
@@ -1039,6 +1116,13 @@ async def _admit_repository_plan_inputs(
                     child_attempt_ref=workflow_id,
                     child_snapshot_ref=snapshot_ref,
                 ).binding.model_dump(by_alias=True, mode="json")
+            if native_consumer:
+                result["access"][slot]["nativeBinding"] = (
+                    RepositoryAuthorityBinding.model_validate(binding).model_dump(
+                        by_alias=True, mode="json"
+                    )
+                )
+                continue
             result["bindings"][slot] = binding
             result["declarations"][slot] = {
                 "allowedRoles": (role,),
