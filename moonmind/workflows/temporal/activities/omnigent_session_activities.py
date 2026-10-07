@@ -3704,10 +3704,10 @@ async def omnigent_ensure_provider_session_activity(
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.session_launch import prepare_workflow_session_create
     from moonmind.workflows.adapters.omnigent_agent_adapter import (
         OmnigentAgentSelection,
         build_omnigent_selection,
-        build_omnigent_session_create_payload,
         resolve_omnigent_target,
     )
 
@@ -3810,31 +3810,7 @@ async def omnigent_ensure_provider_session_activity(
                 workflow_id=str(session.moonmind_workflow_id or ""),
                 state=runtime_binding_state,
             )
-    settled = await _settle_command(request)
-    # REQ-08/ACC-06 observability (MoonLadderStudios/MoonMind#4009): report
-    # the repository issuance that cleanup leaves unused. The narrowed
-    # binding computation is ownership-scoped (only named slots, never
-    # another consumer's model lease); actual issuance release stays with
-    # the issuance owner (#4007), so this step records refs without
-    # mutating the durable binding.
-    if runtime_state is not None:
-        try:
-            from moonmind.omnigent.harness_platform.runtime_binding import (
-                release_unused_repository_issuance,
-            )
-
-            issuance = dict(
-                getattr(runtime_state.binding, "repositoryIssuance", {}) or {}
-            )
-            if issuance:
-                _narrowed, _released = release_unused_repository_issuance(
-                    runtime_state.binding, sorted(issuance.keys())
-                )
-                settled["releasedRepositoryIssuanceRefs"] = list(_released)
-            else:
-                settled["releasedRepositoryIssuanceRefs"] = []
-        except Exception:
-            settled["releasedRepositoryIssuanceRefs"] = []
+        settled = await _settle_command(request)
         settled["revision"] = session.revision
         if runtime_binding is not None and runtime_binding_state is not None:
             settled.update(
@@ -3893,16 +3869,23 @@ async def omnigent_ensure_provider_session_activity(
         provider_request = provider_request.model_copy(
             update={"parameters": parameters}
         )
-        create_payload = build_omnigent_session_create_payload(
+        create_payload, provider_session_id = await prepare_workflow_session_create(
             request=provider_request,
             selection=build_omnigent_selection(provider_request),
             target=target,
+            client=client,
+            bridge=bridge,
+            run_store=bridge_store,
+            provider_idempotency_key=request.session_id,
         )
-        create_payload["idempotency_key"] = request.session_id
-        created = await client.create_session(create_payload)
-        provider_session_id = str(
-            created.get("id") or created.get("sessionId") or created.get("session_id") or ""
-        ).strip()
+        if not provider_session_id:
+            created = await client.create_session(create_payload)
+            provider_session_id = str(
+                created.get("id")
+                or created.get("sessionId")
+                or created.get("session_id")
+                or ""
+            ).strip()
         if not provider_session_id:
             raise RuntimeError("Omnigent create session response omitted session identity")
         provider_snapshot = await client.get_session(provider_session_id)

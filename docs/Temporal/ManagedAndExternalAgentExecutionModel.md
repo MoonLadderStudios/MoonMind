@@ -394,9 +394,14 @@ enforce deployment deny rules. A permission flag authored in the session's
 The bridge row freezes workflow launch defaults when the attempt is first
 persisted, before provider session creation. A retry uses that saved decision,
 including when a worker died after creation but before attaching the session ID.
-Rows retained from before this default was introduced keep their original launch
-arguments; upgrades do not rewrite an uncertain provider request under the same
-idempotency key.
+Both the streaming execution driver and canonical OmnigentSession activity use
+that same launch authority. A retained row without a saved default is ambiguous:
+older workers may have launched with or without the Claude flag. Before another
+create, MoonMind searches the provider's complete, bounded session inventory by
+its original MoonMind identity and reattaches the matching session. Conflicting
+ownership, duplicate matches, or incomplete lookup report the original problem
+without creating anything or recommending a fresh execution key. Only a confirmed no-match permits freezing current
+defaults and creating a session. Explicitly saved empty defaults remain empty.
 
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
