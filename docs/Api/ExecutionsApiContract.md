@@ -188,7 +188,9 @@ Required counts are `total`, `pending`, `executing`, `completed`, and `failed`. 
 
 ### 8.3 Search Attributes and Memo
 
-Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, and `mm_target_skill`.
+Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, `mm_target_skill`, and `mm_provider_profile`.
+
+`mm_provider_profile` (Text) and the memo `providerProfile` summary are the recorded Provider Profile projection written once at admission ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). List rows expose the bounded `providerProfile` summary (`selectionState`, up to eight `{id, label, harness}` entries, `profileCount`); it never carries credentials, OAuth paths, raw provider payloads, or host/container handles.
 
 Runtime/Skill facets are authoritative only after the namespace registers their `KeywordList` types. Before registration, dependent queries degrade without sending invalid Visibility queries. Unknown values are omitted rather than blank. These fields are filters, not sortable scalar strings.
 
@@ -300,7 +302,8 @@ Domain create validation uses 422 `invalid_execution_request`, with field-addres
 | Parameter | Default/constraint |
 | --- | --- |
 | workflowType, state, ownerType, ownerId, entry, repo, integration | Optional filters |
-| targetRuntime / targetRuntimeIn | Registered canonical runtime facet |
+| targetRuntime / targetRuntimeIn | Legacy registered canonical runtime facet; never a Provider Profile alias |
+| providerProfileIn / providerProfileNotIn / providerProfileStateIn / providerProfileStateNotIn / providerProfileBlank | Recorded Provider Profile ID/state membership ([Workflows List §12.1](../UI/WorkflowsListPage.md#121-canonical-filter-encoding)); applied before count and pagination |
 | targetSkillIn | Registered primary Skill facet |
 | pageSize | Default 50; range 1–200 |
 | nextPageToken | Opaque continuation token |

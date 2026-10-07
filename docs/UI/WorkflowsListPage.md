@@ -1,8 +1,8 @@
 # Workflows List Page
 
-Status: Living product contract; Provider Profile presentation is adopted desired state, not an implementation claim  
+Status: Living product contract; Provider Profile presentation is implemented (MoonLadderStudios/MoonMind#4640)  
 Owners: MoonMind Engineering  
-Last updated: 2026-10-01
+Last updated: 2026-10-07
 Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, Provider Profile presentation, and Progress column sort/filter semantics
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
@@ -17,7 +17,7 @@ The page helps operators inspect Temporal-backed MoonMind Workflow Executions in
 
 The column filtering model is intentionally similar to Google Sheets filters: each filterable column owns a filter control where users can stage changes, search or enter values, include or exclude values when appropriate, include or exclude blanks when meaningful, clear a column filter, cancel staged edits, and apply the filter.
 
-The adopted agent-selection design replaces the ordinary Runtime column and mobile field with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. This requires a recorded-profile data projection and corresponding query controls, not a heading-only rename.
+The ordinary Runtime column and mobile field are replaced with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. Rows, filters, counts, and facets read one recorded-profile projection (section 7.3), not a relabeled runtime field.
 
 ---
 
@@ -342,6 +342,17 @@ An authored profile can be displayed before launch without claiming successful a
 Extend the existing list projection and typed response for this compact summary. Reuse existing persistence/batching rather than adding a profile-history service. The browser must not request per-row profiles, execution details, step ledgers, or Temporal histories. No credentials, OAuth paths, raw provider payloads, or infrastructure handles enter the ordinary list payload.
 
 Keep one replacement column. Do not add ordinary Harness, Provider, Backend, Container, and Host columns alongside Provider Profile. Long names wrap or truncate accessibly within the current layout rather than overflowing mobile cards. Equal names are disambiguated by a compact stable ID where needed.
+
+### 7.3 Recorded Provider Profile projection
+
+Admission (`TemporalExecutionService.create_execution`) records the projection once for each user workflow from the admitted parameters only: the agent-profile snapshot's `providerProfileRef` (or the top-level Provider Profile `profileId` admission sets to the same ID) plus explicit or resolved step `providerProfileRef` values. Execution-configuration `profileId`, runtime, model, and current defaults never establish an association.
+
+| Store | Contents | Used for |
+| --- | --- | --- |
+| Memo `providerProfile` | `selectionState`, up to eight `{id, label, harness}` entries, `profileCount`. `label` is the display name captured at admission; ID-only entries omit it. | List row summary and facet labels. |
+| `mm_provider_profile` (Text Search Attribute) | Space-separated opaque tokens: one state token plus one hashed token per recorded ID, including IDs beyond the display bound. | Filters, counts, and facet counts before pagination. |
+
+Temporal SQL Visibility allows three `KeywordList` attributes and all three are in use, so membership is a `Text` attribute whose tokens are single lowercase alphanumeric terms that every Visibility store matches exactly. Records admitted before the projection have neither store and report `not_recorded`; the same absence is what `providerProfileStateIn=not_recorded` and the blank shortcut match. That state means no association is recorded in the projection, not that no profile was used. When the namespace has not registered `mm_provider_profile`, Provider Profile filters return a degraded empty list with an unknown count, the facet reports `current_page_fallback`, and the browser says so; a row without a parsed summary shows **Unavailable**, never an absence state.
 
 ---
 
@@ -729,7 +740,7 @@ Target server-authoritative rule:
 
 ### 12.1 Canonical filter encoding
 
-The API and URL should support multi-value include and exclude filters where meaningful. Provider Profile parameters below are the target extension of the existing query owner, not a claim that the current API accepts them. Implement and document the server and generated/client contract together.
+The API and URL should support multi-value include and exclude filters where meaningful. The Provider Profile parameters below are implemented by the shared executions query builder for list, metrics, and facets, and by the generated/client contract. The browser stages one include or exclude mode per Provider Profile view; it reports a mixed include/exclude link as a validation error and rewrites a `providerProfileBlank` link to the equivalent explicit state list.
 
 Representative URL shapes with illustrative stable profile IDs:
 
@@ -796,7 +807,7 @@ Existing URLs must continue to fail safe:
 | `entry=run` | Historical alias for the default Workflow-run view. |
 | `entry=manifest` | Show a recoverable retired-product message (MoonLadderStudios/MoonMind#4192); the Manifests page is removed, so never redirect to it. |
 | `repo=<value>` | Repository text filter. |
-| legacy Runtime query/filter | Preserve its runtime semantics with a clearly labeled legacy constraint while supported, or explain unsupported filtering before changing the query. Never relabel as Provider Profile or silently broaden results. |
+| legacy Runtime query/filter | Preserved unchanged as a **Legacy runtime** chip and drawer note that can be removed but not newly authored. Never relabeled as Provider Profile or silently broadened. Exit: remove with the `targetRuntime*` API parameters. |
 | legacy `sort` / `sortDir` while frontend sort is current-page-only | Dropped or ignored so old links do not imply global order. |
 | legacy `sort=progress` | Normalize to `sort=progressPct` only after server-authoritative Progress sort exists; otherwise drop or ignore with current-page-only behavior. |
 
@@ -845,7 +856,7 @@ Rules:
 
 The UI needs facet data so a filter popover can show values and counts beyond the current page.
 
-Target Provider Profile extension to the existing endpoint, not an already-shipped API claim:
+Implemented Provider Profile facet on the existing endpoint:
 
 ```text
 GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile IDs, states, and blank shortcut>
