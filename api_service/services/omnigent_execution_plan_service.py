@@ -791,10 +791,30 @@ async def _admit_repository_plan_inputs(
     publish_mode = str(
         initial_parameters.get("publishMode") or publication.get("mode") or "none"
     ).lower()
+    merge_automation = (
+        publication.get("mergeAutomation")
+        or workflow.get("mergeAutomation")
+        or initial_parameters.get("mergeAutomation")
+    )
+    review_only = (
+        isinstance(merge_automation, Mapping)
+        and merge_automation.get("enabled") is True
+        and merge_automation.get("finishMode") == "review_only"
+    )
+    if review_only:
+        from moonmind.schemas.temporal_models import MergeAutomationConfigModel
+
+        MergeAutomationConfigModel.model_validate(merge_automation)
+        if publish_mode != "none":
+            raise ValueError("review_only requires publication mode none")
+        if mode == AccessMode.ANONYMOUS:
+            raise ValueError("anonymous source cannot admit review-request authority")
     slots = {"source": ("source_read", ("read",))}
     if requires_github and mode != AccessMode.ANONYMOUS:
         operations = ("read",)
-        if publish_mode in {"auto", "pr"}:
+        if review_only:
+            operations = ("read", "review_request")
+        elif publish_mode in {"auto", "pr"}:
             operations = ("read", "write", "branch_write", "review_request")
         elif publish_mode == "branch":
             operations = ("read", "write", "branch_write")

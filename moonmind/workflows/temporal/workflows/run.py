@@ -504,7 +504,7 @@ MERGE_AUTOMATION_DEFAULT_FINISH_MODE = "merge"
 # value takes the default; every other unsupported value fails validation
 # instead of silently inheriting merge authority.
 MERGE_AUTOMATION_FINISH_MODES = frozenset(
-    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only"}
+    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only", "review_only"}
 )
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
@@ -20065,6 +20065,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 continue
             if not _coerce_bool(candidate.get("enabled"), default=False):
                 continue
+            finish_mode = self._normalize_finish_mode(
+                candidate.get("finishMode") or candidate.get("finish_mode")
+            )
             timeout_config = candidate.get("timeouts")
             if not isinstance(timeout_config, Mapping):
                 timeout_config = {}
@@ -20088,7 +20091,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 or self._canonical_jira_issue_key_from_parameters(parameters)
             )
             post_merge_jira: dict[str, Any] = dict(post_merge_jira_config)
-            if effective_jira_issue_key and "enabled" not in post_merge_jira:
+            if (
+                finish_mode != "review_only"
+                and effective_jira_issue_key
+                and "enabled" not in post_merge_jira
+            ):
                 post_merge_jira["enabled"] = True
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
@@ -20108,7 +20115,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else {}
             )
             github_issue = self._canonical_github_issue_from_parameters(parameters)
-            if github_issue:
+            if github_issue and finish_mode != "review_only":
                 post_merge_github.setdefault("enabled", True)
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
@@ -20148,9 +20155,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 or "squash",
                 "maxIterations": candidate.get("maxIterations"),
-                "finishMode": self._normalize_finish_mode(
-                    candidate.get("finishMode") or candidate.get("finish_mode")
-                ),
+                "finishMode": finish_mode,
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
                 "postMergeGithub": post_merge_github,
@@ -20811,10 +20816,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return f"Jira issue {issue_key} was already in a done-category status."
         return ""
 
-    def _merge_automation_child_succeeded(self, result: Any) -> bool:
+    def _merge_automation_child_succeeded(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status == "review_complete"
         return status in MERGE_AUTOMATION_SUCCESS_STATUSES
 
     def _merge_automation_child_canceled(self, result: Any) -> bool:
@@ -20823,19 +20832,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         return status == MERGE_AUTOMATION_CANCELED_STATUS
 
-    def _merge_automation_child_status_valid(self, result: Any) -> bool:
+    def _merge_automation_child_status_valid(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status in (
+                MERGE_AUTOMATION_FAILURE_STATUSES
+                | {MERGE_AUTOMATION_CANCELED_STATUS, "review_complete"}
+            )
         return bool(status) and status in MERGE_AUTOMATION_TERMINAL_STATUSES
 
-    def _merge_automation_failure_reason(self, result: Any) -> str:
+    def _merge_automation_failure_reason(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> str:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
         if not status:
             return "merge automation failed: missing terminal status"
-        if status not in MERGE_AUTOMATION_TERMINAL_STATUSES:
+        if not self._merge_automation_child_status_valid(result, finish_mode=finish_mode):
             return f"merge automation failed: unsupported terminal status {status}"
         blockers = self._get_from_result(result, "blockers")
         blocker_summary = ""
@@ -20982,10 +21000,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             or "unknown"
         )
-        child_status_valid = self._merge_automation_child_status_valid(child_result)
+        finish_mode = payload["mergeAutomationConfig"]["finishMode"]
+        child_status_valid = self._merge_automation_child_status_valid(
+            child_result, finish_mode=finish_mode
+        )
         reason = (
-            self._merge_automation_failure_reason(child_result)
-            if not self._merge_automation_child_succeeded(child_result)
+            self._merge_automation_failure_reason(child_result, finish_mode=finish_mode)
+            if not self._merge_automation_child_succeeded(
+                child_result, finish_mode=finish_mode
+            )
             else None
         )
         if child_status_valid:
@@ -21001,10 +21024,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._close_status = CLOSE_STATUS_CANCELED
             self._set_state(
                 STATE_CANCELED,
-                summary=self._merge_automation_failure_reason(child_result),
+                summary=self._merge_automation_failure_reason(
+                    child_result, finish_mode=finish_mode
+                ),
             )
             return
-        if not self._merge_automation_child_succeeded(child_result):
+        if not self._merge_automation_child_succeeded(
+            child_result, finish_mode=finish_mode
+        ):
             raise ValueError(reason or "merge automation failed")
 
     async def _resolve_agent_node_skillset_ref(

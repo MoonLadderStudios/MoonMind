@@ -1306,6 +1306,7 @@ async def _compile_opencode_plan(
     task_input_snapshot_ref="art_request_1",
     task_input_snapshot_digest="sha256:" + "1" * 64,
     profile_tools: tuple[str, ...] = (),
+    parent_repository_plan=None,
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
@@ -1353,6 +1354,7 @@ async def _compile_opencode_plan(
         task_input_snapshot_ref=task_input_snapshot_ref,
         task_input_snapshot_digest=task_input_snapshot_digest,
         execution_plan_store=plan_store,
+        parent_repository_plan=parent_repository_plan,
     )
 
 
@@ -2727,3 +2729,151 @@ async def test_strict_deployment_still_rejects_mismatched_historical_certificate
     assert "execution evidence unavailable" in str(excinfo.value)
     admission = _PlanStore.persisted
     _ = admission
+
+
+class _ReadableRepositoryPlanArtifacts(_ArtifactService):
+    async def read(self, *, artifact_id: str, **_kwargs):
+        return SimpleNamespace(artifact_id=artifact_id), self.payloads[artifact_id]
+
+
+async def _configure_github_repository_plan_test(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import Base
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    repository = "MoonLadderStudios/MoonMind"
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("review-repository", "REVIEW_REPOSITORY_PAT"),
+        assignments=[github_repository_assignment("review-repository", repository)],
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+    return repository, engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def _assert_review_only_repository_plan(plan, artifacts):
+    access = plan.resolvedTools["repositoryAccess"]
+    assert set(access) == {"source", "collaboration"}
+    assert {
+        slot: binding.repositoryRole
+        for slot, binding in plan.credentialBindings.items()
+        if getattr(binding, "authorityKind", None) == "repository_connection"
+    } == {"source": "source_read", "collaboration": "collaboration"}
+    for slot, operations in (
+        ("source", ["read"]),
+        ("collaboration", ["read", "review_request"]),
+    ):
+        artifact_id = access[slot]["artifactRef"].removeprefix("artifact:")
+        selection = json.loads(artifacts.payloads[artifact_id])["selection"]
+        assert selection["connectionId"] == "review-repository"
+        assert selection["operations"] == operations
+    return access
+
+
+@pytest.mark.asyncio
+async def test_review_only_plan_and_child_admit_only_read_and_review_requests(
+    monkeypatch, tmp_path
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    parameters = {
+        "repository": repository,
+        "publishMode": "none",
+        "workflow": {
+            "instructions": "Request and observe a review of the existing PR.",
+            "publish": {
+                "mode": "none",
+                "mergeAutomation": {
+                    "enabled": True,
+                    "finishMode": "review_only",
+                    "reviewLoop": {"enabled": True, "provider": "codex"},
+                },
+            },
+        },
+    }
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters=parameters,
+            workflow_id="mm:review-only-parent",
+        )
+        access = _assert_review_only_repository_plan(parent.envelope.payload, artifacts)
+
+        child = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters=parameters,
+            workflow_id="mm:review-only-child",
+            parent_repository_plan=parent.envelope,
+        )
+        child_access = _assert_review_only_repository_plan(
+            child.envelope.payload, artifacts
+        )
+        for slot in ("source", "collaboration"):
+            assert child_access[slot]["snapshotRef"] != access[slot]["snapshotRef"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ordinary_auto_child_still_cannot_broaden_read_only_parent_authority(
+    monkeypatch, tmp_path
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters={"repository": repository},
+            workflow_id="mm:read-only-parent",
+        )
+        with pytest.raises(
+            ValueError,
+            match="child repository authority must preserve or narrow the parent",
+        ):
+            await _compile_opencode_plan(
+                monkeypatch,
+                artifacts=artifacts,
+                launch_policy_ref="opencode-on-demand@1",
+                plan_store=_PlanStore(object()),
+                session_factory=sessions,
+                profile_tools=("gh",),
+                extra_parameters={"repository": repository, "publishMode": "auto"},
+                workflow_id="mm:ordinary-auto-child",
+                parent_repository_plan=parent.envelope,
+            )
+    finally:
+        await engine.dispose()

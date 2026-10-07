@@ -29,7 +29,7 @@ annotations:
       maxIterations: '{{ inputs.max_iterations }}'
       # `merge` runs a final pr-resolver pass with merge authority once nothing
       # is left to address. `fix_only` stops the loop at that same open gate.
-      finishMode: '{{ "merge" if inputs.finish_with_pr_resolver else "fix_only" }}'
+      finishMode: '{{ "review_only" if inputs.review_only else ("merge" if inputs.finish_with_pr_resolver else "fix_only") }}'
       reviewLoop:
         enabled: '{{ inputs.review_provider != "none" }}'
         provider: '{{ "codex" if inputs.review_provider == "none" else inputs.review_provider }}'
@@ -77,6 +77,12 @@ annotations:
         default: 5
         minimum: 1
         maximum: 50
+      review_only:
+        type: boolean
+        title: Review only
+        description: Request a fresh automated review for the current pull request
+          head and report its findings without fixing, publishing, or merging.
+        default: false
       finish_with_pr_resolver:
         type: boolean
         title: Finish with pr-resolver
@@ -110,8 +116,13 @@ annotations:
       placeholder: '123, a pull request URL, or a head branch'
     review_provider:
       widget: select
+    review_only:
+      widget: checkbox
     finish_with_pr_resolver:
       widget: checkbox
+      visibleWhen:
+        field: review_only
+        equals: false
     advanced_options:
       widget: checkbox
     merge_method:
@@ -138,6 +149,7 @@ annotations:
     review_provider: codex
     merge_method: squash
     max_iterations: 5
+    review_only: false
     finish_with_pr_resolver: false
     advanced_options: false
     max_review_cycles: 5
@@ -167,6 +179,11 @@ inputs:
   type: text
   required: false
   default: '5'
+- name: review_only
+  label: Review Only
+  type: boolean
+  required: false
+  default: false
 - name: finish_with_pr_resolver
   label: Finish With pr-resolver
   type: boolean
