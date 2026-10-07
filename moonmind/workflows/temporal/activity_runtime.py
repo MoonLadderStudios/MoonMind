@@ -12073,6 +12073,7 @@ class TemporalAgentRuntimeActivities:
             DockerReferenceState,
             ManagedRuntimeCleanupConfig,
             cleanup_managed_runtime_files,
+            resolve_closed_workflows,
         )
         from moonmind.workflows.temporal.runtime.managed_session_store import (
             ManagedSessionStore,
@@ -12181,6 +12182,24 @@ class TemporalAgentRuntimeActivities:
                 loop,
             ).result()
 
+        client_adapter = self._client_adapter
+        if client_adapter is None:
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+            client_adapter = TemporalClientAdapter()
+
+        def _closed_workflow_provider(
+            workflow_ids: Sequence[str],
+        ) -> Mapping[str, datetime | None]:
+            # Sandbox workspaces carry only their owner workflow id; Temporal
+            # decides whether that owner (and any grantee) has finished.
+            return asyncio.run_coroutine_threadsafe(
+                resolve_closed_workflows(
+                    workflow_ids, describe=client_adapter.describe_workflow
+                ),
+                loop,
+            ).result()
+
         # The janitor performs recursive synchronous filesystem work. Keep it
         # off this fleet's async loop so live status/control Activities remain
         # serviceable, and own heartbeats from the event-loop side. Cancellation
@@ -12202,6 +12221,7 @@ class TemporalAgentRuntimeActivities:
                     docker_reference_provider=(
                         None if docker_state is None else _docker_reference_provider
                     ),
+                    closed_workflow_provider=_closed_workflow_provider,
                     progress_callback=_check_cleanup_cancellation,
                 ),
                 cancellation_requested=cancellation_requested,

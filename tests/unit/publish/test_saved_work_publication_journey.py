@@ -250,8 +250,8 @@ class Journey:
         )
         return {
             "schemaVersion": "saved-work-publication-v1",
-            "sourceWorkflowId": "mm:source",
-            "sourceRunId": "source-run",
+            "sourceWorkflowId": self.saved.workflow_id,
+            "sourceRunId": self.saved.run_id,
             "savedWorkRef": self.saved.saved_work_ref,
             "savedWorkDigest": self.saved.saved_work_digest,
             "admittedPrincipal": principal,
@@ -311,6 +311,7 @@ async def journey(
     destination_files=None,
     seed_baseline=False,
     emulate_temporal=True,
+    saved_work_factory=None,
 ):
     """Saved work, destination, and provider fixtures for one journey.
 
@@ -318,8 +319,12 @@ async def journey(
     real Temporal worker can run the same Activities.
     """
     async with _artifact_service(tmp_path) as service:
-        saved = await capture_saved_work(
-            tmp_path, BASE_FILES, _mutate, artifact_service=service
+        saved = (
+            await saved_work_factory(service)
+            if saved_work_factory is not None
+            else await capture_saved_work(
+                tmp_path, BASE_FILES, _mutate, artifact_service=service
+            )
         )
         remote = _bare_destination(tmp_path)
         if seed_baseline:

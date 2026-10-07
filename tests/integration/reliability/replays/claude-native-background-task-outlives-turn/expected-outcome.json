@@ -1,0 +1,6 @@
+{
+  "claudeChildEnvironment": {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"
+  },
+  "unaffectedHarnessId": "codex-native"
+}

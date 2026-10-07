@@ -81,6 +81,7 @@ request authority at the boundary the producer already uses:
   controller attests that attempt. Emitting the block into the AgentRun request
   is gated by the `run-canonical-turn-lineage-v1` replay patch, so an AgentRun
   started before the cutover carries no lineage and remains an `initial` turn.
+- `api_service/services/remediation_session_controls.py` adapts admitted cross-workflow interrupt/cancel controls to the same canonical claim and native control owners with `remediation` lineage and an exact persisted session binding. It never constructs a managed-session workflow ID from a runtime label.
 - `api_service/api/routers/omnigent_bridge.py` maps native Workflow Chat control
   types to `workflow_chat`, `approval_response`, or `steering` by exhaustive
   membership.

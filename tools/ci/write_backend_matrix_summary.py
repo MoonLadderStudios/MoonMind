@@ -289,6 +289,38 @@ def classify_outcome(selected: bool, junit_exists: bool, test_outcome: str) -> s
     return "unavailable"
 
 
+# coreutils ``timeout`` exit statuses for the reliability shell deadline.
+DEADLINE_STOPPED_STATUS = 124
+HARD_KILLED_STATUS = 137
+
+
+def classify_termination(selected: bool, exit_status: int | None) -> str:
+    """Describe how the test command ended, from its recorded exit status.
+
+    Only the recorded status is used: a missing status means the shell never
+    reached the line after pytest (native step bound, cancellation or runner
+    loss), so the end state is reported as unavailable, not inferred.
+    """
+    if not selected:
+        return "intentionally unselected"
+    if exit_status is None:
+        return (
+            "unavailable (no exit status recorded -- the native step bound, "
+            "cancellation or runner loss stopped the step first)"
+        )
+    if exit_status == DEADLINE_STOPPED_STATUS:
+        return (
+            "cooperative deadline stop (exit status 124 -- the shell deadline "
+            "interrupted pytest, which exited within its grace period)"
+        )
+    if exit_status == HARD_KILLED_STATUS:
+        return (
+            "hard kill (exit status 137 -- SIGKILL after the deadline grace "
+            "period or from the OS; final reports may be missing)"
+        )
+    return f"pytest exited (exit status {exit_status})"
+
+
 def render_summary(
     *,
     suite: str,
@@ -316,6 +348,7 @@ def render_summary(
     secondary_note: str | None = None,
     overhead_note: str | None = None,
     last_active: LastActiveCase | None = None,
+    exit_status: int | None = None,
 ) -> str:
     """Render the per-job markdown appended to $GITHUB_STEP_SUMMARY."""
     identity = suite if not shard else f"{suite} (shard {shard})"
@@ -327,6 +360,7 @@ def render_summary(
         f"- Tested revision: `{revision or 'unavailable'}`",
         f"- Run/attempt: `{run_id or 'unavailable'}` / `{attempt or 'unavailable'}`",
         f"- Outcome: `{outcome}` (test step outcome: `{test_outcome or 'unavailable'}`)",
+        f"- Termination: `{classify_termination(selected, exit_status)}`",
         "",
         "### Effective command and budgets",
         "",
@@ -458,6 +492,15 @@ def _read_test_seconds(path: str | None) -> float | None:
         return None
     try:
         return float(Path(path).read_text(encoding="utf-8").strip().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _read_exit_status(path: str | None) -> int | None:
+    if not path:
+        return None
+    try:
+        return int(Path(path).read_text(encoding="utf-8").strip().split()[0])
     except (OSError, ValueError, IndexError):
         return None
 
@@ -598,6 +641,7 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         secondary_note=secondary_note,
         overhead_note=overhead_note,
         last_active=last_active,
+        exit_status=_read_exit_status(getattr(args, "test_status_file", "")),
     )
     return markdown, error
 
@@ -617,6 +661,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selected", default="true", choices=["true", "false"])
     parser.add_argument("--test-outcome", default="unknown")
     parser.add_argument("--test-seconds-file", default="")
+    parser.add_argument("--test-status-file", default="")
     parser.add_argument("--effective-command", default="")
     parser.add_argument("--pytest-timeout", default="")
     parser.add_argument("--step-budget", default="")
