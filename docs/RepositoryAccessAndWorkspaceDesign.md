@@ -319,21 +319,33 @@ Server-side repository readers (`GitHubService.read_pull_request`,
 admitted for the work. A caller supplies that connection or names the admitted
 run. Tools and Activities name the run that owns them. A merge gate acting for
 its parent run names the parent. The reader takes the run's recorded
-`connectionRef` from its canonical parameters. As at launch, an omitted
-reference means `repository-connection:git-default`, and an unrecorded default
-derives from the deployment declaration. Selection uses the launch selector, so
-a deleted, disabled, or unassigned connection fails there.
+`connectionRef` from its canonical parameters. A child workflow started by a
+run, such as an agent step, merge gate, or resolver or remediation child, has
+no canonical record of its own. It acts with the nearest recorded run on its
+Temporal parent chain, read from the worker's Temporal client. A chain that
+reaches no recorded run fails. As at launch, an omitted reference means
+`repository-connection:git-default`, and an unrecorded default derives from the
+deployment declaration. Selection uses the launch selector, so a deleted,
+disabled, or unassigned connection fails there.
 
 The selected connection's endpoint must be trusted before any credential is
-read. An App connection issues through the bound acquirer. A PAT connection
-reads only its own SecretRef. A missing or unreadable credential fails without
-substituting an ambient token. A run that authored anonymous access reads with
-no credential. Retries and reconciliation reads in the same Activity reuse the
-same admitted run.
+read. An App connection issues through the bound acquirer for exactly the
+requested operation. A PAT connection reads only its own SecretRef. A missing
+or unreadable credential fails without substituting an ambient token. A run
+that authored anonymous access reads with no credential and cannot mutate.
+Retries and reconciliation reads in the same Activity reuse the same admitted
+run.
 
-Pull-request and issue mutation helpers still take an explicit token and fall
-back to deployment resolution when it is omitted. Review-only merge automation
-and saved publication already supply admitted credentials.
+Pull-request operations in the same work use that admitted connection too. The
+Jules merge Activity's base retarget and merge, the pr-resolver Activities'
+selector, readiness, and merge, and merge/fix merge-automation readiness and
+review requests pass their executing run to `GitHubService`. An App connection
+acquires `merge_request` for a merge or base retarget, `review_request` for a
+review request, and `read` for readiness and selector lookups. A failed
+selection or credential reports the operation unavailable and sends no request.
+Review-only merge automation and saved publication supply their own admitted
+credentials. Other issue and pull-request helpers still take an explicit token
+and fall back to deployment resolution when it is omitted.
 
 ### INV-004 Ambient identity cannot override admitted identity
 
