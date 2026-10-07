@@ -15,16 +15,14 @@ existing drain rule instead of inventing another topology mode or service:
 the decision predicate mirrors
 ``moonmind.workflows.executions.checkpoint_promotion.evaluate_worker_drain``
 (``outstanding == 0`` → safe to remove, otherwise retain). The deployment
-feeds the counts from the existing mechanisms — ``get_drain_metrics``
-scoped to the workflow task queue (see
-``TemporalExecutionService.get_drain_metrics`` ``task_queues`` passthrough),
-pending-activity inspection for old-queue tasks, and the supported reset
-ledger — rather than from fixture replay or failed probes. Missing
-visibility or failed probes are not a clean drain: unobservable dimensions
-must be reported as outstanding. Use
-:func:`render_checkpoint_compat_drain_report` for the exact operator
-procedure (visibility queries, history-marker inspection, and the removal
-checklist) that turns live deployment evidence into a removal decision.
+feeds the counts from Temporal visibility and histories through
+``moonmind.workflows.temporal.checkpoint_compat_drain_probe`` (pre-marker
+running histories, unclosed old-queue persistence activities, and retained
+pre-marker histories that a reset would replay) rather than from fixture
+replay or failed probes. Missing visibility or failed probes are not a clean
+drain: unobservable dimensions must be reported as outstanding.
+:func:`render_checkpoint_compat_drain_report` renders a decision with the
+probe definitions and, once drained, the removal checklist.
 
 This module depends on the standard library only and lives in the
 lightweight ``moonmind.gates`` namespace (whose ``__init__`` chain imports
@@ -59,12 +57,11 @@ class CheckpointCompatDrainUsage:
     Counts must come from live deployment probes, never from fixture replay:
 
     - ``open_pre_cutover_histories``: open workflow histories recorded
-      without the artifacts-fleet patch marker (``get_drain_metrics``
-      scoped to the workflow task queue, filtered to pre-marker histories).
+      without the artifacts-fleet patch marker.
     - ``pending_old_queue_tasks``: pending activity tasks still addressed
       to the workflow queue for ``checkpoint_branch.turn.*`` types.
-    - ``supported_resets_pending``: retained histories with a supported
-      reset obligation that has not been discharged.
+    - ``supported_resets_pending``: retained pre-marker histories that a
+      reset would replay onto the workflow queue.
     """
 
     open_pre_cutover_histories: int = 0
@@ -139,16 +136,9 @@ class CheckpointCompatDrainObservations:
     unobservable dimension retains the compat registration, so fixture
     replay or a partial probe can never authorize removal.
 
-    Source dimensions (MoonLadderStudios/MoonMind#3949 scope 3):
-
-    - ``open_pre_cutover_histories``: ``get_drain_metrics`` scoped to the
-      workflow task queue, filtered to histories recorded without the
-      ``checkpoint-branch-artifact-fleet-v1`` marker.
-    - ``pending_old_queue_tasks``: pending-activity inspection for
-      ``checkpoint_branch.turn.*`` tasks still addressed to the workflow
-      queue.
-    - ``supported_resets_pending``: retained histories with a supported
-      reset obligation that has not been discharged.
+    The dimensions match :class:`CheckpointCompatDrainUsage`;
+    ``moonmind.workflows.temporal.checkpoint_compat_drain_probe`` observes
+    them from the connected deployment.
     """
 
     open_pre_cutover_histories: int | None = None
@@ -237,18 +227,19 @@ def collect_checkpoint_compat_drain_observations(
 ) -> CheckpointCompatDrainObservations:
     """Build drain-gate observations from live deployment probe outputs.
 
-    This is the production entrypoint that binds the gate to authoritative
-    probes instead of fixture replay:
+    This is the entrypoint that binds the gate to live observations instead
+    of fixture replay; ``checkpoint_compat_drain_probe`` calls it with:
 
-    - ``open_pre_cutover_histories``: running workflows on the workflow task
-      queue whose history lacks the ``COMPAT_PATCH_ID`` marker (``None``
-      when visibility is unavailable or the marker scan failed).
-    - ``pending_old_queue_tasks``: pending activities of type
-      ``checkpoint_branch.turn.*`` still addressed to the workflow task
-      queue (``None`` when activity inspection is unavailable).
-    - ``supported_resets_pending``: retained histories with an undispatched
-      supported reset obligation (``None`` when the reset ledger is
-      unsupported or unreadable).
+    - ``open_pre_cutover_histories``: running ``MoonMind.CheckpointBranchTurn``
+      executions on the workflow fleet's queues whose history lacks the
+      ``COMPAT_PATCH_ID`` marker (``None`` when visibility or a history read
+      failed).
+    - ``pending_old_queue_tasks``: unclosed ``checkpoint_branch.turn.*``
+      activities in those histories addressed to a queue other than the
+      artifacts queue (``None`` on the same failures).
+    - ``supported_resets_pending``: closed executions still retained by
+      Temporal whose history lacks the marker (``None`` when visibility or a
+      history read failed).
 
     ``None`` is fail-closed downstream: unobservable dimensions retain the
     compat registration. Negative or non-integer counts raise ``ValueError``
@@ -268,16 +259,12 @@ def render_checkpoint_compat_drain_report(
     observations: CheckpointCompatDrainObservations | None = None,
     workflow_task_queue: str = "mm.workflow",
 ) -> str:
-    """Render the operator procedure that produced (or must produce) a verdict.
+    """Render a drain verdict with its probe definitions and next step.
 
-    The report names the exact live-deployment probes behind each dimension
-    and, when the gate is open, the removal checklist that retires the
-    workflow-queue registration. It is the executable counterpart to the
-    decision predicate: operators (or deployment tooling importing only this
-    stdlib module) collect the three probe outputs, feed them through
-    :func:`collect_checkpoint_compat_drain_observations` and
-    :func:`evaluate_checkpoint_compat_drain_observations`, and follow the
-    checklist below once ``may_remove_workflow_queue_handlers`` is true.
+    The report names what each dimension observes and, when the gate is
+    open, the removal checklist that retires the workflow-queue
+    registration. Observations come from
+    ``python -m moonmind.workflows.temporal.checkpoint_compat_drain_probe``.
     """
 
     blocking = ", ".join(decision.blocking_dimensions) or "none"
@@ -285,18 +272,17 @@ def render_checkpoint_compat_drain_report(
         f"{COMPAT_DRAIN_CONTRACT}: {decision.required_action}",
         f"outstanding={decision.outstanding}; blocking: {blocking}",
         "",
-        "Probes (live deployment evidence; None = unobservable = retain):",
-        "1. open_pre_cutover_histories: list running workflows with",
-        f'   ExecutionStatus="Running" AND TaskQueue="{workflow_task_queue}",',
-        f"   then keep those whose history lacks the '{COMPAT_PATCH_ID}'",
-        "   patch marker. Scoped visibility counts alone are not enough:",
-        "   the workflow queue also hosts post-cutover lanes.",
-        "2. pending_old_queue_tasks: describe each running workflow on the",
-        "   workflow queue and count pendingActivities with activityType",
-        "   'checkpoint_branch.turn.*' still addressed to the workflow queue.",
-        "3. supported_resets_pending: count retained histories with a",
-        "   supported reset obligation that has not been discharged; report",
-        "   None when the reset ledger is unsupported or unreadable.",
+        "Probes (live deployment evidence; None = unobservable = retain),",
+        "collected by python -m",
+        "moonmind.workflows.temporal.checkpoint_compat_drain_probe:",
+        "1. open_pre_cutover_histories: running MoonMind.CheckpointBranchTurn",
+        f'   executions with TaskQueue="{workflow_task_queue}" (or another',
+        f"   workflow-fleet queue) whose history lacks the '{COMPAT_PATCH_ID}'",
+        "   patch marker.",
+        "2. pending_old_queue_tasks: unclosed 'checkpoint_branch.turn.*'",
+        "   activities in those histories addressed to a non-artifacts queue.",
+        "3. supported_resets_pending: retained closed executions without the",
+        "   marker; a reset would replay them onto the workflow queue.",
         "",
     ]
     if observations is not None:
@@ -325,9 +311,9 @@ def render_checkpoint_compat_drain_report(
     else:
         lines.extend(
             [
-                "Retain the workflow-queue checkpoint handlers; re-probe on",
-                "the next maintenance window. Fixture replay is history",
-                "compatibility, not deployed drainage.",
+                "Retain the workflow-queue checkpoint handlers; re-run the",
+                "probe before the next change to this registration. Fixture",
+                "replay is history compatibility, not deployed drainage.",
             ]
         )
     return "\n".join(lines)

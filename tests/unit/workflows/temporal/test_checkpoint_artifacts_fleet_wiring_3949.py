@@ -3,10 +3,11 @@
 New checkpoint persistence already routes to the artifacts fleet behind
 ``checkpoint-branch-artifact-fleet-v1`` (#4032). The workflow-queue handlers
 remain only for pre-cutover replay/in-flight compatibility and must not be
-removed before their consumers drain. These tests prove the surviving
-production wiring, inventory capabilities, gate compat removal on drain
-evidence, and pin ordering/failure-containment — without a Temporal server,
-database, or deployment probe.
+removed before their consumers drain. These are source/registry checks of
+the wiring, capability inventory, drain gating and ordering — they start no
+Temporal worker and are not execution proof. Workflow-to-artifacts-worker
+execution is proven by
+``tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py``.
 
 Fixture replay (``test_checkpoint_queue_replay.py``) proves history
 compatibility only; it is not deployed-drainage evidence.

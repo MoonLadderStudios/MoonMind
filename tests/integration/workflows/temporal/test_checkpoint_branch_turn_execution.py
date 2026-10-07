@@ -503,13 +503,15 @@ def _input(
     *,
     publish_mode: str = "none",
     agent_run_workflow_id: str | None = None,
+    branch_id: str = "branch-1",
+    branch_turn_id: str = "turn-1",
 ) -> dict:
     request = _request(correlation_id, publish_mode=publish_mode)
     return {
         "schemaVersion": "checkpoint-branch-turn-execution/v1",
         "workflowId": "source-workflow",
-        "branchId": "branch-1",
-        "branchTurnId": "turn-1",
+        "branchId": branch_id,
+        "branchTurnId": branch_turn_id,
         "principal": "service:test",
         "sourceNamespace": "default",
         "sourceRunId": "source-run",
@@ -1816,43 +1818,22 @@ async def test_cancel_after_successful_child_keeps_actual_result_canceled() -> N
     ).replay_workflow(history)
 
 
-async def _terminal_activity_database(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/terminal.db")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+async def _seed_terminal_turn(
+    sessions,
+    artifact_service_factory,
+    *,
+    branch_id: str = "branch-1",
+    branch_turn_id: str = "turn-1",
+) -> dict[str, str]:
+    """Seed one claimed branch turn and its durable terminal evidence."""
 
-    def _artifact_service(session: AsyncSession) -> TemporalArtifactService:
-        return TemporalArtifactService(
-            get_temporal_artifact_repository(session), store=store
-        )
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.workflows.checkpoint_branch_turn.async_session_maker",
-        sessions,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.workflows.checkpoint_branch_turn."
-        "get_checkpoint_branch_artifact_service",
-        _artifact_service,
-    )
-
+    turn = branch_turn_id
     async with sessions() as session:
-        session.add(
-            TemporalExecutionCanonicalRecord(
-                workflow_id="source-workflow",
-                run_id="source-run",
-                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
-                entry="api",
-            )
-        )
-        await session.commit()
         await CheckpointBranchService(session).create_branch_graph(
             {
-                "branchId": "branch-1",
+                "branchId": branch_id,
                 "label": "Retry-safe terminal activity",
-                "branchTurnId": "turn-1",
+                "branchTurnId": turn,
                 "source": {
                     "workflowId": "source-workflow",
                     "runId": "source-run",
@@ -1866,28 +1847,28 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
                 "runtimeContextPolicy": "fresh_agent_run",
                 "instructionRef": "artifact://source/instruction",
                 "instructionDigest": "sha256:" + "b" * 64,
-                "idempotencyKey": "create-turn-1",
+                "idempotencyKey": f"create-{turn}",
             }
         )
         await CheckpointBranchService(session).claim_turn_execution(
             workflow_id="source-workflow",
-            branch_id="branch-1",
-            branch_turn_id="turn-1",
+            branch_id=branch_id,
+            branch_turn_id=turn,
             context_bundle_ref="artifact://launch/context",
             step_execution_manifest_ref="artifact://launch/manifest",
             diagnostics_ref="artifact://launch/diagnostics",
             launch_idempotency_key=build_branch_turn_launch_idempotency_key(
                 workflow_id="source-workflow",
-                branch_id="branch-1",
-                branch_turn_id="turn-1",
+                branch_id=branch_id,
+                branch_turn_id=turn,
             ),
             created_step_execution_id="branch-owner:run:implement:execution:1",
-            runtime_agent_run_id="agent-run-turn-1",
+            runtime_agent_run_id=f"agent-run-{turn}",
             agent_request_ref="artifact://launch/request",
-            execution_workflow_id="checkpoint-branch-turn:turn-1",
+            execution_workflow_id=f"checkpoint-branch-turn:{turn}",
         )
         await session.commit()
-        artifacts = _artifact_service(session)
+        artifacts = artifact_service_factory(session)
 
         async def _seed(
             kind: str,
@@ -1918,13 +1899,13 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
         instruction_ref = await _seed("checkpoint-instruction")
         checkpoint_model = StepExecutionCheckpointModel(
             checkpointId=(
-                "checkpoint-branch-turn:turn-1:branch-turn-turn-1:implement:"
+                f"checkpoint-branch-turn:{turn}:branch-turn-{turn}:implement:"
                 "execution:1:checkpoint:after_execution"
             ),
             boundary="after_execution",
             source={
-                "workflowId": "checkpoint-branch-turn:turn-1",
-                "runId": "branch-turn-turn-1",
+                "workflowId": f"checkpoint-branch-turn:{turn}",
+                "runId": f"branch-turn-{turn}",
                 "logicalStepId": "implement",
                 "executionOrdinal": 1,
             },
@@ -1932,8 +1913,8 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             planDigest="sha256:" + "d" * 64,
             workspace={"kind": "git_commit", "headCommit": "def456"},
             omnigentCheckpoint={
-                "workflowId": "checkpoint-branch-turn:turn-1",
-                "runId": "branch-turn-turn-1",
+                "workflowId": f"checkpoint-branch-turn:{turn}",
+                "runId": f"branch-turn-{turn}",
                 "logicalStepId": "implement",
                 "stepExecutionId": "branch-owner:run:implement:execution:1",
                 "attemptOrdinal": 1,
@@ -1943,15 +1924,15 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
                 "credentialGeneration": 1,
                 "hostBindingRef": "omnigent-oauth:profile-1",
                 "endpointRef": "default",
-                "bridgeSessionId": "fresh-bridge-turn-1",
+                "bridgeSessionId": f"fresh-bridge-{turn}",
                 "externalStateRef": external_ref,
                 "externalStateDigest": "sha256:" + "e" * 64,
-                "idempotencyKey": "branch-turn-terminal-turn-1",
+                "idempotencyKey": f"branch-turn-terminal-{turn}",
                 "executionProfileRef": "profile-1",
                 "launchPolicyRef": "policy-1@1",
                 "workspaceLocator": {
                     "kind": "sandbox",
-                    "workspaceId": "branch-workspace-turn-1",
+                    "workspaceId": f"branch-workspace-{turn}",
                     "relativePath": "repo",
                 },
                 "baselineCommit": "abc123",
@@ -1993,6 +1974,42 @@ async def _terminal_activity_database(tmp_path, monkeypatch):
             "publication": await _seed("publication"),
             "checkpoint": checkpoint_ref,
         }
+    return refs
+
+
+async def _terminal_activity_database(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/terminal.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+
+    def _artifact_service(session: AsyncSession) -> TemporalArtifactService:
+        return TemporalArtifactService(
+            get_temporal_artifact_repository(session), store=store
+        )
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.checkpoint_branch_turn.async_session_maker",
+        sessions,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.checkpoint_branch_turn."
+        "get_checkpoint_branch_artifact_service",
+        _artifact_service,
+    )
+
+    async with sessions() as session:
+        session.add(
+            TemporalExecutionCanonicalRecord(
+                workflow_id="source-workflow",
+                run_id="source-run",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                entry="api",
+            )
+        )
+        await session.commit()
+    refs = await _seed_terminal_turn(sessions, _artifact_service)
     return engine, sessions, refs
 
 

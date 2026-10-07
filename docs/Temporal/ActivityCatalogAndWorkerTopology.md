@@ -301,44 +301,63 @@ Removal is owned by the drain gate in
 (`evaluate_checkpoint_compat_drain_observations`, contract
 `checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
 `evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
-Deployment probes enter through `collect_checkpoint_compat_drain_observations`
-/ `CheckpointCompatDrainObservations` /
-`evaluate_checkpoint_compat_drain_observations`: any dimension that is
-unobservable (`None`: missing visibility or failed probe) retains compat
-and is named in `blocking_dimensions`. `render_checkpoint_compat_drain_report`
-renders the exact operator procedure (visibility queries, history-marker
-inspection, removal checklist). Scoped visibility counts come from
-`TemporalExecutionService.get_drain_metrics` with the workflow task queue
-passed explicitly. Drained means all three
-deployment-observed dimensions reach zero:
+`python -m moonmind.workflows.temporal.checkpoint_compat_drain_probe`
+observes the deployment it runs in (read-only) and prints the observations
+and decision as JSON. It derives the workflow fleet's task queues from the
+worker topology, reads Temporal visibility and histories for
+`MoonMind.CheckpointBranchTurn`, and feeds
+`collect_checkpoint_compat_drain_observations`. Drained means all three
+dimensions are observed at zero:
 
-- open pre-cutover histories recorded without the
-  `checkpoint-branch-artifact-fleet-v1` marker (`get_drain_metrics`
-  scoped to the workflow task queue, filtered to pre-marker histories);
-- pending `checkpoint_branch.turn.*` activity tasks still addressed to
-  the workflow queue;
-- retained histories with an undischarged supported-reset obligation.
+- running histories without the `checkpoint-branch-artifact-fleet-v1`
+  marker;
+- unclosed `checkpoint_branch.turn.*` activities in those histories that
+  are addressed to a queue other than the artifacts queue;
+- closed histories without the marker that Temporal still retains. A reset
+  would replay them with `workflow.patched` false and schedule persistence
+  on the workflow queue again; this count reaches zero as they leave
+  retention.
 
-Fixture replay is history-compatibility evidence, not deployed drainage;
-missing visibility or failed probes are not a clean drain and keep the
-registration retained.
+A failed visibility query or history read makes the affected dimension
+`None` (unobservable), which retains the registration. Fixture replay
+(`test_checkpoint_queue_replay.py`) is history-compatibility evidence, not
+deployed drainage. The probe is exercised against a Temporal dev server by
+`tests/integration/workflows/temporal/test_checkpoint_compat_drain_probe_3949.py`;
+no deployment's drain state has been observed as part of that repository
+verification. Removal of the registration, its dependency injection and the
+workflow worker's then-unneeded database/artifact rights is a separate change,
+made only after the probe reports all-zero for the deployment being changed.
 
 ### Actual process permission boundary (consolidated topology)
 
-Until the drain gate above releases the compat registration, the workflow
-worker process intentionally carries database and artifact-retention
-authority (`async_session_maker`, `CheckpointBranchService`, retained
-artifact refs in `workflows/checkpoint_branch_turn.py`) because the
-retained handlers execute old persistence tasks in that process. The four
-`agent_run.py` metadata helpers need none of it (proven behaviorally by
-`test_checkpoint_compat_drain_3949.py`, which runs all four helpers with
-database I/O denied and provider/Docker/artifact configuration removed,
-while the persistence handlers fail closed).
-New-only workflow processing must carry only what its real helpers require;
-while the topology stays consolidated, the justified permission set is exactly
-the retained handlers' persistence authority plus the helpers' catalog
-and registry reads — and the drain gate above is what retires the
-persistence half.
+Deterministic workflow code and new checkpoint persistence run in different
+workers: `temporal-worker-workflow` executes `MoonMind.CheckpointBranchTurn`
+and `temporal-worker-artifacts` executes `checkpoint_branch.turn.*` for
+marked histories, each with its own slots. Until the drain gate above
+releases the compat registration, the workflow worker process still carries
+database and artifact-retention authority (`async_session_maker`,
+`CheckpointBranchService`, retained artifact refs in
+`workflows/checkpoint_branch_turn.py`) because the retained handlers execute
+old persistence tasks in that process. The four `agent_run.py` metadata
+helpers need none of it (`test_checkpoint_compat_drain_3949.py` runs them
+in-process with database I/O denied and provider/Docker/artifact
+configuration removed).
+
+Effective rights in the supported `docker-compose.yaml` composition:
+
+| Right | `temporal-worker-workflow` | `temporal-worker-artifacts` | Surviving need |
+|---|---|---|---|
+| Operator `.env` (`env_file`: database settings and any provider credentials the operator configures) | yes | yes | database access for persistence on both workers |
+| `TEMPORAL_ARTIFACT_S3_*` | yes | yes | artifact retention by persistence handlers |
+| `moonmind_secrets` volume | yes | yes | secret/encryption material |
+| `agent_workspaces` volume | yes | no | workflow-fleet code still references the managed runtime store (`agent_run.py`) |
+| `control-plane-network` | yes | yes | Temporal, database and artifact store |
+
+Both workers load the operator `.env`, so this composition makes no
+least-privilege claim about provider credentials, and no OS-level denial is
+asserted. The workflow worker's database/S3 rights are removed with the
+compat registration; any other change to the workflow worker's rights or
+co-location is coordinated with #3937, not a separate topology.
 
 Measured capability inventory (workflow fleet):
 
@@ -353,29 +372,29 @@ Measured capability inventory (workflow fleet):
 | `checkpoint_branch.turn.persist_terminal` | yes (`lock` + `finalize`) | yes (artifact retention + result/diagnostics writes) |
 | `checkpoint_branch.turn.persist_terminal_rejection` | yes | yes (rejection row terminalization) |
 
-Under bounded concurrent load the consolidated worker retains every
-handoff's control record before its cleanup record with the drain gate
-staying decisive per input (`test_consolidated_worker_retains_control_and_cleanup_progress_under_load`;
-rehearsal, not production saturation proof). A stdlib-only decision-level
-companion (`test_checkpoint_drain_saturation_3949.py`) extends the same
-property to 100 concurrent workflow-decision handoffs with per-turn
-control-before-cleanup ordering. Temporal execution-under-load proof
-(concurrent `CheckpointBranchTurn` executions retaining control/cleanup
-progress under saturation) remains integration scope and requires either
-required-CI execution evidence or explicit reviewer acceptance of these
-rehearsals plus the retry/timeout budgets below. New persistence is proven to
-reach the artifacts fleet exclusively by
-`test_new_{success,failure,cancellation}_reaches_artifacts_fleet_with_real_handlers_3949`
-plus `test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949`,
-which bind the real handler objects only on the artifacts worker and assert
-the serving queue, timeouts, retry budget, and durable row state from the
-recorded history.
+Execution evidence lives in
+`tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py`
+(required CI). Its artifacts worker is built from
+`build_worker_activity_bindings(fleet="artifacts")` with the production slot
+limit, and no `checkpoint_branch.turn.*` handler is bound on the workflow
+queue. The journeys assert the serving queue, timeouts, retry budget and
+durable row state for success, provider failure, cancellation, a transient
+database outage that retries onto the same owned row, and exhausted
+retries that terminalize through `persist_terminal_rejection`. A concurrent
+journey runs more turns than the artifacts slot limit with every slot held:
+concurrency never exceeds the limit, the workflow worker still answers
+queries and processes a cancellation, the canceled turn's row stays
+non-terminal until its persistence gets a slot, and the late checkpoint
+success never overwrites `canceled`. Source, registry and compose checks in
+`test_checkpoint_production_matrix_3949.py` and
+`test_checkpoint_artifacts_fleet_wiring_3949.py` are labeled as inspection,
+not execution proof.
 
 This registration is the current state, not the intended end state. The
 intended least-privilege boundary keeps the workflow fleet Temporal-only with
 no artifact, provider-mutation, or runtime-supervision I/O; whether
-checkpoint persistence belongs beside deterministic workflows is the
-implementation concern tracked in #3949. Do not read the registration above
+checkpoint persistence belongs beside deterministic workflows is coordinated
+with #3937. Do not read the registration above
 as approval for broad workflow-fleet I/O.
 
 This is a narrow exception, not a second general-purpose activity plane.
