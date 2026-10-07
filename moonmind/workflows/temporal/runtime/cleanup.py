@@ -6,6 +6,7 @@ Implements MM-949 from source issue MM-940.
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import os
 import re
@@ -334,6 +335,14 @@ _CLOSED_WORKFLOW_STATUSES = frozenset(
 )
 
 
+class _OwnerLookup(enum.Enum):
+    """Outcome of asking Temporal whether one owner workflow has closed."""
+
+    CLOSED = enum.auto()
+    OPEN = enum.auto()
+    FAILED = enum.auto()
+
+
 class ClosedWorkflowLookupError(RuntimeError):
     """Some owner lookups failed; ``closed`` holds the answers that succeeded.
 
@@ -373,23 +382,23 @@ async def resolve_closed_workflows(
 
     async def lookup(
         workflow_id: str,
-    ) -> tuple[str, Literal["closed", "open", "failed"], datetime | None]:
+    ) -> tuple[str, _OwnerLookup, datetime | None]:
         async with semaphore:
             try:
                 description = await describe(workflow_id)
             except RPCError as exc:
                 if exc.status == RPCStatusCode.NOT_FOUND:
-                    return workflow_id, "closed", None
-                return workflow_id, "failed", None
+                    return workflow_id, _OwnerLookup.CLOSED, None
+                return workflow_id, _OwnerLookup.FAILED, None
             except Exception:
-                return workflow_id, "failed", None
+                return workflow_id, _OwnerLookup.FAILED, None
         status = getattr(getattr(description, "status", None), "name", None)
         if status not in _CLOSED_WORKFLOW_STATUSES:
-            return workflow_id, "open", None
+            return workflow_id, _OwnerLookup.OPEN, None
         close_time = getattr(description, "close_time", None)
         return (
             workflow_id,
-            "closed",
+            _OwnerLookup.CLOSED,
             _ensure_aware(close_time) if isinstance(close_time, datetime) else None,
         )
 
@@ -397,10 +406,14 @@ async def resolve_closed_workflows(
     results = await asyncio.gather(*(lookup(workflow_id) for workflow_id in ids))
     closed = {
         workflow_id: closed_at
-        for workflow_id, state, closed_at in results
-        if state == "closed"
+        for workflow_id, outcome, closed_at in results
+        if outcome is _OwnerLookup.CLOSED
     }
-    failed = [workflow_id for workflow_id, state, _ in results if state == "failed"]
+    failed = [
+        workflow_id
+        for workflow_id, outcome, _ in results
+        if outcome is _OwnerLookup.FAILED
+    ]
     if failed:
         raise ClosedWorkflowLookupError(closed, failed)
     return closed
