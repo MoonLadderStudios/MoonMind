@@ -20557,7 +20557,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "principal": self._owner_id or parent_workflow_id,
             **(
                 {"parentExecutionPlan": parent_execution_plan}
-                if parent_execution_plan is not None
+                if request.get("finishMode") == "review_only"
                 else {}
             ),
             "publishContextRef": (
