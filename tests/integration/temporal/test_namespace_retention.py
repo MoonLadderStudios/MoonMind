@@ -345,9 +345,10 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "mm_target_runtime" in result.stdout
     assert "mm_target_skill" in result.stdout
     assert "mm_title" in result.stdout
+    assert "mm_provider_profile" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 12
+    assert calls.count("search-attribute create") == 13
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
