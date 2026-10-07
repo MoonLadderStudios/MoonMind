@@ -1328,6 +1328,91 @@ async def test_checkpoint_branch_finalize_persists_save_and_verification_handoff
 
 
 @pytest.mark.asyncio
+async def test_late_older_turn_cannot_replace_newer_branch_head(
+    checkpoint_branch_session: AsyncSession,
+) -> None:
+    """A turn finishing after the head moved keeps its work without winning.
+
+    Two turns start from the same head. The first terminal candidate
+    advances it; the late one is retained as its own turn evidence, but it
+    must not replace the newer head, its latest-result index, or the branch
+    state. Its replay stays idempotent.
+    """
+
+    service = CheckpointBranchService(checkpoint_branch_session)
+    graph = await service.create_branch_graph(
+        {
+            **_branch_payload(branchId="cbr-race"),
+            "instructionRef": "artifact://instructions/root",
+            "instructionDigest": "sha256:root",
+            "idempotencyKey": "MM-4016:cbr-race:create",
+        }
+    )
+    older_id = graph.turns[0].branch_turn_id
+    newer = await service.continue_branch(
+        workflow_id="wf-1",
+        branch_id="cbr-race",
+        payload={
+            "instructionRef": "artifact://instructions/newer",
+            "instructionDigest": "sha256:newer",
+            "idempotencyKey": "MM-4016:cbr-race:continue",
+        },
+    )
+    await service.finalize_turn_execution(
+        workflow_id="wf-1",
+        branch_id="cbr-race",
+        branch_turn_id=newer.branch_turn_id,
+        outcome="succeeded",
+        agent_result_ref="artifact://agent-result/newer",
+        diagnostics_ref="artifact://terminal-diagnostics/newer",
+        checkpoint_ref="artifact://checkpoint/newer",
+        checkpoint_digest="sha256:newer",
+    )
+    late_kwargs = dict(
+        workflow_id="wf-1",
+        branch_id="cbr-race",
+        branch_turn_id=older_id,
+        outcome="failed",
+        agent_result_ref="artifact://agent-result/older",
+        diagnostics_ref="artifact://terminal-diagnostics/older",
+        checkpoint_ref="artifact://checkpoint/older",
+        checkpoint_digest="sha256:older",
+    )
+    late = await service.finalize_turn_execution(**late_kwargs)
+    await checkpoint_branch_session.commit()
+
+    branch = await checkpoint_branch_session.get(WorkflowCheckpointBranch, "cbr-race")
+    assert branch is not None
+    assert branch.current_head_checkpoint_ref == "artifact://checkpoint/newer"
+    assert branch.current_head_checkpoint_digest == "sha256:newer"
+    assert branch.state == "active"
+    assert branch.artifact_refs["latestBranchTurnResult"] == (
+        "artifact://agent-result/newer"
+    )
+    # The late turn's own outcome and saved candidate remain durable.
+    assert late.status == "failed"
+    assert late.diagnostics["headAdvanced"] is False
+    assert late.diagnostics["checkpointRef"] == "artifact://checkpoint/older"
+    assert late.diagnostics["checkpointDigest"] == "sha256:older"
+    stored = await service.read_branch_graph(workflow_id="wf-1", branch_id="cbr-race")
+    assert {
+        (artifact.branch_turn_id, artifact.artifact_ref)
+        for artifact in stored.artifacts
+        if artifact.artifact_kind == "output.branch_turn.checkpoint.json"
+    } == {
+        (older_id, "artifact://checkpoint/older"),
+        (newer.branch_turn_id, "artifact://checkpoint/newer"),
+    }
+
+    replayed = await service.finalize_turn_execution(**late_kwargs)
+    assert replayed.diagnostics["checkpointRef"] == "artifact://checkpoint/older"
+    with pytest.raises(ValueError, match="immutable terminal field checkpoint_ref"):
+        await service.finalize_turn_execution(
+            **{**late_kwargs, "checkpoint_ref": "artifact://checkpoint/other"}
+        )
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_handoff_is_indexed_and_readable(
     checkpoint_branch_session: AsyncSession,
 ) -> None:

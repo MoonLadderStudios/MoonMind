@@ -672,3 +672,70 @@ def test_quarantine_lock_rejects_reader_waiting_at_rename(
         with pytest.raises(ValueError, match="unavailable"):
             futures[0].result(timeout=2)
     assert not workspace.exists()
+
+
+def test_unsaved_workspace_outlives_ordinary_retention_until_its_bound(
+    tmp_path: Path,
+) -> None:
+    """A failed required save keeps the only local copy, but not forever.
+
+    The realizer's durable unsaved decision protects the workspace past the
+    ordinary retention window. Repeated recording cannot extend the bound,
+    and once the explicit #4017 limit passes ordinary cleanup applies and
+    takes the marker with it.
+    """
+
+    from moonmind.schemas.saved_work_retention import (
+        SAVED_WORK_UNSAVED_LOCAL_RETENTION,
+    )
+
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    store = SandboxWorkspaceRecordStore(root)
+    closures = _Closures({OWNER: NOW - timedelta(days=10)})
+    first = store.mark_unsaved(
+        WORKSPACE_ID,
+        reason_code="WORKSPACE_SAVE_UNAVAILABLE",
+        recorded_at=NOW - timedelta(days=10),
+    )
+    repeated = store.mark_unsaved(
+        WORKSPACE_ID, reason_code="WORKSPACE_SAVE_UNAVAILABLE", recorded_at=NOW
+    )
+
+    assert repeated == first
+    assert first["availability"] == "locally_retained_but_unsaved"
+    protected = _janitor(root, closures).run()
+    decision = _decision(protected, workspace)
+    assert decision.classification == "protected_unsaved"
+    assert "locally_retained_but_unsaved" in decision.reason
+    assert workspace.exists()
+
+    store.clear_unsaved(WORKSPACE_ID)
+    store.mark_unsaved(
+        WORKSPACE_ID,
+        reason_code="WORKSPACE_SAVE_UNAVAILABLE",
+        recorded_at=NOW - SAVED_WORK_UNSAVED_LOCAL_RETENTION - timedelta(days=1),
+    )
+    _age(store.store_root)
+    expired = _janitor(root, closures).run()
+
+    assert _decision(expired, workspace).classification == "deleted"
+    assert not workspace.exists()
+    assert store.read_unsaved(WORKSPACE_ID) is None
+
+
+def test_cleared_unsaved_decision_returns_workspace_to_ordinary_cleanup(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    store = SandboxWorkspaceRecordStore(root)
+    store.mark_unsaved(
+        WORKSPACE_ID, reason_code="WORKSPACE_SAVE_UNAVAILABLE", recorded_at=NOW
+    )
+    store.clear_unsaved(WORKSPACE_ID)
+    _age(store.store_root)
+
+    result = _janitor(root, _Closures({OWNER: NOW - timedelta(days=10)})).run()
+
+    assert _decision(result, workspace).classification == "deleted"
