@@ -264,11 +264,20 @@ def build_omnigent_session_create_payload(
     request: AgentExecutionRequest,
     selection: OmnigentExecutionSelection,
     target: OmnigentResolvedTarget,
+    launch_defaults: Mapping[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Build the JSON session-create payload sent to Omnigent."""
 
     session = selection.session
     terminal_launch_args = list(session.terminal_launch_args)
+    # Validation has already preserved/rejected the authored string array. Only
+    # workflow execution supplies its durable defaults; interactive API callers
+    # and pre-upgrade workflow rows retain their original arguments.
+    if selection.agent.harness_override == "claude-native" and not any(
+        arg.split("=", 1)[0] in {"--permission-mode", "--dangerously-skip-permissions"}
+        for arg in terminal_launch_args
+    ):
+        terminal_launch_args.extend((launch_defaults or {}).get("claude-native", []))
     title = (
         session.title
         or _clean((request.parameters or {}).get("title"))

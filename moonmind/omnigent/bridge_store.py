@@ -17,6 +17,7 @@ stream is preserved per event on ``omnigent_bridge_session_events``.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -72,6 +73,15 @@ def _journal_artifact_service(session: AsyncSession) -> Any:
     )
 
     return TemporalArtifactService(TemporalArtifactRepository(session))
+
+
+# Pin worker-derived workflow launch defaults before any provider side effect.
+# Missing metadata is ambiguous across older workers: reconcile any provider
+# effect before selecting defaults for an attempt without a saved decision.
+WORKFLOW_LAUNCH_DEFAULTS_KEY = "workflowLaunchDefaults"
+WORKFLOW_LAUNCH_DEFAULTS = {
+    "claude-native": ["--permission-mode", "bypassPermissions"],
+}
 
 
 FIRST_MESSAGE_NOT_PREPARED = "not_prepared"
@@ -928,6 +938,7 @@ class OmnigentBridgeSessionStore:
         """
 
         metadata = dict(target_metadata or {})
+        metadata.pop(WORKFLOW_LAUNCH_DEFAULTS_KEY, None)
         # Persist the request's logical step so the chat-binding projection can
         # label and validate the Chat context. The row only carries the physical
         # ``step_execution_id`` column; the logical id lives in metadata
@@ -957,7 +968,12 @@ class OmnigentBridgeSessionStore:
                     status=STATUS_DECLARED,
                     first_message_state=FIRST_MESSAGE_NOT_PREPARED,
                     terminal_refs={},
-                    metadata_=metadata,
+                    metadata_={
+                        **metadata,
+                        WORKFLOW_LAUNCH_DEFAULTS_KEY: copy.deepcopy(
+                            WORKFLOW_LAUNCH_DEFAULTS
+                        ),
+                    },
                 )
                 session.add(row)
                 await session.commit()
@@ -1093,6 +1109,30 @@ class OmnigentBridgeSessionStore:
                 if changed:
                     await session.commit()
             await session.refresh(row)
+            return _detached(session, row)
+
+    async def freeze_workflow_launch_defaults(
+        self, idempotency_key: str
+    ) -> OmnigentBridgeSession:
+        """Freeze defaults only after legacy provider reconciliation found no effect."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
+                .with_for_update()
+            )
+            row = result.scalar_one()
+            metadata = dict(row.metadata_ or {})
+            if (
+                WORKFLOW_LAUNCH_DEFAULTS_KEY not in metadata
+                and not row.omnigent_session_id
+            ):
+                metadata[WORKFLOW_LAUNCH_DEFAULTS_KEY] = copy.deepcopy(
+                    WORKFLOW_LAUNCH_DEFAULTS
+                )
+                row.metadata_ = metadata
+                await session.commit()
+                await session.refresh(row)
             return _detached(session, row)
 
     async def bind_profile_authorization(

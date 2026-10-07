@@ -730,12 +730,14 @@ degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
 Each sweep processes bounded pages of expired and soft-deleted artifacts and
-pending deletion intents, and keeps paging for up to 40 minutes while a full
-page still makes progress, heartbeating before each candidate and after each
-page. A page whose candidates are all protected ends
-the pass instead of repeating them. The result reports whether a backlog
-remains; the next hourly pass resumes it, so removal keeps pace with creation
-rather than one page per hour.
+pending deletion intents, and keeps paging for up to 40 minutes while pages
+still make progress. The Activity heartbeats periodically while database
+or object-store operations are pending, as well as before each candidate and
+after each page. A page that makes no progress ends the pass instead of
+repeating protected or stalled candidates. A short deletion-intent page still
+reports a backlog if any intent remains unresolved after reconciliation. The
+result reports whether a backlog remains; the next hourly pass resumes it, so
+removal keeps pace with creation rather than one page per hour.
 
 Retention class is assigned when an artifact is created or linked. When the
 mapping shortens a link type's class, a migration applies the new class to
