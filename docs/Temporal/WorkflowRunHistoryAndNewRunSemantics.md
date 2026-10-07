@@ -141,6 +141,8 @@ POST /api/executions/{workflowId}/recover-from-selected-step
 
 The API contract owns request fields and error transport. Before starting linked work, it must resolve and pin the source run, actual failed/selected semantic step, original input and plan, checkpoint and validation artifacts, preserved-step outputs, side-effect disposition, exact destination capabilities, and supported continuation phase.
 
+The canonical admission owner links artifacts from the admitted source workflow family to the new recovery execution as recovery inputs before starting it. These links commit with the destination record, follow the actual Temporal run identity, and leave source links intact. Foreign namespaces, unrelated workflows, and empty family prefixes do not grant inherited access; attachment projection continues to validate current destination linkage, completeness, integrity, lifetime, and content policy.
+
 An intentionally selected earlier step requires its own compatible checkpoint and side-effect decision. It cannot reuse the failed step's workspace merely because the earlier step appears in the preserved-step list. Preserve only eligible predecessors of the selected boundary.
 
 Commit the recovery intent and deterministic destination/restore identity before effects. Repeated identical requests reconcile that operation, including after source status or defaults later change. Changed source/run/checkpoint/phase/selection under the same key is a conflict. A deliberately new recovery attempt requires explicit admission and conflict control.

@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import select
 
-from api_service.db.models import TemporalArtifactLink
+from api_service.db.models import TemporalArtifactLink, TemporalExecutionCanonicalRecord
+from api_service.services.remediation_actions import TemporalRemediationControlPlane
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -25,7 +28,11 @@ from moonmind.workflows.temporal.remediation_context import (
     build_remediation_repair_decision,
     build_remediation_summary_block,
 )
-from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
+from moonmind.workflows.temporal.remediation_tools import (
+    MoonMindControlPlaneRemediationActionExecutor,
+    RemediationEvidenceToolService,
+)
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.unit.workflows.temporal.test_remediation_context import (
     RecordingActionExecutor,
     _admin_permissions,
@@ -33,11 +40,102 @@ from tests.unit.workflows.temporal.test_remediation_context import (
     _create_target_and_remediation,
     _fast_verification_phase,
     _read_artifact_json,
-    mock_client_adapter,
-    temporal_db,
 )
+from tests.unit.workflows.temporal.test_remediation_context import (
+    mock_client_adapter as _mock_client_adapter_fixture,
+)
+from tests.unit.workflows.temporal.test_remediation_context import temporal_db
+
+mock_client_adapter = _mock_client_adapter_fixture
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.parametrize("action_kind", ["execution.pause", "execution.resume"])
+async def test_remediation_control_uses_workflow_owner_and_persists_verified_ui_result(
+    tmp_path, mock_client_adapter, action_kind
+) -> None:
+    async with temporal_db(tmp_path) as session:
+        target, remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord,
+            target.workflow_id,
+        )
+        canonical.paused = action_kind == "execution.resume"
+        await session.commit()
+        handle = AsyncMock()
+        sdk = AsyncMock()
+        sdk.get_workflow_handle = MagicMock(return_value=handle)
+        client = TemporalClientAdapter()
+        client.get_client = AsyncMock(return_value=sdk)
+        plane = TemporalRemediationControlPlane(
+            client=client,
+            execution_service=TemporalExecutionService(session, client_adapter=client),
+        )
+        artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        await RemediationContextBuilder(
+            session=session, artifact_service=artifacts
+        ).build_context(remediation_workflow_id=remediation.workflow_id)
+        authority = await RemediationActionAuthorityService(
+            session=session
+        ).evaluate_action_request(
+            remediation_workflow_id=remediation.workflow_id,
+            action_kind=action_kind,
+            parameters={"expectedRunId": target.run_id},
+            dry_run=False,
+            idempotency_key="control-3624",
+            requesting_principal="workflow:remediator",
+            permissions=_admin_permissions(),
+            security_profile=_admin_profile(allowed_action_kinds=(action_kind,)),
+        )
+        guard = await RemediationMutationGuardService(session=session).evaluate(
+            remediation_workflow_id=remediation.workflow_id,
+            remediation_run_id=remediation.run_id,
+            target_workflow_id=target.workflow_id,
+            target_run_id=target.run_id,
+            action_kind=action_kind,
+            idempotency_key="control-3624",
+            parameters={"expectedRunId": target.run_id},
+            policy=RemediationMutationGuardPolicy(cooldown_seconds=0),
+            now=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        )
+        tools = RemediationEvidenceToolService(
+            session=session,
+            artifact_service=artifacts,
+            action_executor=MoonMindControlPlaneRemediationActionExecutor(
+                plane.handlers()
+            ),
+            verification_phase=_fast_verification_phase(session),
+        )
+        result = await tools.execute_action(
+            remediation_workflow_id=remediation.workflow_id,
+            authority_result=authority.to_dict(),
+            guard_result=guard.to_dict(),
+            principal="service:test",
+            admitted_principal="service:remediation-context",
+        )
+        verification = await _read_artifact_json(
+            artifacts, result["artifactRefs"]["verification"]
+        )
+        assert verification["outcome"] == "verified_resolved"
+        await session.refresh(canonical)
+        assert canonical.paused is (action_kind == "execution.pause")
+        assert (
+            canonical.memo["intervention_audit"][-1]["action"]
+            == action_kind.split(".")[1]
+        )
+        sdk.get_workflow_handle.assert_called_with(
+            target.workflow_id, run_id=target.run_id
+        )
+        handle.execute_update.assert_awaited_once_with(
+            "Pause" if action_kind == "execution.pause" else "Resume",
+            id="control-3624",
+        )
 
 
 async def test_remediation_action_contract_publishes_request_result_and_verification(
@@ -414,3 +512,163 @@ async def test_remediation_lifecycle_cancellation_and_continuity_summary_artifac
             )
         ).scalars().all()
         assert links == []
+
+
+@pytest.mark.parametrize("kind", ["execution.pause", "execution.cancel"])
+async def test_remediation_owner_rechecks_run_after_cached_target_read(
+    tmp_path, mock_client_adapter, kind
+):
+    from sqlalchemy import update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from moonmind.workflows.temporal.remediation_tools import (
+        RemediationTargetHealthSnapshot,
+    )
+
+    async with temporal_db(tmp_path) as session:
+        target, _remediation = await _create_target_and_remediation(
+            session, mock_client_adapter
+        )
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, target.workflow_id
+        )
+        snapshot = RemediationTargetHealthSnapshot(
+            workflow_id=target.workflow_id,
+            pinned_run_id=target.run_id,
+            current_run_id=target.run_id,
+            state="executing",
+            close_status=None,
+            title=None,
+            summary=None,
+            target_run_changed=False,
+        )
+        async with async_sessionmaker(session.bind)() as writer:
+            await writer.execute(
+                update(TemporalExecutionCanonicalRecord)
+                .where(
+                    TemporalExecutionCanonicalRecord.workflow_id == target.workflow_id
+                )
+                .values(run_id="sibling-run")
+            )
+            await writer.commit()
+        assert canonical.run_id != "sibling-run"
+        plane = TemporalRemediationControlPlane(
+            execution_service=TemporalExecutionService(
+                session, client_adapter=mock_client_adapter
+            )
+        )
+        result = await plane.handlers()[kind](
+            {"actionKind": kind, "actionId": "race-3624", "params": {}}, {}, snapshot
+        )
+        assert result["status"] == "precondition_failed"
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        mock_client_adapter.cancel_workflow.assert_not_awaited()
+
+
+async def test_fresh_rerun_retry_recovers_result_after_source_run_advances(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        target, _remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        record = await session.get(TemporalExecutionCanonicalRecord, target.workflow_id)
+        saved = {"accepted": True, "workflow_id": "repair", "run_id": "repair-run"}
+        record.run_id = "replacement-run"
+        record.last_update_idempotency_key = "rerun-1"
+        record.last_update_response = saved
+        await session.commit()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        response = await service.create_fresh_rerun_execution(
+            workflow_id=target.workflow_id,
+            idempotency_key="rerun-1",
+            expected_run_id=target.run_id,
+        )
+        assert response == saved
+        mock_client_adapter.update_workflow.assert_not_awaited()
+        mock_client_adapter.start_workflow.reset_mock()
+        from moonmind.workflows.temporal.service import (
+            TemporalExecutionTargetRunChangedError,
+        )
+
+        with pytest.raises(TemporalExecutionTargetRunChangedError):
+            await service.create_fresh_rerun_execution(
+                workflow_id=target.workflow_id,
+                idempotency_key="rerun-new",
+                expected_run_id=target.run_id,
+            )
+        mock_client_adapter.start_workflow.assert_not_awaited()
+
+
+async def test_same_workflow_rerun_rechecks_and_pins_persisted_source(
+    tmp_path, mock_client_adapter
+):
+    from moonmind.workflows.temporal.service import (
+        TemporalExecutionTargetRunChangedError,
+    )
+
+    async with temporal_db(tmp_path) as session:
+        target, _remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source_run = target.run_id
+        response = await service.update_execution(
+            workflow_id=target.workflow_id,
+            update_name="RequestRerun",
+            idempotency_key="rerun-1",
+            expected_run_id=source_run,
+        )
+        assert response["accepted"]
+        assert mock_client_adapter.update_workflow.await_args.kwargs == {
+            "run_id": source_run,
+            "idempotency_key": "rerun-1",
+        }
+        replay = await service.update_execution(
+            workflow_id=target.workflow_id,
+            update_name="RequestRerun",
+            idempotency_key="rerun-1",
+            expected_run_id=source_run,
+        )
+        assert replay == response
+        assert mock_client_adapter.update_workflow.await_count == 1
+        with pytest.raises(TemporalExecutionTargetRunChangedError):
+            await service.update_execution(
+                workflow_id=target.workflow_id,
+                update_name="RequestRerun",
+                idempotency_key="rerun-new",
+                expected_run_id=source_run,
+            )
+        assert mock_client_adapter.update_workflow.await_count == 1
+
+
+async def test_pinned_same_workflow_rerun_never_falls_back_after_run_closes(
+    tmp_path, mock_client_adapter
+):
+    from moonmind.workflows.temporal.service import (
+        TemporalExecutionTargetRunChangedError,
+    )
+
+    async with temporal_db(tmp_path) as session:
+        target, _remediation = await _create_target_and_remediation(
+            session, mock_client_adapter, authority_mode="admin_auto"
+        )
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        mock_client_adapter.start_workflow.reset_mock()
+        mock_client_adapter.start_workflow.side_effect = None
+        from types import SimpleNamespace
+
+        mock_client_adapter.start_workflow.return_value = SimpleNamespace(
+            run_id="unexpected-fresh"
+        )
+        mock_client_adapter.update_workflow.side_effect = RuntimeError(
+            "workflow execution already completed"
+        )
+        with pytest.raises(TemporalExecutionTargetRunChangedError):
+            await service.update_execution(
+                workflow_id=target.workflow_id,
+                update_name="RequestRerun",
+                idempotency_key="closed-1",
+                expected_run_id=target.run_id,
+            )
+        mock_client_adapter.start_workflow.assert_not_awaited()
