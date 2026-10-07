@@ -137,12 +137,6 @@ async def test_resolver_merged_revision_crosses_parent_and_issue_boundary(
         "load_repository_connection_for_launch",
         AsyncMock(return_value=None),
     )
-    # The merge gate acts with its owning run's admitted (default) connection.
-    monkeypatch.setattr(
-        managed_api_key_resolve,
-        "load_admitted_repository_access",
-        AsyncMock(return_value=("", False)),
-    )
     monkeypatch.setenv("GITHUB_TOKEN", "fixture-only")
     original_patched = module.workflow.patched
     if legacy:

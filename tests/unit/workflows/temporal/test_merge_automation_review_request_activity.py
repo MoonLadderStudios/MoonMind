@@ -276,10 +276,10 @@ async def test_review_request_deadline_preserves_ledger_outcome(
     from moonmind.workflows.temporal import activity_runtime
 
     @asynccontextmanager
-    async def access_context(*_args, **_kwargs):
-        yield {"github_token": "selected-token"}
+    async def token_context(*_args, **_kwargs):
+        yield "selected-token"
 
-    monkeypatch.setattr(activity_runtime, "_merge_automation_github_access", access_context)
+    monkeypatch.setattr(activity_runtime, "_merge_automation_github_token", token_context)
     expiry = "2026-08-24T22:16:00Z"
     fake = _install_fake_github(monkeypatch, [_outcome(
         status,

@@ -8,6 +8,7 @@ import inspect
 import json
 import re
 import time as _time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -6131,60 +6132,38 @@ async def resolve_pull_request_target(
         )
 
     # Only the trusted workflow context may supply repository authority;
-    # tool inputs and selectors cannot choose a credential or plan. Review-only
-    # merge automation supplies its frozen authority; every other run reads
-    # with the connection admitted for it (MoonLadderStudios/MoonMind#4010).
+    # tool inputs and selectors cannot choose a credential or plan.
     if isinstance(context, Mapping) and "repositoryAuthority" in context:
         from moonmind.workflows.temporal.merge_automation_repository_access import (
             merge_automation_repository_token,
         )
 
-        async with merge_automation_repository_token(
+        credential_context = merge_automation_repository_token(
             context["repositoryAuthority"], repository=repository, operation="read"
-        ) as github_token:
-            return await _resolve_pull_request_target(
-                repository=repository,
-                selector=selector,
-                credential={"github_token": github_token},
-                github_service_factory=github_service_factory,
-            )
-    return await _resolve_pull_request_target(
-        repository=repository,
-        selector=selector,
-        credential={"admitted_workflow_id": _admitted_repository_workflow(context)},
-        github_service_factory=github_service_factory,
-    )
-
-
-async def _read_pull_request_with_token(
-    service: GitHubService, *, repository: str, pr_number: int, github_token: str
-) -> Any:
-    headers = service._github_headers(github_token)
-    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
-        response = await client.get(
-            f"https://api.github.com/repos/{repository}/pulls/{pr_number}",
-            headers=headers,
         )
-        response.raise_for_status()
-        return response.json()
+    else:
+        credential_context = nullcontext(None)
+    async with credential_context as github_token:
+        return await _resolve_pull_request_target(
+            repository=repository,
+            selector=selector,
+            github_token=github_token,
+            github_service_factory=github_service_factory,
+        )
 
 
 async def _resolve_pull_request_target(
     *,
     repository: str,
     selector: str,
-    credential: Mapping[str, str],
+    github_token: str | None,
     github_service_factory: Callable[[], GitHubService],
 ) -> ToolResult:
-    """Resolve and read the pull request with exactly one credential source.
-
-    ``credential`` is either the review-only ``github_token`` or the
-    ``admitted_workflow_id`` whose recorded connection both reads use; a
-    connection that cannot read fails here and no ambient token is tried.
-    """
     service = github_service_factory()
     resolution = await service.resolve_pull_request_selector(
-        repo=repository, selector=selector, **credential
+        repo=repository,
+        selector=selector,
+        **({"github_token": github_token} if github_token is not None else {}),
     )
     if not resolution.resolved or not resolution.pr_number:
         return ToolResult(
@@ -6196,62 +6175,53 @@ async def _resolve_pull_request_target(
             },
         )
 
-    try:
-        if "github_token" in credential:
-            pr_data = await _read_pull_request_with_token(
-                service,
-                repository=repository,
-                pr_number=resolution.pr_number,
-                github_token=credential["github_token"],
+    if github_token is not None:
+        token, resolution_error = github_token, None
+    else:
+        token, resolution_error = await service.resolve_github_token(repo=repository)
+    if not token:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": resolution_error
+                or "GitHub auth is not configured for pull request resolution.",
+            },
+        )
+    headers = service._github_headers(token)
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/pulls/{resolution.pr_number}",
+                headers=headers,
             )
-        else:
-            pr_data = await service.read_pull_request(
-                repository,
-                f"https://github.com/{repository}/pull/{resolution.pr_number}",
-                admitted_workflow_id=credential["admitted_workflow_id"],
+            response.raise_for_status()
+            pr_data = response.json()
+        except httpx.HTTPStatusError as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed with HTTP "
+                        f"{exc.response.status_code}."
+                    ),
+                },
             )
-    except httpx.HTTPStatusError as exc:
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "repository": repository,
-                "prNumber": resolution.pr_number,
-                "summary": (
-                    "GitHub pull request fetch failed with HTTP "
-                    f"{exc.response.status_code}."
-                ),
-            },
-        )
-    except (httpx.TransportError, httpx.TimeoutException) as exc:
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "repository": repository,
-                "prNumber": resolution.pr_number,
-                "summary": (
-                    "GitHub pull request fetch failed: "
-                    f"{exc.__class__.__name__}."
-                ),
-            },
-        )
-    except Exception as exc:
-        if "github_token" in credential:
-            raise
-        from moonmind.utils.logging import redact_sensitive_text
-
-        return ToolResult(
-            status="FAILED",
-            outputs={
-                "repository": repository,
-                "prNumber": resolution.pr_number,
-                "summary": (
-                    "The admitted repository connection could not read pull "
-                    f"request {repository}#{resolution.pr_number} "
-                    f"({type(exc).__name__}: {redact_sensitive_text(str(exc))}); "
-                    "no other GitHub credential is used."
-                ),
-            },
-        )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                },
+            )
 
     if not isinstance(pr_data, dict):
         return ToolResult(

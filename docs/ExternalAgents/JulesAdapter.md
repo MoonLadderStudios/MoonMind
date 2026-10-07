@@ -210,6 +210,8 @@ Representative public operations include:
 - `get_task()`
 - `list_activities()`
 - `send_message()`
+- `merge_pull_request()`
+- `update_pull_request_base()`
 
 This layer should remain transport-oriented and should not accumulate workflow semantics such as:
 
