@@ -24,6 +24,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+# Explicit owner/name paths only: no wildcards, URLs, or dot traversal segments.
+GITHUB_REPOSITORY_NAME_PATTERN = (
+    r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]*[A-Za-z0-9_-][A-Za-z0-9_.-]*$"
+)
+
 SETUP_URL_DOC = (
     "https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url"
 )
@@ -147,17 +152,17 @@ def provider_repo_candidates(entry: Any) -> set[str]:
 def permitted_repo_covered(permitted: str, candidates: set[str]) -> bool:
     """Check one allowlisted repository against provider-reported candidates."""
 
-    wanted = str(permitted or "").strip()
-    if not wanted or not candidates:
+    wanted = str(permitted or "").strip().casefold()
+    observed = {candidate.casefold() for candidate in candidates}
+    if not wanted or not observed:
         return False
-    if wanted in candidates:
+    if wanted in observed:
         return True
-    # Provider may report the account-local name while the allowlist stores
-    # the owner-qualified form (or vice versa for legacy fakes).
-    local = _account_local_name(wanted)
-    return bool(local) and (
-        local in candidates or any(c.endswith(f"/{local}") for c in candidates)
-    )
+    # A qualified repository must preserve its owner. Only the provider's
+    # account-local token-request names may match a qualified response name.
+    if "/" in wanted or wanted.isdigit():
+        return False
+    return any(candidate.rsplit("/", 1)[-1] == wanted for candidate in observed)
 
 
 def build_installation_token_request(
@@ -459,7 +464,7 @@ class GitHubAppAdapter:
         if display:
             candidates.append(display)
         for candidate in candidates:
-            if candidate not in self._permitted:
+            if candidate.casefold() not in {repo.casefold() for repo in self._permitted}:
                 raise _bound_error(
                     BOUND_DENIED,
                     "requested repository is outside the connection allowlist",

@@ -995,11 +995,12 @@ async def test_probe_token_transport_outage_is_unavailable_not_denied(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_probe_token_denied_read_is_reported_as_denied(monkeypatch):
+@pytest.mark.parametrize("status", [403, 404])
+async def test_probe_token_denied_read_is_reported_as_denied(monkeypatch, status):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(
-        return_value=_mock_get_response(404, {"message": "Not Found"})
+        return_value=_mock_get_response(status, {"message": "Resource not accessible"})
     )
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -1066,6 +1067,45 @@ async def test_probe_token_uses_selected_credential_without_global_fallback(
     headers = mock_client.get.call_args_list[0].kwargs["headers"]
     assert "connection-token" in headers["Authorization"]
     assert "global-token-must-not-be-used" not in str(headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,headers,message",
+    [
+        (429, {}, "Too many requests"),
+        (403, {"x-ratelimit-remaining": "0"}, "API rate limit exceeded"),
+        (403, {"retry-after": "60"}, "Please wait before retrying"),
+        (403, {}, "You have exceeded a secondary rate limit."),
+    ],
+)
+async def test_probe_token_rate_limits_are_unavailable_not_denied(
+    monkeypatch, status, headers, message
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = AsyncMock()
+    mock_client.get.return_value = _mock_get_response_with_headers(
+        status, {"message": message}, headers
+    )
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="publish", base_branch="main"
+        )
+
+    assert result["repositoryAccessible"] is None
+    assert result["defaultBranchAccessible"] is None
+    assert result["pullRequestAccessible"] is None
+    assert result["observations"]["read"] == "unavailable"
+    assert all(
+        item["status"] == "not_checked" for item in result["permissionChecklist"]
+    )
+    assert all(diagnostic["retryable"] for diagnostic in result["diagnostics"])
+
 
 # ---------------------------------------------------------------------------
 # merge_pull_request

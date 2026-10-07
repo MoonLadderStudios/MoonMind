@@ -20,11 +20,12 @@ from uuid import UUID
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
+from moonmind.auth.github_app import GITHUB_REPOSITORY_NAME_PATTERN
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
 from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_POLICY_CONFLICT,
@@ -79,9 +80,14 @@ class GitHubAppBeginRequest(BaseModel):
     request_id: str = Field(min_length=1, alias="requestId")
     connection_id: str = Field(min_length=1, alias="connectionId")
     expected_account: str = Field(default="", alias="expectedAccount")
-    permitted_repositories: Sequence[str] = Field(
-        default=(), alias="permittedRepositories"
-    )
+    permitted_repositories: Sequence[
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, pattern=GITHUB_REPOSITORY_NAME_PATTERN
+            ),
+        ]
+    ] = Field(min_length=1, alias="permittedRepositories")
     display_name: str = Field(default="GitHub App connection", alias="displayName")
     endpoint_ref: str = Field(default="https://github.com", alias="endpointRef")
     allowed_operations: Sequence[RepositoryOperation] = Field(
@@ -238,6 +244,7 @@ async def complete_github_app_setup(
     """Verify the installation with the provider, then persist it."""
 
     from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.auth.bound_acquisition import BoundAccessError
     from moonmind.auth.github_app_wiring import (
         default_resolve_secret_ref,
         fetch_installation_record,
@@ -289,8 +296,20 @@ async def complete_github_app_setup(
             jwt=jwt,
             installation_id=request.installation_id.strip(),
             api_base=configuration.api_base,
+            permitted_repositories=pending.permitted_repositories,
         )
+    except BoundAccessError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {
+            401,
+            403,
+            404,
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail="GitHub App installation cannot access the requested repositories.",
+            ) from exc
         logger.warning("github_app_provider_fetch_failed", error=str(exc)[:200])
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -322,6 +341,9 @@ _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _PAT_SECRET_PROVIDER = "db"
 
 CredentialKind = Literal["personal_access_token", "github_app", "deployment", "other"]
+ConnectionDisplayName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
 
 
 class RepositoryAssignmentView(BaseModel):
@@ -360,6 +382,12 @@ class RepositoryConnectionListResponse(BaseModel):
     items: list[RepositoryConnectionView]
 
 
+class ConnectionRequestStatus(BaseModel):
+    """Whether the selected connection's exact update request committed."""
+
+    committed: bool
+
+
 class PatConnectionCreateRequest(BaseModel):
     """Create a named PAT connection; the token becomes a Managed Secret."""
 
@@ -367,7 +395,7 @@ class PatConnectionCreateRequest(BaseModel):
 
     request_id: str = Field(min_length=1, max_length=200, alias="requestId")
     connection_id: str = Field(pattern=_CONNECTION_ID_PATTERN, alias="connectionId")
-    display_name: str = Field(min_length=1, max_length=200, alias="displayName")
+    display_name: ConnectionDisplayName = Field(alias="displayName")
     token: SecretStr
     allowed_operations: list[RepositoryOperation] = Field(
         default_factory=lambda: ["read"], alias="allowedOperations", min_length=1
@@ -381,8 +409,8 @@ class ConnectionUpdateRequest(BaseModel):
 
     request_id: str = Field(min_length=1, max_length=200, alias="requestId")
     expected_policy_revision: int = Field(ge=1, alias="expectedPolicyRevision")
-    display_name: str | None = Field(
-        default=None, min_length=1, max_length=200, alias="displayName"
+    display_name: ConnectionDisplayName | None = Field(
+        default=None, alias="displayName"
     )
     token: SecretStr | None = None
     allowed_operations: list[RepositoryOperation] | None = Field(
@@ -591,6 +619,42 @@ async def get_repository_connection(
     return await _view_for(service, connection)
 
 
+@router.get(
+    "/{connection_id}/requests/{request_id}",
+    response_model=ConnectionRequestStatus,
+    summary="Reconcile a Source Control connection update",
+    tags=["RepositoryConnections"],
+)
+async def get_connection_update_status(
+    connection_id: str,
+    request_id: str,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> ConnectionRequestStatus:
+    """Read the existing audit receipt instead of inferring commit from revision."""
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    try:
+        connection = await service.get_manageable_connection(
+            connection_id, principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+        )
+        if connection is None:
+            raise HTTPException(
+                status_code=404, detail="Repository connection not found."
+            )
+        committed = await service.recorded_request(
+            request_id=request_id,
+            action="connection.update",
+            connection_id=connection_id,
+        )
+    except RepositoryRouteError as exc:
+        raise _connection_error_to_http(exc) from exc
+    return ConnectionRequestStatus(committed=committed)
+
+
 @router.post(
     "/pat",
     response_model=RepositoryConnectionView,
@@ -778,7 +842,10 @@ async def disable_repository_connection(
 
 
 async def observe_github_repository(
-    connection: RepositoryConnection, repository: str
+    connection: RepositoryConnection,
+    repository: str,
+    *,
+    revision_reader: Any | None = None,
 ) -> dict[str, str]:
     """Read one repository's provider identity with the connection's credential.
 
@@ -786,25 +853,47 @@ async def observe_github_repository(
     repository, 503 when GitHub or the credential store is unavailable.
     """
 
+    from moonmind.auth.bound_acquisition import (
+        BOUND_ISSUER_FAILED,
+        BOUND_UNAVAILABLE,
+        BoundAccessError,
+    )
     from moonmind.auth.github_app_wiring import github_api_base_for
     from moonmind.auth.github_credentials import resolve_connection_github_credential
     from moonmind.workflows.adapters.github_service import GitHubService
 
-    credential = await resolve_connection_github_credential(connection, repo=repository)
-    if not credential.token:
-        raise HTTPException(
-            status_code=503 if credential.retryable else 422,
-            detail=credential.safe_summary,
-        )
     try:
+        # Trust the destination before resolving either kind of credential.
         api_base = github_api_base_for(connection.endpoint_ref)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if connection.credential.source == "github_app":
+            headers = await GitHubService().bound_app_headers_for_connection(
+                connection,
+                repository=repository,
+                operations=("read",),
+                revision_reader=revision_reader,
+            )
+        else:
+            credential = await resolve_connection_github_credential(
+                connection, repo=repository
+            )
+            if not credential.token:
+                raise HTTPException(
+                    status_code=503 if credential.retryable else 422,
+                    detail=credential.safe_summary,
+                )
+            headers = GitHubService._github_headers(credential.token)
+    except BoundAccessError as exc:
+        raise HTTPException(
+            status_code=(
+                503 if exc.code in {BOUND_ISSUER_FAILED, BOUND_UNAVAILABLE} else 422
+            ),
+            detail=str(exc),
+        ) from exc
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
                 f"{api_base}/repos/{repository}",
-                headers=GitHubService._github_headers(credential.token),
+                headers=headers,
             )
     except (httpx.TransportError, httpx.TimeoutException) as exc:
         raise HTTPException(
@@ -858,7 +947,40 @@ async def set_repository_assignment(
             raise HTTPException(
                 status_code=404, detail="Repository connection not found."
             )
-        observed = await observe_github_repository(connection, repository)
+        if connection.credential.source == "github_app":
+
+            async def read_active_revision(selected_id: str) -> Any:
+                from moonmind.auth.bound_acquisition import (
+                    BOUND_REVOKED,
+                    BoundAccessError,
+                )
+                from moonmind.auth.github_app_wiring import revision_reader_for
+
+                # A fresh session observes revocation while provider issuance runs.
+                async with AsyncSession(bind=db.bind) as current_db:
+                    try:
+                        current = await RepositoryConnectionService(
+                            current_db
+                        ).get_connection(
+                            selected_id,
+                            principal_ref=principal,
+                            principal_scope=_SYSTEM_SCOPE,
+                        )
+                    except RepositoryRouteError as exc:
+                        raise BoundAccessError(
+                            BOUND_REVOKED, "Repository connection is unavailable"
+                        ) from exc
+                if current is None:
+                    raise BoundAccessError(
+                        BOUND_REVOKED, "Repository connection is unavailable"
+                    )
+                return await revision_reader_for({selected_id: current})(selected_id)
+
+            observed = await observe_github_repository(
+                connection, repository, revision_reader=read_active_revision
+            )
+        else:
+            observed = await observe_github_repository(connection, repository)
         if not observed["id"]:
             raise HTTPException(
                 status_code=503,

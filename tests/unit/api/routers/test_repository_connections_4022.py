@@ -61,6 +61,7 @@ def test_begin_derives_app_identity_and_key_reference_server_side(monkeypatch) -
             "requestId": "req:router-derived",
             "connectionId": "acme-app",
             "displayName": "Acme App",
+            "permittedRepositories": ["acme/repo"],
         },
     )
     assert response.status_code == 201, response.text
