@@ -390,9 +390,9 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
             if record_store is not None and workspace_id is not None:
                 record_store.mark_ready(workspace_id, fingerprint)
-        elif named_refs:
-            # A ready repository is not evidence that current verifier inputs
-            # exist. Re-admit only attachments, preserving all candidate edits.
+        elif attachment_refs:
+            # A ready repository is not evidence that current inputs exist or
+            # remain admitted. Re-project only attachments, preserving candidate edits.
             try:
                 attachment_evidence = await self._artifact_projector.project_attachments(
                     candidate,
@@ -405,6 +405,17 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
         paths_by_ref = {item["ref"]: item["path"] for item in attachment_evidence}
         named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
+        # Ordinary inputs (for example the original issue brief/objective) are
+        # admitted and projected by the same owner as verifier evidence. Expose
+        # their existing paths to the first-message consumer even when explicit
+        # repair instructions replace the default task prompt.
+        named_paths.update(
+            {
+                f"inputPath{index}": paths_by_ref[ref]
+                for index, ref in enumerate(attachment_refs, start=1)
+                if ref not in named_refs.values()
+            }
+        )
         # Clone-time commit identity does not survive workspace reconciliation:
         # retries reuse the attempt workspace so no clone runs, an
         # authoritative restore replaces ``.git/config``, and an additive

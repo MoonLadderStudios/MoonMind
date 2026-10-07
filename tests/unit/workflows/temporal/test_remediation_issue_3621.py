@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api_service.api.routers.executions import _serialize_remediation_link_summary
-from api_service.services.remediation_actions import TemporalRemediationControlPlane
 from api_service.services.checkpoint_branch_turn_execution import (
     checkpoint_branch_turn_owner_operational,
 )
+from api_service.services.remediation_actions import TemporalRemediationControlPlane
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationCapabilityContext,
     remediation_action_capability,
@@ -23,7 +23,6 @@ from moonmind.workflows.temporal.remediation_tools import (
 from moonmind.workflows.temporal.remediation_verification import (
     verification_backend_operational,
 )
-
 
 ACTION = "checkpoint_branch.create_from_remediation_context"
 
@@ -77,7 +76,7 @@ async def test_remediation_action_dispatches_the_shared_server_owner() -> None:
         created_step_execution_id=(
             "checkpoint-branch-turn:remediation-repair-1-turn-1:"
             "branch-turn-remediation-repair-1-turn-1:implement:execution:1"
-        )
+        ),
     )
     plane = TemporalRemediationControlPlane(
         client=AsyncMock(),
@@ -92,6 +91,13 @@ async def test_remediation_action_dispatches_the_shared_server_owner() -> None:
     assert result["branchTurnLaunched"] is True
     assert result["terminalBranchResultAvailable"] is False
     assert result["verificationRequired"] is True
+    assert result["resultingIdentity"] == {
+        "workflowId": "target-workflow",
+        "runId": "target-run",
+        "branchId": "remediation-repair-1",
+        "branchTurnId": "remediation-repair-1-turn-1",
+        "stepExecutionId": owner.launch.return_value.created_step_execution_id,
+    }
     owner.launch.assert_awaited_once_with(
         workflow_id="target-workflow",
         branch_id="remediation-repair-1",

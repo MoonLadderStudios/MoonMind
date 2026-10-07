@@ -275,6 +275,8 @@ REQUESTABLE_REMEDIATION_ACTIONS = {
     "execution.start_fresh_rerun",
     "execution.cancel",
     "execution.force_terminate",
+    "session.interrupt_turn",
+    "session.cancel",
 }
 
 def test_remediation_action_authority_lists_canonical_mm483_action_registry():
