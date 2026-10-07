@@ -3838,8 +3838,7 @@ class TemporalArtifactService:
     ) -> LifecycleSweepSummary:
         """Bounded, paginated, idempotent, observable lifecycle sweep.
 
-        ``on_progress`` runs before each candidate so a caller can heartbeat
-        while one page performs slow database and object-store work.
+        ``on_progress`` runs before each candidate to report work within a page.
         """
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
@@ -3948,6 +3947,9 @@ class TemporalArtifactService:
         reconciled, intent_count = await self._reconcile_deletion_intent_page(
             principal=principal, limit=page_size, on_progress=on_progress
         )
+        # A short intent page can still contain failed or uncommitted deletes.
+        # Only report drainage after reconciliation leaves no pending intent.
+        pending_intents = await self._repository.list_pending_deletion_intents(limit=1)
         await self._repository.commit()
         logger.info(
             "Temporal artifact sweep_lifecycle principal=%s run_id=%s soft_deleted=%s hard_deleted=%s",
@@ -3965,7 +3967,8 @@ class TemporalArtifactService:
             reconciled_deletion_count=reconciled,
             pruned_claim_count=pruned,
             hard_delete_candidate_count=len(hard_candidates),
-            drained=all(
+            drained=not pending_intents
+            and all(
                 count < page_size
                 for count in (len(expired), len(hard_candidates), intent_count)
             ),
@@ -3985,9 +3988,9 @@ class TemporalArtifactService:
 
         A single page per hourly pass could not keep pace with artifact
         creation, so expired blobs accumulated until the object store filled.
-        Pages repeat while a full page still made progress; a page whose
-        candidates are all protected stops the pass instead of spinning on
-        them. Remaining work is reported and resumed by the next pass.
+        Pages repeat while backlog remains and the last page made progress;
+        a page whose candidates are all protected or stalled stops the pass
+        instead of spinning on them. Remaining work resumes in the next pass.
         """
         lifecycle_run_id = run_id or str(uuid4())
         deadline = time.monotonic() + max(0.0, time_budget.total_seconds())
@@ -5404,25 +5407,35 @@ class TemporalArtifactActivities:
     ) -> LifecycleSweepSummary:
         from temporalio import activity
 
-        pages_done = 0
+        from moonmind.workflows.temporal.activity_runtime import (
+            _await_with_activity_heartbeats,
+        )
+
+        heartbeat_payload = {"pages": 0}
 
         def heartbeat() -> None:
             if activity.in_activity():
-                activity.heartbeat({"pages": pages_done})
+                try:
+                    activity.heartbeat(dict(heartbeat_payload))
+                except asyncio.QueueFull:
+                    # An earlier heartbeat is already pending in the SDK.
+                    logger.debug("activity_heartbeat_coalesced_queue_full")
 
         def page_done(_page: LifecycleSweepSummary) -> None:
-            nonlocal pages_done
-            pages_done += 1
+            heartbeat_payload["pages"] += 1
             heartbeat()
 
-        # Heartbeat per candidate as well as per page: one page of sequential
-        # database and object-store work can outlast the heartbeat timeout.
-        return await self._service.drain_lifecycle(
-            principal=principal,
-            run_id=run_id,
-            time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
-            on_page=page_done,
-            on_progress=heartbeat,
+        # Keep per-candidate/page progress and also heartbeat while any single
+        # database query, row lock, or object-store operation is still pending.
+        return await _await_with_activity_heartbeats(
+            self._service.drain_lifecycle(
+                principal=principal,
+                run_id=run_id,
+                time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
+                on_page=page_done,
+                on_progress=heartbeat,
+            ),
+            heartbeat_payload=heartbeat_payload,
         )
 
     async def artifact_sweep_lifecycle(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import time
@@ -187,108 +188,33 @@ class SandboxWorkspaceRecordStore:
         # idempotent on reclaim.
         return f"{grant_id}:{mode}", mode
 
-    def _claims_mutex_path(self, workspace_id: str) -> Path:
-        return self._claims_dir(workspace_id) / ".claims.lock"
-
-    @staticmethod
-    def _lock_owner_alive(content: str) -> bool | None:
-        """Return whether the mutex owner PID is alive (None if unknown)."""
-
-        try:
-            owner_pid = int(str(content or "").strip().split("\n", 1)[0])
-        except (TypeError, ValueError):
-            return None
-        if owner_pid <= 0:
-            return None
-        if owner_pid == os.getpid():
-            return False
-        try:
-            os.kill(owner_pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return None
-        return True
-
-    def _acquire_claims_mutex(self, workspace_id: str) -> None:
-        """Serialize claim check-and-insert against competing workers.
-
-        The directory scan and the ``O_EXCL`` claim creation below must run
-        as one atomic step: without this mutex two different claims can each
-        finish the scan before either creates its file, and both ``O_EXCL``
-        creations succeed because the filenames differ. A stale mutex from
-        a crashed worker is taken over after a PID-liveness check; an
-        actively held mutex fails closed after a bounded wait instead of
-        granting conflicting access.
-        """
-
-        claims = self._claims_dir(workspace_id)
-        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
-        mutex = self._claims_mutex_path(workspace_id)
-        own_pid = str(os.getpid())
-        for _ in range(250):
-            try:
-                descriptor = os.open(
-                    mutex, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-                )
-            except FileExistsError:
-                try:
-                    recorded = mutex.read_text(encoding="utf-8")
-                except OSError:
-                    recorded = ""
-                alive = self._lock_owner_alive(recorded)
-                if alive is True:
-                    time.sleep(0.02)
-                    continue
-                # Unknown or dead owner: reclaim the stale mutex. Our PID
-                # reappearing here means a prior holder in this process
-                # crashed without releasing.
-                try:
-                    mutex.unlink()
-                except OSError:
-                    # Lost the reclaim race to a competing worker: fall
-                    # through to re-acquire below instead of proceeding
-                    # beside the new owner.
-                    pass
-                continue
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(own_pid)
-            return
-        raise WorkspaceLocatorResolutionError(
-            WORKSPACE_IDENTITY_MISMATCH,
-            "existing workspace claim is contended by another execution",
-        )
-
-    def _release_claims_mutex(self, workspace_id: str) -> None:
-        """Release the claims mutex only when this process owns it."""
-
-        mutex = self._claims_mutex_path(workspace_id)
-        try:
-            if mutex.read_text(encoding="utf-8").strip().split("\n", 1)[0] != str(
-                os.getpid()
-            ):
-                return
-            mutex.unlink()
-        except OSError:
-            # Lock already gone (or unreadable): another owner reclaimed a
-            # mutex we no longer hold. Never delete a foreign lock here.
-            pass
-
     @contextmanager
     def claims_locked(self, workspace_id: str) -> Iterator[None]:
-        """Hold the claims mutex so no new claim is accepted meanwhile.
+        """Serialize grant admission and workspace deletion across workers.
 
-        Deletion holds it across its final claim check and removal, the same
-        way :meth:`claim_existing_workspace` holds it across check-and-insert.
+        Keep the lock inode outside the removable claims directory. Kernel
+        locks release on process exit and also serialize threads holding
+        separately opened descriptors; PID files cannot distinguish them.
+        Never unlink the lock file while another worker may hold its inode.
         """
-
-        self._acquire_claims_mutex(workspace_id)
+        self.store_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock_path = self._claims_dir(workspace_id).with_suffix(".claims.lock")
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
+            for _ in range(250):
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.02)
+            else:
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH,
+                    "existing workspace claim is contended by another execution",
+                )
             yield
         finally:
-            self._release_claims_mutex(workspace_id)
+            os.close(descriptor)
 
     @staticmethod
     def _claim_is_expired(
@@ -328,7 +254,6 @@ class SandboxWorkspaceRecordStore:
         """
 
         claims = self._claims_dir(workspace_id)
-        claims.mkdir(mode=0o700, parents=True, exist_ok=True)
         grant_id, mode = self._grant_claim_identity(grant)
         if not grant_id or mode not in {"exclusive", "read_only"}:
             raise WorkspaceLocatorResolutionError(
@@ -339,8 +264,15 @@ class SandboxWorkspaceRecordStore:
             ch if ch.isalnum() or ch in {"-", "_", "."} else "_"
             for ch in grant_id
         )[:128] or "grant"
-        self._acquire_claims_mutex(workspace_id)
-        try:
+        with self.claims_locked(workspace_id):
+            if (
+                self.load(workspace_id) is None
+                or not (self._authority / workspace_id).is_dir()
+            ):
+                raise WorkspaceLocatorResolutionError(
+                    WORKSPACE_IDENTITY_MISMATCH, "existing workspace is unavailable"
+                )
+            claims.mkdir(mode=0o700, parents=True, exist_ok=True)
             for existing_path in sorted(claims.glob("*.json")):
                 if existing_path.name == f"{safe_name}.json":
                     continue
@@ -381,9 +313,9 @@ class SandboxWorkspaceRecordStore:
                     "granteeWorkflowId": str(
                         grantee_workflow_id
                         or getattr(grant, "grantee_workflow_id", "")
-                        or getattr(grant, "owner_workflow_id", "")
                         or ""
                     ),
+                    "granteeIdentityVerified": True,
                     "expectedGeneration": int(
                         getattr(grant, "expected_generation", None)
                         if getattr(grant, "expected_generation", None) is not None
@@ -401,8 +333,6 @@ class SandboxWorkspaceRecordStore:
                 return
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 stream.write(payload)
-        finally:
-            self._release_claims_mutex(workspace_id)
 
     def release_existing_workspace(self, workspace_id: str, grant_id: str) -> None:
         """Release ownership of a previously claimed existing workspace.
@@ -452,7 +382,14 @@ class SandboxWorkspaceRecordStore:
                 continue
             if self._claim_is_expired(payload, now):
                 continue
-            grantees.append(str(payload.get("granteeWorkflowId") or "").strip())
+            # Before reader identity was passed explicitly, this field could
+            # contain the owner instead. Keep historical claims protected
+            # until expiry rather than mistaking a live reader for its owner.
+            grantees.append(
+                str(payload.get("granteeWorkflowId") or "").strip()
+                if payload.get("granteeIdentityVerified") is True
+                else ""
+            )
         return tuple(grantees)
 
     def record_paths(self, workspace_id: str) -> tuple[Path, ...]:
