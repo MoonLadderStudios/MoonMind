@@ -5756,3 +5756,120 @@ async def test_default_story_fetcher_resolves_credentials_for_requested_reposito
     )
     resolve.assert_awaited_once_with(repo="owner/repo")
     assert client.get.await_count == 1
+
+
+class _AdmittedReader:
+    """Repository reader double that records the admitted run per read."""
+
+    def __init__(self, pull_request: dict[str, Any], *, fail: bool = False) -> None:
+        self.pull_request = pull_request
+        self.fail = fail
+        self.reads: list[tuple[str, str]] = []
+
+    async def read_pull_request(self, repository, url, *, admitted_workflow_id=""):
+        self.reads.append(("pull_request", admitted_workflow_id))
+        if self.fail:
+            raise RuntimeError("provider page truncated")
+        return self.pull_request
+
+    async def read_repository_target(self, repository, ref="", *, admitted_workflow_id=""):
+        self.reads.append(("target", admitted_workflow_id))
+        return {"ref": "refs/heads/main", "revision": "d" * 40,
+                "contentDigest": "git-tree:" + "e" * 40}
+
+    async def commit_is_ancestor(self, repository, ancestor, descendant, *, admitted_workflow_id=""):
+        self.reads.append(("ancestor", admitted_workflow_id))
+        return True
+
+
+def _merged_pr(head_repository: str = "acme/repo") -> dict[str, Any]:
+    return {
+        "number": 7,
+        "state": "closed",
+        "merged": True,
+        "merge_commit_sha": "c" * 40,
+        "title": "Fix acme/repo#4",
+        "body": "",
+        "base": {"ref": "main", "repo": {"full_name": "acme/repo"}},
+        "head": {"ref": "feature", "sha": "a" * 40,
+                 "repo": {"full_name": head_repository}},
+    }
+
+
+_MERGED_HANDOFF = {
+    "repo": "acme/repo", "number": 7, "url": "https://github.com/acme/repo/pull/7",
+    "headSha": "a" * 40, "headBranch": "feature", "baseBranch": "main",
+}
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_reads_every_fact_with_admitted_run() -> None:
+    reader = _AdmittedReader(_merged_pr())
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason is None
+    assert reader.reads == [
+        ("pull_request", "mm:parent-run"),
+        ("target", "mm:parent-run"),
+        ("ancestor", "mm:parent-run"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_rejects_same_branch_from_fork() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == "The pull request does not match the current published candidate"
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_partial_pull_request_lookup_is_unavailable_not_absent() -> None:
+    reader = _AdmittedReader(_merged_pr(), fail=True)
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == (
+        "Read the matching GitHub pull request through the authorized "
+        "repository reader (RuntimeError)"
+    )
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        ({"admittedWorkflowId": "mm:parent-run", "workflow_id": "merge-gate"}, "mm:parent-run"),
+        ({"workflow_id": "mm:run"}, "mm:run"),
+        (None, ""),
+    ],
+)
+def test_admitted_repository_workflow_prefers_named_parent(context, expected) -> None:
+    assert story_tools._admitted_repository_workflow(context) == expected
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_post_merge_reads_with_parent_run() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    result = await update_github_issue_status(
+        {"repository": "acme/repo", "issueNumber": 4, "mode": "done"},
+        {"admittedWorkflowId": "mm:parent-run", "execution_owner": "default/merge-gate"},
+        github_service_factory=lambda: reader,
+        merged_pull_request=_MERGED_HANDOFF,
+    )
+
+    assert result.status == "FAILED"
+    assert reader.reads == [("pull_request", "mm:parent-run")]

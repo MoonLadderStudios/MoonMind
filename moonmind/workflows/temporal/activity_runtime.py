@@ -5250,12 +5250,16 @@ class TemporalIntegrationActivities:
             gate = candidate_context["acceptanceGate"]
             gate = gate if isinstance(gate, Mapping) else {}
             binding = acceptance_evidence(gate)
+            # The gate reads with the parent run's admitted repository authority.
+            admitted = str(payload.get("parentWorkflowId") or "").strip()
             reason = await validate_completion_target(
                 gate,
                 repository=binding.subject.repository if binding else "",
                 source_ref=str(payload.get("jiraIssueKey") or ""),
                 expected_ref=str(candidate_context.get("completionTargetRef") or ""),
-                read_target=GitHubService().read_repository_target,
+                read_target=lambda repo, ref: GitHubService().read_repository_target(
+                    repo, ref, admitted_workflow_id=admitted
+                ),
             )
             if reason:
                 return {"status": "blocked", "required": True, "reason": reason,
@@ -5319,6 +5323,8 @@ class TemporalIntegrationActivities:
                 "mode": "done",
                 **({"completionTargetRef": config["completionTargetRef"]} if config.get("completionTargetRef") else {}),
             },
+            # The gate reads with the parent run's admitted repository authority.
+            {"admittedWorkflowId": str(payload.get("parentWorkflowId") or "").strip()},
             merged_pull_request=payload.get("pullRequest") or {},
         )
         outputs = dict(result.outputs)

@@ -344,7 +344,11 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
         return failed("Merge requires a valid recorded PR head.")
 
     svc = GitHubService()
-    current = await svc.read_pull_request(repository, pr_url)
+    # Every read, including retries, uses this run's admitted repository authority.
+    admitted = activity.info().workflow_id if activity.in_activity() else ""
+    current = await svc.read_pull_request(
+        repository, pr_url, admitted_workflow_id=admitted
+    )
     head_sha = str((current.get("head") or {}).get("sha") or "")
     if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
         return failed("GitHub did not return a valid PR head for merge verification.")
@@ -379,7 +383,9 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
         )
         if not success:
             return failed(f"Base branch update failed: {summary}")
-        current = await svc.read_pull_request(repository, pr_url)
+        current = await svc.read_pull_request(
+            repository, pr_url, admitted_workflow_id=admitted
+        )
         if (current.get("base") or {}).get("ref") != target_branch or (
             current.get("head") or {}
         ).get("sha") != head_sha:
@@ -394,7 +400,11 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
     if not result.merged:
         # A failed response can follow a successful remote merge (lost ack).
         # A read failure remains retryable with the same recorded candidate.
-        reconciled = reconciled_merge(await svc.read_pull_request(repository, pr_url))
+        reconciled = reconciled_merge(
+            await svc.read_pull_request(
+                repository, pr_url, admitted_workflow_id=admitted
+            )
+        )
         if reconciled is not None:
             return reconciled
     return result.model_dump(by_alias=True)

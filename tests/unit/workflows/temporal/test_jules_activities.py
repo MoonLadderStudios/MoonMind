@@ -803,7 +803,9 @@ async def test_repo_merge_pins_verified_head_and_authored_branch():
                 "expected_head_sha": sha,
             }
         )
-    service.read_pull_request.assert_awaited_once_with("org/repo", url)
+    service.read_pull_request.assert_awaited_once_with(
+        "org/repo", url, admitted_workflow_id=""
+    )
     service.update_pull_request_base.assert_not_awaited()
     service.merge_pull_request.assert_awaited_once_with(
         pr_url=url, merge_method="merge", expected_head_sha=sha
@@ -951,3 +953,40 @@ async def test_repo_merge_reconciles_lost_merge_response():
     service.merge_pull_request.assert_awaited_once_with(
         pr_url=url, merge_method="merge", expected_head_sha="a" * 40,
     )
+
+
+async def test_repo_merge_reads_and_reconciles_with_admitted_run():
+    """#4010: the first read and the lost-ack reconciliation keep the run's authority."""
+    import dataclasses
+
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.adapters.github_service import MergePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    url = "https://github.com/org/repo/pull/123"
+    candidate = {"base": {"ref": "release"}, "head": {"sha": "a" * 40}}
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id="mm:admitted-run")
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as cls:
+        service = cls.return_value
+        service.read_pull_request = AsyncMock(side_effect=[
+            candidate,
+            {**candidate, "merged": True, "merge_commit_sha": "c" * 40},
+        ])
+        service.merge_pull_request = AsyncMock(return_value=MergePRResult(
+            pr_url=url, merged=False, summary="Merge response timed out",
+        ))
+        result = await env.run(repo_merge_pr_activity, {
+            "pr_url": url, "expected_repository": "org/repo",
+            "target_branch": "release", "expected_head_sha": "a" * 40,
+        })
+
+    assert result["merged"] is True
+    assert [call.kwargs for call in service.read_pull_request.await_args_list] == [
+        {"admitted_workflow_id": "mm:admitted-run"},
+        {"admitted_workflow_id": "mm:admitted-run"},
+    ]
+    service.merge_pull_request.assert_awaited_once()

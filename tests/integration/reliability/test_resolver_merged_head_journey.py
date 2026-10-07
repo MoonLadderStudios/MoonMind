@@ -22,6 +22,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.runtime import managed_api_key_resolve
 from moonmind.workflows.temporal.story_output_tools import (
     _validate_post_merge_issue_handoff,
 )
@@ -129,6 +130,14 @@ async def test_resolver_merged_revision_crosses_parent_and_issue_boundary(
         "resolve_github_token",
         AsyncMock(return_value=("fixture-only", None)),
     )
+    # Repository readers select the default connection; leave it unrecorded
+    # so the deployment declaration supplies the fixture token.
+    monkeypatch.setattr(
+        managed_api_key_resolve,
+        "load_repository_connection_for_launch",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-only")
     original_patched = module.workflow.patched
     if legacy:
         monkeypatch.setattr(

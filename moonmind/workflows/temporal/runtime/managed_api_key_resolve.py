@@ -293,6 +293,33 @@ async def select_github_access_for_launch(
     return SelectedGitHubAccess(connection=connection, credential=credential)
 
 
+async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
+    """Return the ``(connectionRef, anonymous)`` a recorded run admitted.
+
+    Retries, Activities, and child gates acting for a run read its canonical
+    parameters instead of carrying credentials or rediscovering authority.
+    An unrecorded or unreadable run raises; no other authority is assumed.
+    """
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+        authored_repository_access,
+    )
+
+    owner = str(workflow_id or "").strip()
+    async with async_session_maker() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, owner)
+    if record is None or not isinstance(record.parameters, Mapping):
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"run {owner!r} has no recorded repository authority; no other "
+            "connection is substituted",
+        )
+    return authored_repository_access(record.parameters)
+
+
 async def resolve_selected_github_credential_for_launch(
     connection_ref: str,
     *,
@@ -999,6 +1026,7 @@ __all__ = [
     "build_github_credential_descriptor_for_launch",
     "inspect_managed_secret_refs_for_launch",
     "load_active_managed_github_secret_slug",
+    "load_admitted_repository_access",
     "load_repository_connection_for_launch",
     "resolve_default_github_connection_credential",
     "resolve_ghcr_pull_credentials_for_launch",
