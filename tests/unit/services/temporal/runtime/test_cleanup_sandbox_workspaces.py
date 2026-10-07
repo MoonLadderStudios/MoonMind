@@ -9,6 +9,7 @@ long-finished workflows filled the shared Docker disk.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Mapping, Sequence
@@ -20,8 +21,10 @@ import pytest
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
 
+from moonmind.omnigent.workspace_sources import ExistingWorkspaceGrant
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.temporal.runtime.cleanup import (
+    ClosedWorkflowLookupError,
     DockerReferenceState,
     ManagedRuntimeCleanupConfig,
     ManagedRuntimeWorkspaceJanitor,
@@ -372,13 +375,108 @@ async def test_resolve_closed_workflows_maps_temporal_states() -> None:
             raise RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b"")
         return descriptions[workflow_id]
 
-    closed = await resolve_closed_workflows(
-        ["mm:running", "mm:completed", "mm:failed", "mm:purged", "mm:unreachable", ""],
-        describe=describe,
-    )
+    with pytest.raises(ClosedWorkflowLookupError, match="mm:unreachable") as raised:
+        await resolve_closed_workflows(
+            [
+                "mm:running",
+                "mm:completed",
+                "mm:failed",
+                "mm:purged",
+                "mm:unreachable",
+                "",
+            ],
+            describe=describe,
+        )
 
-    assert closed == {
+    # Workflows Temporal answered for keep their verdict; the unreachable one
+    # stays protected and the failure is surfaced instead of looking healthy.
+    assert raised.value.closed == {
         "mm:completed": closed_at,
         "mm:failed": closed_at,
         "mm:purged": None,
     }
+    assert raised.value.failed == ("mm:unreachable",)
+
+
+def test_per_workflow_lookup_failure_protects_and_is_reported(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    unreachable = _sandbox_workspace(root)
+    finished = _sandbox_workspace(root, "fedcba9876543210fedcba98", owner="mm:done")
+
+    async def describe(workflow_id: str):
+        if workflow_id == OWNER:
+            raise RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b"")
+        return SimpleNamespace(status=WorkflowExecutionStatus.COMPLETED, close_time=OLD)
+
+    def provider(workflow_ids: Sequence[str]) -> Mapping[str, datetime | None]:
+        return asyncio.run(resolve_closed_workflows(workflow_ids, describe=describe))
+
+    result = _janitor(root, provider).run()
+
+    assert _decision(result, unreachable).classification == "protected_active"
+    assert unreachable.exists()
+    assert _decision(result, finished).classification == "deleted"
+    assert any(OWNER in error for error in result.errors), result.errors
+
+
+def test_claim_acquired_after_the_final_rescan_keeps_the_workspace(
+    tmp_path: Path,
+) -> None:
+    """A reader granted the workspace mid-delete must not lose it."""
+
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    store = SandboxWorkspaceRecordStore(root)
+    janitor = _janitor(root, _Closures({OWNER: NOW - timedelta(days=10)}))
+    rescan = janitor._rescan_blocks_delete
+
+    def claim_after_rescan(candidate):
+        blocked = rescan(candidate)
+        store.claim_existing_workspace(
+            WORKSPACE_ID,
+            ExistingWorkspaceGrant(
+                workspace_id=WORKSPACE_ID,
+                owner_workflow_id=OWNER,
+                owner_step_execution_id=f"{OWNER}:step:1",
+                generation=1,
+                mode="read_only",
+                expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+                grant_digest="hmac-sha256:reader",
+            ),
+            grantee_workflow_id="mm:reader",
+        )
+        return blocked
+
+    janitor._rescan_blocks_delete = claim_after_rescan
+
+    result = janitor.run()
+
+    assert _decision(result, workspace).classification == "protected_shared"
+    assert workspace.exists()
+    assert store.load(WORKSPACE_ID) is not None
+    assert store.active_claim_grantees(WORKSPACE_ID) == ("mm:reader",)
+
+
+def test_interrupted_deletion_quarantine_is_resumed_on_the_next_pass(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    sandbox_quarantine = root / "temporal_sandbox" / f".gc-{'a' * 32}-{WORKSPACE_ID}"
+    workspace_quarantine = root / "workspaces" / f".gc-{'b' * 32}-run-1"
+    for quarantine in (sandbox_quarantine, workspace_quarantine):
+        (quarantine / "repo").mkdir(parents=True)
+        (quarantine / "repo" / "partial.bin").write_bytes(b"left behind")
+    unrelated = root / "temporal_sandbox" / ".gc-not-a-quarantine"
+    unrelated.mkdir()
+
+    dry = _janitor(root, _Closures({}), dry_run=True).run()
+    assert sandbox_quarantine.exists(), dry.errors
+
+    result = _janitor(root, _Closures({})).run()
+
+    assert not sandbox_quarantine.exists()
+    assert not workspace_quarantine.exists()
+    assert unrelated.exists()
+    assert result.errors == ()

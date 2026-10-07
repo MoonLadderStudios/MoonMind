@@ -222,6 +222,90 @@ async def test_lifecycle_sweep_activity_drains_and_reports_completion(
             assert summary.drained is True
 
 
+async def test_lifecycle_drain_continues_through_a_deletion_intent_backlog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full page of pending deletion intents is backlog, not a drained pass."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            artifact_ids = await _create_expired_artifacts(service, 3)
+            real_delete = service._store.delete
+
+            def unavailable(_storage_key: str) -> None:
+                raise OSError("object-store unavailable")
+
+            monkeypatch.setattr(service._store, "delete", unavailable)
+            await service.drain_lifecycle(
+                principal="service:lifecycle",
+                time_budget=timedelta(minutes=5),
+            )
+            for artifact_id in artifact_ids:
+                assert await service._repository.get_deletion_intent(artifact_id)
+
+            monkeypatch.setattr(service._store, "delete", real_delete)
+            summary = await service.drain_lifecycle(
+                principal="service:lifecycle",
+                limit=1,
+                time_budget=timedelta(minutes=5),
+            )
+
+            assert summary.reconciled_deletion_count == 3
+            assert summary.drained is True
+            for artifact_id in artifact_ids:
+                assert (
+                    await service._repository.get_deletion_intent(artifact_id)
+                ) is None
+
+
+async def test_lifecycle_sweep_activity_heartbeats_within_a_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow page must not outlive the heartbeat timeout between heartbeats."""
+
+    from temporalio import activity
+
+    heartbeats: list[object] = []
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(
+        activity, "heartbeat", lambda *details: heartbeats.append(details)
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            await _create_expired_artifacts(service, 3)
+            real_delete = service._store.delete
+            heartbeats_before_delete: list[int] = []
+
+            def observed_delete(storage_key: str) -> None:
+                heartbeats_before_delete.append(len(heartbeats))
+                return real_delete(storage_key)
+
+            monkeypatch.setattr(service._store, "delete", observed_delete)
+
+            activities = TemporalArtifactActivities(service)
+            summary = await activities.artifact_lifecycle_sweep(
+                principal="service:storage-maintenance"
+            )
+
+            assert summary.pages == 1
+            assert summary.hard_deleted_count == 3
+            # Every object deletion in the single page follows a fresh heartbeat.
+            assert heartbeats_before_delete
+            assert all(count > 0 for count in heartbeats_before_delete)
+            assert heartbeats_before_delete == sorted(set(heartbeats_before_delete))
+
+
 async def test_lifecycle_sweep_skips_pinned_artifacts(tmp_path: Path) -> None:
     """Pinned artifacts should remain undeleted during lifecycle sweeps."""
 

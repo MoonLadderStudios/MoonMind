@@ -730,8 +730,9 @@ degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
 Each sweep processes bounded pages of expired and soft-deleted artifacts and
-keeps paging for up to 40 minutes while full pages still make progress,
-heartbeating after each page. A page whose candidates are all protected ends
+pending deletion intents, and keeps paging for up to 40 minutes while a full
+page still makes progress, heartbeating before each candidate and after each
+page. A page whose candidates are all protected ends
 the pass instead of repeating them. The result reports whether a backlog
 remains; the next hourly pass resumes it, so removal keeps pace with creation
 rather than one page per hour.
@@ -739,8 +740,9 @@ rather than one page per hour.
 Retention class is assigned when an artifact is created or linked. When the
 mapping shortens a link type's class, a migration applies the new class to
 existing rows whose every link carries that type, so previously written
-evidence does not keep its longer expiry. Such migrations only change expiry;
-the sweep still enforces every protection before deleting.
+evidence does not keep its longer expiry. As with linking, the new expiry
+counts from the latest such link, never earlier than creation. Such migrations
+only change expiry; the sweep still enforces every protection before deleting.
 
 The current raw and normalized journals referenced by a non-terminal Omnigent
 bridge session remain recovery data and are excluded from expiry and destructive

@@ -628,7 +628,9 @@ class OmnigentWorkspaceMaterializer:
         # active claim, while read-only claims coexist only with read-only
         # claims. Reclaiming the same grant is idempotent for retries.
         try:
-            record_store.claim_existing_workspace(grant.workspace_id, grant)
+            record_store.claim_existing_workspace(
+                grant.workspace_id, grant, grantee_workflow_id=target_workflow_id
+            )
         except Exception as exc:
             raise HarnessPlatformError(
                 f"existing workspace is already granted elsewhere: {exc}",
