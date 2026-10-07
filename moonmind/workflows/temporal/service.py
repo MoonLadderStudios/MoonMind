@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -84,6 +84,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
@@ -2131,6 +2132,7 @@ class TemporalExecutionService:
         _skip_pause_guard: bool = False,
         _workflow_id: str | None = None,
         _run_id: str | None = None,
+        _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2455,7 +2457,54 @@ class TemporalExecutionService:
             )
         if remediation_link is not None:
             self._session.add(remediation_link)
+        recovery_input_links: list[TemporalArtifactLink] = []
         try:
+            if _recovery_artifact_source is not None:
+                # Recovery inherits the admitted source inputs and retained step
+                # evidence, but has a new execution identity. Commit their links
+                # with the destination record before Temporal can launch it.
+                source_family = f"{_recovery_artifact_source.workflow_id}:"
+                links = (
+                    (
+                        await self._session.execute(
+                            select(TemporalArtifactLink).where(
+                                TemporalArtifactLink.namespace
+                                == _recovery_artifact_source.namespace,
+                                or_(
+                                    TemporalArtifactLink.workflow_id
+                                    == _recovery_artifact_source.workflow_id,
+                                    and_(
+                                        TemporalArtifactLink.workflow_id.startswith(
+                                            source_family, autoescape=True
+                                        ),
+                                        TemporalArtifactLink.workflow_id
+                                        != source_family,
+                                    ),
+                                ),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                artifact_repository = TemporalArtifactRepository(self._session)
+                inherited: set[str] = set()
+                for link in links:
+                    if link.artifact_id in inherited:
+                        continue
+                    inherited.add(link.artifact_id)
+                    recovery_input_links.append(
+                        await artifact_repository.add_link(
+                            artifact_id=link.artifact_id,
+                            execution=ExecutionRef(
+                                namespace=self._namespace,
+                                workflow_id=workflow_id,
+                                run_id=run_id,
+                                link_type="input.recovery",
+                                created_by_activity_type="workflow.recovery.inherit",
+                            ),
+                        )
+                    )
             await self._session.commit()
         except IntegrityError as exc:
             await self._session.rollback()
@@ -2470,6 +2519,11 @@ class TemporalExecutionService:
             if existing is None:
                 raise exc
             return await self._sync_projection_best_effort(existing)
+        except Exception:
+            # Never leave an idempotency-visible destination without its input
+            # grants if admission fails before the atomic commit.
+            await self._session.rollback()
+            raise
         await self._session.refresh(record)
 
         if remediation_link is not None:
@@ -2526,6 +2580,8 @@ class TemporalExecutionService:
                 # via _sync_projection_best_effort, so no projection lifecycle
                 # field is written outside mutate_execution_projection.
                 record.run_id = start_run_id
+                for input_link in recovery_input_links:
+                    input_link.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id
                     if remediation_link.context_artifact_ref:
@@ -5674,6 +5730,7 @@ class TemporalExecutionService:
                 if recovery_mode == "selected_step"
                 else f"Recovered from failed step of {record.workflow_id}."
             ),
+            _recovery_artifact_source=record,
         )
         return {
             "accepted": True,
