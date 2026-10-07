@@ -271,14 +271,11 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
         # override and remain scheduled on the workflow queue. No new calls
         # route here; retire only through the drain gate in
         # ``moonmind.gates.checkpoint_compat_drain``
-        # (MoonLadderStudios/MoonMind#3949): removal requires
-        # ``evaluate_checkpoint_compat_drain_observations`` to report zero
-        # outstanding old-queue consumers collected from live deployment
-        # probes via ``collect_checkpoint_compat_drain_observations`` (see
-        # ``render_checkpoint_compat_drain_report`` for the operator
-        # procedure). Scoped visibility counts come from
-        # ``TemporalExecutionService.get_drain_metrics`` with the workflow
-        # task queue passed explicitly.
+        # (MoonLadderStudios/MoonMind#3949). Removal condition:
+        # ``python -m moonmind.workflows.temporal.checkpoint_compat_drain_probe``
+        # run against the deployment being changed reports every dimension
+        # observed (not None) at zero; then remove this registration, its
+        # dead DI and permissions together.
         *checkpoint_branch_activity_handlers(),
     )
 

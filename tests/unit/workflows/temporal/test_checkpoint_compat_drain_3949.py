@@ -11,8 +11,6 @@ drain gate below is what authorizes removal.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from api_service.services.checkpoint_branch_service import (
@@ -122,88 +120,6 @@ def test_drain_rule_matches_canonical_worker_drain_predicate():
             )
         )
         assert gate.may_remove_workflow_queue_handlers is canonical.may_remove_worker_routes
-
-
-def test_compat_registration_points_at_the_drain_gate():
-    from pathlib import Path
-
-    source = (
-        Path(__file__).resolve().parents[4]
-        / "moonmind/workflows/temporal/workflow_registry.py"
-    ).read_text()
-    assert "checkpoint_compat_drain" in source
-    assert "evaluate_checkpoint_compat_drain" in source
-
-
-@pytest.mark.asyncio
-async def test_drain_gate_retains_progress_under_bounded_load():
-    """Bounded-load rehearsal: the gate stays decisive under saturation."""
-
-    usages = [
-        CheckpointCompatDrainUsage(),
-        CheckpointCompatDrainUsage(open_pre_cutover_histories=1),
-        CheckpointCompatDrainUsage(pending_old_queue_tasks=5),
-        CheckpointCompatDrainUsage(supported_resets_pending=2),
-    ]
-
-    async def _decide(usage: CheckpointCompatDrainUsage) -> bool:
-        await asyncio.sleep(0)
-        return evaluate_checkpoint_compat_drain(usage).may_remove_workflow_queue_handlers
-
-    verdicts = await asyncio.wait_for(
-        asyncio.gather(*(_decide(usage) for usage in usages * 25)),
-        timeout=30,
-    )
-    assert verdicts == [True, False, False, False] * 25
-
-
-@pytest.mark.asyncio
-async def test_consolidated_worker_retains_control_and_cleanup_progress_under_load():
-    """Saturation rehearsal: control/cleanup progress is never lost or
-    reordered under concurrent load.
-
-    Each of 100 concurrent turn handoffs records its control decision and
-    its cleanup release into a shared ledger. The gate decision stays
-    decisive per input, every handoff's control record precedes its cleanup
-    record, and all 100 handoffs retain both records — the progress
-    property the consolidated topology must keep until the drain gate
-    releases the compat registration.
-    """
-
-    ledger: dict[str, list[str]] = {}
-    ledger_lock = asyncio.Lock()
-
-    async def _handoff(index: int, usage: CheckpointCompatDrainUsage) -> bool:
-        await asyncio.sleep(0)
-        decision = evaluate_checkpoint_compat_drain(usage)
-        async with ledger_lock:
-            ledger.setdefault(f"turn-{index}", []).append(
-                f"control:{decision.required_action}"
-            )
-        await asyncio.sleep(0)
-        async with ledger_lock:
-            ledger.setdefault(f"turn-{index}", []).append("cleanup:released")
-        return decision.may_remove_workflow_queue_handlers
-
-    usages = [
-        CheckpointCompatDrainUsage(),
-        CheckpointCompatDrainUsage(open_pre_cutover_histories=1),
-        CheckpointCompatDrainUsage(pending_old_queue_tasks=5),
-        CheckpointCompatDrainUsage(supported_resets_pending=2),
-    ]
-    verdicts = await asyncio.wait_for(
-        asyncio.gather(
-            *(_handoff(index, usages[index % len(usages)]) for index in range(100))
-        ),
-        timeout=30,
-    )
-    assert verdicts == [True, False, False, False] * 25
-    assert len(ledger) == 100
-    for index in range(100):
-        records = ledger[f"turn-{index}"]
-        assert len(records) == 2, f"turn-{index} lost progress under load"
-        assert records[0].startswith("control:")
-        assert records[1] == "cleanup:released"
 
 
 # --- Ordering: idempotency and single-mutator ownership ----------------------

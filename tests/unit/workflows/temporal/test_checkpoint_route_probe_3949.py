@@ -17,9 +17,9 @@ method — ``MoonMindCheckpointBranchTurnWorkflow._persistence_route_options``
   tests/conftest.py; do not add ``pytest.mark.unit_fast`` here, it
   conflicts with that ownership.
 
-Full success/failure/cancellation/retry journeys against a live
-artifacts worker (database, sandbox, child workflows) remain integration
-scope; the drain gate in ``moonmind.gates.checkpoint_compat_drain`` owns that sequencing.
+Success/failure/cancellation/retry journeys against the production
+artifacts worker registration live in
+``tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py``.
 """
 
 from __future__ import annotations
