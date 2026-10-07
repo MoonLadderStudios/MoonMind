@@ -349,7 +349,10 @@ Effective container rights come from `docker-compose.yaml`. Both
 `.env` through `env_file`, so any credential placed there (including provider
 keys) reaches both processes; queue separation is not credential separation,
 and no per-fleet least-privilege claim is made. Neither worker mounts the
-Docker socket. The workflow worker's `agent_workspaces:/work/agent_jobs`
+Docker socket. Both workers join only `control-plane-network`, which reaches
+Temporal, Postgres, MinIO and the API and is not internal (outbound network
+access is not confined); neither joins the internal `docker-proxy-network`,
+so neither can reach the Docker API proxy. The workflow worker's `agent_workspaces:/work/agent_jobs`
 mount is not a checkpoint-compat right: the workflow side of
 `MoonMind.AgentRun` (`ManagedAgentAdapter`, `CodexSessionAdapter`) saves and
 loads `ManagedRunStore` records under `/work/agent_jobs/managed_runs`, so the
