@@ -119,6 +119,11 @@ export function GithubTokenProbePanel({
     setResultTarget(null);
     setErrorMessage(null);
     setIsRunning(false);
+    // The panel remounts per selected connection; a late response from an
+    // unmounted or superseded panel must not reach the page notice.
+    return () => {
+      requestSeq.current += 1;
+    };
   }, [currentConnectionKey]);
 
   async function handleRunProbe(event?: FormEvent<HTMLFormElement>) {

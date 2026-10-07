@@ -87,12 +87,17 @@ function LocationProbe() {
 function renderSection({
   initialEntry = '/settings/providers-secrets',
   navigate = vi.fn(),
-}: { initialEntry?: string; navigate?: (url: string) => void } = {}) {
+  onNotice = vi.fn(),
+}: {
+  initialEntry?: string;
+  navigate?: (url: string) => void;
+  onNotice?: (notice: { level: 'ok' | 'error'; text: string } | null) => void;
+} = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
-        <SourceControlConnections canRunProbe navigate={navigate} />
+        <SourceControlConnections canRunProbe navigate={navigate} onNotice={onNotice} />
         <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -194,6 +199,49 @@ describe('SourceControlConnections', () => {
     await screen.findByText('Read access verified');
     const probe = calls(fetchMock, 'POST', '/api/v1/settings/github/token-probe');
     expect(bodyOf(probe[0])).toMatchObject({ connectionId: 'work-github', repo: 'acme/widgets' });
+  });
+
+  it.each([
+    ['success', () => json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true })],
+    ['error', () => json({ detail: 'Personal denied' }, 403)],
+  ])('discards a late %s probe response after switching A to B and back to A', async (_kind, respond) => {
+    const state = {
+      items: [
+        connection({
+          assignments: [
+            { repository: 'me/notes', providerRepoId: '3', operations: ['read'], revision: 1, verified: true },
+          ],
+        }),
+        connection({ id: 'work-github', displayName: 'Work GitHub' }),
+      ],
+    };
+    let resolveProbe: (value: unknown) => void = () => undefined;
+    stubApi(state, {
+      'POST /api/v1/settings/github/token-probe': () =>
+        new Promise((resolve) => {
+          resolveProbe = resolve;
+        }),
+    });
+    const onNotice = vi.fn();
+    renderSection({ onNotice });
+
+    const nav = await screen.findByRole('navigation', { name: 'Connections' });
+    await screen.findByText('me/notes');
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Testing/ })).toBeTruthy());
+    fireEvent.click(within(nav).getByText('Work GitHub'));
+    await screen.findByRole('form', { name: 'Edit connection' });
+    fireEvent.click(within(nav).getByText('Personal GitHub'));
+    await screen.findByText('me/notes');
+
+    resolveProbe(respond());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onNotice).not.toHaveBeenCalled();
+    expect(screen.queryByText('Read access verified')).toBeNull();
+    expect(screen.queryByText('Personal denied')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeTruthy();
   });
 
   it('reconciles a lost create acknowledgment without a second POST or duplicate', async () => {
