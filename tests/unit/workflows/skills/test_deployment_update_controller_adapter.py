@@ -171,6 +171,37 @@ def test_tool_reports_an_unavailable_controller_without_running_the_legacy_updat
     assert SECRET not in str(failure.value)
 
 
+def test_tool_keeps_observing_an_unreadable_status_instead_of_reporting_failure(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = controller_factory()
+    unreadable = {"operationId": "wf-unreadable", "status": ""}
+    observed: list[str] = []
+
+    def observe(_endpoint, operation_id):
+        observed.append(operation_id)
+        return dict(unreadable)
+
+    monkeypatch.setattr(
+        deployment_execution,
+        "submit_controller_update",
+        lambda *a, **k: dict(unreadable),
+    )
+    monkeypatch.setattr(deployment_execution, "observe_controller_operation", observe)
+    monkeypatch.setattr(deployment_execution, "CONTROLLER_OBSERVE_TIMEOUT_SECONDS", 0.2)
+
+    with pytest.raises(ToolFailure) as failure:
+        asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
+
+    # An unreadable observation proves neither failure nor completion.
+    assert failure.value.error_code == "DEPLOYMENT_CONTROLLER_OBSERVATION_TIMEOUT"
+    assert failure.value.retryable is True
+    assert failure.value.details["operationId"] == "wf-unreadable"
+    assert observed and set(observed) == {"wf-unreadable"}
+    assert controller.applied == []
+
+
 def test_tool_without_a_durable_identity_is_refused(
     controller_factory: Callable[..., InProcessController],
 ) -> None:

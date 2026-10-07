@@ -343,15 +343,16 @@ class _Operations:
     """Settings Operations and execution reads for the controller journey."""
 
     def __init__(self) -> None:
+        self.update_status = 503
         self.update_response: dict[str, Any] = {
-            "deploymentUpdateRunId": "depupd_run1",
-            "taskId": "mm:legacy",
-            "workflowId": "mm:legacy",
-            "operationId": None,
-            "owner": "workflow",
-            "status": "QUEUED",
+            "detail": {
+                "code": "deployment_controller_not_installed",
+                "message": "The standalone deployment controller is not installed, "
+                "so the dashboard cannot submit updates. Install and start it from "
+                "the host with `python3 deploy/controller/bootstrap.py install` then "
+                "`start`, or update from the host with ./tools/update-moonmind.sh.",
+            }
         }
-        self.execution: dict[str, Any] = {"workflowId": "mm:legacy", "status": "canceled"}
         self.controller: dict[str, Any] = {"installed": False, "reachable": False}
         self.actions: list[dict[str, Any]] = []
         self.requests: list[tuple[str, str]] = []
@@ -364,13 +365,13 @@ class _Operations:
         }
 
 
-def _history_row(status: str = "CANCELED") -> dict[str, Any]:
+def _workflow_row(status: str = "RUNNING") -> dict[str, Any]:
     return {
-        "id": "depupd_run1",
+        "id": "depupd_run2",
         "owner": "workflow",
         "status": status,
-        "requestedImage": f"{REPOSITORY}:journey-history",
-        "runDetailUrl": "/workflows/mm:legacy",
+        "requestedImage": f"{REPOSITORY}:journey-controller",
+        "runDetailUrl": "/workflows/mm:new",
         "operationId": None,
     }
 
@@ -414,8 +415,6 @@ def operations_api():
                 self._send(200, operations.stack())
             elif self.path.startswith("/api/v1/operations/deployment/image-targets"):
                 self._send(200, {"repositories": [{"repository": REPOSITORY}]})
-            elif self.path.startswith("/api/executions/"):
-                self._send(200, operations.execution)
             else:
                 self._send(404, {})
 
@@ -423,9 +422,7 @@ def operations_api():
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             operations.requests.append(("POST", self.path))
             if self.path == "/api/v1/operations/deployment/update":
-                self._send(202, operations.update_response)
-            elif self.path.endswith("/cancel"):
-                self._send(202, operations.execution)
+                self._send(operations.update_status, operations.update_response)
             else:
                 self._send(404, {})
 
@@ -444,59 +441,52 @@ def _phase(phase, base, state_file):
     )
 
 
-def test_history_records_a_workflow_backed_update_before_the_controller(
+def test_controller_absent_is_a_repair_route_without_a_workflow(
     operations_api, tmp_path
 ):
     base, operations = operations_api
-    operations.actions = [_history_row()]
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 0
+    assert _phase("controller_absent", base, state_file) == 0
     state = json.loads(state_file.read_text())
-    assert state["deploymentHistory"] == {
-        "workflowId": "mm:legacy",
-        "status": "CANCELED",
-        "runDetailUrl": "/workflows/mm:legacy",
-    }
     assert state["controller"]["repository"] == REPOSITORY
-    assert ("POST", "/api/executions/mm%3Alegacy/cancel") in operations.requests
+    assert state["controller"]["reference"].startswith("journey-controller-")
+    assert ("POST", "/api/v1/operations/deployment/update") in operations.requests
 
 
-def test_history_update_already_owned_by_a_controller_fails(
+def test_controller_absent_update_accepted_by_any_updater_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
+    operations.update_status = 202
     operations.update_response = {
-        **operations.update_response,
-        "owner": "controller",
-        "operationId": "ui-early",
-        "workflowId": None,
+        "deploymentUpdateRunId": "depupd_run1",
+        "taskId": "mm:legacy",
+        "workflowId": "mm:legacy",
+        "owner": "workflow",
+        "status": "QUEUED",
     }
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 1
-    assert "transitional workflow updater" in capsys.readouterr().err
+    assert _phase("controller_absent", base, state_file) == 1
+    assert "deployment_controller_not_installed" in capsys.readouterr().err
 
 
-def test_history_update_that_completed_fails(operations_api, tmp_path, capsys):
-    """No application-owned updater may run while the journey holds history."""
+def test_controller_absent_with_a_workflow_backed_update_fails(
+    operations_api, tmp_path, capsys
+):
     base, operations = operations_api
-    operations.execution = {"workflowId": "mm:legacy", "status": "completed"}
+    operations.actions = [_workflow_row()]
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 1
-    assert "completed" in capsys.readouterr().err
+    assert _phase("controller_absent", base, state_file) == 1
+    assert "workflow-backed" in capsys.readouterr().err
 
 
 def _dashboard_controller_state(state_file, **controller: Any) -> None:
     state_file.write_text(
         json.dumps(
             {
-                "deploymentHistory": {
-                    "workflowId": "mm:legacy",
-                    "status": "CANCELED",
-                    "runDetailUrl": "/workflows/mm:legacy",
-                },
                 "controller": {
                     "repository": REPOSITORY,
                     "reference": "journey-controller",
@@ -531,7 +521,7 @@ def test_controller_journey_with_one_owner_and_the_first_failure_passes(
     operations_api, tmp_path
 ):
     base, operations = operations_api
-    _installed(operations, _controller_row(), _history_row())
+    _installed(operations, _controller_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)
 
@@ -546,7 +536,6 @@ def test_second_controller_operation_is_a_second_mutation_owner(
         operations,
         _controller_row(operationId="ui-2", id="ctl-ui-2"),
         _controller_row(),
-        _history_row(),
     )
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)
@@ -560,7 +549,6 @@ def test_retry_that_lost_the_first_failure_fails(operations_api, tmp_path, capsy
     _installed(
         operations,
         _controller_row(errorSummary="attempt 4: staging failed"),
-        _history_row(),
     )
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)
@@ -571,7 +559,7 @@ def test_retry_that_lost_the_first_failure_fails(operations_api, tmp_path, capsy
 
 def test_retry_without_a_fresh_attempt_group_fails(operations_api, tmp_path):
     base, operations = operations_api
-    _installed(operations, _controller_row(attemptGroup=1), _history_row())
+    _installed(operations, _controller_row(attemptGroup=1))
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)
 
@@ -582,7 +570,7 @@ def test_controller_submission_that_created_a_workflow_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
-    _installed(operations, _controller_row(), _history_row())
+    _installed(operations, _controller_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(
         state_file,
@@ -602,8 +590,7 @@ def test_new_workflow_backed_update_after_the_controller_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
-    revived = {**_history_row("RUNNING"), "id": "depupd_run2", "runDetailUrl": "/workflows/mm:new"}
-    _installed(operations, _controller_row(), revived, _history_row())
+    _installed(operations, _controller_row(), _workflow_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)
 
@@ -613,7 +600,7 @@ def test_new_workflow_backed_update_after_the_controller_fails(
 
 def test_reload_that_did_not_reconnect_fails(operations_api, tmp_path, capsys):
     base, operations = operations_api
-    _installed(operations, _controller_row(), _history_row())
+    _installed(operations, _controller_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file, reloadedOperationId=None)
 
@@ -625,7 +612,7 @@ def test_dashboard_that_submitted_again_after_reconnecting_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
-    _installed(operations, _controller_row(), _history_row())
+    _installed(operations, _controller_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file, dashboardSubmissions=2)
 

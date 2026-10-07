@@ -57,7 +57,13 @@ _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
 ControllerStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 _CONTROLLER_STATUS_MAP: dict[str, ControllerStatus] = {
     "pending": "QUEUED",
@@ -76,6 +82,12 @@ class ControllerEndpoint:
 
     base_url: str
     secret: str | None
+
+
+# The controller is a private endpoint (its deployment network alias or the
+# host loopback) guarded by a bearer secret, so requests never use an
+# ambient HTTP(S) proxy that would see the credential or fail to route.
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class ControllerTransportError(RuntimeError):
@@ -173,7 +185,7 @@ def _controller_request(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _DIRECT_OPENER.open(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8") or "{}"
             status = response.status
     except urllib.error.HTTPError as exc:
@@ -418,5 +430,9 @@ def list_controller_operations(
 
 
 def controller_action_status(controller_status: str) -> ControllerStatus:
-    """Map a controller operation status onto the Operations action status."""
-    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "QUEUED")
+    """Map a controller operation status onto the Operations action status.
+
+    A missing or unrecognized status is ``UNKNOWN``: an unreadable
+    observation never looks accepted, running, or complete.
+    """
+    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "UNKNOWN")

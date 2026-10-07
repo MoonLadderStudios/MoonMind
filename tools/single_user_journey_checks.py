@@ -53,24 +53,22 @@ recreated stack, can verify what an earlier phase saved):
     published, or it refused only because subsystem transforms are not yet
     registered. That refusal is recorded and printed as not published. Any
     other refusal, a deferral, or no observed outcome fails.
-``deployment_history``
+``controller_absent``
     MoonLadderStudios/MoonMind#4502, before a deployment controller is
-    installed and while the deployment worker is stopped: submit one Settings
-    Operations update, which must be accepted by the transitional workflow
-    updater, cancel it before any updater runs, and wait until Settings
-    Operations lists it as a closed workflow-backed row.
+    installed: a Settings Operations update must be refused as
+    ``deployment_controller_not_installed`` with the host repair route, and
+    no workflow-backed update may exist.
 ``controller_ready``
     After the journey starts the standalone controller: Settings Operations
     must report it installed and reachable, with no controller operation yet
-    and the workflow-backed history row unchanged.
+    and no workflow-backed update.
 ``controller``
     After the dashboard submitted, reloaded, and retried
     (``tools/single_user_journey_browser.mjs ... controller``): the dashboard's
     submission and retry were answered by the controller with no workflow,
     the reload reconnected to the same operation, exactly one controller
     operation owns the stack, its retry started a fresh attempt group while
-    keeping the first failure, and the workflow-backed history is unchanged
-    with no new workflow-backed update.
+    keeping the first failure, and no workflow-backed update was created.
 
 Stdlib only: it runs on the CI host, outside the application image.
 """
@@ -829,42 +827,20 @@ def _workflow_rows(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [action for action in actions if action.get("owner") != "controller"]
 
 
-def _require_history_unchanged(
-    api: Api, state: dict[str, Any], actions: list[dict[str, Any]]
-) -> None:
-    """The workflow-backed row stays readable history, not a revived engine."""
+def _require_no_workflow_updates(actions: list[dict[str, Any]]) -> None:
+    """The controller is the only updater; no workflow-backed update exists."""
 
-    history = state.get("deploymentHistory") or {}
-    if not history.get("workflowId"):
-        raise JourneyFailure("no workflow-backed deployment history was recorded")
     rows = _workflow_rows(actions)
-    urls = sorted(str(row.get("runDetailUrl")) for row in rows)
-    if urls != [history["runDetailUrl"]]:
+    if rows:
         raise JourneyFailure(
-            "Settings Operations lists workflow-backed updates other than the "
-            f"recorded history ({urls}); the controller era created a workflow"
-        )
-    if str(rows[0].get("status")) != history["status"]:
-        raise JourneyFailure(
-            f"workflow-backed history changed from {history['status']} to "
-            f"{rows[0].get('status')}"
-        )
-    _, values = execution_state(describe(api, history["workflowId"]))
-    if not values & (CANCELED | TERMINAL_FAILURE):
-        raise JourneyFailure(
-            f"history workflow {history['workflowId']} is no longer closed: "
-            f"{sorted(values)}"
+            "Settings Operations lists workflow-backed updates "
+            f"{sorted(str(row.get('runDetailUrl')) for row in rows)}; the "
+            "dashboard must never construct the retired workflow updater"
         )
 
 
-def deployment_history(
-    api: Api, state: dict[str, Any], *, label: str, timeout: float
-) -> None:
-    """Record one workflow-backed update before a controller is installed.
-
-    The journey stops the deployment worker first, so the transitional
-    updater can accept the request but never run it.
-    """
+def controller_absent(api: Api, state: dict[str, Any], *, label: str) -> None:
+    """Without a controller, an update is a repair route, never a workflow."""
 
     targets = api.json(
         "GET", f"/api/v1/operations/deployment/image-targets?stack={DEPLOYMENT_STACK}"
@@ -873,80 +849,42 @@ def deployment_history(
     if not repositories:
         raise JourneyFailure(f"Settings Operations offers no image target: {targets!r}")
     repository = str(repositories[0]["repository"])
-    queued = api.json(
+    status, payload = api.request(
         "POST",
         "/api/v1/operations/deployment/update",
         body={
             "stack": DEPLOYMENT_STACK,
             "image": {
                 "repository": repository,
-                "reference": f"journey-history-{label}-{uuid.uuid4().hex[:8]}",
+                "reference": f"journey-absent-{label}-{uuid.uuid4().hex[:8]}",
             },
             "mode": "changed_services",
-            "removeOrphans": True,
-            "wait": True,
-            "runSmokeCheck": False,
-            "pauseWork": False,
-            "pruneOldImages": False,
-            "reason": f"single-user journey {label}: workflow-backed history",
+            "reason": f"single-user journey {label}: no controller installed",
         },
-        expect=(202,),
+        expect=(202, 503),
     )
-    workflow_id = str(queued.get("workflowId") or "")
-    if queued.get("owner") != "workflow" or not workflow_id:
+    try:
+        detail = (json.loads(payload or b"null") or {}).get("detail") or {}
+    except (json.JSONDecodeError, AttributeError):
+        detail = {}
+    if status != 503 or detail.get("code") != "deployment_controller_not_installed":
         raise JourneyFailure(
-            "without an installed controller Settings Operations must use the "
-            f"transitional workflow updater: {queued!r}"
+            "without an installed controller Settings Operations must answer "
+            f"deployment_controller_not_installed, not HTTP {status}: "
+            f"{payload[:800].decode(errors='replace')}"
         )
-    api.json(
-        "POST",
-        f"/api/executions/{quote(workflow_id)}/cancel",
-        body={"action": "cancel", "graceful": True},
-        expect=(202,),
-    )
-    deadline = time.monotonic() + timeout
-    row: dict[str, Any] | None = None
-    while time.monotonic() < deadline:
-        _, values = execution_state(describe(api, workflow_id))
-        if values & COMPLETED:
-            raise JourneyFailure(
-                f"history update {workflow_id} completed although no deployment "
-                "worker was running"
-            )
-        if values & (CANCELED | TERMINAL_FAILURE):
-            _, actions = _stack_actions(api)
-            row = next(
-                (
-                    action
-                    for action in _workflow_rows(actions)
-                    if action.get("runDetailUrl") == f"/workflows/{workflow_id}"
-                ),
-                None,
-            )
-            if row is not None and str(row.get("status") or "") not in {
-                "QUEUED",
-                "RUNNING",
-                "UNKNOWN",
-            }:
-                break
-            row = None
-        time.sleep(3)
-    if row is None:
-        raise JourneyFailure(
-            f"Settings Operations never listed {workflow_id} as a closed "
-            f"workflow-backed update within {timeout:.0f}s"
-        )
-    state["deploymentHistory"] = {
-        "workflowId": workflow_id,
-        "status": str(row["status"]),
-        "runDetailUrl": str(row["runDetailUrl"]),
-    }
+    if "./tools/update-moonmind.sh" not in str(detail.get("message")):
+        raise JourneyFailure(f"the refusal names no host repair route: {detail!r}")
+    stack, actions = _stack_actions(api)
+    if (stack.get("controller") or {}).get("installed"):
+        raise JourneyFailure(f"a controller is already installed: {stack.get('controller')!r}")
+    _require_no_workflow_updates(actions)
     # The dashboard later submits this unpublished tag to the controller.
     state["controller"] = {
         "repository": repository,
         "reference": f"journey-controller-{label}-{uuid.uuid4().hex[:8]}",
     }
-    log(f"workflow-backed history {workflow_id} recorded as {row['status']}")
+    log("without a controller the update is a repair route; no workflow was created")
 
 
 def controller_ready(api: Api, state: dict[str, Any], *, timeout: float) -> None:
@@ -961,7 +899,7 @@ def controller_ready(api: Api, state: dict[str, Any], *, timeout: float) -> None
                     "the controller already owns an operation before the "
                     "dashboard submitted one"
                 )
-            _require_history_unchanged(api, state, actions)
+            _require_no_workflow_updates(actions)
             log("Settings Operations reaches the installed controller")
             return
         time.sleep(3)
@@ -1039,10 +977,10 @@ def controller(api: Api, state: dict[str, Any]) -> None:
             f"the retry of {operation_id} started no fresh attempt group "
             f"(attempt group {operation.get('attemptGroup')!r})"
         )
-    _require_history_unchanged(api, state, actions)
+    _require_no_workflow_updates(actions)
     log(
         f"controller operation {operation_id} is the only mutation owner; retry "
-        "kept the first failure and history is unchanged"
+        "kept the first failure and no workflow was created"
     )
 
 
@@ -1058,7 +996,7 @@ def main(argv: list[str] | None = None) -> int:
             "release",
             "vector_free",
             "conversion",
-            "deployment_history",
+            "controller_absent",
             "controller_ready",
             "controller",
         ),
@@ -1074,7 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
     api = Api(args.api_base)
     state: dict[str, Any] = {}
     # These phases start a journey's state; every later phase reads it.
-    if args.phase not in {"populate", "deployment_history"}:
+    if args.phase not in {"populate", "controller_absent"}:
         state = json.loads(args.state_file.read_text())
     try:
         if args.phase == "populate":
@@ -1097,8 +1035,8 @@ def main(argv: list[str] | None = None) -> int:
             verify(api, state)
         elif args.phase == "vector_free":
             vector_free(api, state)
-        elif args.phase == "deployment_history":
-            deployment_history(api, state, label=args.label, timeout=args.timeout)
+        elif args.phase == "controller_absent":
+            controller_absent(api, state, label=args.label)
         elif args.phase == "controller_ready":
             controller_ready(api, state, timeout=args.timeout)
         elif args.phase == "controller":

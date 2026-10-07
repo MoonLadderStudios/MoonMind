@@ -129,6 +129,7 @@ const stackState = {
   },
   latestAction: recentAction,
   recentActions: [recentAction],
+  controller: { installed: true, reachable: true, message: null },
   policy: {
     repository: 'ghcr.io/moonladderstudios/moonmind',
     defaultReference: 'stable',
@@ -236,9 +237,9 @@ describe('OperationsSettingsSection deployment update card', () => {
           ok: true,
           status: 202,
           json: async () => ({
-            deploymentUpdateRunId: 'depupd_queued',
-            taskId: 'mm:deployment-update',
-            workflowId: 'mm:deployment-update',
+            deploymentUpdateRunId: 'ctl-ui-queued',
+            operationId: 'ui-queued',
+            owner: 'controller',
             status: 'QUEUED',
           }),
         } as Response);
@@ -451,8 +452,11 @@ describe('OperationsSettingsSection deployment update card', () => {
         pruneOldImages: false,
       });
       expect(JSON.parse(String(updateCall?.[1]?.body))).not.toHaveProperty('reason');
+      expect(JSON.parse(String(updateCall?.[1]?.body)).operationId).toMatch(/^ui-[0-9a-f]{32}$/);
     });
-    expect(await within(card).findByText(/deployment update queued/i)).toBeTruthy();
+    expect(
+      await within(card).findByText(/update accepted by the controller: operation ui-queued \(queued\)/i),
+    ).toBeTruthy();
   });
 
   it('renders update history and hides raw command-log links by default', async () => {
@@ -523,9 +527,9 @@ describe('OperationsSettingsSection deployment update card', () => {
           ok: true,
           status: 202,
           json: async () => ({
-            deploymentUpdateRunId: 'depupd_rollback',
-            taskId: 'mm:deployment-update',
-            workflowId: 'mm:deployment-update',
+            deploymentUpdateRunId: 'ctl-ui-rollback',
+            operationId: 'ui-rollback',
+            owner: 'controller',
             status: 'QUEUED',
             body: init?.body,
           }),
@@ -561,7 +565,9 @@ describe('OperationsSettingsSection deployment update card', () => {
         reason: expect.stringContaining('Rollback after failed update depupd_recent'),
       });
     });
-    expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
+    expect(
+      await within(card).findByText(/rollback accepted by the controller: operation ui-rollback/i),
+    ).toBeTruthy();
   });
 
   const failedControllerAction = {
@@ -655,8 +661,6 @@ describe('OperationsSettingsSection deployment update card', () => {
               deploymentUpdateRunId: 'ctl-ui-1',
               operationId: 'ui-1',
               owner: 'controller',
-              taskId: null,
-              workflowId: null,
               status: 'RUNNING',
             }),
           } as Response)
@@ -707,6 +711,113 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(rollback.disabled).toBe(true);
   });
 
+  it('routes an uninstalled controller to the host repair path without submitting', async () => {
+    mockControllerState(
+      {
+        installed: false,
+        reachable: false,
+        message:
+          'The standalone deployment controller is not installed, so the dashboard cannot submit updates. Install and start it from the host with `python3 deploy/controller/bootstrap.py install` then `start`, or update from the host with ./tools/update-moonmind.sh.',
+      },
+      () => null,
+      [stackStateWithRollback.recentActions[0]],
+    );
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toContain('is not installed');
+    expect(alert.textContent).toContain('deploy/controller/bootstrap.py install');
+    expect(alert.textContent).toContain('./tools/update-moonmind.sh');
+    expect(alert.textContent).not.toMatch(/transitional/i);
+    const submit = within(card).getByRole('button', { name: /update moonmind/i }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const rollback = within(card).getByRole('button', { name: /roll back to stable/i }) as HTMLButtonElement;
+    expect(rollback.disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === '/api/v1/operations/deployment/update'),
+    ).toBe(false);
+  });
+
+  it('resubmits one intent under the same operation identity until it is answered', async () => {
+    const answers: Array<'lost' | 'unavailable' | 'accepted'> = ['lost', 'unavailable', 'accepted', 'accepted'];
+    mockControllerState({ installed: true, reachable: true }, (url, init) => {
+      if (url !== '/api/v1/operations/deployment/update') {
+        return null;
+      }
+      const operationId = JSON.parse(String(init?.body)).operationId;
+      const answer = answers.shift();
+      if (answer === 'lost') {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      if (answer === 'unavailable') {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({
+            detail: {
+              code: 'deployment_controller_unavailable',
+              message: `The deployment controller is unavailable: controller did not answer. Operation ${operationId} was not confirmed.`,
+              operationId,
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 202,
+        json: async () => ({
+          deploymentUpdateRunId: `ctl-${operationId}`,
+          operationId,
+          owner: 'controller',
+          status: 'RUNNING',
+        }),
+      } as Response);
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const target = await within(card).findByLabelText(/update to/i);
+    const submit = within(card).getByRole('button', { name: /update moonmind/i });
+    const submittedIds = () =>
+      fetchSpy.mock.calls
+        .filter(([url]) => String(url) === '/api/v1/operations/deployment/update')
+        .map(([, init]) => JSON.parse(String(init?.body)).operationId as string);
+
+    fireEvent.change(target, { target: { value: '20260507.2470' } });
+    fireEvent.click(submit);
+    await within(card).findByText(/failed to fetch/i);
+    fireEvent.click(submit);
+    await within(card).findByText(/was not confirmed/i);
+    fireEvent.click(submit);
+    await within(card).findByText(/update accepted by the controller/i);
+    const [first, second, third] = submittedIds();
+    expect(first).toMatch(/^ui-[0-9a-f]{32}$/);
+    // A duplicate or lost-response resubmission keeps the intent's identity.
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+
+    // An answered intent is finished; a new submission is a new intent.
+    fireEvent.change(target, { target: { value: '20260508.0001' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(submittedIds()).toHaveLength(4));
+    expect(submittedIds()[3]).not.toBe(first);
+  });
+
+  it('renders an unreadable controller status as unknown, not queued or complete', async () => {
+    const unknownAction = { ...failedControllerAction, status: 'UNKNOWN', completedAt: null, retryAllowed: false, errorSummary: null, attempts: [], verification: [] };
+    mockControllerState({ installed: true, reachable: true }, () => null, [unknownAction]);
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    expect(await within(card).findByText('Operation ui-1')).toBeTruthy();
+    expect(within(card).getAllByText('UNKNOWN').length).toBeGreaterThan(0);
+    expect(within(card).queryByText('QUEUED')).toBeNull();
+    expect(within(card).queryByText('SUCCEEDED')).toBeNull();
+    expect(within(card).getByText('not confirmed')).toBeTruthy();
+  });
+
   it('names the controller operation that accepted a submitted update', async () => {
     mockControllerState({ installed: true, reachable: true }, (url) =>
       url === '/api/v1/operations/deployment/update'
@@ -717,8 +828,6 @@ describe('OperationsSettingsSection deployment update card', () => {
               deploymentUpdateRunId: 'ctl-ui-2',
               operationId: 'ui-2',
               owner: 'controller',
-              taskId: null,
-              workflowId: null,
               status: 'RUNNING',
             }),
           } as Response)

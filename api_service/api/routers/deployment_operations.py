@@ -28,12 +28,8 @@ from api_service.services.deployment_operations import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
-from moonmind.workflows.temporal import (
-    TemporalExecutionService,
-    TemporalExecutionValidationError,
-)
 from moonmind.workflows.skills.deployment_tools import DEPLOYMENT_UPDATE_TOOL_NAME
+from moonmind.workflows.temporal import TemporalExecutionService
 
 
 router = APIRouter(prefix="/api/v1/operations/deployment", tags=["deployment"])
@@ -63,28 +59,36 @@ class DeploymentUpdateRequest(BaseModel):
         None, alias="rollbackSourceActionId"
     )
     confirmation: str | None = None
+    # The dashboard's own controller operation identity for this intent; a
+    # resubmission after a duplicate click or lost response reuses it.
+    operation_id: str | None = Field(
+        None, alias="operationId", pattern=r"^ui-[A-Za-z0-9][A-Za-z0-9._-]{0,124}$"
+    )
 
 
 DeploymentActionStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 
 
 class DeploymentUpdateResponse(BaseModel):
-    """The accepted update and who owns it.
+    """The accepted update, identified by its durable controller operation.
 
-    A controller-owned update is identified by its durable controller
-    ``operationId``; ``taskId``/``workflowId`` are set only for the
-    transitional workflow updater, never manufactured for a local operation.
+    The controller owns every update; no Temporal workflow identity is
+    manufactured for its operation.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
-    task_id: str | None = Field(None, alias="taskId")
-    workflow_id: str | None = Field(None, alias="workflowId")
-    operation_id: str | None = Field(None, alias="operationId")
-    owner: Literal["controller", "workflow"]
+    operation_id: str = Field(..., alias="operationId")
+    owner: Literal["controller"]
     status: DeploymentActionStatus
 
 
@@ -597,7 +601,6 @@ def _stack_state(
 async def submit_deployment_update(
     payload: DeploymentUpdateRequest,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: User = Depends(get_current_user()),
 ) -> DeploymentUpdateResponse:
     _require_admin(user)
@@ -612,40 +615,16 @@ async def submit_deployment_update(
             confirmation=payload.confirmation,
             rollback_source_action_id=payload.rollback_source_action_id,
         )
-    except DeploymentOperationError as exc:
-        raise _policy_error(exc) from exc
-    try:
         queued = await service.queue_update(
-            execution_service=execution_service,
             policy=policy,
             submission=DeploymentUpdateSubmission(
                 stack=policy.stack,
                 repository=payload.image.repository,
                 reference=payload.image.reference,
-                mode=payload.mode,
-                remove_orphans=payload.remove_orphans,
-                wait=payload.wait,
-                run_smoke_check=payload.run_smoke_check,
-                pause_work=payload.pause_work,
-                prune_old_images=payload.prune_old_images,
                 reason=payload.reason,
-                requested_by_user_id=getattr(user, "id", None),
-                operation_kind=payload.operation_kind,
-                rollback_source_action_id=payload.rollback_source_action_id,
-                confirmation=payload.confirmation,
-                before_build_id=resolve_moonmind_build_id(),
+                operation_id=payload.operation_id,
             ),
         )
-    except TemporalSubmitDisabledError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "temporal_submit_disabled", "message": str(exc)},
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"code": "deployment_update_queue_invalid", "message": str(exc)},
-        ) from exc
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
     return DeploymentUpdateResponse(**queued)

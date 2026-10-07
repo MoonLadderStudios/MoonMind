@@ -9,8 +9,8 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
-from uuid import UUID, uuid4
+from typing import Any, Literal
+from uuid import uuid4
 
 from moonmind.workflows.skills.deployment_controller import (
     ControllerEndpoint,
@@ -23,10 +23,6 @@ from moonmind.workflows.skills.deployment_controller import (
     submit_controller_update,
     unavailable_controller_error,
 )
-from moonmind.workflows.skills.deployment_tools import (
-    DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
-)
 
 CurrentImageEvidence = Literal[
     "controller", "desired_state", "environment", "policy", "unavailable"
@@ -37,13 +33,11 @@ _IMAGE_REFERENCE_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}|sha256:[A-Fa-f0-9]{64})$"
 )
 
-# Settings Operations adopts the standalone deployment controller
-# (MoonLadderStudios/MoonMind#4502). Once a deployment has installed it, the
-# controller is the only update owner (see ``deployment_controller``). Until a
-# deployment installs a working controller, the transitional legacy workflow
-# (``_queue_legacy_workflow``) still serves updates, which is the same rule
-# the host entrypoint applies. Remove it once the default install provides
-# the controller.
+# Settings Operations submits to and observes the standalone deployment
+# controller (MoonLadderStudios/MoonMind#4502). It is the only update owner:
+# an absent or unreachable controller is reported with the host repair
+# route, never converted into a workflow-backed update. Workflow-backed
+# updates recorded before the controller remain readable history.
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 _MAX_CONTROLLER_ATTEMPTS_SHOWN = 10
 
@@ -140,18 +134,10 @@ class DeploymentUpdateSubmission:
     stack: str
     repository: str
     reference: str
-    mode: str
-    remove_orphans: bool
-    wait: bool
-    run_smoke_check: bool
-    pause_work: bool
-    prune_old_images: bool
     reason: str | None
-    requested_by_user_id: UUID | str | None
-    operation_kind: str = "update"
-    rollback_source_action_id: str | None = None
-    confirmation: str | None = None
-    before_build_id: str | None = None
+    # The caller's own controller operation identity for this intent, so a
+    # duplicate or lost-response resubmission reattaches to one operation.
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -228,27 +214,6 @@ class DeploymentCurrentImage:
     source_run_id: str | None
     updated_at: str | None
     evidence: CurrentImageEvidence
-
-
-class DeploymentExecutionCreator(Protocol):
-    async def create_execution(
-        self,
-        *,
-        workflow_type: str,
-        owner_id: UUID | str | None,
-        owner_type: str | None = None,
-        title: str | None,
-        input_artifact_ref: str | None,
-        plan_artifact_ref: str | None,
-        manifest_artifact_ref: str | None,
-        failure_policy: str | None,
-        initial_parameters: dict[str, Any] | None,
-        idempotency_key: str | None,
-        repository: str | None = None,
-        integration: str | None = None,
-        summary: str | None = None,
-    ) -> Any:
-        raise NotImplementedError
 
 
 DEFAULT_DEPLOYMENT_POLICIES: dict[str, DeploymentStackPolicy] = {
@@ -351,10 +316,7 @@ class DeploymentOperationsService:
             return DeploymentControllerObservation(
                 installed=False,
                 reachable=False,
-                message=(
-                    "The standalone deployment controller is not installed; "
-                    "updates use the transitional workflow updater."
-                ),
+                message=_controller_not_installed_error().message,
             )
         try:
             operations = list_controller_operations(endpoint, stack=policy.stack)
@@ -379,11 +341,7 @@ class DeploymentOperationsService:
         """Request the controller's explicit fresh bounded attempt."""
         endpoint = self.controller_endpoint()
         if endpoint is None:
-            raise DeploymentOperationError(
-                "deployment_controller_not_installed",
-                "The standalone deployment controller is not installed.",
-                status_code=409,
-            )
+            raise _controller_not_installed_error()
         operation = await asyncio.to_thread(
             retry_controller_operation, endpoint, operation_id
         )
@@ -392,184 +350,41 @@ class DeploymentOperationsService:
     async def queue_update(
         self,
         *,
-        execution_service: DeploymentExecutionCreator,
         policy: DeploymentStackPolicy,
         submission: DeploymentUpdateSubmission,
     ) -> dict[str, Any]:
         endpoint = self.controller_endpoint()
         if endpoint is None:
-            return await self._queue_legacy_workflow(
-                execution_service=execution_service,
-                policy=policy,
-                submission=submission,
-            )
+            raise _controller_not_installed_error()
         separator = "@" if submission.reference.startswith("sha256:") else ":"
+        # A reused identity reattaches to its operation; the controller
+        # refuses it for a different target, which is new intent.
         operation = await asyncio.to_thread(
             submit_controller_update,
             endpoint,
-            operation_id=f"ui-{uuid4().hex}",
+            operation_id=submission.operation_id or f"ui-{uuid4().hex}",
             stack=policy.stack,
             desired_image=f"{submission.repository}{separator}{submission.reference}",
             reason=submission.reason or "",
         )
         return _controller_submission_response(operation)
 
-    async def _queue_legacy_workflow(
-        self,
-        *,
-        execution_service: DeploymentExecutionCreator,
-        policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
-    ) -> dict[str, Any]:
-        """Transitional updater for deployments without an installed controller."""
-        initial_parameters = self._build_initial_parameters(
-            policy=policy,
-            submission=submission,
-        )
-        execution = await execution_service.create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=submission.requested_by_user_id,
-            owner_type="user",
-            title=f"Update deployment stack {policy.stack}",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy="fail_fast",
-            initial_parameters=initial_parameters,
-            idempotency_key=self._idempotency_key(
-                policy=policy,
-                submission=submission,
-            ),
-            repository=None,
-            integration=DEPLOYMENT_UPDATE_TOOL_NAME,
-            summary=(
-                f"Policy-gated deployment update for {policy.stack} to "
-                f"{submission.repository}:{submission.reference}."
-            ),
-        )
-        workflow_id = str(getattr(execution, "workflow_id", "") or "").strip()
-        run_id = str(getattr(execution, "run_id", "") or "").strip()
-        if not workflow_id or not run_id:
-            raise DeploymentOperationError(
-                "deployment_update_queue_failed",
-                "Deployment update workflow was not created.",
-            )
-        deployment_update_run_id = f"depupd_{run_id.replace('-', '')}"
-        return {
-            "deploymentUpdateRunId": deployment_update_run_id,
-            "taskId": workflow_id,
-            "workflowId": workflow_id,
-            "operationId": None,
-            "owner": "workflow",
-            "status": "QUEUED",
-        }
 
-    def _build_initial_parameters(
-        self,
-        *,
-        policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
-    ) -> dict[str, Any]:
-        plan_inputs = {
-            "stack": policy.stack,
-            "image": {
-                "repository": submission.repository,
-                "reference": submission.reference,
-            },
-            "mode": submission.mode,
-            "removeOrphans": submission.remove_orphans,
-            "wait": submission.wait,
-            "runSmokeCheck": submission.run_smoke_check,
-            "pauseWork": submission.pause_work,
-            "pruneOldImages": submission.prune_old_images,
-            "operationKind": submission.operation_kind,
-        }
-        if submission.reason and submission.reason.strip():
-            plan_inputs["reason"] = submission.reason.strip()
-        if submission.rollback_source_action_id:
-            plan_inputs["rollbackSourceActionId"] = submission.rollback_source_action_id
-        if submission.confirmation:
-            plan_inputs["confirmation"] = submission.confirmation
-        deployment_step = {
-            "id": "update-moonmind-deployment",
-            "type": "tool",
-            "title": "Update MoonMind deployment",
-            "instructions": (
-                "Run the policy-gated deployment update operation for "
-                f"stack '{policy.stack}' using the typed "
-                f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
-            ),
-            "tool": {
-                "type": "skill",
-                "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                "id": DEPLOYMENT_UPDATE_TOOL_NAME,
-                "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
-                "inputs": plan_inputs,
-            },
-        }
-        return {
-            "task": {
-                "instructions": (
-                    "Run the policy-gated deployment update operation for "
-                    f"stack '{policy.stack}' using the typed "
-                    f"{DEPLOYMENT_UPDATE_TOOL_NAME} tool contract."
-                ),
-                "operation": {
-                    "type": "deployment.update",
-                    "source": "api.v1.operations.deployment.update",
-                    "jiraIssue": "MM-523",
-                    "kind": submission.operation_kind,
-                    "rollbackSourceActionId": submission.rollback_source_action_id,
-                    "beforeBuildId": submission.before_build_id,
-                },
-                "steps": [deployment_step],
-                # Keep the legacy projection shape until deployment action
-                # readers are fully migrated to task.steps.
-                "plan": [
-                    {
-                        "id": deployment_step["id"],
-                        "title": deployment_step["title"],
-                        "tool": {
-                            "type": "skill",
-                            "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
-                        },
-                        "inputs": plan_inputs,
-                    }
-                ],
-            }
-        }
-
-    def _idempotency_key(
-        self,
-        *,
-        policy: DeploymentStackPolicy,
-        submission: DeploymentUpdateSubmission,
-    ) -> str:
-        normalized_reason = str(submission.reason or "").strip()
-        explicit_action_key = normalized_reason
-        if submission.operation_kind == "rollback" or _is_mutable_reference(
-            policy=policy, reference=submission.reference
-        ):
-            explicit_action_key = uuid4().hex
-        return "|".join(
-            [
-                "deployment-update",
-                policy.stack,
-                submission.repository,
-                submission.reference,
-                submission.mode,
-                explicit_action_key,
-            ]
-        )[:128]
+def _controller_not_installed_error() -> DeploymentOperationError:
+    return DeploymentOperationError(
+        "deployment_controller_not_installed",
+        "The standalone deployment controller is not installed, so the "
+        "dashboard cannot submit updates. Install and start it from the host "
+        "with `python3 deploy/controller/bootstrap.py install` then `start`, "
+        "or update from the host with ./tools/update-moonmind.sh.",
+        status_code=503,
+    )
 
 
 def _controller_submission_response(operation: dict[str, Any]) -> dict[str, Any]:
     operation_id = str(operation.get("operationId") or "")
     return {
         "deploymentUpdateRunId": f"ctl-{operation_id}",
-        "taskId": None,
-        "workflowId": None,
         "operationId": operation_id,
         "owner": "controller",
         "status": controller_action_status(str(operation.get("status") or "")),
