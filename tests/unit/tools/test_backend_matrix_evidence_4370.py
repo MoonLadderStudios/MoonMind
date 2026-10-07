@@ -9,6 +9,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
 from tools.ci.write_backend_matrix_summary import (
     DURATION_SEMANTICS,
     SNAPSHOT_SCHEMA,
@@ -90,12 +92,26 @@ def test_slowest_and_durations_snapshot_are_separate_files(tmp_path: Path) -> No
     assert payload["durationSemantics"] is None
 
 
-def test_malformed_case_time_stays_unavailable_not_zero(tmp_path: Path) -> None:
+@pytest.mark.parametrize("case_time", ["fast", "", None])
+def test_malformed_case_time_stays_unavailable_not_zero(
+    tmp_path: Path, case_time: str | None
+) -> None:
     """#4629 R2: invalid timing text must not silently become a measured
     zero in the per-shard snapshot."""
-    root = ET.Element("testsuite", {"tests": "2", "failures": "0", "errors": "0", "skipped": "0", "time": "1"})
-    ET.SubElement(root, "testcase", {"classname": "mod", "name": "test_bad", "time": "fast"})
-    ET.SubElement(root, "testcase", {"classname": "mod", "name": "test_ok", "time": "0.5"})
+    root = ET.Element(
+        "testsuite",
+        {"tests": "3", "failures": "0", "errors": "0", "skipped": "0", "time": "1"},
+    )
+    bad_attributes = {"classname": "mod", "name": "test_bad"}
+    if case_time is not None:
+        bad_attributes["time"] = case_time
+    ET.SubElement(root, "testcase", bad_attributes)
+    ET.SubElement(
+        root, "testcase", {"classname": "mod", "name": "test_ok", "time": "0.5"}
+    )
+    ET.SubElement(
+        root, "testcase", {"classname": "mod", "name": "test_zero", "time": "0"}
+    )
     path = tmp_path / "junit.xml"
     ET.ElementTree(root).write(path)
 
@@ -104,9 +120,12 @@ def test_malformed_case_time_stays_unavailable_not_zero(tmp_path: Path) -> None:
     write_durations_snapshot("reliability-shard-1", summary, snapshot)
     write_slowest_report(summary, tmp_path / "slowest.txt")
 
-    cases = {case["junitName"]: case for case in json.loads(snapshot.read_text())["cases"]}
+    cases = {
+        case["junitName"]: case for case in json.loads(snapshot.read_text())["cases"]
+    }
     assert cases["mod::test_bad"]["duration"] is None
     assert cases["mod::test_ok"]["duration"] == 0.5
+    assert cases["mod::test_zero"]["duration"] == 0.0
     assert "unavailable mod::test_bad" in (tmp_path / "slowest.txt").read_text()
 
 
