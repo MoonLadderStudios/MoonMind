@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -29,6 +30,7 @@ from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_r
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
+    WorkspaceLocatorResolutionError,
 )
 
 ManagedRuntimeCandidateKind = Literal[
@@ -325,9 +327,29 @@ CleanupProgressCallback = Callable[[Mapping[str, object]], None]
 ClosedWorkflowProvider = Callable[[Sequence[str]], Mapping[str, datetime | None]]
 
 _SANDBOX_STORE = "temporal_sandbox"
+# Name ``_delete_candidate`` gives a path while it is being removed.
+_QUARANTINE_NAME = re.compile(r"^\.gc-[0-9a-f]{32}-.+")
 _CLOSED_WORKFLOW_STATUSES = frozenset(
     {"COMPLETED", "FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 )
+
+
+class ClosedWorkflowLookupError(RuntimeError):
+    """Some owner lookups failed; ``closed`` holds the answers that succeeded.
+
+    The failed workflows are treated as open, so their workspaces stay
+    protected, while the error keeps the Temporal outage visible.
+    """
+
+    def __init__(
+        self, closed: Mapping[str, datetime | None], failed: Sequence[str]
+    ) -> None:
+        self.closed = dict(closed)
+        self.failed = tuple(failed)
+        super().__init__(
+            f"owner workflow lookup failed for {len(self.failed)} workflow(s): "
+            + ", ".join(self.failed[:5])
+        )
 
 
 async def resolve_closed_workflows(
@@ -340,38 +362,52 @@ async def resolve_closed_workflows(
 
     A workflow whose history Temporal no longer retains closed before the
     namespace retention window, so it is closed with an unknown time.
-    Running workflows and failed lookups are omitted and stay protected.
+    Running workflows are omitted and stay protected. Failed lookups are
+    omitted too, then raised together as :class:`ClosedWorkflowLookupError`
+    carrying the answers that did succeed.
     """
 
     from temporalio.service import RPCError, RPCStatusCode
 
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
-    async def lookup(workflow_id: str) -> tuple[str, bool, datetime | None]:
+    async def lookup(
+        workflow_id: str,
+    ) -> tuple[str, Literal["closed", "open", "failed"], datetime | None]:
         async with semaphore:
             try:
                 description = await describe(workflow_id)
             except RPCError as exc:
-                return workflow_id, exc.status == RPCStatusCode.NOT_FOUND, None
+                if exc.status == RPCStatusCode.NOT_FOUND:
+                    return workflow_id, "closed", None
+                return workflow_id, "failed", None
             except Exception:
-                return workflow_id, False, None
+                return workflow_id, "failed", None
         status = getattr(getattr(description, "status", None), "name", None)
         if status not in _CLOSED_WORKFLOW_STATUSES:
-            return workflow_id, False, None
+            return workflow_id, "open", None
         close_time = getattr(description, "close_time", None)
         return (
             workflow_id,
-            True,
+            "closed",
             _ensure_aware(close_time) if isinstance(close_time, datetime) else None,
         )
 
     ids = [workflow_id for workflow_id in dict.fromkeys(workflow_ids) if workflow_id]
     results = await asyncio.gather(*(lookup(workflow_id) for workflow_id in ids))
-    return {
+    closed = {
         workflow_id: closed_at
-        for workflow_id, closed, closed_at in results
-        if closed
+        for workflow_id, state, closed_at in results
+        if state == "closed"
     }
+    failed = [workflow_id for workflow_id, state, _ in results if state == "failed"]
+    if failed:
+        raise ClosedWorkflowLookupError(closed, failed)
+    return closed
+
+
+class _SandboxWorkspaceClaimed(Exception):
+    """A sandbox workspace gained an open claim before it could be removed."""
 
 
 class ManagedRuntimeWorkspaceJanitor:
@@ -443,6 +479,8 @@ class ManagedRuntimeWorkspaceJanitor:
 
     def _run_enabled_pass(self) -> ManagedRuntimeCleanupResult:
         errors: list[str] = []
+        if not self._config.dry_run:
+            self._resume_quarantined_deletions(errors)
         try:
             run_records, session_records, unreadable = self._load_owner_records()
         except OSError as exc:
@@ -480,6 +518,38 @@ class ManagedRuntimeWorkspaceJanitor:
             unreadable_owner_records=len(unreadable),
             errors=tuple(errors),
         )
+
+    def _resume_quarantined_deletions(self, errors: list[str]) -> None:
+        """Finish deletions a previous pass quarantined but did not complete.
+
+        Deletion renames a path to ``.gc-<uuid hex>-<name>`` beside it before
+        removing it, and the owner records may already be gone, so a crash or
+        cancellation mid-delete would otherwise leave the bytes forever.
+        """
+
+        root = self._config.runtime_store_root
+        for parent in (
+            root,
+            root / "workspaces",
+            root / _SANDBOX_STORE,
+            self._config.artifact_root,
+        ):
+            try:
+                quarantines = sorted(
+                    child
+                    for child in parent.iterdir()
+                    if _QUARANTINE_NAME.match(child.name) and not child.is_symlink()
+                )
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                errors.append(f"quarantine scan failed for {parent}: {exc}")
+                continue
+            for quarantine in quarantines:
+                try:
+                    _delete_path(quarantine, progress_callback=self._progress_callback)
+                except OSError as exc:
+                    errors.append(f"quarantine deletion failed for {quarantine}: {exc}")
 
     def _load_owner_records(
         self,
@@ -819,6 +889,11 @@ class ManagedRuntimeWorkspaceJanitor:
             return
         try:
             closed = self._closed_workflow_provider(workflow_ids)
+        except ClosedWorkflowLookupError as exc:
+            # Keep the answers Temporal gave; the failed owners stay protected.
+            closed = exc.closed
+            if errors is not None:
+                errors.append(str(exc))
         except Exception as exc:
             if errors is not None:
                 errors.append(f"owner workflow lookup failed: {exc}")
@@ -1065,7 +1140,13 @@ class ManagedRuntimeWorkspaceJanitor:
                     estimated_bytes,
                 )
             self._emit_progress("delete", candidate)
-            if not self._delete_candidate(candidate):
+            try:
+                deleted = self._delete_candidate(candidate)
+            except _SandboxWorkspaceClaimed as exc:
+                return self._decision(
+                    candidate, "protected_shared", str(exc), newest, estimated_bytes
+                )
+            if not deleted:
                 return self._decision(
                     candidate, "already_absent", "candidate path vanished before deletion"
                 )
@@ -1324,11 +1405,44 @@ class ManagedRuntimeWorkspaceJanitor:
         quarantine = candidate.path.with_name(
             f".gc-{uuid.uuid4().hex}-{candidate.path.name}"
         )
-        candidate.path.rename(quarantine)
-        if candidate.sandbox_owner is not None:
-            self._sandbox_store.discard(candidate.sandbox_owner.workspace_id)
+        owner = candidate.sandbox_owner
+        if owner is None:
+            candidate.path.rename(quarantine)
+        else:
+            self._quarantine_sandbox_workspace(candidate, owner, quarantine)
         _delete_path(quarantine, progress_callback=self._progress_callback)
         return True
+
+    def _quarantine_sandbox_workspace(
+        self,
+        candidate: ManagedRuntimeCleanupCandidate,
+        owner: SandboxWorkspaceOwner,
+        quarantine: Path,
+    ) -> None:
+        """Move a sandbox workspace aside while no new claim can be accepted.
+
+        A claim taken after the final rescan would otherwise be discarded with
+        the workspace its workflow is about to use. Holding the claims mutex
+        across the last claim check, the rename and the record removal closes
+        that window; the slow recursive delete runs after it is released.
+        """
+
+        store = self._sandbox_store
+        try:
+            with store.claims_locked(owner.workspace_id):
+                grantees = store.active_claim_grantees(
+                    owner.workspace_id, now=self._now()
+                )
+                if any(grantee not in self._closed_workflows for grantee in grantees):
+                    raise _SandboxWorkspaceClaimed(
+                        "workspace was claimed before delete"
+                    )
+                candidate.path.rename(quarantine)
+                store.discard(owner.workspace_id)
+        except WorkspaceLocatorResolutionError as exc:
+            raise _SandboxWorkspaceClaimed(
+                "workspace claims are contended; delete deferred"
+            ) from exc
 
     def _emit_progress(
         self,

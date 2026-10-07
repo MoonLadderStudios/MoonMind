@@ -149,6 +149,57 @@ def test_upgrade_reclassifies_only_rows_whose_links_are_all_runtime_evidence(
     assert rows["art_pinned"].expires_at is None
 
 
+def test_upgrade_keeps_seven_days_from_the_latest_runtime_evidence_link(
+    monkeypatch,
+) -> None:
+    """Linking assigns expiry from the link time, so the backfill must too."""
+
+    engine = sa.create_engine("sqlite:///:memory:")
+    linked_at = CREATED_AT + timedelta(days=20)
+    with engine.begin() as connection:
+        TemporalArtifact.metadata.create_all(
+            connection,
+            tables=[TemporalArtifact.__table__, TemporalArtifactLink.__table__],
+        )
+        connection.execute(
+            sa.insert(TemporalArtifact),
+            [_artifact("art_old_link"), _artifact("art_recent_link")],
+        )
+        links = [
+            ("art_old_link", "runtime.stdout", CREATED_AT),
+            ("art_recent_link", "runtime.stdout", CREATED_AT + timedelta(days=1)),
+            ("art_recent_link", "runtime.omnigent.sse.raw", linked_at),
+        ]
+        for index, (artifact_id, link_type, created_at) in enumerate(links):
+            connection.execute(
+                sa.insert(TemporalArtifactLink).values(
+                    id=uuid.UUID(int=index + 1),
+                    artifact_id=artifact_id,
+                    namespace="default",
+                    workflow_id="mm:workflow",
+                    run_id="run",
+                    link_type=link_type,
+                    created_at=created_at,
+                )
+            )
+
+        migration = _migration()
+        monkeypatch.setattr(
+            migration, "op", Operations(MigrationContext.configure(connection))
+        )
+        migration.upgrade()
+
+        expiries = {
+            row.artifact_id: row.expires_at.replace(tzinfo=UTC)
+            for row in connection.execute(
+                sa.select(TemporalArtifact.artifact_id, TemporalArtifact.expires_at)
+            )
+        }
+
+    assert expiries["art_old_link"] == CREATED_AT + timedelta(days=7)
+    assert expiries["art_recent_link"] == linked_at + timedelta(days=7)
+
+
 def test_migration_policy_matches_runtime_retention_derivation() -> None:
     """The frozen link list must equal what new artifacts are assigned."""
     from moonmind.workflows.temporal.artifacts import _derive_retention

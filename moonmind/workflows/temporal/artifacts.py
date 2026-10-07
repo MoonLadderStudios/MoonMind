@@ -158,7 +158,8 @@ class LifecycleSweepSummary:
     pruned_claim_count: int = 0
     hard_delete_candidate_count: int = 0
     pages: int = 1
-    # False when expired or soft-deleted work remains for the next pass.
+    # False when expired, soft-deleted or deletion-intent work remains for the
+    # next pass.
     drained: bool = True
 
 @dataclass(slots=True, frozen=True)
@@ -3701,10 +3702,24 @@ class TemporalArtifactService:
         limit: int = 500,
     ) -> int:
         """Converge persisted deletion intents after failures/restarts."""
+        reconciled, _examined = await self._reconcile_deletion_intent_page(
+            principal=principal, limit=limit
+        )
+        return reconciled
+
+    async def _reconcile_deletion_intent_page(
+        self,
+        *,
+        principal: str,
+        limit: int,
+        on_progress: Callable[[], None] | None = None,
+    ) -> tuple[int, int]:
+        """Reconcile one page of intents; return (reconciled, examined)."""
         reconciled = 0
-        for intent in await self._repository.list_pending_deletion_intents(
-            limit=limit
-        ):
+        intents = await self._repository.list_pending_deletion_intents(limit=limit)
+        for intent in intents:
+            if on_progress is not None:
+                on_progress()
             try:
                 artifact = await self._repository.get_artifact(intent.artifact_id)
             except TemporalArtifactNotFoundError:
@@ -3738,7 +3753,7 @@ class TemporalArtifactService:
             await self._repository.clear_deletion_intent(artifact.artifact_id)
             reconciled += 1
         await self._repository.commit()
-        return reconciled
+        return reconciled, len(intents)
 
     async def hard_delete(
         self,
@@ -3819,8 +3834,13 @@ class TemporalArtifactService:
         run_id: str | None = None,
         now: datetime | None = None,
         limit: int = 500,
+        on_progress: Callable[[], None] | None = None,
     ) -> LifecycleSweepSummary:
-        """Bounded, paginated, idempotent, observable lifecycle sweep."""
+        """Bounded, paginated, idempotent, observable lifecycle sweep.
+
+        ``on_progress`` runs before each candidate so a caller can heartbeat
+        while one page performs slow database and object-store work.
+        """
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
         page_size = max(1, int(limit))
@@ -3832,6 +3852,8 @@ class TemporalArtifactService:
         soft_deleted = 0
         skipped_in_use = 0
         for artifact in expired:
+            if on_progress is not None:
+                on_progress()
             artifact = await self._repository.get_artifact_for_update(
                 artifact.artifact_id
             )
@@ -3863,6 +3885,8 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
+            if on_progress is not None:
+                on_progress()
             await self._repository.lock_storage_references(
                 storage_backend=artifact.storage_backend,
                 storage_key=artifact.storage_key,
@@ -3921,8 +3945,8 @@ class TemporalArtifactService:
                 await self._repository.commit()
             hard_deleted += 1
 
-        reconciled = await self.reconcile_deletion_intents(
-            principal=principal, limit=page_size
+        reconciled, intent_count = await self._reconcile_deletion_intent_page(
+            principal=principal, limit=page_size, on_progress=on_progress
         )
         await self._repository.commit()
         logger.info(
@@ -3941,7 +3965,10 @@ class TemporalArtifactService:
             reconciled_deletion_count=reconciled,
             pruned_claim_count=pruned,
             hard_delete_candidate_count=len(hard_candidates),
-            drained=len(expired) < page_size and len(hard_candidates) < page_size,
+            drained=all(
+                count < page_size
+                for count in (len(expired), len(hard_candidates), intent_count)
+            ),
         )
 
     async def drain_lifecycle(
@@ -3952,6 +3979,7 @@ class TemporalArtifactService:
         run_id: str | None = None,
         limit: int = 500,
         on_page: Callable[[LifecycleSweepSummary], None] | None = None,
+        on_progress: Callable[[], None] | None = None,
     ) -> LifecycleSweepSummary:
         """Repeat bounded sweep pages until drained or the budget is spent.
 
@@ -3966,12 +3994,20 @@ class TemporalArtifactService:
         pages: list[LifecycleSweepSummary] = []
         while True:
             page = await self.sweep_lifecycle(
-                principal=principal, run_id=lifecycle_run_id, limit=limit
+                principal=principal,
+                run_id=lifecycle_run_id,
+                limit=limit,
+                on_progress=on_progress,
             )
             pages.append(page)
             if on_page is not None:
                 on_page(page)
-            progressed = page.soft_deleted_count + page.hard_deleted_count > 0
+            progressed = (
+                page.soft_deleted_count
+                + page.hard_deleted_count
+                + page.reconciled_deletion_count
+                > 0
+            )
             if page.drained or not progressed or time.monotonic() >= deadline:
                 break
         return LifecycleSweepSummary(
@@ -5368,20 +5404,25 @@ class TemporalArtifactActivities:
     ) -> LifecycleSweepSummary:
         from temporalio import activity
 
-        def heartbeat(page: LifecycleSweepSummary) -> None:
-            if activity.in_activity():
-                activity.heartbeat(
-                    {
-                        "softDeleted": page.soft_deleted_count,
-                        "hardDeleted": page.hard_deleted_count,
-                    }
-                )
+        pages_done = 0
 
+        def heartbeat() -> None:
+            if activity.in_activity():
+                activity.heartbeat({"pages": pages_done})
+
+        def page_done(_page: LifecycleSweepSummary) -> None:
+            nonlocal pages_done
+            pages_done += 1
+            heartbeat()
+
+        # Heartbeat per candidate as well as per page: one page of sequential
+        # database and object-store work can outlast the heartbeat timeout.
         return await self._service.drain_lifecycle(
             principal=principal,
             run_id=run_id,
             time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
-            on_page=heartbeat,
+            on_page=page_done,
+            on_progress=heartbeat,
         )
 
     async def artifact_sweep_lifecycle(

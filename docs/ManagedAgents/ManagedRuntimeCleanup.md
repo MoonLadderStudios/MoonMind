@@ -305,14 +305,19 @@ safety:
   skipWhenOwnerRecordUnreadable: true
   storeIsNeverACandidate: true
   rescanBeforeDelete: true
+  claimsLockedAcrossFinalCheckAndRemoval: true
 deletionAuthority: ManagedRuntimeWorkspaceJanitor
 schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
 ```
 
-A failed or unavailable Temporal lookup keeps every affected workspace and is
-reported as a pass error. Owner close time, not workspace creation, starts the
-retention window, so a long-running workflow keeps its checkout for the full
-window after it finishes.
+A failed or unavailable Temporal lookup, for the whole pass or for one
+workflow, keeps every affected workspace and is reported as a pass error.
+Each claim records the workflow actually using the workspace, so a running
+reader of a closed owner's workspace keeps it. The janitor holds the claims
+mutex across its final claim check, the move into quarantine and the record
+removal, so a claim accepted after the rescan is never discarded. Owner close
+time, not workspace creation, starts the retention window, so a long-running
+workflow keeps its checkout for the full window after it finishes.
 
 ### 6.6 Managed runtime artifact directory
 
@@ -625,7 +630,9 @@ If any gate fails, the candidate must be skipped with a reason.
 
 Use a two-phase filesystem protocol:
 
-1. Acquire the janitor lock.
+1. Acquire the janitor lock and, unless this is a dry run, finish deleting any
+   `.gc-<uuid hex>-<name>` quarantine an interrupted pass left in a candidate
+   parent. Its owner records may already be gone, so it is never a candidate.
 2. Scan stores and filesystem candidates.
 3. Build ownership groups.
 4. Classify candidates as protected, eligible, skipped, or errored.

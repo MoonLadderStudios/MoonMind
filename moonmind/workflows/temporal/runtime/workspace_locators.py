@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -274,6 +276,20 @@ class SandboxWorkspaceRecordStore:
             # mutex we no longer hold. Never delete a foreign lock here.
             pass
 
+    @contextmanager
+    def claims_locked(self, workspace_id: str) -> Iterator[None]:
+        """Hold the claims mutex so no new claim is accepted meanwhile.
+
+        Deletion holds it across its final claim check and removal, the same
+        way :meth:`claim_existing_workspace` holds it across check-and-insert.
+        """
+
+        self._acquire_claims_mutex(workspace_id)
+        try:
+            yield
+        finally:
+            self._release_claims_mutex(workspace_id)
+
     @staticmethod
     def _claim_is_expired(
         payload: dict[str, Any], now: datetime | None = None
@@ -291,7 +307,9 @@ class SandboxWorkspaceRecordStore:
             moment = moment.replace(tzinfo=UTC)
         return moment <= (now or datetime.now(tz=UTC))
 
-    def claim_existing_workspace(self, workspace_id: str, grant: Any) -> None:
+    def claim_existing_workspace(
+        self, workspace_id: str, grant: Any, *, grantee_workflow_id: str = ""
+    ) -> None:
         """Record exclusive/read-only use of another workflow's workspace.
 
         Existing-workspace grants declare exclusive writable use or explicitly
@@ -303,6 +321,10 @@ class SandboxWorkspaceRecordStore:
         grant carries a bounded lifetime, and expiry is enforced here even
         when the execution lifecycle never called
         :meth:`release_existing_workspace`.
+
+        ``grantee_workflow_id`` names the workflow using the workspace. Grants
+        that do not carry their grantee need it so retention never mistakes a
+        running reader's claim for the (possibly closed) owner's.
         """
 
         claims = self._claims_dir(workspace_id)
@@ -357,7 +379,8 @@ class SandboxWorkspaceRecordStore:
                     "grantId": grant_id,
                     "mode": mode,
                     "granteeWorkflowId": str(
-                        getattr(grant, "grantee_workflow_id", "")
+                        grantee_workflow_id
+                        or getattr(grant, "grantee_workflow_id", "")
                         or getattr(grant, "owner_workflow_id", "")
                         or ""
                     ),

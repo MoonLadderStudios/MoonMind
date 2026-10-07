@@ -10,7 +10,8 @@ copies (~390 GB) held the artifact store at its free-drive threshold.
 
 This revision gives those existing rows the class new rows already receive:
 an artifact whose every link is runtime evidence becomes ephemeral and
-expires seven days after creation. Rows with any other link, no link, a
+expires seven days after its creation or latest evidence link, whichever is
+later, as linking assigns for new rows. Rows with any other link, no link, a
 non-standard class, a pin, or a deleted status are unchanged. Nothing is
 deleted here; the lifecycle sweep still honours pins, live use claims and
 active-journal protection before removing a blob.
@@ -50,11 +51,18 @@ EPHEMERAL_LINK_TYPES: tuple[str, ...] = (
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        ephemeral_expiry = "created_at + interval '7 days'"
-    else:
-        ephemeral_expiry = "datetime(created_at, '+7 days')"
     link_types = ", ".join(f"'{link_type}'" for link_type in EPHEMERAL_LINK_TYPES)
+    # Linking assigns the ephemeral expiry from the link time, so a row linked
+    # well after creation keeps seven days from its latest evidence link.
+    latest_link = f"""(
+              SELECT MAX(link.created_at) FROM temporal_artifact_links AS link
+              WHERE link.artifact_id = temporal_artifacts.artifact_id
+                AND link.link_type IN ({link_types})
+          )"""
+    if bind.dialect.name == "postgresql":
+        ephemeral_expiry = f"GREATEST(created_at, {latest_link}) + interval '7 days'"
+    else:
+        ephemeral_expiry = f"datetime(MAX(created_at, {latest_link}), '+7 days')"
     op.execute(
         f"""
         UPDATE temporal_artifacts

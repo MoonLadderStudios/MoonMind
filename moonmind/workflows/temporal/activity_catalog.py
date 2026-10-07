@@ -510,7 +510,7 @@ def build_default_activity_catalog(
             task_queue=cfg.activity_artifacts_task_queue,
             fleet=ARTIFACTS_FLEET,
             # Drains pages for up to LIFECYCLE_SWEEP_TIME_BUDGET (40 min),
-            # heartbeating after each bounded page.
+            # heartbeating per candidate and after each page.
             timeouts=TemporalActivityTimeouts(2700, 3000, 300),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),

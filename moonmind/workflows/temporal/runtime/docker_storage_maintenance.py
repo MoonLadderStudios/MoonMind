@@ -184,7 +184,10 @@ async def reclaim_docker_storage_under_pressure(
     # An anonymous volume no container references can never be reattached:
     # Compose only carries anonymous volumes across a recreate while the old
     # container still exists. Named volumes (deployment data, caches, builder
-    # state) are excluded by the daemon default and by the label filter.
+    # state) are excluded by this label filter. Since API 1.42 the daemon's
+    # own anonymous-only default applies this same label, so dropping it
+    # reclaims nothing more; older daemons prune every unused volume, named
+    # ones included, unless the filter is explicit.
     await run(
         "unreferenced anonymous volume prune",
         (
