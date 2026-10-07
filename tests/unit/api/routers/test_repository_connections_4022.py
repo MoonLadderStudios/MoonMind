@@ -15,7 +15,7 @@ def _client(monkeypatch) -> TestClient:
     monkeypatch.setenv("MOONMIND_GITHUB_APP_SETUP_SECRET", "router-test-secret")
     router_module._setup_service = None
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix="/api/v1/repository-connections")
 
     async def _user():
         return SimpleNamespace(id="principal:alice")
@@ -27,7 +27,7 @@ def _client(monkeypatch) -> TestClient:
 def test_begin_returns_setup_url_and_state(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.post(
-        "/github-app/begin",
+        "/api/v1/repository-connections/github-app/begin",
         json={
             "appSlug": "moonmind-test",
             "expectedAppRef": "github-app:123456",
@@ -49,13 +49,38 @@ def test_begin_returns_setup_url_and_state(monkeypatch) -> None:
     assert payload["connectionId"] == "repository-connection:app"
 
 
+def test_begin_derives_app_identity_and_key_reference_server_side(monkeypatch) -> None:
+    """MoonLadderStudios/MoonMind#4019: no internal refs in ordinary setup."""
+
+    client = _client(monkeypatch)
+    response = client.post(
+        "/api/v1/repository-connections/github-app/begin",
+        json={
+            "appSlug": "moonmind-test",
+            "appId": "123456",
+            "requestId": "req:router-derived",
+            "connectionId": "acme-app",
+            "displayName": "Acme App",
+        },
+    )
+    assert response.status_code == 201, response.text
+    pending = router_module.get_setup_service().admit_setup_callback(
+        state=response.json()["state"],
+        caller_principal="principal:alice",
+        caller_scope=("system", None),
+        destination_connection_id="acme-app",
+    )
+    assert pending.expected_app_ref == "github-app:123456"
+    assert pending.configuration.key_secret_ref == "db://github-app-key/default"
+
+
 def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
     from fastapi import HTTPException
 
     monkeypatch.setenv("MOONMIND_GITHUB_APP_SETUP_SECRET", "router-test-secret")
     router_module._setup_service = None
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix="/api/v1/repository-connections")
 
     async def _deny():
         raise HTTPException(status_code=401, detail="unauthenticated")
@@ -63,7 +88,7 @@ def test_begin_rejects_anonymous_enrollment(monkeypatch) -> None:
     app.dependency_overrides[get_current_user()] = _deny
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
-        "/github-app/begin",
+        "/api/v1/repository-connections/github-app/begin",
         json={
             "appSlug": "moonmind-test",
             "expectedAppRef": "github-app:123456",
@@ -81,7 +106,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
         return object()
 
     app = FastAPI()
-    app.include_router(router_module.router)
+    app.include_router(router_module.router, prefix="/api/v1/repository-connections")
 
     async def _user():
         return SimpleNamespace(id="principal:alice")
@@ -117,7 +142,7 @@ def test_callback_rejects_forged_state_before_touching_writer(monkeypatch) -> No
     router_module._setup_service = None
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
-        "/github-app/callback",
+        "/api/v1/repository-connections/github-app/callback",
         json={
             "state": "forged-state",
             "installationId": "123",

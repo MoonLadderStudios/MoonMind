@@ -27,6 +27,7 @@ from api_service.services.settings_catalog import (
     settings_error,
     settings_permissions_for_user,
 )
+from moonmind.workflows.executions.repository_contract import RepositoryRouteError
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 SETTINGS_CURRENT_USER_DEP = get_current_user()
@@ -69,6 +70,7 @@ async def probe_github_token(
     repo: str,
     mode: str,
     base_branch: str | None = None,
+    credential: Any | None = None,
 ) -> dict[str, Any]:
     from moonmind.workflows.adapters.github_service import GitHubService
 
@@ -76,7 +78,39 @@ async def probe_github_token(
         repo=repo,
         mode=mode,
         base_branch=base_branch,
+        credential=credential,
     )
+
+
+async def _selected_connection_credential(
+    connection_id: str, *, repo: str, user: Any
+) -> Any | None:
+    """Resolve only the selected connection's credential (#4019).
+
+    Returns ``None`` when the admitted principal cannot discover the
+    connection; the probe never substitutes another GitHub credential.
+    """
+
+    from api_service.services.repository_connections import (
+        RepositoryConnectionService,
+    )
+    from moonmind.auth.github_credentials import resolve_connection_github_credential
+
+    principal = str(getattr(user, "id", "") or "").strip()
+    if not principal:
+        return None
+    async with db_base.async_session_maker() as session:
+        try:
+            connection = await RepositoryConnectionService(session).get_connection(
+                connection_id,
+                principal_ref=principal,
+                principal_scope=("system", None),
+            )
+        except RepositoryRouteError:
+            return None
+    if connection is None:
+        return None
+    return await resolve_connection_github_credential(connection, repo=repo)
 
 
 def _permission_denied_response(permission: str) -> JSONResponse:
@@ -566,11 +600,28 @@ async def github_token_probe(
     denied = _require_permission(user, "settings.effective.read")
     if denied is not None:
         return denied
-    return await probe_github_token(
+    connection_id = (payload.connection_id or "").strip()
+    if not connection_id:
+        return await probe_github_token(
+            repo=payload.repo,
+            mode=payload.mode,
+            base_branch=payload.base_branch,
+        )
+    credential = await _selected_connection_credential(
+        connection_id, repo=payload.repo, user=user
+    )
+    if credential is None:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Repository connection not found."},
+        )
+    result = await probe_github_token(
         repo=payload.repo,
         mode=payload.mode,
         base_branch=payload.base_branch,
+        credential=credential,
     )
+    return {**result, "connectionId": connection_id}
 
 
 @router.get("/audit")

@@ -836,14 +836,15 @@ class GitHubService:
         *,
         repo: str,
         mode: str,
-        base_branch: str | None,
     ) -> list[dict[str, str | None]]:
+        """Return read checks; ``{ref}`` marks the branch the caller fills in."""
+
         profile = cls.github_permission_profiles().get(
             mode,
             cls.github_permission_profiles()["publish"],
         )
         required = profile.required_permissions
-        ref = base_branch or "main"
+        ref = "{ref}"
         checks: list[dict[str, str | None]] = [
             {
                 "field": "repositoryAccessible",
@@ -908,10 +909,25 @@ class GitHubService:
         mode: str = "publish",
         base_branch: str | None = None,
         github_token: str | None = None,
+        credential: Any | None = None,
     ) -> dict[str, Any]:
+        """Observe read access with one credential; never claim write access.
+
+        ``credential`` is a selected connection's already-resolved credential
+        (MoonLadderStudios/MoonMind#4019); when supplied, no other GitHub
+        credential is consulted. Every check is a read, so ``observations``
+        reports write access as ``untested``. A transport failure is
+        ``unavailable``, never denied access, and branch checks use the
+        remote default branch unless a branch was selected.
+        """
+
         from moonmind.auth.github_credentials import resolve_github_credential
 
-        resolved = await resolve_github_credential(github_token, repo=repo)
+        resolved = (
+            credential
+            if credential is not None
+            else await resolve_github_credential(github_token, repo=repo)
+        )
         checklist = self._profile_checklist(mode)
         result: dict[str, Any] = {
             "repo": repo,
@@ -920,6 +936,8 @@ class GitHubService:
             "repositoryAccessible": None,
             "defaultBranchAccessible": None,
             "pullRequestAccessible": None,
+            "remoteDefaultBranch": None,
+            "observations": {"read": "not_checked", "write": "untested"},
             "permissionChecklist": checklist,
             "diagnostics": [],
             "limitations": [
@@ -935,32 +953,42 @@ class GitHubService:
             ],
         }
         if not resolved.token:
+            retryable = bool(getattr(resolved, "retryable", False))
+            if retryable:
+                result["observations"]["read"] = "unavailable"
             result["diagnostics"].append(
                 {
                     "operation": "resolve_github_credential",
                     "message": resolved.safe_summary,
-                    "retryable": False,
+                    "retryable": retryable,
                 }
             )
             return result
 
         headers = self._github_headers(resolved.token)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            checks = self._probe_checks_for_mode(
-                repo=repo,
-                mode=mode,
-                base_branch=base_branch,
-            )
+            checks = self._probe_checks_for_mode(repo=repo, mode=mode)
+            ref = (base_branch or "").strip()
             for check in checks:
                 field = check["field"]
                 url = str(check["url"])
                 operation = str(check["operation"])
                 permission = check["permission"]
+                if "{ref}" in url:
+                    if not ref:
+                        # The default branch was not observed; do not guess one.
+                        continue
+                    url = url.replace("{ref}", ref)
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
                     if field:
                         result[field] = True
+                    if operation == "repository":
+                        result["observations"]["read"] = "verified"
+                        default_branch = self._probe_default_branch(response)
+                        result["remoteDefaultBranch"] = default_branch
+                        ref = ref or default_branch or ""
                     if permission:
                         self._mark_probe_permission(
                             result["permissionChecklist"],
@@ -968,9 +996,15 @@ class GitHubService:
                             success=True,
                         )
                 except httpx.HTTPStatusError as exc:
-                    if field:
+                    status_code = exc.response.status_code
+                    unavailable = status_code >= 500
+                    if field and not unavailable:
                         result[field] = False
-                    if permission:
+                    if operation == "repository":
+                        result["observations"]["read"] = (
+                            "unavailable" if unavailable else "denied"
+                        )
+                    if permission and not unavailable:
                         self._mark_probe_permission(
                             result["permissionChecklist"],
                             permission=str(permission),
@@ -979,20 +1013,15 @@ class GitHubService:
                     result["diagnostics"].append(
                         {
                             "operation": operation,
-                            "httpStatus": exc.response.status_code,
+                            "httpStatus": status_code,
                             "message": self._github_permission_summary(exc.response),
-                            "retryable": exc.response.status_code >= 500,
+                            "retryable": unavailable,
                         }
                     )
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
-                    if field:
-                        result[field] = False
-                    if permission:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
-                        )
+                    # An outage is not denied access: leave the field unknown.
+                    if operation == "repository":
+                        result["observations"]["read"] = "unavailable"
                     result["diagnostics"].append(
                         {
                             "operation": operation,
@@ -1001,6 +1030,17 @@ class GitHubService:
                         }
                     )
         return result
+
+    @staticmethod
+    def _probe_default_branch(response: httpx.Response) -> str | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        branch = str(payload.get("default_branch") or "").strip()
+        return branch or None
 
     # -- PR operations ----------------------------------------------------
 

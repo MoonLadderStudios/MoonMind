@@ -324,14 +324,28 @@ This page contains:
 - Managed Secrets and secret-health surfaces;
 - SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
-- provider credential health and readiness; and
-- Harness and Provider binding diagnostics, with Backend provenance in execution details.
+- provider credential health and readiness;
+- Harness and Provider binding diagnostics, with Backend provenance in execution details; and
+- **Source Control** connections for repository access, kept separate from Provider Profiles.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
 A page-local Harness filter offers **All harnesses** and backend-supported Harness choices. It narrows the visible Provider Profile collection while global readiness counts use the complete collection unless explicitly labeled as filtered. Existing `runtime` URL parameters and `runtime_id` API values remain compatibility inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) owns this vocabulary and authoring defaults.
 
 On narrow viewports the saved-profile records stack each label above its value and give actions their own full-width wrapping area below the values (MoonLadderStudios/MoonMind#4559). The create/edit form stays single-column with shrinkable fieldsets, and tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. The shared contract lives in [DashboardDesignSystem.md](./DashboardDesignSystem.md).
+
+#### 7.1.0 Source Control connections
+
+The Source Control section lists the named repository connections the operator may manage, including disabled ones, with each connection's name, credential kind (personal access token, GitHub App installation, or deployment credential), validated App account and installation, lifecycle, and explicitly assigned repositories. A connection with no assigned repositories grants no repository access, and the section says so.
+
+- **Add token connection** asks for a name, a GitHub personal access token, and whether publishing is allowed. The server stores the token as a Managed Secret in the same transaction as the connection (`POST /api/v1/repository-connections/pat`). The connection ID is derived from the name and is never suffixed; a clash is a conflict the operator resolves by renaming.
+- **Connect GitHub App** asks for a name, the App name from its GitHub URL, the App ID, and optional repository limits, then sends the operator to GitHub through the existing enrollment begin/callback. The App identity and managed signing-key reference are derived server-side unless supplied on the advanced path. When GitHub returns with `installation_id` and `state`, the page completes the callback once and removes those parameters from the URL.
+- **Edit connection** renames, changes whether publishing is allowed, or replaces a token with compare-and-set on the loaded policy revision. A conflict keeps the non-sensitive draft and reloads the current connection.
+- **Disable connection** stops new use without deleting records, secrets, or shared App installations.
+- **Assign repository** verifies `owner/repo` through the connection's own credential before saving the provider repository ID. If GitHub is unavailable, existing assignments and the draft stay unchanged.
+- **Test connection** reads one repository with only the selected connection (`POST /api/v1/settings/github/token-probe` with `connectionId`). It reports read access as verified, denied, or unavailable, never treats an outage as denial, shows the remote default branch, and labels write access as untested because the test never writes.
+
+Each create, save, disable, and assignment carries a stable `requestId`. A retry after an uncertain outcome reuses it. After a lost acknowledgment the page reads the connection back and shows the committed record before offering another create; it never blindly resubmits a POST. Test results and late responses are tied to the selected connection, its revisions, and the test inputs: a response for a connection that is no longer selected, or for an earlier request, is discarded, and changed inputs mark a displayed result as stale. Tokens live only in the password field until submission and are cleared after transfer, cancellation, or a lost session. They never appear in URLs, query caches, or responses, and responses never include SecretRefs.
 
 #### 7.1.1 Provider Profile creation
 
@@ -423,7 +437,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 
 | Page | Primary data |
 |---|---|
-| Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted Harness/Provider choices, profile creation capabilities and presets |
+| Providers & Secrets | Provider Profiles, Managed Secret metadata, Source Control connections, OAuth state, readiness diagnostics, permitted Harness/Provider choices, profile creation capabilities and presets |
 | Instance | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 

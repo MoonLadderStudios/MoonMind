@@ -1,30 +1,40 @@
-"""Operator-invokable GitHub App enrollment (#4022).
+"""Source Control connection routes (#4019) and GitHub App enrollment (#4022).
 
-Mounts the trusted-boundary setup begin/callback on the existing
-authenticated API surface: the operator begins setup (receiving the
-GitHub install URL plus single-use state), installs the App in the
-browser, and the callback verifies the installation against the
-provider before persisting through ``RepositoryConnectionService``,
-the single writable authority for connections.
+Mounts the connection list/detail, PAT creation, rotation, disable, and
+assignment operations plus the trusted-boundary App setup begin/callback on
+the existing authenticated API surface. Every write goes through
+``RepositoryConnectionService``, the single writable authority for
+connections. PAT creation and rotation store the token as a Managed Secret
+in the same transaction; responses never carry tokens or SecretRefs, and
+caller identity always comes from the admission dependency.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
 from moonmind.workflows.executions.repository_contract import (
+    REPOSITORY_POLICY_CONFLICT,
+    REPOSITORY_SETUP_REQUIRED,
+    RepositoryAssignment,
+    RepositoryConnection,
+    RepositoryIdentity,
     RepositoryOperation,
     RepositoryRouteError,
+    SecretRefCredential,
 )
 
 logger = structlog.get_logger(__name__)
@@ -60,9 +70,12 @@ class GitHubAppBeginRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     app_slug: str = Field(min_length=1, alias="appSlug")
-    expected_app_ref: str = Field(min_length=1, alias="expectedAppRef")
     app_id: str = Field(pattern=r"^[0-9]+$", alias="appId")
-    key_secret_ref: str = Field(min_length=1, alias="keySecretRef")
+    # Derived server-side when omitted (#4019): the App identity follows the
+    # App ID and the signing key uses the deployment's managed default.
+    # Supplying them is the advanced reuse path.
+    expected_app_ref: str = Field(default="", alias="expectedAppRef")
+    key_secret_ref: str = Field(default="", alias="keySecretRef")
     request_id: str = Field(min_length=1, alias="requestId")
     connection_id: str = Field(min_length=1, alias="connectionId")
     expected_account: str = Field(default="", alias="expectedAccount")
@@ -142,9 +155,19 @@ async def begin_github_app_setup(
 
     service = get_setup_service()
     from moonmind.auth.github_app import _numeric_key
-    from moonmind.auth.github_app_wiring import github_api_base_for
+    from moonmind.auth.github_app_wiring import (
+        DEFAULT_KEY_SECRET_REF,
+        github_api_base_for,
+    )
 
     principal = _admitted_principal(_user)
+    request = request.model_copy(
+        update={
+            "expected_app_ref": request.expected_app_ref.strip()
+            or f"github-app:{request.app_id}",
+            "key_secret_ref": request.key_secret_ref.strip() or DEFAULT_KEY_SECRET_REF,
+        }
+    )
     try:
         # Only deployment-owned host trust applies, including for Enterprise.
         api_base = github_api_base_for(request.endpoint_ref)
@@ -289,3 +312,619 @@ async def complete_github_app_setup(
     except RepositoryRouteError as exc:
         raise _route_error_to_http(exc) from exc
     return GitHubAppCallbackResponse(connectionId=saved.id)
+
+
+# -- Source Control connections (#4019) -------------------------------------
+
+_SYSTEM_SCOPE: tuple[str, str | None] = ("system", None)
+_CONNECTION_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
+_REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_PAT_SECRET_PROVIDER = "db"
+
+CredentialKind = Literal["personal_access_token", "github_app", "deployment", "other"]
+
+
+class RepositoryAssignmentView(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    repository: str
+    provider_repo_id: str | None = Field(default=None, alias="providerRepoId")
+    operations: list[str]
+    revision: int
+    verified: bool
+
+
+class RepositoryConnectionView(BaseModel):
+    """Operator-facing connection summary; never a token or SecretRef."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    display_name: str = Field(alias="displayName")
+    hosting_service: str | None = Field(default=None, alias="hostingService")
+    endpoint: str
+    credential_kind: CredentialKind = Field(alias="credentialKind")
+    account: str | None = None
+    installation_id: str | None = Field(default=None, alias="installationId")
+    permitted_repositories: list[str] = Field(
+        default_factory=list, alias="permittedRepositories"
+    )
+    lifecycle: str
+    policy_revision: int = Field(alias="policyRevision")
+    credential_revision: int = Field(alias="credentialRevision")
+    allowed_operations: list[str] = Field(alias="allowedOperations")
+    assignments: list[RepositoryAssignmentView] = Field(default_factory=list)
+
+
+class RepositoryConnectionListResponse(BaseModel):
+    items: list[RepositoryConnectionView]
+
+
+class PatConnectionCreateRequest(BaseModel):
+    """Create a named PAT connection; the token becomes a Managed Secret."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=200, alias="requestId")
+    connection_id: str = Field(pattern=_CONNECTION_ID_PATTERN, alias="connectionId")
+    display_name: str = Field(min_length=1, max_length=200, alias="displayName")
+    token: SecretStr
+    allowed_operations: list[RepositoryOperation] = Field(
+        default_factory=lambda: ["read"], alias="allowedOperations", min_length=1
+    )
+
+
+class ConnectionUpdateRequest(BaseModel):
+    """Rename, change operations, or rotate the token of one connection."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=200, alias="requestId")
+    expected_policy_revision: int = Field(ge=1, alias="expectedPolicyRevision")
+    display_name: str | None = Field(
+        default=None, min_length=1, max_length=200, alias="displayName"
+    )
+    token: SecretStr | None = None
+    allowed_operations: list[RepositoryOperation] | None = Field(
+        default=None, alias="allowedOperations", min_length=1
+    )
+
+
+class ConnectionActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=200, alias="requestId")
+
+
+class AssignmentSetRequest(BaseModel):
+    """Assign one repository, verified through the connection's own access."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=200, alias="requestId")
+    repository: str = Field(min_length=3, max_length=200)
+    operations: list[RepositoryOperation] = Field(
+        default_factory=lambda: ["read"], min_length=1
+    )
+    revision: int = Field(default=1, ge=1)
+
+
+class AssignmentRemoveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(min_length=1, max_length=200, alias="requestId")
+    provider_repo_id: str = Field(min_length=1, alias="providerRepoId")
+    repository: str = Field(min_length=1)
+
+
+def _connection_error_to_http(exc: RepositoryRouteError) -> HTTPException:
+    """Map service outcomes; a stale revision is a conflict the form keeps."""
+
+    code = getattr(exc, "code", "") or ""
+    if code == REPOSITORY_POLICY_CONFLICT:
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    if code == REPOSITORY_SETUP_REQUIRED and "not found" in str(exc):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if code == "REPOSITORY_DENIED":
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    return _route_error_to_http(exc)
+
+
+def _credential_kind(connection: RepositoryConnection) -> CredentialKind:
+    source = connection.credential.source
+    if source == "secret_ref":
+        return "personal_access_token"
+    if source == "github_app":
+        return "github_app"
+    if source == "github_resolver":
+        return "deployment"
+    return "other"
+
+
+def _connection_view(
+    connection: RepositoryConnection,
+    assignments: Sequence[RepositoryAssignment],
+) -> RepositoryConnectionView:
+    credential = connection.credential
+    is_app = credential.source == "github_app"
+    return RepositoryConnectionView(
+        id=connection.id,
+        displayName=connection.display_name,
+        hostingService=connection.hosting_service,
+        endpoint=connection.endpoint_ref,
+        credentialKind=_credential_kind(connection),
+        account=(getattr(credential, "account", None) or None) if is_app else None,
+        installationId=(
+            str(getattr(credential, "installation_ref", "")).split(":")[-1] or None
+            if is_app
+            else None
+        ),
+        permittedRepositories=(
+            list(getattr(credential, "permitted_repositories", ()) or ())
+            if is_app
+            else []
+        ),
+        lifecycle=connection.lifecycle,
+        policyRevision=connection.policy_revision,
+        credentialRevision=connection.credential_revision,
+        allowedOperations=list(connection.allowed_operations),
+        assignments=[
+            RepositoryAssignmentView(
+                repository=assignment.identity.display_name,
+                providerRepoId=assignment.identity.provider_repo_id,
+                operations=list(assignment.operations),
+                revision=assignment.revision,
+                verified=assignment.verified,
+            )
+            for assignment in assignments
+        ],
+    )
+
+
+async def _view_for(
+    service: Any, connection: RepositoryConnection
+) -> RepositoryConnectionView:
+    return _connection_view(connection, await service.list_assignments(connection.id))
+
+
+def _pat_secret_slug(connection_id: str, credential_revision: int) -> str:
+    return f"repository-connection/{connection_id}/credential-{credential_revision}"
+
+
+def _actor_uuid(user: Any) -> UUID | None:
+    value = getattr(user, "id", None)
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _transient_token(value: SecretStr | None) -> str:
+    token = value.get_secret_value().strip() if value is not None else ""
+    if not token:
+        raise HTTPException(status_code=422, detail="A token is required.")
+    return token
+
+
+async def _stage_pat_secret(
+    db: AsyncSession,
+    *,
+    slug: str,
+    token: str,
+    connection_id: str,
+    request_id: str,
+    user: Any,
+) -> None:
+    """Stage the token as a Managed Secret in the caller's transaction."""
+
+    from api_service.services.secrets import (
+        SecretConflictError,
+        SecretFencedError,
+        SecretsService,
+    )
+
+    try:
+        await SecretsService.create_secret(
+            db,
+            slug,
+            token,
+            {"purpose": "repository_connection", "connectionId": connection_id},
+            request_id=f"{request_id}:credential",
+            actor_user_id=_actor_uuid(user),
+            reason="Source Control connection credential",
+            commit=False,
+        )
+    except (SecretConflictError, SecretFencedError) as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The connection credential could not be stored; reload the connection.",
+        ) from exc
+
+
+@router.get(
+    "",
+    response_model=RepositoryConnectionListResponse,
+    response_model_by_alias=True,
+    summary="List Source Control connections",
+    tags=["RepositoryConnections"],
+)
+async def list_repository_connections(
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionListResponse:
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    connections = await service.list_manageable_connections(
+        principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+    )
+    items = [await _view_for(service, connection) for connection in connections]
+    items.sort(key=lambda item: (item.display_name.lower(), item.id))
+    return RepositoryConnectionListResponse(items=items)
+
+
+@router.get(
+    "/{connection_id}",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Read one Source Control connection",
+    tags=["RepositoryConnections"],
+)
+async def get_repository_connection(
+    connection_id: str,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    connection = await service.get_manageable_connection(
+        connection_id, principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Repository connection not found.")
+    return await _view_for(service, connection)
+
+
+@router.post(
+    "/pat",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a personal access token connection",
+    tags=["RepositoryConnections"],
+)
+async def create_pat_connection(
+    request: PatConnectionCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    """Create once per request identity; a retry returns the committed row."""
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.auth.github_app_setup import _deployment_git_client_policy
+
+    principal = _admitted_principal(_user)
+    token = _transient_token(request.token)
+    service = RepositoryConnectionService(db)
+    slug = _pat_secret_slug(request.connection_id, 1)
+    connection = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": request.connection_id,
+            "provider": "git",
+            "displayName": request.display_name.strip(),
+            "endpointRef": "https://github.com",
+            "allowedOperations": list(dict.fromkeys(request.allowed_operations)),
+            "clientPolicy": _deployment_git_client_policy(),
+            "credential": {
+                "source": "secret_ref",
+                "credentialRef": {"provider": _PAT_SECRET_PROVIDER, "key": slug},
+            },
+            "lifecycle": "active",
+            "policyRevision": 1,
+            "credentialRevision": 1,
+            "ownership": {
+                "ownerRef": principal,
+                "scopeType": "system",
+                "allowedPrincipalRefs": [principal],
+            },
+            "hostingService": "github",
+        }
+    )
+    try:
+        if not await service.recorded_request(
+            request_id=request.request_id,
+            action="connection.create",
+            connection_id=request.connection_id,
+        ):
+            await service.require_available_connection_id(request.connection_id)
+            await _stage_pat_secret(
+                db,
+                slug=slug,
+                token=token,
+                connection_id=request.connection_id,
+                request_id=request.request_id,
+                user=_user,
+            )
+        saved = await service.create_connection(
+            connection,
+            actor_ref=principal,
+            request_id=request.request_id,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, saved)
+
+
+@router.patch(
+    "/{connection_id}",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Rename, change operations, or rotate a connection token",
+    tags=["RepositoryConnections"],
+)
+async def update_repository_connection(
+    connection_id: str,
+    request: ConnectionUpdateRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    """Compare-and-set on ``expectedPolicyRevision``; never a silent overwrite."""
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    try:
+        current = await service.get_manageable_connection(
+            connection_id, principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+        )
+        if current is None:
+            raise HTTPException(
+                status_code=404, detail="Repository connection not found."
+            )
+        replayed = await service.recorded_request(
+            request_id=request.request_id,
+            action="connection.update",
+            connection_id=connection_id,
+        )
+        changes: dict[str, Any] = {}
+        if request.display_name is not None:
+            changes["display_name"] = request.display_name.strip()
+        if request.allowed_operations is not None:
+            changes["allowed_operations"] = tuple(
+                dict.fromkeys(request.allowed_operations)
+            )
+        if request.token is not None and not replayed:
+            token = _transient_token(request.token)
+            if current.credential.source != "secret_ref":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Only personal access token connections accept a new token.",
+                )
+            if request.expected_policy_revision != current.policy_revision:
+                raise RepositoryRouteError(
+                    REPOSITORY_POLICY_CONFLICT, "stale policy revision"
+                )
+            next_revision = current.credential_revision + 1
+            slug = _pat_secret_slug(connection_id, next_revision)
+            await _stage_pat_secret(
+                db,
+                slug=slug,
+                token=token,
+                connection_id=connection_id,
+                request_id=request.request_id,
+                user=_user,
+            )
+            changes["credential"] = SecretRefCredential.model_validate(
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": _PAT_SECRET_PROVIDER, "key": slug},
+                }
+            )
+            changes["credential_revision"] = next_revision
+        saved = await service.update_connection(
+            current.model_copy(update=changes),
+            actor_ref=principal,
+            request_id=request.request_id,
+            expected_policy_revision=request.expected_policy_revision,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, saved)
+
+
+@router.post(
+    "/{connection_id}/disable",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Stop new use of a connection without removing its records",
+    tags=["RepositoryConnections"],
+)
+async def disable_repository_connection(
+    connection_id: str,
+    request: ConnectionActionRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    try:
+        saved = await service.disable_connection(
+            connection_id,
+            actor_ref=principal,
+            request_id=request.request_id,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, saved)
+
+
+async def observe_github_repository(
+    connection: RepositoryConnection, repository: str
+) -> dict[str, str]:
+    """Read one repository's provider identity with the connection's credential.
+
+    Raises ``HTTPException``: 422 when the connection cannot read the
+    repository, 503 when GitHub or the credential store is unavailable.
+    """
+
+    from moonmind.auth.github_app_wiring import github_api_base_for
+    from moonmind.auth.github_credentials import resolve_connection_github_credential
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    credential = await resolve_connection_github_credential(connection, repo=repository)
+    if not credential.token:
+        raise HTTPException(
+            status_code=503 if credential.retryable else 422,
+            detail=credential.safe_summary,
+        )
+    try:
+        api_base = github_api_base_for(connection.endpoint_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{api_base}/repos/{repository}",
+                headers=GitHubService._github_headers(credential.token),
+            )
+    except (httpx.TransportError, httpx.TimeoutException) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub is unavailable; existing assignments are unchanged.",
+        ) from exc
+    if response.status_code >= 500:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub is unavailable; existing assignments are unchanged.",
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=422,
+            detail=f"This connection cannot read {repository} (HTTP {response.status_code}).",
+        )
+    payload = response.json()
+    return {
+        "id": str(payload.get("id") or ""),
+        "fullName": str(payload.get("full_name") or repository),
+    }
+
+
+@router.post(
+    "/{connection_id}/assignments",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Assign a repository to a connection",
+    tags=["RepositoryConnections"],
+)
+async def set_repository_assignment(
+    connection_id: str,
+    request: AssignmentSetRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    """Assign only a repository this connection itself can read."""
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    repository = request.repository.strip()
+    if not _REPOSITORY_NAME.fullmatch(repository):
+        raise HTTPException(status_code=422, detail="Use the owner/name form.")
+    service = RepositoryConnectionService(db)
+    try:
+        connection = await service.get_connection(
+            connection_id, principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+        )
+        if connection is None:
+            raise HTTPException(
+                status_code=404, detail="Repository connection not found."
+            )
+        observed = await observe_github_repository(connection, repository)
+        if not observed["id"]:
+            raise HTTPException(
+                status_code=503,
+                detail="GitHub did not report a repository identity; try again.",
+            )
+        await service.set_assignment(
+            RepositoryAssignment(
+                connectionId=connection_id,
+                identity=RepositoryIdentity(
+                    endpoint=connection.endpoint_ref,
+                    providerRepoId=observed["id"],
+                    displayName=observed["fullName"],
+                ),
+                operations=tuple(dict.fromkeys(request.operations)),
+                revision=request.revision,
+                verified=True,
+            ),
+            actor_ref=principal,
+            request_id=request.request_id,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, connection)
+
+
+@router.post(
+    "/{connection_id}/assignments/remove",
+    response_model=RepositoryConnectionView,
+    response_model_by_alias=True,
+    summary="Remove a repository assignment from a connection",
+    tags=["RepositoryConnections"],
+)
+async def remove_repository_assignment(
+    connection_id: str,
+    request: AssignmentRemoveRequest,
+    db: Annotated[AsyncSession, Depends(get_async_session)],
+    _user: Annotated[Any, Depends(get_current_user())],
+) -> RepositoryConnectionView:
+    from api_service.services.repository_connections import RepositoryConnectionService
+
+    principal = _admitted_principal(_user)
+    service = RepositoryConnectionService(db)
+    try:
+        connection = await service.get_connection(
+            connection_id, principal_ref=principal, principal_scope=_SYSTEM_SCOPE
+        )
+        if connection is None:
+            raise HTTPException(
+                status_code=404, detail="Repository connection not found."
+            )
+        await service.remove_assignment(
+            connection_id=connection_id,
+            identity=RepositoryIdentity(
+                endpoint=connection.endpoint_ref,
+                providerRepoId=request.provider_repo_id,
+                displayName=request.repository,
+            ),
+            actor_ref=principal,
+            request_id=request.request_id,
+            principal_ref=principal,
+            principal_scope=_SYSTEM_SCOPE,
+        )
+    except RepositoryRouteError as exc:
+        await db.rollback()
+        raise _connection_error_to_http(exc) from exc
+    return await _view_for(service, connection)
