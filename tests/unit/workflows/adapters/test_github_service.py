@@ -931,6 +931,142 @@ async def test_probe_github_token_uses_readiness_mode_checks(monkeypatch):
     assert checklist["Checks"]["status"] == "passed"
     assert checklist["Issues"]["status"] == "passed"
 
+
+@pytest.mark.asyncio
+async def test_probe_token_uses_remote_default_branch_and_reports_untested_write(
+    monkeypatch,
+):
+    """MoonLadderStudios/MoonMind#4019: a read is not a verified write."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=[
+            _mock_get_response(
+                200, {"full_name": "owner/repo", "default_branch": "trunk"}
+            ),
+            _mock_get_response(200, {"name": "trunk"}),
+            _mock_get_response(200, []),
+        ]
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
+
+    assert [call.args[0] for call in mock_client.get.call_args_list][1] == (
+        "https://api.github.com/repos/owner/repo/branches/trunk"
+    )
+    assert result["remoteDefaultBranch"] == "trunk"
+    assert result["observations"] == {"read": "verified", "write": "untested"}
+
+
+@pytest.mark.asyncio
+async def test_probe_token_transport_outage_is_unavailable_not_denied(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        side_effect=httpx.ConnectError(
+            "down", request=httpx.Request("GET", "https://api.github.com/x")
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
+
+    assert result["repositoryAccessible"] is None
+    assert result["remoteDefaultBranch"] is None
+    assert result["observations"]["read"] == "unavailable"
+    # Branch-dependent checks are not guessed against "main" without a branch.
+    urls = [call.args[0] for call in mock_client.get.call_args_list]
+    assert not any("/branches/" in url for url in urls)
+    assert result["defaultBranchAccessible"] is None
+    assert all(item["status"] != "failed" for item in result["permissionChecklist"])
+    assert result["diagnostics"][0]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_probe_token_denied_read_is_reported_as_denied(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(
+        return_value=_mock_get_response(404, {"message": "Not Found"})
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
+
+    assert result["repositoryAccessible"] is False
+    assert result["observations"]["read"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_probe_token_uses_selected_credential_without_global_fallback(
+    monkeypatch,
+):
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "global-token-must-not-be-used")
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    unresolved = ResolvedGitHubCredential(
+        source=GitHubCredentialSource.UNRESOLVABLE,
+        sourceName="repository-connection:a",
+        diagnostic="Repository connection credential could not be read",
+        retryable=True,
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="publish", credential=unresolved
+        )
+
+    mock_client.get.assert_not_called()
+    assert result["credentialSource"]["sourceName"] == "repository-connection:a"
+    assert result["credentialSource"]["resolved"] is False
+    assert result["observations"]["read"] == "unavailable"
+
+    resolved = ResolvedGitHubCredential(
+        token="connection-token",
+        source=GitHubCredentialSource.SECRET_REF_ENV,
+        sourceName="repository-connection:a",
+    )
+    mock_client.get = AsyncMock(
+        return_value=_mock_get_response(200, {"default_branch": "main"})
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        await GitHubService().probe_token(
+            repo="owner/repo", mode="indexing", credential=resolved
+        )
+    headers = mock_client.get.call_args_list[0].kwargs["headers"]
+    assert "connection-token" in headers["Authorization"]
+    assert "global-token-must-not-be-used" not in str(headers)
+
 # ---------------------------------------------------------------------------
 # merge_pull_request
 # ---------------------------------------------------------------------------
