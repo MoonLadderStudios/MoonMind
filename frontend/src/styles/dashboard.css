@@ -1,6 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@config "../../../tailwind.config.cjs";
+
+/* Keep the dashboard's own base styles: intentionally do not import Preflight. */
+@custom-variant hover (&:hover);
 
 :root {
   color-scheme: light;

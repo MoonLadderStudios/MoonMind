@@ -10,6 +10,18 @@ Install frontend dependencies once:
 npm install
 ```
 
+The dashboard uses Tailwind CSS 4 through `@tailwindcss/postcss` in
+`postcss.config.cjs`. Its stylesheet explicitly loads `tailwind.config.cjs`
+for source scanning, dashboard tokens, and class-based dark mode. It imports
+Tailwind's theme and utilities separately, without Preflight, so the
+dashboard continues to own its base styles. Small shadows and backdrop blur
+retain their existing values in the theme configuration.
+
+Tailwind 4 requires Safari 16.4+, Chrome 111+, or Firefox 128+ because it uses
+modern CSS features. See the [Tailwind upgrade guide](https://tailwindcss.com/docs/upgrade-guide#browser-requirements).
+The pinned Playwright matrix below verifies current browser engines; it does
+not establish support for older versions outside that range.
+
 ## Demo and review workflow
 
 Use the production-like workflow when you need another person to review a
