@@ -77,6 +77,9 @@ _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
         "mm_title",
     }
 )
+# Text attributes hold space-separated opaque tokens matched as exact terms
+# (MoonLadderStudios/MoonMind#4640: recorded Provider Profile membership).
+_TEXT_SEARCH_ATTRIBUTES = frozenset({"mm_provider_profile"})
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -116,7 +119,10 @@ def _build_typed_search_attributes(
 
         # Temporal only supports lists for KeywordList. All other types must be unwrapped.
         if all(isinstance(v, str) for v in values):
-            if key in _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES:
+            if key in _TEXT_SEARCH_ATTRIBUTES:
+                key_type = SearchAttributeKey.for_text(key)
+                pairs.append(SearchAttributePair(key_type, " ".join(values)))
+            elif key in _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES:
                 key_type = SearchAttributeKey.for_keyword_list(key)
                 pairs.append(SearchAttributePair(key_type, values))
             elif len(values) > 1:

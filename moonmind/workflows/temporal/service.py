@@ -26,6 +26,7 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
@@ -149,6 +150,12 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_MEMO_KEY,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    build_provider_profile_projection,
+    recorded_provider_profile_ids,
+)
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
@@ -2111,6 +2118,28 @@ class TemporalExecutionService:
                 f"{ref} is {artifact.status.value}."
             )
 
+    async def _provider_profile_label_snapshot(
+        self, parameters: Mapping[str, Any]
+    ) -> dict[str, str | None]:
+        """Capture recorded Provider Profile display names once at admission."""
+
+        profile_ids = [
+            profile_id for profile_id, _ in recorded_provider_profile_ids(parameters)
+        ]
+        if not profile_ids:
+            return {}
+        rows = await self._session.execute(
+            select(
+                ManagedAgentProviderProfile.profile_id,
+                ManagedAgentProviderProfile.account_label,
+                ManagedAgentProviderProfile.provider_label,
+            ).where(ManagedAgentProviderProfile.profile_id.in_(profile_ids))
+        )
+        return {
+            str(profile_id): (account_label or provider_label or None)
+            for profile_id, account_label, provider_label in rows.all()
+        }
+
     async def create_execution(
         self,
         *,
@@ -2408,6 +2437,18 @@ class TemporalExecutionService:
             title_tokens = tokenize_title(resolved_title)
             if title_tokens:
                 search_attributes["mm_title"] = title_tokens
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            # MoonLadderStudios/MoonMind#4640: one recorded Provider Profile
+            # projection feeds list rows (memo) and filters/facets (Search
+            # Attribute) so later renames or deletions cannot erase history.
+            profile_summary, profile_search_value = (
+                build_provider_profile_projection(
+                    params,
+                    labels=await self._provider_profile_label_snapshot(params),
+                )
+            )
+            memo[PROVIDER_PROFILE_MEMO_KEY] = profile_summary
+            search_attributes[PROVIDER_PROFILE_SEARCH_ATTRIBUTE] = profile_search_value
 
         artifact_refs = [
             ref
