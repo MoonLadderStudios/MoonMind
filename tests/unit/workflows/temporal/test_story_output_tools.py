@@ -5873,3 +5873,100 @@ async def test_update_github_issue_status_post_merge_reads_with_parent_run() -> 
 
     assert result.status == "FAILED"
     assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_child_started_workflow_reads_handoff_with_owning_run_connection(
+    monkeypatch, tmp_path
+) -> None:
+    """#4010: a resolver/remediation child acts with its recorded owner's selected PAT B.
+
+    The child has no canonical record; the reader follows its Temporal parent
+    chain (remediation -> resolver -> owning run) to the recorded authority.
+    """
+
+    import dataclasses
+
+    import httpx
+    from temporalio import activity
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from tests.helpers.repository_connections import (
+        TemporalParentClient,
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    owner = "mm:owner-run"
+    resolver = "merge-automation:mm:owner-run:acme/repo:7:resolver:1"
+    remediation = f"{resolver}:remediation"
+    parents = {remediation: resolver, resolver: owner}
+
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/repos/acme/repo/pulls/7":
+            return httpx.Response(200, json={**_merged_pr(), "body": "Fixes acme/repo#4"})
+        if path.endswith("/commits/refs%2Fheads%2Fmain") or path.endswith(
+            "/commits/refs/heads/main"
+        ):
+            return httpx.Response(
+                200, json={"sha": "d" * 40, "commit": {"tree": {"sha": "e" * 40}}}
+            )
+        if path.startswith("/repos/acme/repo/compare/"):
+            return httpx.Response(200, json={"status": "ahead"})
+        raise AssertionError(f"Unexpected provider request: {request.method} {path}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    client = TemporalParentClient(parents)
+    monkeypatch.setattr(activity, "client", lambda: client)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:team-b", "acme/repo")
+        ],
+        admitted_runs={
+            owner: {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:team-b",
+                    "repository": {"name": "acme/repo"},
+                }
+            }
+        },
+    )
+
+    async def validate() -> str | None:
+        return await story_tools._validate_post_merge_issue_handoff(
+            GitHubService(), repository="acme/repo", issue_ref="acme/repo#4",
+            pull_request=_MERGED_HANDOFF,
+            admitted_workflow_id=story_tools._admitted_repository_workflow(
+                {"workflow_id": "authored-input-is-ignored"}
+            ),
+        )
+
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=remediation)
+    try:
+        reason = await env.run(validate)
+    finally:
+        await engine.dispose()
+
+    assert reason is None
+    # Each of the three reads resolves the owner; none caches authority.
+    assert client.described == [remediation, resolver] * 3
+    assert [r.url.path.split("/")[4] for r in requests] == ["pulls", "commits", "compare"]
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}

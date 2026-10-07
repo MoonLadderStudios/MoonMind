@@ -293,12 +293,45 @@ async def select_github_access_for_launch(
     return SelectedGitHubAccess(connection=connection, credential=credential)
 
 
+#: Bound on the Temporal parent chain walked to a workflow's recorded run.
+_ADMITTED_OWNER_MAX_DEPTH = 8
+
+
+async def _recorded_parent_workflow_id(workflow_id: str) -> str:
+    """Return the Temporal parent of ``workflow_id`` from the server's record.
+
+    Only an Activity has the worker's client; elsewhere there is no parent to
+    read, and a failed read is unavailable authority rather than none.
+    """
+
+    from temporalio import activity
+
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    if not activity.in_activity():
+        return ""
+    try:
+        described = await activity.client().get_workflow_handle(workflow_id).describe()
+    except Exception as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"owner of run {workflow_id!r} could not be read "
+            f"({type(exc).__name__}); no other connection is substituted",
+        ) from exc
+    return str(getattr(described, "parent_id", "") or "").strip()
+
+
 async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
     """Return the ``(connectionRef, anonymous)`` a recorded run admitted.
 
     Retries, Activities, and child gates acting for a run read its canonical
     parameters instead of carrying credentials or rediscovering authority.
-    An unrecorded or unreadable run raises; no other authority is assumed.
+    A child workflow started by a run (an agent step, a merge gate, a resolver
+    or remediation child) has no canonical record of its own; it acts with
+    the nearest recorded run on its Temporal parent chain. An unrecorded or
+    unreadable chain raises; no other authority is assumed.
     """
 
     from api_service.db.base import async_session_maker
@@ -308,16 +341,22 @@ async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
         authored_repository_access,
     )
 
-    owner = str(workflow_id or "").strip()
-    async with async_session_maker() as session:
-        record = await session.get(TemporalExecutionCanonicalRecord, owner)
-    if record is None or not isinstance(record.parameters, Mapping):
-        raise RepositoryContractError(
-            "REPOSITORY_CONNECTION_UNAVAILABLE",
-            f"run {owner!r} has no recorded repository authority; no other "
-            "connection is substituted",
-        )
-    return authored_repository_access(record.parameters)
+    requested = owner = str(workflow_id or "").strip()
+    for _ in range(_ADMITTED_OWNER_MAX_DEPTH):
+        if not owner:
+            break
+        async with async_session_maker() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, owner)
+        if record is not None:
+            if isinstance(record.parameters, Mapping):
+                return authored_repository_access(record.parameters)
+            break
+        owner = await _recorded_parent_workflow_id(owner)
+    raise RepositoryContractError(
+        "REPOSITORY_CONNECTION_UNAVAILABLE",
+        f"run {requested!r} has no recorded repository authority; no other "
+        "connection is substituted",
+    )
 
 
 async def resolve_selected_github_credential_for_launch(

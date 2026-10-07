@@ -14,6 +14,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.security import OutboundScanResult
+from tests.helpers.repository_connections import TemporalParentClient
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -274,11 +275,13 @@ async def test_repo_merge_pr_activity_updates_base_before_merge():
     service.update_pull_request_base.assert_awaited_once_with(
         pr_url="https://github.com/org/repo/pull/123",
         new_base="main",
+        admitted_workflow_id="",
     )
     service.merge_pull_request.assert_awaited_once_with(
         pr_url="https://github.com/org/repo/pull/123",
         merge_method="merge",
         expected_head_sha="a" * 40,
+        admitted_workflow_id="",
     )
     assert result["merged"] is True
     assert result["mergeSha"] == "abc123"
@@ -808,7 +811,8 @@ async def test_repo_merge_pins_verified_head_and_authored_branch():
     )
     service.update_pull_request_base.assert_not_awaited()
     service.merge_pull_request.assert_awaited_once_with(
-        pr_url=url, merge_method="merge", expected_head_sha=sha
+        pr_url=url, merge_method="merge", expected_head_sha=sha,
+        admitted_workflow_id="",
     )
     assert result["merged"] is True
 
@@ -952,6 +956,7 @@ async def test_repo_merge_reconciles_lost_merge_response():
     assert result["mergeSha"] == "c" * 40
     service.merge_pull_request.assert_awaited_once_with(
         pr_url=url, merge_method="merge", expected_head_sha="a" * 40,
+        admitted_workflow_id="",
     )
 
 
@@ -989,4 +994,177 @@ async def test_repo_merge_reads_and_reconciles_with_admitted_run():
         {"admitted_workflow_id": "mm:admitted-run"},
         {"admitted_workflow_id": "mm:admitted-run"},
     ]
-    service.merge_pull_request.assert_awaited_once()
+    assert service.merge_pull_request.await_args.kwargs["admitted_workflow_id"] == (
+        "mm:admitted-run"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Child-executed merges keep the owning run's authority (MoonLadderStudios/MoonMind#4010)
+# ---------------------------------------------------------------------------
+
+_OWNER_RUN = "mm:owner-run"
+_AGENT_CHILD = f"{_OWNER_RUN}:agent:jules-step:1"
+_MERGE_URL = "https://github.com/org/repo/pull/123"
+
+
+def _github_merge_transport(monkeypatch):
+    """Answer the PR read, base retarget, and merge; record every request."""
+
+    import httpx
+
+    requests: list[httpx.Request] = []
+    state = {"base": "other"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if request.method == "GET" and path == "/repos/org/repo/pulls/123":
+            return httpx.Response(200, json={
+                "number": 123,
+                "base": {"ref": state["base"], "repo": {"full_name": "org/repo"}},
+                "head": {"ref": "jules", "sha": "a" * 40, "repo": {"full_name": "org/repo"}},
+            })
+        if request.method == "PATCH" and path == "/repos/org/repo/pulls/123":
+            state["base"] = "release"
+            return httpx.Response(200, json={})
+        if request.method == "PUT" and path == "/repos/org/repo/pulls/123/merge":
+            return httpx.Response(200, json={"merged": True, "sha": "c" * 40})
+        raise AssertionError(f"Unexpected provider request: {request.method} {path}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    return requests
+
+
+async def _record_owner_selecting_team_b(monkeypatch, tmp_path):
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    return await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:team-b", "org/repo")
+        ],
+        admitted_runs={
+            _OWNER_RUN: {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:team-b",
+                    "repository": {"name": "org/repo"},
+                }
+            }
+        },
+    )
+
+
+def _agent_child_environment(monkeypatch, parents: TemporalParentClient):
+    import dataclasses
+
+    from temporalio import activity
+    from temporalio.testing import ActivityEnvironment
+
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=_AGENT_CHILD)
+    monkeypatch.setattr(activity, "client", lambda: parents)
+    return env
+
+
+async def test_agent_child_merge_reads_and_writes_with_owning_run_connection(
+    monkeypatch, tmp_path
+):
+    """An AgentRun child's merge uses its recorded owner's selected PAT B, not ambient A."""
+
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    requests = _github_merge_transport(monkeypatch)
+    parents = TemporalParentClient({_AGENT_CHILD: _OWNER_RUN})
+    env = _agent_child_environment(monkeypatch, parents)
+    engine = await _record_owner_selecting_team_b(monkeypatch, tmp_path)
+    try:
+        result = await env.run(repo_merge_pr_activity, {
+            "pr_url": _MERGE_URL, "expected_repository": "org/repo",
+            "target_branch": "release", "expected_head_sha": "a" * 40,
+        })
+    finally:
+        await engine.dispose()
+
+    assert result["merged"] is True, result
+    assert [(r.method, r.url.path) for r in requests] == [
+        ("GET", "/repos/org/repo/pulls/123"),
+        ("PATCH", "/repos/org/repo/pulls/123"),
+        ("GET", "/repos/org/repo/pulls/123"),
+        ("PUT", "/repos/org/repo/pulls/123/merge"),
+    ]
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
+    assert set(parents.described) == {_AGENT_CHILD}
+
+
+async def test_agent_child_merge_without_owner_credential_writes_nothing(
+    monkeypatch, tmp_path
+):
+    """A missing selected credential fails closed; ambient A is never used to mutate."""
+
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.delenv("TEAM_B_PAT", raising=False)
+    requests = _github_merge_transport(monkeypatch)
+    env = _agent_child_environment(
+        monkeypatch, TemporalParentClient({_AGENT_CHILD: _OWNER_RUN})
+    )
+    engine = await _record_owner_selecting_team_b(monkeypatch, tmp_path)
+    try:
+        with pytest.raises(ValueError, match="does not try another GitHub credential"):
+            await env.run(repo_merge_pr_activity, {
+                "pr_url": _MERGE_URL, "expected_repository": "org/repo",
+                "target_branch": "release", "expected_head_sha": "a" * 40,
+            })
+    finally:
+        await engine.dispose()
+
+    assert requests == []
+
+
+async def test_unrecorded_merge_owner_fails_without_substitution(monkeypatch, tmp_path):
+    """A child whose parent chain reaches no recorded run reads and writes nothing."""
+
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    requests = _github_merge_transport(monkeypatch)
+    env = _agent_child_environment(
+        monkeypatch, TemporalParentClient({_AGENT_CHILD: "mm:unrecorded-run"})
+    )
+    engine = await _record_owner_selecting_team_b(monkeypatch, tmp_path)
+    try:
+        with pytest.raises(RepositoryContractError, match="no recorded repository authority"):
+            await env.run(repo_merge_pr_activity, {
+                "pr_url": _MERGE_URL, "expected_repository": "org/repo",
+                "target_branch": "release", "expected_head_sha": "a" * 40,
+            })
+    finally:
+        await engine.dispose()
+
+    assert requests == []
