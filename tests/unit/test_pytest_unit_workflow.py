@@ -105,8 +105,61 @@ def test_required_integration_job_uploads_failure_diagnostics() -> None:
     assert any(
         step["uses"].startswith("actions/upload-artifact@")
         and step.get("if") == "failure()"
+        and "${{ matrix.suite }}" in step["with"]["name"]
         for step in uses_steps
     )
+
+
+def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
+    # The hermetic suite, the host-updater transport qualification, and the
+    # three disposable Compose journeys each own an isolated Compose project.
+    # Running them as parallel rows keeps every boundary while the slowest
+    # row, not their serial sum, bounds integration-ci.
+    job = _load_workflow()["jobs"]["integration-ci"]
+
+    assert job["strategy"]["matrix"]["suite"] == [
+        "hermetic",
+        "host-update-transport",
+        "fresh-journey",
+        "upgrade-journey",
+        "controller-journey",
+    ]
+    assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
+    assert int(job["timeout-minutes"]) <= 30
+
+    steps = {step["name"]: step for step in job["steps"]}
+    row_commands = {
+        "Run hermetic integration CI suite": (
+            "hermetic",
+            "./tools/test_integration.sh",
+        ),
+        "Qualify host updater Docker transport recovery": (
+            "host-update-transport",
+            "tests/integration/host_update/test_host_updater_transport.py -q",
+        ),
+        "Run disposable default first-run journey": (
+            "fresh-journey",
+            "./tools/first_run_journey_3938.sh",
+        ),
+        "Run eligible-upgrade journey": (
+            "upgrade-journey",
+            "./tools/first_run_journey_3938.sh --upgrade",
+        ),
+        "Run Settings Operations controller journey": (
+            "controller-journey",
+            "./tools/first_run_journey_3938.sh --controller",
+        ),
+    }
+    for name, (row, command) in row_commands.items():
+        assert steps[name]["if"] == f"matrix.suite == '{row}'"
+        assert command in [line.strip() for line in steps[name]["run"].splitlines()]
+
+    # Only the journey rows drive the compiled dashboard in a browser.
+    for name in (
+        "Set up Node for the dashboard journey",
+        "Install the journey browser's Playwright runtime",
+    ):
+        assert steps[name]["if"] == "endsWith(matrix.suite, '-journey')"
 
 
 def test_preflight_policy_enforces_workflow_display_name_guard() -> None:
@@ -131,17 +184,18 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
     workflow = _load_workflow()
     jobs = workflow["jobs"]
 
-    detector_job = jobs["detect-openapi-contract-impact"]
+    # Detection reuses the selector's changed-file list instead of a separate
+    # runner that recomputes it.
+    assert "detect-openapi-contract-impact" not in jobs
+    selector_job = jobs["select-test-suites"]
     assert (
-        detector_job["outputs"]["run_check"] == "${{ steps.detect.outputs.run_check }}"
+        selector_job["outputs"]["generated_contracts"]
+        == "${{ steps.detect-openapi.outputs.generated_contracts }}"
     )
-    detector_steps = detector_job["steps"]
-    detector_checkout = detector_steps[0]
-    assert detector_checkout["uses"].startswith("actions/checkout@")
-    assert int(detector_checkout["with"]["fetch-depth"]) == 1
+    selector_steps = selector_job["steps"]
     assert any(
         "tools/check_openapi_affecting_changes.sh" in (step.get("run") or "")
-        for step in detector_steps
+        for step in selector_steps
     )
     assert not any(
         (step.get("uses") or "").startswith("actions/setup-node@")
@@ -149,14 +203,14 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
         or "npm ci" in (step.get("run") or "")
         or "uv pip install" in (step.get("run") or "")
         or "apt-get install" in (step.get("run") or "")
-        for step in detector_steps
+        for step in selector_steps
     )
 
     contract_job = jobs["run-generated-contracts"]
-    assert contract_job["needs"] == "detect-openapi-contract-impact"
+    assert contract_job["needs"] == "select-test-suites"
     assert (
         contract_job["if"]
-        == "needs.detect-openapi-contract-impact.outputs.run_check == 'true'"
+        == "needs.select-test-suites.outputs.generated_contracts == 'true'"
     )
     contract_steps = contract_job["steps"]
     assert any(
@@ -174,15 +228,15 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
 
     required_job = jobs["check-generated-contracts"]
     assert required_job["needs"] == [
-        "detect-openapi-contract-impact",
+        "select-test-suites",
         "run-generated-contracts",
     ]
     assert required_job["if"] == "always()"
     required_script = "\n".join(
         (step.get("run") or "") for step in required_job["steps"] if "run" in step
     )
-    assert "needs.detect-openapi-contract-impact.result" in required_script
-    assert "needs.detect-openapi-contract-impact.outputs.run_check" in required_script
+    assert "needs.select-test-suites.result" in required_script
+    assert "needs.select-test-suites.outputs.generated_contracts" in required_script
     assert "needs.run-generated-contracts.result" in required_script
     assert "Generated contract verification passed." in required_script
     assert "skipped intentionally" in required_script
@@ -200,7 +254,13 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
     browser = jobs["frontend-browser"]
     assert browser["needs"] == "select-test-suites"
     assert browser["strategy"]["fail-fast"] is False
-    assert "frontend_browser_firefox" in browser["strategy"]["matrix"]["engine"]
+    engines = browser["strategy"]["matrix"]["engine"]
+    assert "frontend_browser_firefox" in engines
+    # MoonMind#4559: WebKit runs the whole browser suite, including the
+    # form/fieldset/overlay cases, on every selection that runs the matrix.
+    # A second job running one of those files again in WebKit is redundant.
+    assert engines.count('"webkit"') == 2
+    assert "frontend-browser-webkit-targeted" not in jobs
     assert "@sha256:" in browser["container"]["image"]
     assert browser["env"]["HOME"] == "/root"
     assert not any(
@@ -213,28 +273,12 @@ def test_frontend_jobs_are_impact_aware_and_keep_stable_aggregator() -> None:
         "select-test-suites",
         "frontend-static",
         "frontend-browser",
-        "frontend-browser-webkit-targeted",
     ]
     assert not any("uses" in step for step in aggregator["steps"])
     script = "\n".join(step.get("run", "") for step in aggregator["steps"])
     assert "frontend-static was selected" in script
     assert "frontend-browser was selected" in script
-    assert "frontend-browser-webkit-targeted was selected" in script
     assert "skipped intentionally" in script
-
-    webkit_targeted = jobs["frontend-browser-webkit-targeted"]
-    assert webkit_targeted["needs"] == "select-test-suites"
-    assert (
-        webkit_targeted["if"]
-        == "needs.select-test-suites.outputs.frontend_browser_chromium == 'true'"
-    )
-    assert "@sha256:" in webkit_targeted["container"]["image"]
-    assert webkit_targeted["env"]["HOME"] == "/root"
-    assert any(
-        "mobileOverflow4559.browser.test.tsx" in step.get("run", "")
-        and step.get("env", {}).get("MOONMIND_BROWSER_ENGINES") == "webkit"
-        for step in webkit_targeted["steps"]
-    )
 
 
 def test_playwright_package_and_container_versions_match() -> None:
@@ -343,12 +387,15 @@ def test_deterministic_conformance_is_selection_gated() -> None:
 def test_image_building_jobs_share_a_layer_cache() -> None:
     workflow = _load_workflow()
     integration_steps = workflow["jobs"]["integration-ci"]["steps"]
-    build = next(
+    builds = [
         step
         for step in integration_steps
         if (step.get("uses") or "").startswith("docker/build-push-action@")
+    ]
+    build = next(
+        step for step in builds if step["with"].get("target") == "test-runtime"
     )
-    assert build["with"]["target"] == "test-runtime"
+    assert build["if"] == "matrix.suite == 'hermetic'"
     assert build["with"]["load"] is True
     assert build["with"]["cache-from"].startswith("type=gha,")
     assert build["with"]["cache-to"].startswith("type=gha,")
@@ -364,6 +411,19 @@ def test_image_building_jobs_share_a_layer_cache() -> None:
     )
     assert exact_build["with"]["cache-from"].startswith("type=gha,")
     assert exact_build["with"]["cache-to"].startswith("type=gha,")
+
+    # The journey rows build the same default deployable target with the same
+    # build arguments as the exact-artifact gate, so they read the scope that
+    # gate writes. The gate stays the only writer: the parallel journey rows
+    # export nothing.
+    candidate = next(step for step in builds if "target" not in step["with"])
+    assert candidate["if"] == "matrix.suite != 'hermetic'"
+    assert candidate["with"]["file"] == exact_build["with"]["file"]
+    assert candidate["with"]["build-args"] == exact_build["with"]["build-args"]
+    assert candidate["with"]["cache-from"] == exact_build["with"]["cache-from"]
+    assert "cache-to" not in candidate["with"]
+    scope = candidate["with"]["cache-from"].split("scope=")[1].split(",")[0]
+    assert f"scope={scope}," in exact_build["with"]["cache-to"]
 
 
 def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None:
@@ -384,16 +444,21 @@ def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None
 
 def test_shard_ownership_verifier_always_runs() -> None:
     workflow = _load_workflow()
-    job = workflow["jobs"]["verify-test-shard-ownership"]
+    assert "verify-test-shard-ownership" not in workflow["jobs"]
+    job = workflow["jobs"]["preflight-policy"]
 
     # Static repository invariant (MoonLadderStudios/MoonMind#3950): exclusive
-    # shard ownership must gate targeted PRs too, so the job carries no
-    # selection gate and ci-required aggregates it unconditionally.
+    # shard ownership must gate targeted PRs too, so it runs in the always-run
+    # preflight job with no selection gate of its own.
     assert "if" not in job
-    assert any(
-        "tools/verify_test_shard_ownership.py" in step.get("run", "")
+    verifier = next(
+        step
         for step in job["steps"]
+        if "tools/verify_test_shard_ownership.py" in step.get("run", "")
     )
+    assert "if" not in verifier
+    install = _run_command("preflight-policy", "Install runtime dependencies via uv")
+    assert "uv pip install --system -e .[tests]" in install
 
 
 def test_reliability_job_runs_the_canonical_journey_suite() -> None:
@@ -490,13 +555,11 @@ def test_ci_required_is_pure_result_aggregator() -> None:
     for dependency in (
         "select-test-suites",
         "preflight-policy",
-        "moonspec-projection",
         "backend-matrix",
         "unit-slow",
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
-        "verify-test-shard-ownership",
         "test-frontend",
         "check-generated-contracts",
     ):
@@ -506,6 +569,9 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "api-component",
         "temporal-boundary",
         "reliability-journey-checkpoint-resume",
+        # Static invariants now run inside preflight-policy.
+        "moonspec-projection",
+        "verify-test-shard-ownership",
     ):
         assert removed not in job["needs"]
 
@@ -526,29 +592,28 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
     for name in (
         "select-test-suites",
         "preflight-policy",
-        "moonspec-projection",
         "backend-matrix",
         "unit-slow",
         "integration-ci",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
-        "verify-test-shard-ownership",
         "test-frontend",
         "check-generated-contracts",
     ):
         assert name in script
 
-    # Always-run aggregators and the always-run shard-ownership invariant are
-    # aggregated unconditionally (MoonLadderStudios/MoonMind#3950): a failing
-    # frontend or generated-contract gate must fail ci-required, and targeted
-    # PRs must not trip a success-but-unselected failure on shard ownership.
+    # Always-run aggregators and the always-run preflight invariants (policy,
+    # MoonSpec projection, shard ownership) are aggregated unconditionally
+    # (MoonLadderStudios/MoonMind#3950): a failing frontend or
+    # generated-contract gate must fail ci-required, and targeted PRs must not
+    # trip a success-but-unselected failure on an always-run invariant.
     assert 'require_always "test-frontend"' in script
     assert "needs.test-frontend.result" in script
     assert 'require_always "check-generated-contracts"' in script
     assert "needs.check-generated-contracts.result" in script
-    assert 'require_always "verify-test-shard-ownership"' in script
-    assert "needs.verify-test-shard-ownership.result" in script
-    assert 'require_selected "verify-test-shard-ownership"' not in script
+    assert 'require_always "preflight-policy"' in script
+    assert "needs.preflight-policy.result" in script
+    assert 'require_selected "preflight-policy"' not in script
 
 
 def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
@@ -633,16 +698,45 @@ def test_unit_fast_initializes_moonspec_test_fixtures() -> None:
 
 def test_moonspec_projection_initializes_only_moonspec_submodule() -> None:
     workflow = _load_workflow()
-    job = workflow["jobs"]["moonspec-projection"]
+    assert "moonspec-projection" not in workflow["jobs"]
+    job = workflow["jobs"]["preflight-policy"]
 
     checkout = job["steps"][0]
     assert "submodules" not in checkout.get("with", {})
 
-    scripts = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "git submodule update --init --depth 1 -- moonspec" in scripts
+    runs = [step.get("run", "") for step in job["steps"]]
+    scripts = "\n".join(runs)
+    assert "python3 tools/sync_moonspec.py --check" in scripts
     # Does not initialize Open WebUI or Omnigent.
     assert "open-webui" not in scripts
     assert "omnigent" not in scripts
+
+    # The repository policy scans and the shard-ownership collection walk the
+    # working tree, so MoonSpec is initialized only after they have run and
+    # they keep checking the same tree as before.
+    init_index = next(
+        index
+        for index, run in enumerate(runs)
+        if "git submodule update --init --depth 1 -- moonspec" in run
+    )
+    for tree_walker in (
+        "./tools/check_terminology.sh",
+        "tools/verify_workflow_terminology.py",
+        "tools/check_removed_capability_semantics.py",
+        "tools/status_domain_audit.py",
+        "tools/audit_status_tokens.py",
+        "tools/verify_test_shard_ownership.py",
+    ):
+        walker_index = next(
+            index for index, run in enumerate(runs) if tree_walker in run
+        )
+        assert walker_index < init_index, tree_walker
+    check_index = next(
+        index
+        for index, run in enumerate(runs)
+        if "tools/sync_moonspec.py --check" in run
+    )
+    assert check_index > init_index
 
 
 def test_no_backend_ci_job_uses_recursive_submodules() -> None:
@@ -663,13 +757,15 @@ def test_shared_changed_file_helper_covers_supported_events() -> None:
 
 
 def test_generated_contract_detector_uses_shared_helper() -> None:
-    command = _run_command(
-        "detect-openapi-contract-impact", "Detect OpenAPI-affecting changes"
-    )
+    compute = _run_command("select-test-suites", "Compute changed files")
+    command = _run_command("select-test-suites", "Detect OpenAPI-affecting changes")
 
-    assert "tools/ci/compute_changed_files.sh" in command
+    assert "tools/ci/compute_changed_files.sh" in compute
+    assert '>> "$GITHUB_OUTPUT"' in compute
     assert "tools/check_openapi_affecting_changes.sh" in command
-    assert "resolution=unknown" in command
+    # An unknown change set stays conservative and runs the contract check.
+    assert "steps.changed-files.outputs.resolution" in command
+    assert "generated_contracts=true" in command
 
 
 def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> None:
