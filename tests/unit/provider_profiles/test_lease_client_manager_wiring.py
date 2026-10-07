@@ -806,3 +806,82 @@ async def test_a_manager_rpc_failure_that_is_not_a_wedge_reports_temporals_error
     assert adapter.terminated == []
     # One bounded reattach was attempted before the original error stood.
     assert adapter.update_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "purpose",
+    [
+        CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        CredentialLeasePurpose.CREDENTIAL_REPAIR,
+    ],
+)
+@pytest.mark.parametrize("recover_on_attempt", [2, 3, None])
+async def test_client_reattaches_while_owner_release_transition_is_pending(
+    purpose: CredentialLeasePurpose,
+    recover_on_attempt: int | None,
+) -> None:
+    """A bounded transition wait must not terminate an otherwise valid admission."""
+    manager, adapter, client = _wire(1, credential_source="oauth_volume")
+    manager._lease_transition_contract = True
+    manager._owner_release_ordering = True
+    manager._lease_grant_sequence = 1
+    owner = "release-then-readmit"
+    profile = manager._profiles[PROFILE_ID]
+    profile.reserve(
+        owner, NOW, purpose=purpose.value, metadata={"fencingGeneration": 1}
+    )
+    manager._index_lease(PROFILE_ID, owner, owner)
+    manager._unresolved_releases[owner] = {
+        "profile_id": PROFILE_ID,
+        "fencing_generation": 1,
+        "kind": "owner_release",
+        "outcome": "retryable",
+        "retryable": True,
+    }
+
+    async def pending_transition_timeout(predicate, timeout=None):
+        assert not predicate()
+        assert timeout == timedelta(seconds=60)
+        adapter.stubs.advance(timeout)
+        raise TimeoutError
+
+    adapter.stubs.wait_condition = pending_transition_timeout
+
+    def release_commits(attempt: int) -> None:
+        if attempt == recover_on_attempt:
+            profile.release(owner)
+            manager._unindex_lease(owner)
+            manager._unresolved_releases.pop(owner)
+
+    adapter.on_update = release_commits
+    acquire = (
+        client.acquire_maintenance_lease
+        if purpose.is_maintenance
+        else client.acquire_execution_lease
+    )
+    arguments = {
+        "runtime_id": RUNTIME_ID,
+        "profile_id": PROFILE_ID,
+        "owner_id": owner,
+        "purpose": purpose,
+        "metadata": {"workflowId": owner},
+    }
+    if recover_on_attempt is None:
+        with pytest.raises(WorkflowUpdateFailedError) as pending:
+            await acquire(**arguments)
+        assert pending.value.cause.type == "ProviderProfileLeaseTransitionPending"
+        assert profile.lease_fencing_generation(owner) == 1
+        assert owner in manager._unresolved_releases
+    else:
+        lease = await acquire(**arguments)
+        assert lease.already_held is False
+        assert lease.fencing_generation == 2
+        assert profile.lease_fencing_generation(owner) == 2
+        assert owner not in manager._unresolved_releases
+
+    expected_attempts = recover_on_attempt or 3
+    assert len(adapter.updates) == expected_attempts
+    assert all(update == adapter.updates[0] for update in adapter.updates)
+    assert len(adapter.started) == expected_attempts
+    assert adapter.signals == []

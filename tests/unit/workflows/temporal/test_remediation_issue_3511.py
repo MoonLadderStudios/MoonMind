@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-from unittest.mock import MagicMock
-from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,8 +20,8 @@ from moonmind.workflows.temporal.remediation_actions import (
 )
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
-    RemediationEvidenceToolService,
     RemediationEvidenceToolError,
+    RemediationEvidenceToolService,
     RemediationTargetHealthSnapshot,
     _approval_binding_from_state,
 )
@@ -753,6 +751,7 @@ async def test_production_rerun_adapter_uses_execution_service_idempotently() ->
     execution_service.create_fresh_rerun_execution.assert_awaited_once_with(
         workflow_id="target",
         idempotency_key="action-1",
+        expected_run_id="target-run",
     )
 
 
@@ -763,7 +762,7 @@ async def test_checkpoint_branch_adapter_persists_graph_through_service() -> Non
     )
     turn_owner = AsyncMock()
     turn_owner.launch.return_value = SimpleNamespace(
-        created_step_execution_id="repair:execution:1"
+        created_step_execution_id="repair:execution:1",
     )
     plane = TemporalRemediationControlPlane(
         client=AsyncMock(),

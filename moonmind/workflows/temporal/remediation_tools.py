@@ -359,9 +359,28 @@ class RemediationEvidenceToolService:
         """Return the parsed linked remediation context artifact."""
 
         link = await self._load_link(remediation_workflow_id)
-        return await self._read_context_payload(
+        context = await self._read_context_payload(
             link=link, principal=principal, admitted_principal=admitted_principal
         )
+        from api_service.services.remediation_capabilities import (
+            project_remediation_action_inputs,
+            remediation_link_capabilities,
+        )
+
+        await project_remediation_action_inputs(link, session=self._session)
+        evidence = context.get("evidence") or {}
+        link.evidence_degraded = bool(evidence.get("evidenceDegraded"))
+        link.unavailable_evidence_classes = tuple(
+            evidence.get("unavailableEvidenceClasses") or ()
+        )
+        matrix = remediation_link_capabilities(link)
+        return {
+            **context,
+            "actionCapabilities": matrix,
+            "allowedActions": [
+                row["actionKind"] for row in matrix if row["requestable"]
+            ],
+        }
 
     async def read_target_artifact(
         self,
@@ -1125,6 +1144,7 @@ class RemediationEvidenceToolService:
             action_request = {
                 **dict(action_request),
                 "targetRuntime": preparation.target.runtime,
+                "remediationWorkflowId": link.remediation_workflow_id,
             }
             if policy_snapshot is not None:
                 action_request["policySnapshot"] = policy_snapshot

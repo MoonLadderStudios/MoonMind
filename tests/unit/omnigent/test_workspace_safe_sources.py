@@ -1189,6 +1189,37 @@ async def test_existing_workspace_grant_positive_and_negative(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_read_only_claim_records_the_reader_as_grantee(tmp_path, monkeypatch):
+    """The janitor protects a shared workspace while its reader is running."""
+
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
+    workspace_id = "shared-ws"
+    _ensure_owned_workspace(tmp_path, workspace_id, owner=("owner-wf", "owner-st"))
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=_never_clone, workspace_root=tmp_path
+    )
+
+    await materializer.materialize(
+        _request(
+            _grant_spec(
+                workspace_id,
+                owner=("owner-wf", "owner-st"),
+                mode="read_only",
+                grantee="reader-wf",
+            ),
+            workflow_id="reader-wf",
+            step_id="reader-st",
+        ),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert SandboxWorkspaceRecordStore(tmp_path).active_claim_grantees(
+        workspace_id
+    ) == ("reader-wf",)
+
+
+@pytest.mark.asyncio
 async def test_stale_grant_generation_fails_after_advance(tmp_path, monkeypatch):
     monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", _TEST_GRANT_SECRET)
     workspace_id = "gen-ws"

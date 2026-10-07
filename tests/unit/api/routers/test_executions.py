@@ -6822,7 +6822,7 @@ def test_list_remediations_for_target_returns_compact_inbound_links(
         ),
         patch.object(
             executions_module,
-            "remediation_action_capability_matrix",
+            "remediation_link_capabilities",
             return_value=(),
         ),
     ):
@@ -6916,7 +6916,7 @@ def test_list_remediations_for_remediation_returns_compact_outbound_links(
         ),
         patch.object(
             executions_module,
-            "remediation_action_capability_matrix",
+            "remediation_link_capabilities",
             return_value=(),
         ),
     ):
@@ -7097,7 +7097,7 @@ def test_list_remediations_for_remediation_returns_rich_operator_metadata(
         ),
         patch.object(
             executions_module,
-            "remediation_action_capability_matrix",
+            "remediation_link_capabilities",
             return_value=(),
         ),
     ):

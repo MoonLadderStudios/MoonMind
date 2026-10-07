@@ -45,11 +45,13 @@ class TemporalRemediationControlPlane:
         execution_service: TemporalExecutionService | None = None,
         checkpoint_branch_service: CheckpointBranchService | None = None,
         checkpoint_branch_turn_owner: CheckpointBranchTurnExecutionOwner | None = None,
+        session_control_service: Any = None,
     ) -> None:
         self._client = client or TemporalClientAdapter()
         self._execution_service = execution_service
         self._checkpoint_branch_service = checkpoint_branch_service
         self._checkpoint_branch_turn_owner = checkpoint_branch_turn_owner
+        self._session_control_service = session_control_service
 
     @staticmethod
     def _parts(
@@ -95,7 +97,10 @@ class TemporalRemediationControlPlane:
         params: Mapping[str, Any], target: RemediationTargetHealthSnapshot
     ) -> None:
         expected = str(params.get("expectedRunId") or target.pinned_run_id).strip()
-        if expected != target.current_run_id:
+        if (
+            target.pinned_run_id != target.current_run_id
+            or expected != target.current_run_id
+        ):
             raise ValueError("expectedRunId does not match the current target run")
 
     async def execution_control(
@@ -107,20 +112,23 @@ class TemporalRemediationControlPlane:
         action_id, params, before = self._parts(action_request, target)
         self._ensure_expected_run(params, target)
         kind = str(action_request["actionKind"])
-        if kind == "execution.pause":
-            await self._client.update_workflow(
-                target.workflow_id, "Pause", {"idempotency_key": action_id}
+        if self._execution_service is None:
+            raise RuntimeError("execution service is unavailable")
+        if kind in {"execution.pause", "execution.resume"}:
+            await self._execution_service.signal_execution(
+                workflow_id=target.workflow_id,
+                signal_name="Pause" if kind == "execution.pause" else "Resume",
+                payload=None,
+                payload_artifact_ref=None,
+                expected_run_id=target.current_run_id,
+                idempotency_key=action_id,
             )
-        elif kind == "execution.resume":
-            await self._client.update_workflow(
-                target.workflow_id, "Resume", {"idempotency_key": action_id}
-            )
-        elif kind == "execution.cancel":
-            await self._client.cancel_workflow(target.workflow_id)
         else:
-            await self._client.terminate_workflow(
-                target.workflow_id,
+            await self._execution_service.cancel_execution(
+                workflow_id=target.workflow_id,
                 reason=str(params.get("reason") or "authorized remediation"),
+                graceful=kind == "execution.cancel",
+                expected_run_id=target.current_run_id,
             )
         return self._accepted(
             before,
@@ -142,12 +150,14 @@ class TemporalRemediationControlPlane:
             response = await self._execution_service.create_fresh_rerun_execution(
                 workflow_id=target.workflow_id,
                 idempotency_key=action_id,
+                expected_run_id=target.current_run_id,
             )
         else:
             response = await self._execution_service.update_execution(
                 workflow_id=target.workflow_id,
                 update_name="RequestRerun",
                 idempotency_key=action_id,
+                expected_run_id=target.current_run_id,
             )
         accepted = response.get("accepted") is not False
         status = "accepted" if accepted else "no_op"
@@ -283,29 +293,14 @@ class TemporalRemediationControlPlane:
         _guard_result: Mapping[str, Any],
         target: RemediationTargetHealthSnapshot,
     ) -> Mapping[str, Any]:
-        action_id, params, before = self._parts(action_request, target)
-        agent_run_id = self._required(params, "agentRunId")
-        runtime_id = self._required(params, "runtimeId")
-        kind = str(action_request["actionKind"])
-        update = {
-            "session.interrupt_turn": "InterruptTurn",
-            "session.clear": "ClearSession",
-            "session.cancel": "CancelSession",
-            "session.terminate": None,
-            "session.restart_container": None,
-        }[kind]
-        if update is None:
-            raise ValueError(f"{kind} is unsupported by the owning session control plane")
-        await self._client.update_workflow(
-            f"{agent_run_id}:session:{runtime_id}",
-            update,
-            {"requestId": action_id, "reason": params.get("reason")},
+        _action_id, params, before = self._parts(action_request, target)
+        self._ensure_expected_run(params, target)
+        if self._session_control_service is None:
+            raise ValueError("The canonical session control owner is unavailable")
+        result = await self._session_control_service.execute(
+            action_request=action_request, target=target
         )
-        return self._accepted(
-            before,
-            after=[f"managed-session:{agent_run_id}:{runtime_id}:action:{action_id}"],
-            message=f"{kind} was delivered to the managed-session control plane.",
-        )
+        return {"beforeEvidenceRefs": before, **result}
 
     async def omnigent_reconcile(
         self,
@@ -599,6 +594,10 @@ def build_remediation_action_executor(
 ) -> MoonMindControlPlaneRemediationActionExecutor:
     """Build explicit owning adapters for every policy-visible action."""
 
+    from api_service.services.remediation_session_controls import (
+        RemediationSessionControlService,
+    )
+
     client = TemporalClientAdapter()
     execution_service = (
         TemporalExecutionService(session, client_adapter=client)
@@ -608,6 +607,9 @@ def build_remediation_action_executor(
     plane = TemporalRemediationControlPlane(
         client=client,
         execution_service=execution_service,
+        session_control_service=(
+            RemediationSessionControlService(session) if session is not None else None
+        ),
         checkpoint_branch_service=(
             CheckpointBranchService(session) if session is not None else None
         ),

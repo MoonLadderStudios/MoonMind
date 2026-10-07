@@ -390,7 +390,18 @@ and launching the workflow is the operator's authorization. Claude Code's
 account default (`auto`) would otherwise let its classifier refuse requested
 work, such as queueing pr-resolver children. Omnigent policy hooks still
 enforce deployment deny rules. A permission flag authored in the session's
-`terminalLaunchArgs` is preserved.
+`terminalLaunchArgs` is preserved and validated before defaults are applied.
+The bridge row freezes workflow launch defaults when the attempt is first
+persisted, before provider session creation. A retry uses that saved decision,
+including when a worker died after creation but before attaching the session ID.
+Both the streaming execution driver and canonical OmnigentSession activity use
+that same launch authority. A retained row without a saved default is ambiguous:
+older workers may have launched with or without the Claude flag. Before another
+create, MoonMind searches the provider's complete, bounded session inventory by
+its original MoonMind identity and reattaches the matching session. Conflicting
+ownership, duplicate matches, or incomplete lookup report the original problem
+without creating anything or recommending a fresh execution key. Only a confirmed no-match permits freezing current
+defaults and creating a session. Explicitly saved empty defaults remain empty.
 
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
