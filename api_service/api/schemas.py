@@ -112,6 +112,7 @@ class GitHubTokenProbeRequest(BaseModel):
         "indexing"
     )
     base_branch: Optional[str] = Field(None, alias="baseBranch")
+    connection_id: Optional[str] = Field(None, alias="connectionId", min_length=1)
 
 class QueueSystemMetadataModel(BaseModel):
     """Serialized worker pause metadata shared by claim + heartbeat responses."""

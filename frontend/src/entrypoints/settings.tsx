@@ -10,7 +10,6 @@ import { ConfigurationHealthSummary } from '../components/settings/Configuration
 import {
   GeneratedSettingsSection,
 } from '../components/settings/GeneratedSettingsSection';
-import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
   OperationsSettingsSection,
   type WorkerPauseConfig,
@@ -21,6 +20,7 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
+import { SourceControlConnections } from '../components/settings/SourceControlConnections';
 import {
   SettingsDraftGuardProvider,
   useSettingsDraftGuard,
@@ -310,7 +310,7 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
         </RegionUnavailable>
       )}
 
-      <GithubTokenProbePanel canRunProbe={canRunGithubTokenProbe} onNotice={setNotice} />
+      <SourceControlConnections canRunProbe={canRunGithubTokenProbe} onNotice={setNotice} />
     </SettingsPageFrame>
   );
 }
