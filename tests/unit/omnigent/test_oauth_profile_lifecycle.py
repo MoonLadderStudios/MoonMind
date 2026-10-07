@@ -3684,7 +3684,6 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
         "hostType": "external",
         "hostId": "claude-host-1",
         "workspace": "/workspaces/run",
-        "terminalLaunchArgs": ["--permission-mode", "bypassPermissions"],
     }
     assert bound.parameters["candidateWorkspace"]["checkpointRef"] == (
         "artifact://workspace-checkpoint/claude-2"

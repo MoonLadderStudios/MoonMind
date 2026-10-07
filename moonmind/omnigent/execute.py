@@ -57,6 +57,10 @@ from moonmind.omnigent.failure_classification import (
     failure_class_for_terminal_status,
 )
 from moonmind.omnigent.harness_platform.failures import remediation_for
+from moonmind.omnigent.session_launch import (
+    OmnigentLaunchReconciliationError,
+    prepare_workflow_session_create,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
@@ -76,7 +80,6 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAdapterError,
     OmnigentAgentSelection,
     build_omnigent_selection,
-    build_omnigent_session_create_payload,
     resolve_omnigent_target,
 )
 from moonmind.workflows.adapters.omnigent_client import (
@@ -2573,16 +2576,6 @@ async def run_omnigent_execution(
                 ),
             )
             target_agent_id = target.agent_id
-            session_payload = build_omnigent_session_create_payload(
-                request=request,
-                selection=selection,
-                target=target,
-            )
-            session_payload["idempotency_key"] = request.idempotency_key
-            labels = session_payload.setdefault("labels", {})
-            if isinstance(labels, dict):
-                labels.setdefault("moonmind.issue", "MM-1059")
-
             durable_row = None
             durable_terminal_status: str | None = None
             bridge_session_id: str | None = None
@@ -2755,6 +2748,27 @@ async def run_omnigent_execution(
                         ),
                     }
                 )
+            if not session_id:
+                session_payload, recovered_id = await prepare_workflow_session_create(
+                    request=request,
+                    selection=selection,
+                    target=target,
+                    client=client,
+                    bridge=durable_row,
+                    run_store=run_store,
+                    provider_idempotency_key=request.idempotency_key,
+                )
+                session_payload["labels"].setdefault("moonmind.issue", "MM-1059")
+                if recovered_id:
+                    session_id = recovered_id
+                    await run_store.attach_session(request.idempotency_key, session_id)
+                    external_state["retry"].update(
+                        {
+                            "sessionResolution": "attached",
+                            "attached": True,
+                            "attachSource": "provider_session_reconciliation",
+                        }
+                    )
             if not session_id:
                 with control_plane_spans.omnigent_span(
                     control_plane_spans.SESSION_ENSURE_PROVIDER_ATTACHMENT,
@@ -4350,6 +4364,7 @@ async def run_omnigent_execution(
         retry_recommendation = None
         if (
             status_code is None
+            and not isinstance(exc, OmnigentLaunchReconciliationError)
             and not first_message_posted
             and not raw_events
             and not normalized_events
@@ -4395,7 +4410,9 @@ async def run_omnigent_execution(
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
             diagnosticsRef=bundle.diagnostics_ref,
             failureClass=failure_class,
-            providerErrorCode=str(status_code or "omnigent_http_error"),
+            providerErrorCode=str(
+                status_code or getattr(exc, "code", None) or "omnigent_http_error"
+            ),
             retryRecommendation=retry_recommendation,
             metadata={
                 "normalizedStatus": "failed",
