@@ -2,14 +2,12 @@
 module.exports = {
   content: [
     "./api_service/templates/react_dashboard.html",
+    "./api_service/templates/_navigation.html",
     // Vite/React entrypoints use Tailwind utilities in TSX; source must be scanned
     // directly and dist must stay irrelevant.
     "./frontend/src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",
-  corePlugins: {
-    preflight: false,
-  },
   theme: {
     extend: {
       colors: {
@@ -29,11 +27,14 @@ module.exports = {
         mm: "0.9rem",
       },
       boxShadow: {
+        // Preserve the existing dashboard elevation after Tailwind's scale rename.
+        sm: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
         mm: "var(--mm-shadow)",
         mmGlow:
           "0 0 0 1px rgb(var(--mm-accent) / 0.55), 0 10px 40px -20px rgb(var(--mm-accent) / 0.65)",
       },
       backdropBlur: {
+        sm: "4px",
         mm: "18px",
       },
       transitionTimingFunction: {
@@ -45,5 +46,4 @@ module.exports = {
       },
     },
   },
-  safelist: [],
 };
