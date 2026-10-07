@@ -168,6 +168,31 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
     expect(await screen.findByText(/no assigned repositories/i)).toBeTruthy();
   });
 
+  it('reports an unassigned repository as not checked, never as verified', async () => {
+    stubFetch({
+      connectionId: 'work-github',
+      repo: 'other/unassigned',
+      credentialSource: { resolved: false },
+      repositoryAccessible: null,
+      observations: { read: 'not_checked', branch: 'not_checked', write: 'untested' },
+      diagnostics: [
+        {
+          operation: 'repository_assignment',
+          message: 'other/unassigned is not assigned to this connection; assign it before testing.',
+          retryable: false,
+        },
+      ],
+    });
+    renderPanel({ connection: CONNECTION_B, initialRepo: 'other/unassigned' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText('Read access was not checked')).toBeTruthy();
+    expect(screen.getByText(/is not assigned to this connection/i)).toBeTruthy();
+    expect(screen.getByText(/Tests read only assigned repositories/i)).toBeTruthy();
+    expect(screen.queryByText(/Read access verified/i)).toBeNull();
+  });
+
   it('discards a late response after switching A to B and back to A', async () => {
     const { fetchMock, pending } = deferredFetch();
     const { select } = renderPanel();

@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -906,11 +906,15 @@ class GitHubService:
         credential: Any | None = None,
         connection: Any | None = None,
         revision_reader: Any | None = None,
+        admitted_repositories: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Observe read access with selected authority; never claim write access.
 
         A selected connection retains its trusted endpoint and typed acquisition
-        path, including bound App installation tokens. ``credential`` remains
+        path, including bound App installation tokens. Other selected
+        credentials read only a repository the connection admits: its saved
+        ``admitted_repositories`` or its own permitted repositories. A token
+        usually sees more than its connection admits. ``credential`` remains
         available to historical callers with already-resolved credentials. Only
         callers without either selection use the legacy deployment resolver.
         """
@@ -920,7 +924,10 @@ class GitHubService:
             BOUND_UNAVAILABLE,
             BoundAccessError,
         )
-        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.auth.github_app_wiring import (
+            github_api_base_for,
+            permitted_repositories_for,
+        )
         from moonmind.auth.github_credentials import (
             resolve_connection_github_credential,
             resolve_github_credential,
@@ -967,6 +974,29 @@ class GitHubService:
         app_read_scope = (
             connection is not None and connection.credential.source == "github_app"
         )
+        if connection is not None and not app_read_scope:
+            # Bound App issuance enforces its own repository restriction; a
+            # PAT does not, so refuse before reading its secret or GitHub.
+            admitted = {
+                str(name).strip().casefold()
+                for name in (
+                    *admitted_repositories,
+                    *permitted_repositories_for(connection),
+                )
+                if str(name).strip()
+            }
+            if repo.strip().casefold() not in admitted:
+                result["diagnostics"].append(
+                    {
+                        "operation": "repository_assignment",
+                        "message": (
+                            f"{repo} is not assigned to this connection; "
+                            "assign it before testing."
+                        ),
+                        "retryable": False,
+                    }
+                )
+                return result
         try:
             if connection is not None:
                 # Validate the deployment-controlled trust policy before reading
@@ -1073,23 +1103,9 @@ class GitHubService:
                     continue
                 except httpx.HTTPStatusError as exc:
                     status_code = exc.response.status_code
-                    rate_limit = self._github_rate_limit_event(exc.response)
-                    unavailable = status_code >= 500 or rate_limit is not None
-                    diagnostic: dict[str, Any] = {
-                        "operation": operation,
-                        "httpStatus": status_code,
-                        "message": self._github_permission_summary(exc.response),
-                        "retryable": unavailable,
-                    }
-                    if rate_limit is not None:
-                        retry_after = resolve_provider_cooldown_seconds(
-                            rate_limit,
-                            now=datetime.now(timezone.utc),
-                            default_seconds=60,
-                        )
-                        result["retryAfterSeconds"] = retry_after
-                        diagnostic["retryAfterSeconds"] = retry_after
-                    result["diagnostics"].append(diagnostic)
+                    unavailable = self._record_probe_http_failure(
+                        result, operation=operation, response=exc.response
+                    )
                     if unavailable:
                         if operation == "repository":
                             result["observations"]["read"] = "unavailable"
@@ -1098,15 +1114,23 @@ class GitHubService:
                     elif operation == "branch" and status_code in {404, 409}:
                         # A missing branch says nothing about Contents access.
                         result[str(field)] = False
-                        result["observations"]["branch"] = (
+                        branch_kind = (
                             "empty_repository"
                             if status_code == 409
                             else await self._probe_missing_branch_kind(
-                                client, api_base=api_base, repo=repo, headers=headers
+                                client,
+                                api_base=api_base,
+                                repo=repo,
+                                headers=headers,
+                                result=result,
                             )
                         )
+                        result["observations"]["branch"] = branch_kind
                         ref = ""
-                        continue
+                        if branch_kind != "unavailable":
+                            continue
+                        # The listing read was throttled or failed: stop.
+                        unavailable = True
                     else:
                         if field:
                             result[field] = False
@@ -1166,6 +1190,34 @@ class GitHubService:
         }
         return reported or None
 
+    def _record_probe_http_failure(
+        self,
+        result: dict[str, Any],
+        *,
+        operation: str,
+        response: httpx.Response,
+    ) -> bool:
+        """Record one failed probe read; report whether it was a throttle/outage."""
+
+        rate_limit = self._github_rate_limit_event(response)
+        unavailable = response.status_code >= 500 or rate_limit is not None
+        diagnostic: dict[str, Any] = {
+            "operation": operation,
+            "httpStatus": response.status_code,
+            "message": self._github_permission_summary(response),
+            "retryable": unavailable,
+        }
+        if rate_limit is not None:
+            retry_after = resolve_provider_cooldown_seconds(
+                rate_limit,
+                now=datetime.now(timezone.utc),
+                default_seconds=60,
+            )
+            result["retryAfterSeconds"] = retry_after
+            diagnostic["retryAfterSeconds"] = retry_after
+        result["diagnostics"].append(diagnostic)
+        return unavailable
+
     async def _probe_missing_branch_kind(
         self,
         client: httpx.AsyncClient,
@@ -1173,16 +1225,37 @@ class GitHubService:
         api_base: str,
         repo: str,
         headers: Mapping[str, str],
+        result: dict[str, Any],
     ) -> str:
-        """Tell an empty repository from a missing branch with one read."""
+        """Tell an empty repository from a missing branch with one read.
 
+        A throttle or outage on that read is ``unavailable``, not a missing
+        branch; the caller then stops probing.
+        """
+
+        operation = "branch_listing"
         try:
             response = await client.get(
                 f"{api_base}/repos/{repo}/branches?per_page=1", headers=headers
             )
             response.raise_for_status()
             branches = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPStatusError as exc:
+            if self._record_probe_http_failure(
+                result, operation=operation, response=exc.response
+            ):
+                return "unavailable"
+            return "not_found"
+        except httpx.HTTPError as exc:
+            result["diagnostics"].append(
+                {
+                    "operation": operation,
+                    "message": exc.__class__.__name__,
+                    "retryable": True,
+                }
+            )
+            return "unavailable"
+        except ValueError:
             return "not_found"
         if isinstance(branches, list):
             return "missing" if branches else "empty_repository"

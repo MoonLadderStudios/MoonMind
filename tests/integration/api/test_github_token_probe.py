@@ -16,7 +16,11 @@ from api_service.services.repository_connections import (
     RepositoryRouteError,
 )
 from moonmind.auth import github_credentials
-from moonmind.workflows.executions.repository_contract import RepositoryConnection
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryAssignment,
+    RepositoryConnection,
+    RepositoryIdentity,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -52,7 +56,6 @@ def _connection_b() -> RepositoryConnection:
             "displayName": "Connection B",
             "hostingService": "github",
             "endpointRef": "https://github.com",
-            "allowedRepositoryIds": ["acme/widgets"],
             "allowedOperations": ["read"],
             "clientPolicy": {
                 "pinnedVersion": "system",
@@ -85,6 +88,26 @@ def selected_b(monkeypatch, settings_user_override):
         return _connection_b()
 
     monkeypatch.setattr(RepositoryConnectionService, "get_connection", get_connection)
+    state.assignment_lookups = []
+
+    async def list_assignments(self, connection_id):
+        # B's saved assignment, with GitHub's own display casing.
+        state.assignment_lookups.append(connection_id)
+        return [
+            RepositoryAssignment(
+                connectionId=connection_id,
+                identity=RepositoryIdentity(
+                    endpoint="https://github.com",
+                    providerRepoId="101",
+                    displayName="Acme/Widgets",
+                ),
+                operations=("read",),
+            )
+        ]
+
+    monkeypatch.setattr(
+        RepositoryConnectionService, "list_assignments", list_assignments
+    )
     secret = AsyncMock(return_value="token-b")
     monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)
     state.secret = secret
@@ -266,3 +289,27 @@ async def test_settings_token_ref_reaches_canonical_github_resolver(monkeypatch)
     assert resolved.token == "resolved-token"
     assert resolved.source_name == "MOONMIND_GITHUB_TOKEN_REF"
     assert resolved.repo == "owner/repo"
+
+
+async def test_selected_b_refuses_unassigned_repository_without_reading(selected_b):
+    """B's token may see other repositories; the test reads only B's own."""
+
+    response = await selected_b.probe(
+        {"connectionId": "connection-b", "repo": "other/unassigned"}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["connectionId"] == "connection-b"
+    assert body["observations"] == {
+        "read": "not_checked",
+        "branch": "not_checked",
+        "write": "untested",
+    }
+    assert body["repositoryAccessible"] is None
+    assert body["credentialSource"]["resolved"] is False
+    assert body["diagnostics"][0]["operation"] == "repository_assignment"
+    assert selected_b.assignment_lookups == ["connection-b"]
+    assert selected_b.requests == []
+    selected_b.secret.assert_not_called()
+    assert "ambient-token-a" not in response.text
