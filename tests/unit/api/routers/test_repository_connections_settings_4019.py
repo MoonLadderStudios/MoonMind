@@ -441,7 +441,7 @@ async def test_selected_connection_probe_uses_only_that_connection(
         )
         assert response.status_code == 200, response.text
         assert response.json()["connectionId"] == "personal-github"
-        assert seen["credential"].token == TOKEN_A
+        assert seen["connection"].id == "personal-github"
         assert TOKEN_A not in response.text
 
         missing = await client.post(
@@ -449,3 +449,205 @@ async def test_selected_connection_probe_uses_only_that_connection(
             json={"repo": "acme/widgets", "mode": "publish", "connectionId": "nope"},
         )
         assert missing.status_code == 404
+
+
+@pytest.mark.parametrize("display_name", [" ", "\t\n"])
+async def test_blank_display_names_rejected_without_mutating_connections(
+    harness, display_name
+):
+    client = harness.client
+    rejected = await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body(display_name, "personal-github", "req-empty", TOKEN_A),
+    )
+    assert rejected.status_code == 422
+    assert await _count(harness.maker, RepositoryConnectionRecord) == 0
+    assert await _count(harness.maker, ManagedSecret) == 0
+    created = await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body(" Personal GitHub ", "personal-github", "req-1", TOKEN_A),
+    )
+    assert created.status_code == 201
+    assert created.json()["displayName"] == "Personal GitHub"
+    rejected = await client.patch(
+        "/api/v1/repository-connections/personal-github",
+        json={
+            "requestId": "req-empty-update",
+            "expectedPolicyRevision": 1,
+            "displayName": display_name,
+        },
+    )
+    assert rejected.status_code == 422
+    current = await client.get("/api/v1/repository-connections/personal-github")
+    assert current.json()["displayName"] == "Personal GitHub"
+    assert current.json()["policyRevision"] == 1
+
+
+async def test_update_receipt_checks_exact_request_identity_and_admission(harness):
+    client = harness.client
+    for connection_id in ("personal-github", "other-github"):
+        created = await client.post(
+            "/api/v1/repository-connections/pat",
+            json=_create_body(
+                connection_id, connection_id, f"create-{connection_id}", TOKEN_A
+            ),
+        )
+        assert created.status_code == 201
+    updated = await client.patch(
+        "/api/v1/repository-connections/personal-github",
+        json={
+            "requestId": "committed-update",
+            "expectedPolicyRevision": 1,
+            "displayName": "Concurrent edit",
+        },
+    )
+    assert updated.status_code == 200
+    prefix = "/api/v1/repository-connections/personal-github/requests"
+    missing = await client.get(f"{prefix}/uncommitted-update")
+    assert missing.status_code == 200
+    assert missing.json() == {"committed": False}
+    committed = await client.get(f"{prefix}/committed-update")
+    assert committed.status_code == 200
+    assert committed.json() == {"committed": True}
+    # Another action's receipt cannot confirm this update.
+    created = await client.get(f"{prefix}/create-personal-github")
+    assert created.json() == {"committed": False}
+    wrong_connection = await client.get(
+        "/api/v1/repository-connections/other-github/requests/committed-update"
+    )
+    assert wrong_connection.status_code == 409
+    harness.principal["id"] = "principal:stranger"
+    denied = await client.get(f"{prefix}/committed-update")
+    assert denied.status_code in (403, 404)
+
+
+@pytest.mark.parametrize("revoke_during_issuance", [False, True])
+async def test_app_repository_assignment_uses_its_bound_read_credential(
+    harness, monkeypatch, revoke_during_issuance
+):
+    from datetime import datetime, timedelta, timezone
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.auth import github_app_wiring
+    from moonmind.workflows.executions.repository_contract import RepositoryConnection
+
+    connection = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": "app-connection",
+            "provider": "git",
+            "hostingService": "github",
+            "displayName": "App connection",
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read"],
+            "clientPolicy": {
+                "pinnedVersion": "system",
+                "toolBundleRef": "git:system",
+                "executableSha256": "system",
+            },
+            "credential": {
+                "source": "github_app",
+                "appRef": "github-app:123",
+                "installationRef": "456",
+                "keyRef": "db://app-key",
+                "account": "acme",
+                "permittedRepositories": ["acme/widgets"],
+            },
+            "ownership": {"ownerRef": "principal:operator", "scopeType": "system"},
+        }
+    )
+    async with harness.maker() as session:
+        await RepositoryConnectionService(session).create_connection(
+            connection,
+            actor_ref="principal:operator",
+            request_id="create-app",
+            principal_ref="principal:operator",
+            principal_scope=("system", None),
+        )
+
+    async def read_key(ref):
+        if revoke_during_issuance:
+            async with harness.maker() as session:
+                await RepositoryConnectionService(session).disable_connection(
+                    "app-connection",
+                    actor_ref="principal:operator",
+                    request_id="disable-app",
+                    principal_ref="principal:operator",
+                    principal_scope=("system", None),
+                )
+        return b"app-key-fixture"
+
+    monkeypatch.setattr(github_app_wiring, "default_resolve_secret_ref", read_key)
+    monkeypatch.setattr(
+        github_app_wiring,
+        "default_make_jwt_for",
+        lambda app_id: lambda key: "app-jwt-fixture",
+    )
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/app/installations/456":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 456,
+                    "app_id": 123,
+                    "account": {"login": "acme"},
+                    "repository_selection": "all",
+                    "suspended_at": None,
+                },
+            )
+        if request.url.path == "/app/installations/456/access_tokens":
+            import json
+
+            assert json.loads(request.content) == {
+                "repositories": ["widgets"],
+                "permissions": {"contents": "read", "metadata": "read"},
+            }
+            return httpx.Response(
+                201,
+                json={
+                    "token": "app-installation-fixture",
+                    "expires_at": (
+                        datetime.now(timezone.utc) + timedelta(minutes=55)
+                    ).isoformat(),
+                    "permissions": {"contents": "read", "metadata": "read"},
+                    "repositories": [
+                        {"id": 7, "full_name": "acme/widgets", "name": "widgets"}
+                    ],
+                },
+            )
+        assert str(request.url) == "https://api.github.com/repos/acme/widgets"
+        assert request.headers["Authorization"] == "Bearer app-installation-fixture"
+        return httpx.Response(200, json={"id": 7, "full_name": "acme/widgets"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler)),
+    )
+    assigned = await harness.client.post(
+        "/api/v1/repository-connections/app-connection/assignments",
+        json={"requestId": "assign-app", "repository": "acme/widgets"},
+    )
+    if revoke_during_issuance:
+        assert assigned.status_code in (403, 422)
+        assert not any("/repos/" in request.url.path for request in requests)
+        assert await _count(harness.maker, RepositoryConnectionAssignment) == 0
+        return
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["assignments"][0]["providerRepoId"] == "7"
+    assert assigned.json()["assignments"][0]["operations"] == ["read"]
+    assert len(requests) == 3
+    assert "app-installation-fixture" not in assigned.text
+    requests.clear()
+    denied = await harness.client.post(
+        "/api/v1/repository-connections/app-connection/assignments",
+        json={"requestId": "assign-outside", "repository": "acme/outside"},
+    )
+    assert denied.status_code == 422
+    assert requests == []
+    current = await harness.client.get("/api/v1/repository-connections/app-connection")
+    assert len(current.json()["assignments"]) == 1

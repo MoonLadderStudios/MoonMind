@@ -1347,6 +1347,26 @@ export interface paths {
         patch: operations["update_repository_connection_api_v1_repository_connections__connection_id__patch"];
         trace?: never;
     };
+    "/api/v1/repository-connections/{connection_id}/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reconcile a Source Control connection update
+         * @description Read the existing audit receipt instead of inferring commit from revision.
+         */
+        get: operations["get_connection_update_status_api_v1_repository_connections__connection_id__requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/repository-connections/pat": {
         parameters: {
             query?: never;
@@ -6972,6 +6992,14 @@ export interface components {
         ConnectionActionRequest: {
             /** Requestid */
             requestId: string;
+        };
+        /**
+         * ConnectionRequestStatus
+         * @description Whether the selected connection's exact update request committed.
+         */
+        ConnectionRequestStatus: {
+            /** Committed */
+            committed: boolean;
         };
         /**
          * ConnectionUpdateRequest
@@ -17193,6 +17221,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RepositoryConnectionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_connection_update_status_api_v1_repository_connections__connection_id__requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionRequestStatus"];
                 };
             };
             /** @description Validation Error */
