@@ -385,7 +385,7 @@ async def test_caller_owned_transaction_commits_once(tmp_path):
 # ACC-06 --------------------------------------------------------------------
 
 
-async def _connection(maker, slug):
+async def _connection(maker, slug, credential_config=None):
     async with maker() as db:
         db.add(
             RepositoryConnectionRecord(
@@ -397,13 +397,38 @@ async def _connection(maker, slug):
                 endpoint_ref="https://github.com",
                 allowed_operations=["read"],
                 client_policy={},
-                credential_config={"pat": {"ref": f"db://{slug}"}},
+                credential_config=credential_config
+                or {"pat": {"ref": f"db://{slug}"}},
                 owner_ref="owner",
                 scope_type="system",
                 allowed_principal_refs=[],
             )
         )
         await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_delete_protected_by_typed_db_connection_reference(tmp_path):
+    """Source Control PAT connections reference ``db`` SecretRefs (#4019)."""
+
+    maker, engine = await _maker(tmp_path)
+    slug = "repository-connection/personal-github/credential-1"
+    try:
+        async with maker() as db:
+            await SecretsService.create_secret(db, slug, "token")
+        await _connection(
+            maker,
+            slug,
+            credential_config={
+                "source": "secret_ref",
+                "credentialRef": {"provider": "db", "key": slug, "extra": {}},
+            },
+        )
+        async with maker() as db:
+            assert await SecretsService.delete_secret(db, slug) is False
+            assert await SecretsService.get_secret(db, slug) == "token"
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

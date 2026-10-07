@@ -255,7 +255,7 @@ def test_repo_projection_matches_pinned_bundle():
     """The committed vendored files must match the pinned moonspec bundle.
 
     Guards the same invariant as the CI drift gate so a stale vendored copy
-    fails the unit suite even when the moonspec-projection job is skipped.
+    fails the unit suite even when the preflight-policy projection check is skipped.
     """
     if not (REPO_ROOT / "moonspec" / "bundle" / "moonspec.bundle.yaml").is_file():
         pytest.skip("moonspec submodule not initialized")

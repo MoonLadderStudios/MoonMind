@@ -21,6 +21,7 @@ connection/publication machinery.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Sequence
@@ -209,7 +210,7 @@ def issuer_for_connection(
         if not permitted:
             permitted = permitted_repositories_for(connection)
         target = (target_repository or "").strip()
-        if target and target not in permitted:
+        if target and target.casefold() not in {repo.casefold() for repo in permitted}:
             raise BoundAccessError(
                 BOUND_DENIED,
                 "requested repository is outside the connection allowlist",
@@ -331,24 +332,88 @@ async def fetch_installation_record(
     jwt: str,
     installation_id: str,
     api_base: str = _GITHUB_API_BASE,
+    permitted_repositories: Sequence[str] | None = None,
 ) -> Mapping[str, Any]:
-    """Fetch the verified installation/account association record."""
+    """Fetch installation metadata and prove only the requested repository scope.
+
+    GitHub's installation metadata contains no repository list. For an explicit
+    scope, each JWT-authenticated repository-installation lookup must match that
+    installation, App, and account before its authored name becomes evidence.
+    Provider URLs and redirects never choose where the App JWT is sent.
+    """
 
     import httpx
 
-    url = f"{api_base.rstrip('/')}/app/installations/{installation_id}"
+    from moonmind.auth.bound_acquisition import BOUND_DENIED, BoundAccessError
+    from moonmind.auth.github_app import (
+        GITHUB_REPOSITORY_NAME_PATTERN,
+        normalize_installation_record,
+    )
+
+    repositories = None
+    if permitted_repositories is not None:
+        repositories = tuple(dict.fromkeys(permitted_repositories))
+        if not repositories:
+            raise ValueError("App verification requires explicit repositories")
+        if any(
+            not isinstance(name, str)
+            or not re.fullmatch(GITHUB_REPOSITORY_NAME_PATTERN, name)
+            for name in repositories
+        ):
+            raise ValueError("App repositories must use explicit owner/name identities")
+    base = api_base.rstrip("/")
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {jwt}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, headers=headers)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        response = await client.get(
+            f"{base}/app/installations/{installation_id}", headers=headers
+        )
         response.raise_for_status()
         data = response.json()
-    if not isinstance(data, Mapping):
-        raise ValueError("installation record is invalid")
-    return data
+        if not isinstance(data, Mapping):
+            raise ValueError("installation record is invalid")
+        if repositories is None:
+            return data
+        installation = normalize_installation_record(data)
+        account = data.get("account")
+        account_id = account.get("id") if isinstance(account, Mapping) else None
+        if (
+            installation.installation_key != installation_id
+            or not installation.app_key
+            or not installation.account
+            or account_id is None
+            or installation.suspended
+        ):
+            raise BoundAccessError(
+                BOUND_DENIED, "installation association is invalid or suspended"
+            )
+        for repository in repositories:
+            response = await client.get(
+                f"{base}/repos/{repository}/installation", headers=headers
+            )
+            response.raise_for_status()
+            association = response.json()
+            if not isinstance(association, Mapping):
+                raise ValueError("repository installation record is invalid")
+            verified = normalize_installation_record(association)
+            repository_account = association.get("account")
+            if (
+                verified.installation_key != installation.installation_key
+                or verified.app_key != installation.app_key
+                or verified.account != installation.account
+                or not isinstance(repository_account, Mapping)
+                or repository_account.get("id") != account_id
+                or verified.suspended
+            ):
+                raise BoundAccessError(
+                    BOUND_DENIED, "repository installation association mismatch"
+                )
+    # Ignore any unexpected provider repository list. Persist only authored,
+    # individually verified names, never repository_selection='all' authority.
+    return {**data, "repositories": list(repositories)}
 
 
 __all__ = [
@@ -475,7 +540,10 @@ def default_http_post_for(
 
 
 def default_get_installation_for(
-    *, installation_id: str, api_base: str = ""
+    *,
+    installation_id: str,
+    api_base: str = "",
+    permitted_repositories: Sequence[str] | None = None,
 ) -> Callable[..., Awaitable[Mapping[str, Any]] | Mapping[str, Any]]:
     """Build the production installation-record fetch for one installation."""
 
@@ -488,7 +556,10 @@ def default_get_installation_for(
 
     async def _fetch(*, jwt: str) -> Mapping[str, Any]:
         return await fetch_installation_record(
-            jwt=jwt, installation_id=resolved, api_base=base
+            jwt=jwt,
+            installation_id=resolved,
+            api_base=base,
+            permitted_repositories=permitted_repositories,
         )
 
     return _fetch
@@ -567,6 +638,15 @@ def build_bound_acquirer_for_connection(
             str(getattr(connection, "endpoint_ref", "") or ""),
             allowed_hosts=allowed_api_hosts,
         )
+        # Public enrollment records owner/name scope. Retained numeric-only
+        # imports keep the existing metadata check and exact repository_ids
+        # token restriction; selected installations without ID evidence deny.
+        effective_permitted = tuple(permitted_repositories) or permitted_repositories_for(
+            connection
+        )
+        named_repositories = tuple(
+            name for name in effective_permitted if not name.isdigit()
+        )
         issuer = issuer_for_connection(
             connection,
             resolve_secret=resolve_secret or default_resolve_secret_ref,
@@ -577,7 +657,9 @@ def build_bound_acquirer_for_connection(
             ),
             get_installation=get_installation
             or default_get_installation_for(
-                installation_id=resolved_installation_id, api_base=resolved_base
+                installation_id=resolved_installation_id,
+                api_base=resolved_base,
+                permitted_repositories=named_repositories or None,
             ),
             expected_account=expected_account,
             permitted_repositories=permitted_repositories,
@@ -707,7 +789,15 @@ async def acquire_bound_credential_for_connection(
         for name in (permitted_repositories or ())
         if str(name).strip()
     ) or permitted_repositories_for(connection)
-    if target_repository and target_repository not in effective_permitted:
+    # GitHub repository names are case-insensitive; retain the full owner/name
+    # boundary, and leave non-App credential identity semantics unchanged.
+    if getattr(connection.credential, "source", "") == "github_app":
+        permitted_target = target_repository.casefold() in {
+            name.casefold() for name in effective_permitted
+        }
+    else:
+        permitted_target = target_repository in effective_permitted
+    if target_repository and not permitted_target:
         raise BoundAccessError(
             BOUND_DENIED,
             "requested repository is outside the connection allowlist",

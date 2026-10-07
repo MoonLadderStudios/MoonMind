@@ -354,6 +354,54 @@ class RepositoryConnectionService:
             verified=row.verified,
         )
 
+    async def recorded_request(
+        self, *, request_id: str, action: str, connection_id: str
+    ) -> bool:
+        """Whether this request identity already committed ``action``.
+
+        Callers that stage dependent writes (such as a Managed Secret) check
+        this first so a lost-acknowledgment retry converges on the recorded
+        result instead of staging the dependency again.
+        """
+
+        return await self._replayed_action(
+            request_id=request_id, action=action, connection_id=connection_id
+        )
+
+    async def require_available_connection_id(self, connection_id: str) -> None:
+        """Refuse an existing or deleted ID; never suffix it into another."""
+
+        existing = await self._get_record(connection_id)
+        if existing is None:
+            return
+        if existing.tombstone:
+            raise RepositoryRouteError(
+                REPOSITORY_ID_REUSE, "connection id was deleted and cannot be reused"
+            )
+        raise RepositoryRouteError(
+            REPOSITORY_ROUTE_CONFLICT, "connection id already exists"
+        )
+
+    async def list_assignments(self, connection_id: str) -> list[RepositoryAssignment]:
+        """Return the persisted assignments of one connection, by display name."""
+
+        record = await self._get_record(connection_id)
+        if record is None:
+            return []
+        rows = (
+            await self._session.execute(
+                select(RepositoryConnectionAssignment).where(
+                    RepositoryConnectionAssignment.connection_id == connection_id
+                )
+            )
+        ).scalars().all()
+        assignments = [
+            self._stored_assignment(row, endpoint=record.endpoint_ref) for row in rows
+        ]
+        return sorted(
+            assignments, key=lambda item: item.identity.display_name.lower()
+        )
+
     # -- connections ------------------------------------------------------
 
     async def create_connection(
@@ -550,6 +598,65 @@ class RepositoryConnectionService:
             principal_scope=principal_scope,
             action="discover",
         )
+
+    def _manageable(
+        self,
+        record: RepositoryConnectionRecord,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection | None:
+        """Discoverable, or a disabled connection this principal administers."""
+
+        for action in ("discover", "edit"):
+            try:
+                return self._check_use(
+                    record=record,
+                    principal_ref=principal_ref,
+                    principal_scope=principal_scope,
+                    action=action,
+                )
+            except RepositoryRouteError:
+                continue
+        return None
+
+    async def get_manageable_connection(
+        self,
+        connection_id: str,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> RepositoryConnection | None:
+        """Return one connection for Source Control settings (#4019)."""
+
+        record = await self._get_record((connection_id or "").strip())
+        if record is None or record.tombstone:
+            return None
+        return self._manageable(
+            record, principal_ref=principal_ref, principal_scope=principal_scope
+        )
+
+    async def list_manageable_connections(
+        self,
+        *,
+        principal_ref: str,
+        principal_scope: tuple[str, str | None],
+    ) -> list[RepositoryConnection]:
+        """List connections Source Control settings may show this principal."""
+
+        rows = (
+            await self._session.execute(select(RepositoryConnectionRecord))
+        ).scalars().all()
+        visible: list[RepositoryConnection] = []
+        for record in rows:
+            if record.tombstone:
+                continue
+            connection = self._manageable(
+                record, principal_ref=principal_ref, principal_scope=principal_scope
+            )
+            if connection is not None:
+                visible.append(connection)
+        return visible
 
     async def update_connection(
         self,
