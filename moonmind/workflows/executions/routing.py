@@ -1,4 +1,5 @@
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from moonmind.config.settings import settings
 
@@ -36,6 +37,28 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
         f"Unsupported boolean value: {value!r}; "
         f"expected true/false, yes/no, on/off, 1/0, or omit for default"
     )
+
+
+def merge_automation_candidates(
+    parameters: Mapping[str, Any],
+    *,
+    publish_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+) -> tuple[Any, ...]:
+    """Preserve the parent workflow's ordered merge-automation inputs."""
+    task_publish = task_payload.get("publish")
+    return (
+        publish_payload.get("mergeAutomation")
+        or publish_payload.get("merge_automation"),
+        task_payload.get("mergeAutomation") or task_payload.get("merge_automation"),
+        (
+            task_publish.get("mergeAutomation") or task_publish.get("merge_automation")
+            if isinstance(task_publish, Mapping)
+            else None
+        ),
+        parameters.get("mergeAutomation") or parameters.get("merge_automation"),
+    )
+
 
 def get_routing_target_for_workflow(
     *,

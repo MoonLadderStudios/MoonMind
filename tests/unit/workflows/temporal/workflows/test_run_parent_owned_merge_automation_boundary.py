@@ -352,6 +352,13 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
     parent._publish_context["headSha"] = "abc123"
     parameters = {
         "publishMode": "none",
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "artifact:review-parent-plan",
+            "taskInputSnapshotRef": "artifact:review-parent-input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
         "mergeAutomation": {
             "enabled": True,
             "finishMode": "review_only",
@@ -365,6 +372,7 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
         **_kwargs: Any,
     ) -> dict[str, Any]:
         assert payload["mergeAutomationConfig"]["finishMode"] == "review_only"
+        assert payload["parentExecutionPlan"] == parameters["omnigentExecutionPlan"]
         return {"status": "review_complete", "latestHeadSha": "abc123"}
 
     monkeypatch.setattr(

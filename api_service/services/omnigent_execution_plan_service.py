@@ -791,20 +791,39 @@ async def _admit_repository_plan_inputs(
     publish_mode = str(
         initial_parameters.get("publishMode") or publication.get("mode") or "none"
     ).lower()
-    merge_automation = (
-        publication.get("mergeAutomation")
-        or workflow.get("mergeAutomation")
-        or initial_parameters.get("mergeAutomation")
+    from moonmind.workflows.executions.routing import (
+        _coerce_bool,
+        merge_automation_candidates,
     )
+
+    top_publish = initial_parameters.get("publish")
+    parent_publish = (
+        top_publish
+        if isinstance(top_publish, Mapping) and top_publish
+        else publication
+    )
+    merge_automation = next(
+        (
+            candidate
+            for candidate in merge_automation_candidates(
+                initial_parameters, publish_payload=parent_publish, task_payload=workflow
+            )
+            if isinstance(candidate, Mapping)
+            and _coerce_bool(candidate.get("enabled"), default=False)
+        ),
+        {},
+    )
+    finish_mode = merge_automation.get("finishMode") or merge_automation.get("finish_mode")
     review_only = (
-        isinstance(merge_automation, Mapping)
-        and merge_automation.get("enabled") is True
-        and merge_automation.get("finishMode") == "review_only"
+        isinstance(finish_mode, str) and finish_mode.strip() == "review_only"
     )
     if review_only:
         from moonmind.schemas.temporal_models import MergeAutomationConfigModel
 
-        MergeAutomationConfigModel.model_validate(merge_automation)
+        MergeAutomationConfigModel.model_validate(
+            {**merge_automation, "finishMode": "review_only"}
+        )
+        publish_mode = publish_mode.strip()
         if publish_mode != "none":
             raise ValueError("review_only requires publication mode none")
         if mode == AccessMode.ANONYMOUS:
