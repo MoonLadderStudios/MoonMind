@@ -1870,6 +1870,11 @@ class MoonMindMergeAutomationWorkflow:
                     b.kind == "external_state_unavailable" for b in self._blockers
                 )
             ):
+                # Readiness/artifact Activities may outlast the remaining budget.
+                if expire_at is not None and workflow.now() >= expire_at:
+                    self._status = STATE_EXPIRED
+                    self._publish_visibility()
+                    return await self._finish()
                 terminal = await self._post_automated_review(
                     head_sha=self._input.pull_request.head_sha
                 )
