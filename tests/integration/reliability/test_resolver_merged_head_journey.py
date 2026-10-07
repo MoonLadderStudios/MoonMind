@@ -87,6 +87,7 @@ async def test_resolver_merged_revision_crosses_parent_and_issue_boundary(
                             else fixture["publishedHead"]
                         ),
                         "ref": "feature",
+                        "repo": {"full_name": repo},
                     },
                     "base": {"ref": "main", "repo": {"full_name": repo}},
                     "title": f"Resolve #{fixture['issueNumber']}",
