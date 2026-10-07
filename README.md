@@ -49,7 +49,7 @@ The default local install binds to `127.0.0.1` and uses restricted, disabled aut
 
 For optional settings, use [`.env-template`](.env-template). For startup checks and troubleshooting, see [Combined Stack Validation](docs/Omnigent/CombinedStackValidationAndRollback.md). Start with `docker compose ps` and `docker compose logs <service>`; do not delete volumes to fix a startup problem.
 
-## How it fits together
+## Architecture
 
 - **MoonMind API and dashboard** accept work and expose controls and results.
 - **Temporal and workers** coordinate durable workflows and run their steps.
