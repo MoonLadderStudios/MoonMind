@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
     )
     from moonmind.omnigent.stock_agents import (
@@ -91,7 +92,10 @@ with workflow.unsafe.imports_passed_through():
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
-    from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.routing import (
+        _coerce_bool,
+        merge_automation_candidates,
+    )
     from moonmind.workflows.executions.preset_readiness import (
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
@@ -20050,29 +20054,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self,
         parameters: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        candidates: list[Any] = []
         publish_payload = self._resolve_publish_payload(parameters)
         task_payload = self._mapping_value(parameters, "workflow")
         if not task_payload:
             task_payload = self._mapping_value(parameters, "task")
-        if isinstance(publish_payload, Mapping):
-            candidates.append(
-                publish_payload.get("mergeAutomation")
-                or publish_payload.get("merge_automation")
-            )
-        if isinstance(task_payload, Mapping):
-            candidates.append(
-                task_payload.get("mergeAutomation")
-                or task_payload.get("merge_automation")
-            )
-            task_publish = task_payload.get("publish")
-            if isinstance(task_publish, Mapping):
-                candidates.append(
-                    task_publish.get("mergeAutomation")
-                    or task_publish.get("merge_automation")
-                )
-        candidates.append(
-            parameters.get("mergeAutomation") or parameters.get("merge_automation")
+        candidates = merge_automation_candidates(
+            parameters, publish_payload=publish_payload, task_payload=task_payload
         )
 
         for candidate in candidates:
@@ -20425,6 +20412,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ) or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
         if not normalized_head_sha:
             return None
+        parent_execution_plan = None
+        if request.get("finishMode") == "review_only":
+            admitted_binding = parameters.get("omnigentExecutionPlan")
+            if not isinstance(admitted_binding, Mapping):
+                raise ValueError(
+                    "review_only requires admitted parent execution-plan authority"
+                )
+            parent_execution_plan = OmnigentExecutionPlanBinding.model_validate(
+                admitted_binding
+            ).model_dump(by_alias=True, mode="json")
         pr_number = int(parsed["number"])
         fallback_poll_seconds = self._normalize_positive_int(
             request.get("fallbackPollSeconds"),
@@ -20541,6 +20538,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "parentWorkflowId": parent_workflow_id,
             "parentRunId": parent_run_id,
             "principal": self._owner_id or parent_workflow_id,
+            **(
+                {"parentExecutionPlan": parent_execution_plan}
+                if parent_execution_plan is not None
+                else {}
+            ),
             "publishContextRef": (
                 self._coerce_text(
                     self._publish_context.get("publishContextRef")
@@ -20633,7 +20635,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             result_map.get("finishMode") or context.get("mergeAutomationFinishMode"),
             max_chars=20,
         )
-        if finish_mode:
+        if finish_mode == "review_only":
             summary["finishMode"] = finish_mode
         if pr_number is not None:
             summary["prNumber"] = pr_number
@@ -20930,9 +20932,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
-        self._publish_context["mergeAutomationFinishMode"] = payload[
-            "mergeAutomationConfig"
-        ]["finishMode"]
+        if payload["mergeAutomationConfig"]["finishMode"] == "review_only":
+            self._publish_context["mergeAutomationFinishMode"] = "review_only"
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"
         self._waiting_reason = "Waiting for PR merge automation."
         self._attention_required = False

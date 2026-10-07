@@ -159,6 +159,8 @@ Fix-only is not None and cannot make blockers, deferred comments, or pending che
 
 Review-only compiles to publication None and admits repository read plus the `review_request` collaboration operation only. It requires a supported configured reviewer and fresh review; disabled or unsupported review is rejected before effects. It admits no repository writes, publication destination, work branch, resolver preparation, remediation, merge, or post-merge effects. This is a gate finish mode, not a new portable `pr-resolver` mode.
 
+Review-only StartInput requires typed `parentExecutionPlan` bound to the actual admitted parent workflow; readiness and requests consume its immutable selected collaboration repository snapshot and connection for the admitted `read` or `review_request` operation. Caller-supplied tokens, ambient credentials, and arbitrary connections cannot supply that authority or broaden existing admission and parent narrowing.
+
 ### 9.2 Parent publish output
 
 Durable PublishContext includes repository, prNumber, prUrl, baseRef, headRef, exact headSha, publishedAt or the qualified adoption observation, optional jiraIssueKey, and artifact provenance. Keep large evidence artifact-backed with a compact safe projection.

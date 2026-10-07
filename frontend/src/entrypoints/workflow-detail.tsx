@@ -552,15 +552,22 @@ const SkillRuntimeSchema = z
 const MergeAutomationSchema = z
   .object({
     enabled: z.boolean().optional(),
-    finishMode: z.string().nullable().optional(),
     workflowId: z.string().nullable().optional(),
     childWorkflowId: z.string().nullable().optional(),
     status: z.string().nullable().optional(),
+    finishMode: z.string().nullable().optional(),
     prNumber: z.union([z.number(), z.string()]).nullable().optional(),
     prUrl: z.string().nullable().optional(),
     latestHeadSha: z.string().nullable().optional(),
     cycles: z.union([z.number(), z.string()]).nullable().optional(),
     resolverChildWorkflowIds: z.array(z.string()).default([]).optional(),
+    reviewLoop: z
+      .object({
+        activeRequest: z.record(z.string(), z.unknown()).nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     resolverChildren: z
       .array(
         z
@@ -2393,13 +2400,16 @@ function MergeAutomationPanel({
       }));
   const blockers = mergeAutomation.blockers || [];
   const artifactRefs = mergeAutomation.artifactRefs;
-  let noResolverMessage = 'Waiting for required checks before launching pr-resolver.';
+  const reviewPending = ['awaiting_child', 'waiting', 'executing'].includes(mergeAutomation.status || '');
+  let resolverStatusMessage = 'Waiting for required checks before launching pr-resolver.';
   if (mergeAutomation.status === 'review_complete') {
-    noResolverMessage = 'Review complete. No resolver was launched.';
+    resolverStatusMessage = 'The requested review is complete. CI and any review findings remain separate obligations.';
+  } else if (reviewPending && mergeAutomation.reviewLoop?.activeRequest) {
+    resolverStatusMessage = 'Review requested. Waiting for the configured reviewer to complete.';
   } else if (mergeAutomation.finishMode === 'review_only') {
-    noResolverMessage = ['awaiting_child', 'waiting', 'executing'].includes(mergeAutomation.status || '')
-      ? 'Waiting for fresh review of the current PR head.'
-      : 'Review-only automation does not launch pr-resolver.';
+    resolverStatusMessage = reviewPending
+      ? 'Waiting to request review of the current PR head.'
+      : 'Review-only automation does not launch a resolver.';
   }
 
   return (
@@ -2457,7 +2467,7 @@ function MergeAutomationPanel({
           </ul>
         </div>
       ) : (
-        <p className="small">{noResolverMessage}</p>
+        <p className="small">{resolverStatusMessage}</p>
       )}
 
       {blockers.length ? (

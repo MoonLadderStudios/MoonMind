@@ -158,7 +158,7 @@ async def repository_consumers(tmp_path, monkeypatch, request):
     plans = DbExecutionPlanStore(sessions)
     gateway = TemporalOmnigentArtifactGateway(sessions)
 
-    async def compile_plan(publish_mode="none", *, workflow=None, profile_tools=()):
+    async def compile_plan(publish_mode="none", *, profile_tools=(), **parameters):
         input_ref, input_digest = await writer.persist_json_artifact(
             artifact_service=artifacts,
             principal="user-1",
@@ -178,11 +178,7 @@ async def repository_consumers(tmp_path, monkeypatch, request):
             launch_policy_ref="omnigent-on-demand@1",
             workflow_id=_WORKFLOW,
             profile_tools=profile_tools,
-            extra_parameters={
-                "repository": _target(),
-                "publishMode": publish_mode,
-                **({"workflow": workflow} if workflow is not None else {}),
-            },
+            extra_parameters={"repository": _target(), "publishMode": publish_mode, **parameters},
             task_input_snapshot_ref=input_ref,
             task_input_snapshot_digest=input_digest,
         )
