@@ -12,7 +12,7 @@ authors = ["MoonMind Contributors <opensource@moonmind.ai>"]
 packages = [{ include = "moonmind" }, { include = "pr_resolver_core" }, { include = "moonmind_controller" }]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.14"
+python = ">=3.10,<3.15"
 fastapi = ">=0.135.3,<0.142.0"
 starlette = ">=0.49.1,<2.0.0"
 python-multipart = ">=0.0.26,<0.1.0"
