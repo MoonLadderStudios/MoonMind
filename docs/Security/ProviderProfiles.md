@@ -1589,7 +1589,11 @@ revoked generation. Only requests that preceded the release are withdrawn;
 later same-owner requests survive persistence and release redelivery. The
 `provider-profile-manager-owner-release-ordering-v1` marker preserves the
 previous command order for retained histories. Unresolved obligations and queued
-readmissions survive Continue-As-New through the existing snapshot.
+readmissions survive Continue-As-New through the existing snapshot. If an
+acquisition's bounded transition wait expires, the shared lease client treats
+`ProviderProfileLeaseTransitionPending` as reattachable and resubmits the same
+owner request within its three-attempt budget. Exhaustion remains an observable
+error and never grants capacity against an unresolved release.
 
 **Expiry and terminal ownership request cleanup.** Lease expiry is not evidence
 that the holder stopped: it transitions the row to `cleanup_requested` and
