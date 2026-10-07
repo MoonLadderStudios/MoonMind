@@ -194,6 +194,12 @@ class GenericOmnigentHostRealizer:
     ) -> AgentRunResult:
         """Fence one canonical delivery command around the generic lifecycle."""
 
+        from moonmind.omnigent.harness_platform.credential_bindings import (
+            assert_agent_execution_authority,
+        )
+
+        assert_agent_execution_authority(plan.payload.credentialBindings)
+
         if plan.payload.executionRealizerRef != self.ref:
             raise HarnessPlatformError(
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",

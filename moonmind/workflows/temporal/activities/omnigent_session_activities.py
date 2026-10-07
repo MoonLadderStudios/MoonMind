@@ -24,6 +24,7 @@ from moonmind.omnigent.harness_platform.agent_profile import (
     accepted_upstream_snapshot_digests,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
+    assert_agent_execution_authority,
     assert_worker_supports_binding_set,
     create_binding_set,
     is_repository_authority,
@@ -242,6 +243,7 @@ def _enforce_session_worker_authority_barrier(plan: Any) -> None:
     )
 
     raw_bindings = dict(plan.payload.credentialBindings or {})
+    assert_agent_execution_authority(raw_bindings)
     if not plan_bindings_have_repository_authority(
         getattr(plan.payload, "credentialBindings", None)
     ):
@@ -296,6 +298,7 @@ async def omnigent_evaluate_session_admission_activity(
             workflow_id=request.workflow_id,
             step_execution_id=request.step_execution_id,
         )
+        assert_agent_execution_authority(plan.payload.credentialBindings)
         selected_profiles = {
             binding.providerProfileRef
             for binding in model_bindings_of(

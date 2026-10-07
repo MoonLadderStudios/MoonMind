@@ -2181,22 +2181,135 @@ class TemporalPlanActivities:
         )
         return PlanGenerateActivityResult(plan_ref=plan_ref)
 
+    async def _native_execution_parameters(
+        self, binding_payload: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        """Read native consumer intent from its immutable admitted plan only."""
+        from api_service.db.base import async_session_maker
+        from api_service.services.omnigent_execution_plan_service import (
+            _native_review_graph,
+        )
+        from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+        from moonmind.omnigent.harness_platform.execution_plan import (
+            verify_execution_plan_envelope,
+        )
+        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+        from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+            _load_verified_execution_plan,
+        )
+
+        binding = OmnigentExecutionPlanBinding.model_validate(binding_payload)
+        persisted = await DbExecutionPlanStore(async_session_maker).load(
+            binding.plan_ref
+        )
+        if persisted is None:
+            raise TemporalActivityRuntimeError("bound execution plan is unavailable")
+        persisted = verify_execution_plan_envelope(persisted)
+        if binding.plan_digest != "sha256:" + persisted.planRef.rsplit(":", 1)[-1]:
+            raise TemporalActivityRuntimeError("bound execution plan digest mismatch")
+        if not any(
+            getattr(value, "consumer", "agent") == "native"
+            for value in persisted.payload.credentialBindings.values()
+        ):
+            return None
+        execution = temporal_activity.info()
+        await _load_verified_execution_plan(
+            binding, workflow_id=execution.workflow_id, run_id=execution.workflow_run_id
+        )
+        gateway = TemporalOmnigentArtifactGateway(
+            async_session_maker, principal=f"workflow:{execution.workflow_id}"
+        )
+        body = await gateway.read_bytes(binding.task_input_snapshot_ref)
+        if (
+            "sha256:" + hashlib.sha256(body).hexdigest()
+            != binding.task_input_snapshot_digest
+        ):
+            raise TemporalActivityRuntimeError(
+                "native graph task-input snapshot digest mismatch"
+            )
+        frozen = json.loads(body)
+        parameters = frozen.get("draft") if isinstance(frozen, Mapping) else None
+        if not isinstance(parameters, Mapping):
+            target = frozen.get("target") if isinstance(frozen, Mapping) else None
+            parameters = (
+                target.get("initialParameters") if isinstance(target, Mapping) else None
+            )
+        if (
+            not isinstance(parameters, Mapping)
+            or _native_review_graph(parameters) is None
+        ):
+            raise TemporalActivityRuntimeError(
+                "native execution plan lacks its frozen graph"
+            )
+        return parameters
+
     async def plan_validate(
         self,
         *,
-        plan_ref: ArtifactRef | str,
-        registry_snapshot_ref: ArtifactRef | str,
+        plan_ref: ArtifactRef | str | Mapping[str, Any],
+        registry_snapshot_ref: ArtifactRef | str | Mapping[str, Any] | None = None,
         principal: str,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> ArtifactRef:
+        omnigent_execution_plan: Mapping[str, Any] | None = None,
+        execution_parameters: Mapping[str, Any] | None = None,
+    ) -> ArtifactRef | str | Mapping[str, Any]:
+        native_parameters: Mapping[str, Any] | None = None
+        if omnigent_execution_plan is not None:
+            native_parameters = await self._native_execution_parameters(
+                omnigent_execution_plan
+            )
+            if native_parameters is None:
+                # Do not introduce graph restrictions for ordinary/retained
+                # agent bindings. Native authorization is the sole new gate.
+                return plan_ref
+            from api_service.services.omnigent_execution_plan_service import (
+                _native_review_graph,
+            )
+
+            if not isinstance(execution_parameters, Mapping) or (
+                _native_review_graph(execution_parameters)
+                != _native_review_graph(native_parameters)
+            ):
+                raise TemporalActivityRuntimeError(
+                    "native execution parameters conflict with the frozen graph"
+                )
+
+        def native_artifact_id(ref: ArtifactRef | str | Mapping[str, Any]) -> str:
+            from moonmind.omnigent.bridge_artifacts import (
+                TemporalOmnigentArtifactGateway,
+            )
+
+            if isinstance(ref, Mapping):
+                ref = ref.get("artifact_id") or ref.get("artifactId")
+            else:
+                ref = getattr(ref, "artifact_id", ref)
+            return TemporalOmnigentArtifactGateway._artifact_id(ref)
+
         plan_payload = await _read_json_artifact(
             self._artifact_service,
-            artifact_ref=plan_ref,
+            artifact_ref=native_artifact_id(plan_ref)
+            if native_parameters is not None
+            else plan_ref,
             principal=principal,
         )
+        if native_parameters is not None and registry_snapshot_ref is None:
+            if not isinstance(plan_payload, Mapping):
+                raise TemporalActivityRuntimeError(
+                    "native effective plan must be an object"
+                )
+            registry_snapshot_ref = parse_plan_definition(
+                plan_payload
+            ).metadata.registry_snapshot.artifact_ref
+        if registry_snapshot_ref is None:
+            raise TemporalActivityRuntimeError(
+                "plan.validate requires a registry snapshot"
+            )
         registry_payload = await _read_json_artifact(
             self._artifact_service,
-            artifact_ref=registry_snapshot_ref,
+            artifact_ref=native_artifact_id(registry_snapshot_ref)
+            if native_parameters is not None
+            else registry_snapshot_ref,
             principal=principal,
         )
         if not isinstance(plan_payload, Mapping):
@@ -2212,9 +2325,39 @@ class TemporalPlanActivities:
             registry_payload,
             artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
         )
+        if native_parameters is not None:
+            from moonmind.workflows.temporal.worker_runtime import (
+                _build_runtime_planner,
+            )
+
+            actual = parse_plan_definition(plan_payload)
+            if actual.metadata.registry_snapshot.digest != snapshot.digest:
+                raise TemporalActivityRuntimeError(
+                    "native effective plan registry digest mismatch"
+                )
+            # Reuse the deterministic built-in producer on verified explicit
+            # native steps, with no input artifact, model, or provider fallback.
+            expected = parse_plan_definition(
+                _build_runtime_planner()(None, native_parameters, snapshot)
+            )
+            actual_payload = actual.to_payload()
+            expected_payload = expected.to_payload()
+            if any(
+                actual_payload[key] != expected_payload[key]
+                for key in ("nodes", "edges", "policy")
+            ):
+                raise TemporalActivityRuntimeError(
+                    "native effective plan conflicts with its frozen graph"
+                )
+            for node in actual.nodes:
+                validate_tool_dispatch_authority(
+                    snapshot.get_tool(name=node.skill_name)
+                )
         validated = validate_plan_payload(
             payload=plan_payload, registry_snapshot=snapshot
         )
+        if native_parameters is not None:
+            return plan_ref
         return await _write_json_artifact(
             self._artifact_service,
             principal=principal,

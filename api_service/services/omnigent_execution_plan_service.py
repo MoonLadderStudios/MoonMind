@@ -692,6 +692,181 @@ def _build_v2_profile(
     )
 
 
+def _enabled_merge_automation(
+    initial_parameters: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    from moonmind.workflows.executions.routing import (
+        _coerce_bool,
+        merge_automation_candidates,
+    )
+
+    workflow = _workflow_payload(initial_parameters)
+    top_publish = initial_parameters.get("publish")
+    publication = workflow.get("publish") or {}
+    parent_publish = (
+        top_publish if isinstance(top_publish, Mapping) and top_publish else publication
+    )
+    return next(
+        (
+            candidate
+            for candidate in merge_automation_candidates(
+                initial_parameters,
+                publish_payload=parent_publish,
+                task_payload=workflow,
+            )
+            if isinstance(candidate, Mapping)
+            and _coerce_bool(candidate.get("enabled"), default=False)
+        ),
+        {},
+    )
+
+
+def _native_review_graph(
+    initial_parameters: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Recognize only the closed built-in PR-review graph, never generic tools.
+
+    This is compiler-owned consumer classification, not an authored capability.
+    Unknown execution fields, dynamic expansion, and additional steps stay on
+    the ordinary agent admission path.
+    """
+    from moonmind.schemas.temporal_models import MergeAutomationConfigModel
+
+    workflow = _workflow_payload(initial_parameters)
+    supported_fields = {
+        "steps",
+        "publish",
+        "git",
+        "workspace",
+        "runtime",
+        "title",
+        "composition",
+        "appliedTemplate",
+        "authoredPresets",
+        "capabilities",
+        "warnings",
+        # Expansion stops at the frozen steps when they are present; these
+        # fields retain authoring provenance rather than executable children.
+        "taskTemplate",
+        "task_template",
+        "appliedStepTemplates",
+        "inputs",
+        "mergeAutomation",
+        "merge_automation",
+    }
+    if any(value for key, value in workflow.items() if key not in supported_fields):
+        return None
+    if initial_parameters.get("instructions") or initial_parameters.get(
+        "inputArtifactRef"
+    ):
+        return None
+    steps = workflow.get("steps")
+    if not isinstance(steps, list) or len(steps) != 1:
+        return None
+    step = steps[0]
+    if not isinstance(step, Mapping) or step.get("type") != "tool":
+        return None
+    supported_step_fields = {
+        "id",
+        "type",
+        "title",
+        "instructions",
+        "tool",
+        "repositoryOperation",
+        "presetProvenance",
+        "source",
+    }
+    if any(value for key, value in step.items() if key not in supported_step_fields):
+        return None
+    if step.get("repositoryOperation") not in (None, "read"):
+        return None
+    tool = step.get("tool")
+    if (
+        not isinstance(tool, Mapping)
+        or tool.get("id") != "github.resolve_pull_request_target"
+        or set(tool) - {"id", "inputs", "requiredCapabilities"}
+    ):
+        return None
+    inputs = tool.get("inputs")
+    if (
+        not isinstance(inputs, Mapping)
+        or set(inputs) != {"repository", "pullRequest"}
+        or not isinstance(inputs.get("repository"), str)
+        or not isinstance(inputs.get("pullRequest"), (str, int))
+        or isinstance(inputs.get("pullRequest"), bool)
+        or not str(inputs.get("pullRequest") or "").strip()
+        or any(
+            marker in str(value) for value in inputs.values() for marker in ("{{", "${")
+        )
+    ):
+        return None
+    config = _enabled_merge_automation(initial_parameters)
+    finish_mode = config.get("finishMode") or config.get("finish_mode")
+    if not isinstance(finish_mode, str) or finish_mode.strip() != "review_only":
+        return None
+    publication = workflow.get("publish") or {}
+    publish_mode = (
+        initial_parameters.get("publishMode") or publication.get("mode") or "none"
+    )
+    if str(publish_mode).strip().lower() != "none":
+        return None
+    admitted_config = MergeAutomationConfigModel.model_validate(
+        {**config, "finishMode": "review_only"}
+    )
+    return {
+        "steps": steps,
+        "inputs": workflow.get("inputs") or {},
+        "repository": initial_parameters.get("repository"),
+        "workspace": (
+            initial_parameters.get("workspaceSpec")
+            or initial_parameters.get("workspace")
+            or workflow.get("workspace")
+            or {}
+        ),
+        "mergeAutomation": admitted_config.model_dump(mode="json", by_alias=True),
+    }
+
+
+async def _verify_native_review_graph(
+    *,
+    initial_parameters: Mapping[str, Any],
+    artifact_service: Any,
+    principal: str,
+    task_input_snapshot_ref: str,
+    task_input_snapshot_digest: str,
+) -> bool:
+    """Require the compiler's closed graph to match its immutable input bytes."""
+    graph = _native_review_graph(initial_parameters)
+    if graph is None:
+        return False
+    _artifact, body = await artifact_service.read(
+        artifact_id=task_input_snapshot_ref.removeprefix("artifact://").removeprefix(
+            "artifact:"
+        ),
+        principal=principal,
+        allow_restricted_raw=True,
+    )
+    if _sha256(body) != task_input_snapshot_digest:
+        raise ValueError("native review graph task-input snapshot digest mismatch")
+    frozen = json.loads(body)
+    if not isinstance(frozen, Mapping):
+        raise ValueError("native review graph requires a frozen task-input snapshot")
+    frozen_parameters = frozen.get("draft")
+    if not isinstance(frozen_parameters, Mapping):
+        target = frozen.get("target")
+        frozen_parameters = (
+            target.get("initialParameters") if isinstance(target, Mapping) else None
+        )
+    if (
+        not isinstance(frozen_parameters, Mapping)
+        or _native_review_graph(frozen_parameters) != graph
+    ):
+        raise ValueError(
+            "native review graph conflicts with frozen task-input snapshot"
+        )
+    return True
+
+
 async def _admit_repository_plan_inputs(
     *,
     session_factory: Any,
@@ -703,11 +878,13 @@ async def _admit_repository_plan_inputs(
     requires_github: bool,
     parent_plan: OmnigentExecutionPlanEnvelope | None,
     typed_authority: bool = True,
+    native_review: bool = False,
 ) -> dict[str, Any]:
     """Derive transport/tool roles and freeze selection through existing owners.
 
-    Without ``typed_authority`` the selected realizer is model-only: nothing is
-    admitted, and only a selection its legacy credential can honor is accepted.
+    Agent authority requires a repository-capable realizer. A compiler-proven
+    frozen native review graph instead admits its collaboration-only consumer;
+    ordinary model-only agent selections retain their legacy restrictions.
     """
     from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
@@ -764,9 +941,17 @@ async def _admit_repository_plan_inputs(
         "sourceKind": source.kind,
     }
     if not source.repository_ref:
+        if native_review:
+            raise ValueError(
+                "native review graph requires a selected GitHub repository"
+            )
         return result
     _remote, kind = normalize_repository_source(source.repository_ref)
     if kind != "github_https":
+        if native_review:
+            raise ValueError(
+                "native review graph requires a selected GitHub repository"
+            )
         # Local/content sources never acquire repository transport credentials.
         return result
     repository = github_repository_name_from_value(source.repository_ref)
@@ -791,32 +976,11 @@ async def _admit_repository_plan_inputs(
     publish_mode = str(
         initial_parameters.get("publishMode") or publication.get("mode") or "none"
     ).lower()
-    from moonmind.workflows.executions.routing import (
-        _coerce_bool,
-        merge_automation_candidates,
+    merge_automation = _enabled_merge_automation(initial_parameters)
+    finish_mode = merge_automation.get("finishMode") or merge_automation.get(
+        "finish_mode"
     )
-
-    top_publish = initial_parameters.get("publish")
-    parent_publish = (
-        top_publish
-        if isinstance(top_publish, Mapping) and top_publish
-        else publication
-    )
-    merge_automation = next(
-        (
-            candidate
-            for candidate in merge_automation_candidates(
-                initial_parameters, publish_payload=parent_publish, task_payload=workflow
-            )
-            if isinstance(candidate, Mapping)
-            and _coerce_bool(candidate.get("enabled"), default=False)
-        ),
-        {},
-    )
-    finish_mode = merge_automation.get("finishMode") or merge_automation.get("finish_mode")
-    review_only = (
-        isinstance(finish_mode, str) and finish_mode.strip() == "review_only"
-    )
+    review_only = isinstance(finish_mode, str) and finish_mode.strip() == "review_only"
     if review_only:
         from moonmind.schemas.temporal_models import MergeAutomationConfigModel
 
@@ -828,7 +992,14 @@ async def _admit_repository_plan_inputs(
             raise ValueError("review_only requires publication mode none")
         if mode == AccessMode.ANONYMOUS:
             raise ValueError("anonymous source cannot admit review-request authority")
-    slots = {"source": ("source_read", ("read",))}
+    if native_review:
+        # No checkout or source/destination credential enters this closed graph.
+        native_repository = workflow["steps"][0]["tool"]["inputs"]["repository"]
+        if not review_only or native_repository.strip().lower() != repository.lower():
+            raise ValueError(
+                "native review graph target conflicts with admitted repository"
+            )
+    slots = {} if native_review else {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
     if (requires_github or review_only) and mode != AccessMode.ANONYMOUS:
         operations = ("read",)
@@ -866,7 +1037,14 @@ async def _admit_repository_plan_inputs(
             async with session_factory() as session:
                 yield session
 
-    if not typed_authority:
+    if (
+        any(binding.consumer == "native" for binding in parent_bindings.values())
+        and not native_review
+    ):
+        raise ValueError(
+            "child cannot convert native repository authority to agent authority"
+        )
+    if not typed_authority and not native_review:
         # The profile-bound realizer reads only the legacy GitHub credential,
         # which migration 391 records as the default connection. Any other
         # selected or routed connection would be silently substituted.
@@ -908,9 +1086,12 @@ async def _admit_repository_plan_inputs(
         candidates = []
         if mode != AccessMode.ANONYMOUS:
             if parent_bindings:
-                inherited = parent_bindings.get("source")
+                inherited_slot = "collaboration" if native_review else "source"
+                inherited = parent_bindings.get(inherited_slot)
                 if inherited is None:
-                    raise ValueError("parent has no admitted source authority")
+                    raise ValueError(
+                        f"parent has no admitted {inherited_slot} authority"
+                    )
                 if connection_ref and connection_ref != inherited.connectionRef:
                     raise ValueError(
                         "child cannot change the admitted repository connection"
@@ -1031,8 +1212,15 @@ async def _admit_repository_plan_inputs(
                 "repositoryAccessSnapshotRef": snapshot_ref,
                 "materializerRef": "repository-broker@1",
                 "repositoryRole": role,
+                **({"consumer": "native"} if native_review else {}),
             }
             if parent_plan is not None:
+                if parent_bindings[slot].consumer != (
+                    "native" if native_review else "agent"
+                ):
+                    raise ValueError(
+                        "child cannot change repository authority consumer"
+                    )
                 binding = attenuate_repository_binding_for_child(
                     parent_binding=parent_bindings[slot],
                     child_target_ref=workflow_id,
@@ -1042,6 +1230,7 @@ async def _admit_repository_plan_inputs(
             result["bindings"][slot] = binding
             result["declarations"][slot] = {
                 "allowedRoles": (role,),
+                **({"allowedConsumers": ("native",)} if native_review else {}),
                 "allowedMaterializers": ("repository-broker@1",),
                 "expectedConnectionRef": snapshot.connection_id,
                 "allowedSnapshotRefs": (snapshot_ref,),
@@ -1452,6 +1641,13 @@ async def compile_and_persist_execution_plan(
         auth_model=config["authModel"],
         additional_tools=mounted_skill_tools,
     )
+    native_review = await _verify_native_review_graph(
+        initial_parameters=initial_parameters,
+        artifact_service=artifact_service,
+        principal=principal,
+        task_input_snapshot_ref=task_input_snapshot_ref,
+        task_input_snapshot_digest=task_input_snapshot_digest,
+    )
     repository_access = {}
     if repository_bindings is None:
         repository_inputs = await _admit_repository_plan_inputs(
@@ -1463,6 +1659,7 @@ async def compile_and_persist_execution_plan(
             initial_parameters=initial_parameters,
             requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
+            native_review=native_review,
             # A model-only realizer keeps its existing credential path; typed
             # repository authority is admitted only where it can be consumed.
             typed_authority=selected_realizer_consumes_repository_authority(
@@ -1487,6 +1684,16 @@ async def compile_and_persist_execution_plan(
         }
     }
     if repository_bindings:
+        if (
+            any(
+                binding.get("consumer") == "native"
+                for binding in repository_bindings.values()
+            )
+            and not native_review
+        ):
+            raise ValueError(
+                "native repository authority requires a frozen native review graph"
+            )
         # A mixed model/repository plan uses the v2 envelope so repository
         # authority carries its explicit kind, delivery contract, and role.
         # Model entries without a discriminator upgrade to model authority
@@ -1721,6 +1928,7 @@ async def compile_and_persist_execution_plan(
         raise ValueError(
             f"execution evidence unavailable under policy={policy}: {exc}"
         ) from exc
+
     def _uncertified_ordinary_authority() -> AdmissionAuthority:
         # Certificate-independent ordinary admission. Never fabricate an
         # empty passing certificate, never substitute {} for evidence, and
@@ -1780,7 +1988,9 @@ async def compile_and_persist_execution_plan(
                 plan.payload.model_copy(
                     update={
                         "admissionAuthority": AdmissionAuthority(
-                            admissionMode=("strict" if strict_admission else "ordinary"),
+                            admissionMode=(
+                                "strict" if strict_admission else "ordinary"
+                            ),
                             supportEvidenceRef=f"artifact:{support_evidence_ref}",
                             supportEvidenceDigest=support_evidence_digest,
                             # The evidence resolver returns the tier that admission
@@ -1791,7 +2001,9 @@ async def compile_and_persist_execution_plan(
                                 else "deployment_qualified"
                             ),
                             featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
-                            replayCompatibilityVersion=(OMNIGENT_SESSION_COMPATIBILITY_VERSION),
+                            replayCompatibilityVersion=(
+                                OMNIGENT_SESSION_COMPATIBILITY_VERSION
+                            ),
                             rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
                         )
                     }

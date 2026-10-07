@@ -58,6 +58,12 @@ class CodexProfileBoundRealizer:
         Codex remediation attempt claims under ``TurnSource.REMEDIATION``.
         """
 
+        from moonmind.omnigent.harness_platform.credential_bindings import (
+            assert_agent_execution_authority,
+        )
+
+        assert_agent_execution_authority(plan.payload.credentialBindings)
+
         from moonmind.omnigent.harness_platform.failures import (
             HarnessPlatformError,
             HarnessPlatformFailure,

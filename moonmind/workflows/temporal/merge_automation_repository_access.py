@@ -50,6 +50,7 @@ async def acquire_merge_automation_repository_credential(
         role="collaboration",
         operation=operation,
         repository=repository,
+        consumer="native",
     )
     # This gate admits github.com PR URLs. Do not send a different host's
     # credentials to the GitHub.com-only review adapter.
@@ -62,6 +63,7 @@ async def acquire_merge_automation_repository_credential(
         operation=operation,
         repository=repository,
         execution_owner=owner,
+        consumer="native",
     )
     if acquired is None:
         raise ValueError("review-only requires authenticated collaboration authority")
