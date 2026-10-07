@@ -251,7 +251,7 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
         return {"cut": [], "skipped": []}
 
     async def schedules():
-        return 0
+        return {"refreshed": 0, "failures": []}
 
     async def running_server(expected):
         return live["server"]

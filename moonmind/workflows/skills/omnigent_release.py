@@ -339,7 +339,8 @@ class OmnigentReleaseDrivers:
     cut_policy_versions: Callable[
         [dict[str, str]], Awaitable[dict[str, list[str]]]
     ] = field(default=None, repr=False)
-    refresh_schedules: Callable[[], Awaitable[int]] = field(
+    # Returns {"refreshed": int, "failures": [str]}; never gates the release.
+    refresh_schedules: Callable[[], Awaitable[dict[str, Any]]] = field(
         default=None, repr=False
     )
     qualify_host_drift: Callable[
@@ -785,26 +786,50 @@ async def _default_cut_policy_versions(
     return {"cut": cut, "skipped": skipped}
 
 
-async def _default_refresh_schedules() -> int:
+async def _default_refresh_schedules() -> dict[str, Any]:
+    """Move recurring schedules onto the cut policies without gating the release.
+
+    Schedules consume the release; they are not part of it. A schedule that
+    cannot be re-planned is named in the receipt and retried by the API's
+    bootstrap reconciliation, so it never turns a verified deployment into a
+    failed one that no rerun can fix.
+    """
     from api_service.db.base import get_async_session_context
     from api_service.services.recurring_workflows_service import (
         RecurringWorkflowsService,
     )
+    from moonmind.utils.logging import redact_sensitive_text
 
     try:
         async with get_async_session_context() as session:
-            refreshed = await RecurringWorkflowsService(
+            outcome = await RecurringWorkflowsService(
                 session
-            ).refresh_managed_bootstrap_schedules(limit=500, raise_on_failure=True)
+            ).refresh_managed_bootstrap_schedules(limit=500)
             await session.commit()
-            return refreshed
-    except OmnigentReleaseError:
-        raise
     except Exception as exc:
-        raise OmnigentReleaseError(
-            "refresh-schedules",
-            f"managed bootstrap schedule refresh failed: {exc}",
-        ) from exc
+        return {
+            "refreshed": 0,
+            "failures": [
+                "schedule refresh pass failed: "
+                + redact_sensitive_text(str(exc))[:500]
+            ],
+        }
+    return {"refreshed": outcome.refreshed, "failures": list(outcome.failures)}
+
+
+def _schedule_refresh_receipt(schedules: Mapping[str, Any]) -> dict[str, Any]:
+    """Name a few failed schedules and count the rest.
+
+    The standalone controller recovers the receipt from a 4,000-character log
+    tail, so an unbounded list would cost the receipt itself. The API's
+    bootstrap reconciliation logs every failure as it retries.
+    """
+    failures = [str(failure) for failure in schedules.get("failures") or ()]
+    return {
+        "schedulesRefreshed": int(schedules.get("refreshed") or 0),
+        "scheduleRefreshFailureCount": len(failures),
+        "scheduleRefreshFailures": [failure[:300] for failure in failures[:3]],
+    }
 
 
 async def _default_verify_live_container(server_ref: str) -> str | None:
@@ -1100,7 +1125,9 @@ async def migrate_omnigent_release(
     container up, skip-when-current policy/schedule steps). Any failure raises
     :class:`OmnigentReleaseError` with the step name; the retained fleet owns
     recovery and the record's ``previous`` revision supports an explicit
-    rollback through this same function.
+    rollback through this same function. Recurring schedules are the
+    exception: they consume the release, so the receipt names any schedule
+    the refresh could not move instead of failing the release.
 
     ``selected_revision`` is the revision :func:`select_omnigent_release`
     recorded before the Compose pass. The migration then finishes exactly
@@ -1169,7 +1196,7 @@ async def _migrate_omnigent_release_inner(
             resolved = await run.await_resolution(target)
             catalog = await run.sync_catalog()
             policy_outcome = await run.cut_policy_versions(target)
-            refreshed = await run.refresh_schedules()
+            schedules = await run.refresh_schedules()
             if run.qualify_host_drift is not None:
                 # Fence promotion while policy defaults drift from the
                 # recorded release (#4379 R7): a compatible rebuild names
@@ -1204,7 +1231,7 @@ async def _migrate_omnigent_release_inner(
             "serverImageRef": target.get("server"),
             "policiesCut": policy_outcome["cut"],
             "policiesSkipped": policy_outcome["skipped"],
-            "schedulesRefreshed": refreshed,
+            **_schedule_refresh_receipt(schedules),
             "catalogRef": catalog.get("catalogRef"),
             "resolvedRefs": resolved,
         }
@@ -1215,7 +1242,7 @@ async def _migrate_omnigent_release_inner(
     resolved = await run.await_resolution(target)
     catalog = await run.sync_catalog()
     policy_outcome = await run.cut_policy_versions(target)
-    refreshed = await run.refresh_schedules()
+    schedules = await run.refresh_schedules()
     if run.qualify_host_drift is not None:
         raise_for_release_policy_drift(await run.qualify_host_drift(dict(target)))
     live_digest = await run.verify_live_container(str(target.get("server") or ""))
@@ -1239,7 +1266,7 @@ async def _migrate_omnigent_release_inner(
         },
         "policiesCut": policy_outcome["cut"],
         "policiesSkipped": policy_outcome["skipped"],
-        "schedulesRefreshed": refreshed,
+        **_schedule_refresh_receipt(schedules),
         "catalogRef": catalog.get("catalogRef"),
         "resolvedRefs": resolved,
     }

@@ -93,6 +93,12 @@ SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
 _SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
     {SCHEDULE_TARGET_PINNED, SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT}
 )
+# Per schedule: the reusable plan this process last compiled for it and the
+# digest of the inputs it was compiled from. What a compile reads from the
+# image or process environment (built-in Skills, rollout policy, evidence
+# settings) is fixed for the process lifetime, so the plan stays current until
+# one of the fingerprinted inputs moves. One entry per schedule.
+_SCHEDULE_PLAN_INPUTS: dict[str, tuple[str, str]] = {}
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. MoonMind.ManifestIngest is intentionally absent from the live
 # recurring catalog: new recurring targets carrying it are rejected
@@ -131,6 +137,13 @@ class RecurringScheduleRuntimeSummary:
     last_scheduled_for: datetime | None = None
     last_dispatch_status: str | None = None
     last_dispatch_error: str | None = None
+
+@dataclass(frozen=True, slots=True)
+class ManagedScheduleRefresh:
+    """One managed-schedule refresh pass: how many moved, and why others did not."""
+
+    refreshed: int = 0
+    failures: tuple[str, ...] = ()
 
 def _json_object(value: object, *, field_name: str) -> dict[str, Any]:
     if value is None:
@@ -713,21 +726,22 @@ class RecurringWorkflowsService:
 
         target = dict(definition.target or {})
         initial_parameters = dict(target.get("initialParameters") or {})
-        if isinstance(
+        has_plan = isinstance(
             initial_parameters.get("omnigentExecutionPlan"), Mapping
-        ):
-            return await self._refresh_omnigent_execution_plan_target(
-                definition,
-                target=target,
-                initial_parameters=initial_parameters,
-            )
+        )
         previous = initial_parameters.get("agentProfileSnapshot")
         if (
             not isinstance(previous, Mapping)
             or previous.get("profileId") != BOOTSTRAP_PROFILE_ID
         ):
+            if has_plan:
+                return await self._refresh_omnigent_execution_plan_target(
+                    definition,
+                    target=target,
+                    initial_parameters=initial_parameters,
+                )
             return False
-        if target.get("agentProfileSnapshot") != previous:
+        if not has_plan and target.get("agentProfileSnapshot") != previous:
             raise RecurringWorkflowValidationError(
                 "managed schedule Agent Profile snapshot identities conflict"
             )
@@ -765,23 +779,33 @@ class RecurringWorkflowsService:
             if isinstance(allowed_policy_refs, list) and allowed_policy_refs
             else ""
         )
+        current = (
+            previous.get("version") == active.version
+            and previous.get("digest") == active.digest
+        )
         provider_profile_ref = str(previous.get("providerProfileRef") or "").strip()
-        if selected_policy_ref and provider_profile_ref:
+        if not current and selected_policy_ref and provider_profile_ref:
             host_binding = await self._session.scalar(
                 select(OmnigentOAuthHostBindingRecord).where(
                     OmnigentOAuthHostBindingRecord.provider_profile_id
                     == provider_profile_ref
                 )
             )
+            # The schedule follows its provider's host binding onto the new
+            # policy; a cutover defers the binding while its host still serves.
             if (
                 host_binding is not None
                 and host_binding.launch_policy_ref != selected_policy_ref
             ):
                 return False
-        if (
-            previous.get("version") == active.version
-            and previous.get("digest") == active.digest
-        ):
+        if has_plan:
+            # Recompiling advances the managed snapshot with the plan.
+            return await self._refresh_omnigent_execution_plan_target(
+                definition,
+                target=target,
+                initial_parameters=initial_parameters,
+            )
+        if current:
             return False
 
         # Single-user (#4351): schedule refresh uses the definition's real
@@ -804,6 +828,69 @@ class RecurringWorkflowsService:
         definition.version = int(definition.version or 0) + 1
         await self._session.flush()
         return True
+
+    async def _schedule_plan_inputs_digest(
+        self,
+        *,
+        target: Mapping[str, Any],
+        initial_parameters: Mapping[str, Any],
+        provider_profile: Any,
+        binding: Any,
+    ) -> str | None:
+        """Digest what a schedule's plan is compiled from, or None if unknown.
+
+        Compilation writes new artifacts, so a recompiled binding never equals
+        the stored one; this digest decides currency instead. It covers the
+        authored target (task, model, Skills, refreshed Agent Profile
+        snapshot), the original task input, the Provider Profile identity that
+        selects the credential materializer, the selected launch policy's
+        runtime snapshot, and the exact deployed Omnigent server build.
+        """
+
+        from api_service.services.omnigent_execution_plan_service import (
+            json_artifact_digest,
+        )
+        from api_service.services.omnigent_policies import (
+            OmnigentPolicyService,
+            PolicyConflict,
+            PolicyNotFound,
+        )
+        from moonmind.omnigent.deployment_identity import (
+            resolve_deployed_server_build_digest,
+        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+        snapshot = initial_parameters.get("agentProfileSnapshot") or {}
+        try:
+            policy_snapshot = await OmnigentPolicyService(
+                self._session
+            ).resolve_runtime_snapshot(str(snapshot.get("launchPolicyRef") or ""))
+            server_build = resolve_deployed_server_build_digest()
+        except (PolicyConflict, PolicyNotFound, HarnessPlatformError):
+            # Compilation reports why this authority is not ready.
+            return None
+        return json_artifact_digest(
+            {
+                "initialParameters": {
+                    key: value
+                    for key, value in initial_parameters.items()
+                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef"}
+                },
+                "runtimeProviderTarget": target.get("runtimeProviderTarget"),
+                "runtimeProviderTargetUpdatePolicy": str(
+                    target.get("runtimeProviderTargetUpdatePolicy")
+                    or SCHEDULE_TARGET_PINNED
+                ).strip(),
+                "taskInputSnapshotDigest": binding.task_input_snapshot_digest,
+                "providerProfile": {
+                    "profileId": getattr(provider_profile, "profile_id", None),
+                    "runtimeId": getattr(provider_profile, "runtime_id", None),
+                    "providerId": getattr(provider_profile, "provider_id", None),
+                },
+                "policySnapshotDigest": json_artifact_digest(policy_snapshot),
+                "serverBuildDigest": server_build,
+            }
+        )
 
     async def _refresh_omnigent_execution_plan_target(
         self,
@@ -886,6 +973,16 @@ class RecurringWorkflowsService:
             user=actor,
         )
         snapshot = initial_parameters["agentProfileSnapshot"]
+        inputs_digest = await self._schedule_plan_inputs_digest(
+            target=target,
+            initial_parameters=initial_parameters,
+            provider_profile=provider_profile,
+            binding=current_binding,
+        )
+        if inputs_digest is not None and _SCHEDULE_PLAN_INPUTS.get(
+            str(definition.id)
+        ) == (current_binding.plan_ref, inputs_digest):
+            return False
         artifact_service = self._artifact_service or TemporalArtifactService(
             TemporalArtifactRepository(self._session)
         )
@@ -916,6 +1013,24 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 f"could not refresh scheduled Omnigent authority: {exc}"
             ) from exc
+        # Strict support evidence is time-limited and admitted repository
+        # authority comes from mutable connections, so those plans are
+        # recompiled every pass instead of being reused.
+        compiled_payload = persisted_plan.envelope.payload
+        admission = getattr(compiled_payload, "admissionAuthority", None)
+        if (
+            inputs_digest is None
+            or getattr(admission, "admissionMode", None) == "strict"
+            or (getattr(compiled_payload, "resolvedTools", None) or {}).get(
+                "repositoryAccess"
+            )
+        ):
+            _SCHEDULE_PLAN_INPUTS.pop(str(definition.id), None)
+        else:
+            _SCHEDULE_PLAN_INPUTS[str(definition.id)] = (
+                persisted_plan.binding.plan_ref,
+                inputs_digest,
+            )
         # MoonLadderStudios/MoonMind#3833: a schedule pins its runtime-provider
         # target. Advancing time-limited admission evidence must never silently
         # move the schedule onto a different harness, realizer, or rollout row.
@@ -1055,16 +1170,14 @@ class RecurringWorkflowsService:
         return True
 
     async def refresh_managed_bootstrap_schedules(
-        self, limit: int = 500, *, raise_on_failure: bool = False
-    ) -> int:
+        self, limit: int = 500
+    ) -> ManagedScheduleRefresh:
         """Refresh scheduled actions after a managed bootstrap policy cutover.
 
-        Individual schedule failures are contained by default so one broken
-        definition cannot block startup reconciliation. Pass
-        ``raise_on_failure=True`` when the caller must block completion on any
-        failure (for example the singular Omnigent release migration, which
-        cannot publish success while recurring workflows retain stale
-        execution-plan authority).
+        Individual schedule failures are contained so one broken definition
+        cannot block the others, startup reconciliation, or a deployment
+        update. Each failure is returned with its reason; the API's bootstrap
+        reconciliation retries it on its next pass.
         """
 
         batch_size = max(1, int(limit))
@@ -1122,15 +1235,7 @@ class RecurringWorkflowsService:
                     definition_id,
                     exc,
                 )
-        if failed and raise_on_failure:
-            # The release migration cannot publish success while affected
-            # recurring workflows retain stale execution-plan authority.
-            raise RuntimeError(
-                f"Failed to refresh {len(failed)} managed bootstrap "
-                f"schedule(s): {', '.join(failed[:5])}"
-                + ("..." if len(failed) > 5 else "")
-            )
-        return refreshed
+        return ManagedScheduleRefresh(refreshed=refreshed, failures=tuple(failed))
 
     async def _validate_model_selection_submission(
         self,

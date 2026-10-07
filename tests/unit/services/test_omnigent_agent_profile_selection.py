@@ -621,6 +621,7 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
         consumer_id,
         user,
         replace_existing_usage=False,
+        persist_usage=True,
     ):
         captured.update(
             selection=selection,
@@ -735,10 +736,12 @@ async def test_managed_schedule_refresh_requires_and_replaces_exact_usage(
         consumer_id,
         user,
         replace_existing_usage,
+        persist_usage=True,
     ):
         assert consumer_type == "schedule"
         assert consumer_id == "schedule-1"
         assert replace_existing_usage is True
+        assert persist_usage is True
         return {
             **previous,
             "version": 2,
@@ -798,6 +801,7 @@ async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
         consumer_id,
         user,
         replace_existing_usage=False,
+        persist_usage=True,
     ):
         captured["selection"] = selection
         return {
