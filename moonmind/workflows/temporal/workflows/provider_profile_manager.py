@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         validate_codex_oauth_capacity,
     )
     from moonmind.provider_profiles.lease_client import (
+        LEASE_TRANSITION_PENDING_ERROR_TYPE,
         MANAGER_ROLLOVER_ERROR_TYPE,
         RELEASING_LEASE_OUTCOMES,
         CredentialLeaseMode,
@@ -89,6 +90,7 @@ FRESH_START_DB_LEASE_RESTORE_PATCH = (
     "provider-profile-manager-fresh-start-db-lease-restore-v1"
 )
 DURABLE_LEASE_GRANT_PATCH = "provider-profile-manager-durable-lease-grant-v1"
+OWNER_RELEASE_ORDERING_PATCH = "provider-profile-manager-owner-release-ordering-v1"
 ACTIVITY_OWNED_LEASE_VERIFICATION_PATCH = (
     "provider-profile-manager-activity-owned-lease-verification-v1"
 )
@@ -1181,6 +1183,10 @@ class MoonMindProviderProfileManagerWorkflow:
         self._shutdown_requested: bool = False
         self._has_new_events: bool = False
         self._durable_release_wakeup: bool = False
+        self._owner_release_ordering: bool = False
+        # The durable obligation lives in _unresolved_releases. This transient
+        # set only prevents concurrent deliveries from issuing the same write.
+        self._owner_releases_in_flight: set[str] = set()
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
         # True once startup finished restoring profiles and durable leases from
@@ -1436,6 +1442,16 @@ class MoonMindProviderProfileManagerWorkflow:
         requester_id = payload["requester_workflow_id"]
         profile = self._profiles.get(profile_id)
         released = False
+        if (
+            self._owner_release_ordering
+            and payload.get("fencing_generation") is not None
+        ):
+            current_profile_id = self._profile_id_for_lease(requester_id)
+            if current_profile_id is not None and current_profile_id != profile_id:
+                # The same owner was re-admitted on another profile. A late
+                # release for the earlier profile cannot revoke that authority
+                # or create an obligation that blocks its current generation.
+                return
         if profile and self._release_is_fenced_out(profile, requester_id, payload):
             # A duplicate or delayed release that quotes an older grant
             # generation must not free the lease the same deterministic owner
@@ -1520,12 +1536,60 @@ class MoonMindProviderProfileManagerWorkflow:
         fencing_generation = (
             profile.lease_fencing_generation(requester_id) if profile else 0
         )
-        outcome = await self._remove_lease_from_db(
-            requester_id,
-            fencing_generation=fencing_generation,
-            profile_id=profile_id,
-            reason="owner_release",
-        )
+        if self._owner_release_ordering:
+            if requester_id in self._owner_releases_in_flight:
+                return LeaseTransitionOutcome.RETRYABLE.value
+            claimed_fence = payload.get("fencing_generation")
+            if not fencing_generation and claimed_fence is not None:
+                # The in-memory holder may already be gone. Preserve a delayed
+                # release's fence instead of sending an unfenced wildcard to
+                # the ledger, including after a rollover.
+                try:
+                    fencing_generation = int(claimed_fence)
+                except (TypeError, ValueError):
+                    return LeaseTransitionOutcome.STALE.value
+                if fencing_generation <= 0:
+                    return LeaseTransitionOutcome.STALE.value
+            withdraw_pending = claimed_fence is None or (
+                profile is not None and requester_id in profile.current_leases
+            )
+            pending_release = self._unresolved_releases.get(requester_id)
+            same_release = (
+                pending_release is not None
+                and pending_release.get("kind", "owner_release") == "owner_release"
+                and pending_release.get("profile_id") == profile_id
+                and pending_release.get("fencing_generation") == fencing_generation
+            )
+            # Record before yielding: re-admission must not inherit the lease
+            # being released, and a rollover must retain an unresolved write.
+            self._unresolved_releases[requester_id] = {
+                "profile_id": profile_id,
+                "fencing_generation": fencing_generation,
+                "outcome": LeaseTransitionOutcome.RETRYABLE.value,
+                "retryable": True,
+                "kind": "owner_release",
+            }
+            # Withdraw only requests that preceded this release. A retry can
+            # enqueue the same owner while persistence is in flight; it must
+            # survive and receive a fresh fenced grant after the release.
+            if not same_release and withdraw_pending:
+                self._pending_requests = [
+                    req
+                    for req in self._pending_requests
+                    if req.requester_workflow_id != requester_id
+                ]
+                if profile:
+                    profile.dequeue_maintenance_waiter(requester_id)
+            self._owner_releases_in_flight.add(requester_id)
+        try:
+            outcome = await self._remove_lease_from_db(
+                requester_id,
+                fencing_generation=fencing_generation,
+                profile_id=profile_id,
+                reason="owner_release",
+            )
+        finally:
+            self._owner_releases_in_flight.discard(requester_id)
         if outcome not in RELEASING_LEASE_OUTCOMES:
             self._record_unresolved_release(
                 requester_id,
@@ -1549,14 +1613,15 @@ class MoonMindProviderProfileManagerWorkflow:
                     # The drain that a deferred scope move was waiting for:
                     # apply the persisted move without needing another sync.
                     self._apply_pending_scope_move(profile)
-            # A release also withdraws any pending maintenance request from the
-            # same owner, so a caller that gave up cannot hold the queue head.
-            profile.dequeue_maintenance_waiter(requester_id)
-        self._pending_requests = [
-            req
-            for req in self._pending_requests
-            if req.requester_workflow_id != requester_id
-        ]
+            if not self._owner_release_ordering:
+                # Retained histories withdrew requests after persistence.
+                profile.dequeue_maintenance_waiter(requester_id)
+        if not self._owner_release_ordering:
+            self._pending_requests = [
+                req
+                for req in self._pending_requests
+                if req.requester_workflow_id != requester_id
+            ]
         lease_group_id = self._normalize_optional_string(
             payload.get("lease_group_id")
         )
@@ -1570,7 +1635,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     workflow.now() + timedelta(seconds=handoff_ttl_seconds)
                 ).isoformat(),
             )
-        if released and self._durable_release_wakeup:
+        if (released or self._owner_release_ordering) and self._durable_release_wakeup:
+            # A concurrent confirmed cleanup may have removed the old lease;
+            # finishing this handler still opens its readmission gate.
             # The loop may have consumed the release signal while awaiting
             # this write. Capacity became reusable only now; offer it without
             # waiting for the periodic timer. Unresolved outcomes never wake
@@ -1777,6 +1844,17 @@ class MoonMindProviderProfileManagerWorkflow:
         evidence instead. Either way the slot stays unavailable.
         """
 
+        existing = self._unresolved_releases.get(lease_id, {})
+        if (
+            self._owner_release_ordering
+            and kind != "owner_release"
+            and existing.get("kind") == "owner_release"
+            and int(existing.get("fencing_generation") or 0) >= fencing_generation
+        ):
+            # A same-generation or older cleanup completion cannot replace
+            # the owner's stronger release obligation. A newer cleanup may
+            # replace diagnostic evidence from an obsolete owner generation.
+            return
         retryable = outcome == LeaseTransitionOutcome.RETRYABLE.value
         entry: dict[str, Any] = {
             "profile_id": profile_id,
@@ -1816,7 +1894,11 @@ class MoonMindProviderProfileManagerWorkflow:
             return
         for requester_id in sorted(self._unresolved_releases):
             pending = self._unresolved_releases.get(requester_id)
-            if pending is None or not pending.get("retryable", True):
+            if (
+                pending is None
+                or not pending.get("retryable", True)
+                or requester_id in self._owner_releases_in_flight
+            ):
                 continue
             if pending.get("kind") == "verified_cleanup":
                 # A verified-teardown release retries through the same
@@ -1891,12 +1973,17 @@ class MoonMindProviderProfileManagerWorkflow:
                     reason=reason,
                 )
                 continue
-            outcome = await self._remove_lease_from_db(
-                requester_id,
-                fencing_generation=int(pending.get("fencing_generation") or 0),
-                profile_id=str(pending.get("profile_id") or ""),
-                reason="owner_release_retry",
-            )
+            if self._owner_release_ordering:
+                self._owner_releases_in_flight.add(requester_id)
+            try:
+                outcome = await self._remove_lease_from_db(
+                    requester_id,
+                    fencing_generation=int(pending.get("fencing_generation") or 0),
+                    profile_id=str(pending.get("profile_id") or ""),
+                    reason="owner_release_retry",
+                )
+            finally:
+                self._owner_releases_in_flight.discard(requester_id)
             if outcome not in RELEASING_LEASE_OUTCOMES:
                 self._record_unresolved_release(
                     requester_id,
@@ -2267,6 +2354,14 @@ class MoonMindProviderProfileManagerWorkflow:
         while not self._shutdown_requested and not self._rollover_requested:
             if verify_activity_owner:
                 await self._assert_activity_lease_owner_running(lease_metadata)
+            if self._owner_release_ordering and self._lease_grant_is_pending(
+                requester_id
+            ):
+                # A concurrent confirmed cleanup may already have removed the
+                # old lease. Its owner-release handler still must finish before
+                # this deterministic owner can acquire replacement authority.
+                await self._await_pending_grant_handoff(requester_id)
+                continue
             existing_profile_id = self._profile_id_for_lease(requester_id)
             if existing_profile_id is not None:
                 if self._lease_grant_is_pending(requester_id):
@@ -3032,6 +3127,7 @@ class MoonMindProviderProfileManagerWorkflow:
             LEASE_CLEANUP_REDRIVE_PATCH
         )
         self._durable_release_wakeup = workflow.patched(DURABLE_RELEASE_WAKEUP_PATCH)
+        self._owner_release_ordering = workflow.patched(OWNER_RELEASE_ORDERING_PATCH)
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
@@ -3281,12 +3377,34 @@ class MoonMindProviderProfileManagerWorkflow:
         grant. Returning ``already_held`` for one would hand a concurrent
         caller authority that the ledger may never commit, so concurrent
         identical callers wait and then join the committed result — or observe
-        the rolled-back state — instead.
+        the rolled-back state — instead. New histories also withhold an owner
+        whose release is unresolved: that generation is being revoked, and a
+        fresh grant must wait for the durable release to finish.
         """
 
         if not self._lease_transition_contract:
             return False
-        return owner_id in self._pending_grant_handoffs
+        if owner_id in self._pending_grant_handoffs:
+            return True
+        if not self._owner_release_ordering:
+            return False
+        if owner_id in self._owner_releases_in_flight:
+            return True
+        pending = self._unresolved_releases.get(owner_id)
+        if not pending or pending.get("kind", "owner_release") != "owner_release":
+            return False
+        if pending.get("retryable", True):
+            return True
+        # A stale late release can refer to an older durable tombstone. Keep
+        # its diagnostic evidence, but do not let it block an unrelated future
+        # generation. Conflicts still block the exact live authority involved.
+        profile = self._profiles.get(self._profile_id_for_lease(owner_id) or "")
+        return bool(
+            profile is not None
+            and profile.profile_id == pending.get("profile_id")
+            and profile.lease_fencing_generation(owner_id)
+            == pending.get("fencing_generation")
+        )
 
     async def _await_pending_grant_handoff(self, owner_id: str) -> None:
         """Wait, bounded, for one grant handoff to reach a durable outcome."""
@@ -3297,9 +3415,14 @@ class MoonMindProviderProfileManagerWorkflow:
                 timeout=timedelta(seconds=60),
             )
         except TimeoutError:
-            # Bounded: the caller re-evaluates rather than blocking forever on
-            # an unresponsive persistence activity.
-            pass
+            # A maintenance acquisition does not loop around this wait. Never
+            # let its timeout turn an unresolved transition into authority.
+            if self._owner_release_ordering:
+                raise exceptions.ApplicationError(
+                    "Provider profile lease transition is still unresolved",
+                    type=LEASE_TRANSITION_PENDING_ERROR_TYPE,
+                ) from None
+            # Retained histories re-evaluate after their recorded timer.
 
     def _restore_state(
         self,
