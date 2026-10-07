@@ -555,11 +555,19 @@ const MergeAutomationSchema = z
     workflowId: z.string().nullable().optional(),
     childWorkflowId: z.string().nullable().optional(),
     status: z.string().nullable().optional(),
+    finishMode: z.string().nullable().optional(),
     prNumber: z.union([z.number(), z.string()]).nullable().optional(),
     prUrl: z.string().nullable().optional(),
     latestHeadSha: z.string().nullable().optional(),
     cycles: z.union([z.number(), z.string()]).nullable().optional(),
     resolverChildWorkflowIds: z.array(z.string()).default([]).optional(),
+    reviewLoop: z
+      .object({
+        activeRequest: z.record(z.string(), z.unknown()).nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     resolverChildren: z
       .array(
         z
@@ -2392,6 +2400,16 @@ function MergeAutomationPanel({
       }));
   const blockers = mergeAutomation.blockers || [];
   const artifactRefs = mergeAutomation.artifactRefs;
+  let resolverStatusMessage = 'Waiting for required checks before launching pr-resolver.';
+  if (mergeAutomation.status === 'review_complete') {
+    resolverStatusMessage = 'The requested review is complete. CI and any review findings remain separate obligations.';
+  } else if (mergeAutomation.status === 'waiting' && mergeAutomation.reviewLoop?.activeRequest) {
+    resolverStatusMessage = 'Review requested. Waiting for the configured reviewer to complete.';
+  } else if (mergeAutomation.finishMode === 'review_only') {
+    resolverStatusMessage = mergeAutomation.status === 'waiting'
+      ? 'Waiting to request review of the current PR head.'
+      : 'Review-only automation does not launch a resolver.';
+  }
 
   return (
     <section className="stack">
@@ -2448,7 +2466,7 @@ function MergeAutomationPanel({
           </ul>
         </div>
       ) : (
-        <p className="small">Waiting for required checks before launching pr-resolver.</p>
+        <p className="small">{resolverStatusMessage}</p>
       )}
 
       {blockers.length ? (

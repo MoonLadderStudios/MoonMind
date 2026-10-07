@@ -4229,6 +4229,142 @@ def _compact_saved_candidate(candidate: Any) -> dict[str, Any]:
     }
 
 
+async def _merge_automation_repository_credential(
+    payload: Mapping[str, Any], *, repository: str, operation: str
+) -> Any | None:
+    """Acquire only the direct review gate's persisted collaboration authority."""
+    config = payload.get("mergeAutomationConfig")
+    finish_mode = payload.get("finishMode") or (
+        config.get("finishMode") if isinstance(config, Mapping) else None
+    )
+    if str(finish_mode or "").strip().lower() != "review_only":
+        # Retained merge/fix histories keep their recorded credential contract.
+        return None
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+    from moonmind.omnigent.bridge_artifacts import (
+        TemporalOmnigentArtifactGateway,
+        link_verified_execution_plan_inputs,
+    )
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        OmnigentExecutionPlanBinding,
+    )
+    from moonmind.workflows.executions.repository_contract import normalize_endpoint
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _load_verified_execution_plan,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    parent_id = str(
+        payload.get("admittedParentWorkflowId") or payload.get("parentWorkflowId") or ""
+    ).strip()
+    principal = str(payload.get("principal") or "").strip()
+    parent_run_id = str(payload.get("parentRunId") or "").strip()
+    if not parent_id or not principal or not parent_run_id:
+        raise TemporalActivityRuntimeError("review_only requires owning execution authority")
+    pull_request = payload.get("pullRequest")
+    if not isinstance(pull_request, Mapping):
+        pull_request = {}
+    pr_number = int(pull_request.get("number") or payload.get("prNumber") or 0)
+    initial_head = str(
+        pull_request.get("headSha") or payload.get("expectedHeadSha") or ""
+    ).strip()
+    expected_gate_id = f"merge-automation:{parent_id}:{repository}:{pr_number}:{initial_head}"
+    actual_gate_id = temporal_activity.info().workflow_id
+    if actual_gate_id != expected_gate_id or (
+        operation == "review_request" and payload.get("parentWorkflowId") != actual_gate_id
+    ):
+        raise TemporalActivityRuntimeError("review_only repository use conflicts with its executing gate")
+    binding = OmnigentExecutionPlanBinding.model_validate(payload.get("parentExecutionPlan"))
+    async with async_session_maker() as session:
+        parent = await session.get(TemporalExecutionCanonicalRecord, parent_id)
+    if parent is None or not isinstance(parent.parameters, Mapping):
+        raise TemporalActivityRuntimeError("review_only parent execution authority is unavailable")
+    canonical_binding = OmnigentExecutionPlanBinding.model_validate(
+        parent.parameters.get("omnigentExecutionPlan")
+    )
+    if (
+        binding != canonical_binding
+        or principal != str(parent.owner_id or parent.workflow_id)
+        or parent_run_id != parent.run_id
+    ):
+        raise TemporalActivityRuntimeError("review_only conflicts with its owning execution authority")
+    plan = await _load_verified_execution_plan(binding, admitted_principal=principal)
+    await link_verified_execution_plan_inputs(
+        session_factory=async_session_maker, plan=plan, binding=binding,
+        workflow_id=parent_id, run_id=parent_run_id,
+    )
+
+    # This direct Activity has no agent Step. Delegate only the verified parent's
+    # admitted snapshots through the existing workflow artifact read policy.
+    admitted_refs = {
+        access["artifactRef"]
+        for access in plan.payload.resolvedTools.get("repositoryAccess", {}).values()
+    }
+
+    async def read_snapshot(artifact_ref, *, request):
+        if artifact_ref not in admitted_refs:
+            raise TemporalActivityRuntimeError("repository snapshot is not admitted by the parent plan")
+        async with async_session_maker() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            _artifact, body = await service.read(
+                artifact_id=TemporalOmnigentArtifactGateway._artifact_id(artifact_ref),
+                principal="service:merge_automation",
+                admitted_principal=f"workflow:{parent_id}",
+            )
+        return body
+
+    request = AgentExecutionRequest(
+        agentKind="external", agentId="omnigent",
+        omnigentExecutionPlan=binding, correlationId=parent_id,
+        idempotencyKey=f"{parent_id}:{parent_run_id}:merge-review",
+        parameters={"executionPlanRef": binding.plan_ref},
+    )
+    credentials = OmnigentGithubCredentialService(
+        None, session_factory=async_session_maker,
+        artifact_gateway=SimpleNamespace(read_repository_access_snapshot=read_snapshot),
+    )
+    identity = await credentials.admitted_repository_identity(
+        plan=plan, request=request, role="collaboration", operation=operation,
+        repository=repository,
+    )
+    # These two adapters currently use public GitHub REST endpoints only.
+    if normalize_endpoint(identity.endpoint) != "https://github.com":
+        raise TemporalActivityRuntimeError("review_only requires a public GitHub repository binding")
+    acquired = await credentials.acquire_repository_use(
+        plan=plan, request=request, role="collaboration", operation=operation,
+        repository=repository, execution_owner=request.idempotency_key,
+    )
+    if acquired is None:
+        raise TemporalActivityRuntimeError("review_only requires its selected collaboration credential")
+    return acquired
+
+
+@contextlib.asynccontextmanager
+async def _merge_automation_github_token(payload, *, repository, operation):
+    acquired = await _merge_automation_repository_credential(
+        payload, repository=repository, operation=operation,
+    )
+    if acquired is None:
+        yield payload.get("githubToken")
+        return
+    try:
+        token = acquired.credential.use_now(lambda value: value.decode("utf-8").strip())
+        if not token:
+            raise TemporalActivityRuntimeError("selected collaboration credential is empty")
+        yield token
+    finally:
+        acquired.credential.clear()
+
+
 class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
 
@@ -4805,17 +4941,21 @@ class TemporalIntegrationActivities:
         if not isinstance(active_review_request, Mapping):
             active_review_request = None
 
-        readiness = await GitHubService().evaluate_pull_request_readiness(
-            repo=str(pull_request.get("repo") or ""),
-            pr_number=int(pull_request.get("number") or 0),
-            head_sha=str(pull_request.get("headSha") or ""),
-            policy=dict(policy),
-            github_token=payload.get("githubToken"),
-            review_loop_enabled=bool(review_loop.get("enabled")),
-            review_request=dict(active_review_request)
-            if active_review_request
-            else None,
-        )
+        repository = str(pull_request.get("repo") or "")
+        async with _merge_automation_github_token(
+            payload, repository=repository, operation="read",
+        ) as github_token:
+            readiness = await GitHubService().evaluate_pull_request_readiness(
+                repo=repository,
+                pr_number=int(pull_request.get("number") or 0),
+                head_sha=str(pull_request.get("headSha") or ""),
+                policy=dict(policy),
+                github_token=github_token,
+                review_loop_enabled=bool(review_loop.get("enabled")),
+                review_request=dict(active_review_request)
+                if active_review_request
+                else None,
+            )
         evidence = readiness.model_dump(by_alias=True)
 
         jira_issue_key = str(payload.get("jiraIssueKey") or "").strip()
@@ -4890,102 +5030,105 @@ class TemporalIntegrationActivities:
                 "that does not match its request identity"
             )
 
-        async with get_async_session_context() as session:
-            entry = await MergeAutomationReviewRequestStore(session).claim(
-                request_key=expected_request_key,
-                parent_workflow_id=parent_workflow_id,
-                repository=repository,
+        async with _merge_automation_github_token(
+            payload, repository=repository, operation="review_request",
+        ) as github_token:
+            async with get_async_session_context() as session:
+                entry = await MergeAutomationReviewRequestStore(session).claim(
+                    request_key=expected_request_key,
+                    parent_workflow_id=parent_workflow_id,
+                    repository=repository,
+                    pr_number=pr_number,
+                    head_sha=expected_head_sha,
+                    provider=provider_record.provider,
+                    command=provider_record.command,
+                )
+                await session.commit()
+
+            if entry.status == STATUS_REQUESTED and entry.request_comment_id:
+                return {
+                    **entry.to_payload(),
+                    "status": "recorded",
+                    "retryable": False,
+                    "summary": "Automated review request already recorded.",
+                }
+
+            attempt_started_at = entry.attempt_started_at
+            parsed_attempt_started_at = None
+            if attempt_started_at:
+                try:
+                    parsed_attempt_started_at = datetime.fromisoformat(
+                        attempt_started_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    parsed_attempt_started_at = None
+            if parsed_attempt_started_at is None:
+                parsed_attempt_started_at = datetime.now(timezone.utc)
+            # Allow for clock skew between this service and GitHub so a comment the
+            # previous ambiguous attempt actually created is still reconcilable.
+            reconcile_from = parsed_attempt_started_at - timedelta(minutes=2)
+
+            result = await GitHubService().request_automated_review(
+                repo=repository,
                 pr_number=pr_number,
-                head_sha=expected_head_sha,
+                expected_head_sha=expected_head_sha,
                 provider=provider_record.provider,
-                command=provider_record.command,
+                attempt_started_at=reconcile_from.isoformat(),
+                recorded_comment_id=entry.request_comment_id,
+                github_token=github_token,
             )
-            await session.commit()
+            outcome = result.model_dump(by_alias=True, mode="json")
+            posted = outcome.get("status") in {"requested", "reconciled", "recorded"}
+            requested_at = None
+            raw_requested_at = str(outcome.get("requestedAt") or "").strip()
+            if raw_requested_at:
+                try:
+                    requested_at = datetime.fromisoformat(
+                        raw_requested_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    requested_at = None
 
-        if entry.status == STATUS_REQUESTED and entry.request_comment_id:
-            return {
-                **entry.to_payload(),
-                "status": "recorded",
-                "retryable": False,
-                "summary": "Automated review request already recorded.",
-            }
-
-        attempt_started_at = entry.attempt_started_at
-        parsed_attempt_started_at = None
-        if attempt_started_at:
-            try:
-                parsed_attempt_started_at = datetime.fromisoformat(
-                    attempt_started_at.replace("Z", "+00:00")
+            async with get_async_session_context() as session:
+                settled = await MergeAutomationReviewRequestStore(session).settle(
+                    request_key=expected_request_key,
+                    status=STATUS_REQUESTED if posted else STATUS_FAILED,
+                    request_comment_id=outcome.get("requestCommentId"),
+                    request_comment_url=outcome.get("requestCommentUrl"),
+                    requested_at=requested_at,
+                    actor=outcome.get("actor"),
+                    reconciled=bool(outcome.get("reconciled")),
+                    failure_reason=None if posted else outcome.get("summary"),
                 )
-            except ValueError:
-                parsed_attempt_started_at = None
-        if parsed_attempt_started_at is None:
-            parsed_attempt_started_at = datetime.now(timezone.utc)
-        # Allow for clock skew between this service and GitHub so a comment the
-        # previous ambiguous attempt actually created is still reconcilable.
-        reconcile_from = parsed_attempt_started_at - timedelta(minutes=2)
+                await session.commit()
 
-        result = await GitHubService().request_automated_review(
-            repo=repository,
-            pr_number=pr_number,
-            expected_head_sha=expected_head_sha,
-            provider=provider_record.provider,
-            attempt_started_at=reconcile_from.isoformat(),
-            recorded_comment_id=entry.request_comment_id,
-            github_token=payload.get("githubToken"),
-        )
-        outcome = result.model_dump(by_alias=True, mode="json")
-        posted = outcome.get("status") in {"requested", "reconciled", "recorded"}
-        requested_at = None
-        raw_requested_at = str(outcome.get("requestedAt") or "").strip()
-        if raw_requested_at:
-            try:
-                requested_at = datetime.fromisoformat(
-                    raw_requested_at.replace("Z", "+00:00")
+            payload_out = dict(settled.to_payload()) if settled is not None else {}
+            payload_out.update(
+                {
+                    "status": outcome.get("status"),
+                    "provider": provider_record.provider,
+                    "command": provider_record.command,
+                    "headSha": expected_head_sha,
+                    "observedHeadSha": outcome.get("observedHeadSha"),
+                    "requestCommentId": outcome.get("requestCommentId"),
+                    "requestCommentUrl": outcome.get("requestCommentUrl"),
+                    "requestedAt": outcome.get("requestedAt"),
+                    "actor": outcome.get("actor"),
+                    "reconciled": bool(outcome.get("reconciled")),
+                    "retryable": bool(outcome.get("retryable")),
+                    "summary": outcome.get("summary"),
+                    "requestKey": expected_request_key,
+                }
+            )
+            if not posted and outcome.get("retryable"):
+                # Retry through the activity retry policy; the ledger keeps the
+                # original attempt instant so the retry reconciles instead of
+                # posting a second request.
+                raise TemporalActivityRuntimeError(
+                    "merge_automation.request_automated_review could not prove the "
+                    f"request was posted: {outcome.get('summary')}"
                 )
-            except ValueError:
-                requested_at = None
-
-        async with get_async_session_context() as session:
-            settled = await MergeAutomationReviewRequestStore(session).settle(
-                request_key=expected_request_key,
-                status=STATUS_REQUESTED if posted else STATUS_FAILED,
-                request_comment_id=outcome.get("requestCommentId"),
-                request_comment_url=outcome.get("requestCommentUrl"),
-                requested_at=requested_at,
-                actor=outcome.get("actor"),
-                reconciled=bool(outcome.get("reconciled")),
-                failure_reason=None if posted else outcome.get("summary"),
-            )
-            await session.commit()
-
-        payload_out = dict(settled.to_payload()) if settled is not None else {}
-        payload_out.update(
-            {
-                "status": outcome.get("status"),
-                "provider": provider_record.provider,
-                "command": provider_record.command,
-                "headSha": expected_head_sha,
-                "observedHeadSha": outcome.get("observedHeadSha"),
-                "requestCommentId": outcome.get("requestCommentId"),
-                "requestCommentUrl": outcome.get("requestCommentUrl"),
-                "requestedAt": outcome.get("requestedAt"),
-                "actor": outcome.get("actor"),
-                "reconciled": bool(outcome.get("reconciled")),
-                "retryable": bool(outcome.get("retryable")),
-                "summary": outcome.get("summary"),
-                "requestKey": expected_request_key,
-            }
-        )
-        if not posted and outcome.get("retryable"):
-            # Retry through the activity retry policy; the ledger keeps the
-            # original attempt instant so the retry reconciles instead of
-            # posting a second request.
-            raise TemporalActivityRuntimeError(
-                "merge_automation.request_automated_review could not prove the "
-                f"request was posted: {outcome.get('summary')}"
-            )
-        return payload_out
+            return payload_out
 
     async def merge_automation_complete_post_merge_jira(self, payload, /, **kwargs):
         if not isinstance(payload, Mapping):

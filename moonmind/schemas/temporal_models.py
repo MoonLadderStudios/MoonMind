@@ -24,6 +24,7 @@ from pr_resolver_core.review_providers import (
 )
 
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -2235,6 +2236,9 @@ class MergeAutomationStartInput(BaseModel):
     parent_workflow_id: str = Field(..., alias="parentWorkflowId")
     parent_run_id: str | None = Field(None, alias="parentRunId")
     principal: str | None = Field(None, alias="principal")
+    parent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="parentExecutionPlan"
+    )
     publish_context_ref: str = Field(..., alias="publishContextRef")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
@@ -2277,6 +2281,20 @@ class MergeAutomationStartInput(BaseModel):
         if value < 0:
             raise ValueError("cycleCount must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def _require_review_only_parent_plan(self) -> "MergeAutomationStartInput":
+        if self.config.finish_mode == "review_only" and self.parent_execution_plan is None:
+            raise ValueError("review_only requires parentExecutionPlan authority.")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_parent_plan(self, handler):
+        payload = handler(self)
+        if self.parent_execution_plan is None:
+            payload.pop("parentExecutionPlan", None)
+            payload.pop("parent_execution_plan", None)
+        return payload
 
 
 class PRResolverPolicyModel(BaseModel):

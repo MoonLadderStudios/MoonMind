@@ -5,6 +5,16 @@ from temporalio.exceptions import ApplicationError
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
+
+def _review_only_plan_binding() -> dict[str, str]:
+    return {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "artifact:review-parent-plan",
+        "taskInputSnapshotRef": "artifact:review-parent-input",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
 def _enabled_parameters() -> dict[str, object]:
     return {
         "publishMode": "pr",
@@ -370,6 +380,8 @@ def test_review_only_merge_gate_payload_preserves_mode_without_post_merge_effect
     workflow._repo = "MoonLadderStudios/MoonMind"
     parameters = {
         "publishMode": "none",
+        "omnigentExecutionPlan": _review_only_plan_binding(),
+        "parentExecutionPlan": {"planRef": "caller-selected-plan"},
         "mergeAutomation": {
             "enabled": True,
             "finishMode": "review_only",
@@ -397,9 +409,80 @@ def test_review_only_merge_gate_payload_preserves_mode_without_post_merge_effect
     assert payload is not None
     config = payload["mergeAutomationConfig"]
     assert config["finishMode"] == "review_only"
+    assert payload["parentExecutionPlan"] == _review_only_plan_binding()
     assert not config["postMergeJira"].get("enabled", False)
     assert not config["postMergeGithub"].get("enabled", False)
     assert workflow._merge_required(parameters) is False
+
+
+def test_review_only_parent_requires_admitted_execution_plan_binding() -> None:
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/MoonMind"
+
+    with pytest.raises(ValueError, match="review_only requires admitted parent execution-plan authority"):
+        parent._build_merge_gate_start_payload(
+            parameters={
+                "publishMode": "none",
+                "parentExecutionPlan": _review_only_plan_binding(),
+                "mergeAutomation": {
+                    "enabled": True,
+                    "finishMode": "review_only",
+                    "reviewLoop": {"enabled": True, "provider": "codex"},
+                },
+            },
+            pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+            head_sha="abc123",
+            parent_workflow_id="mm:parent",
+            parent_run_id="run-1",
+        )
+
+
+def test_review_only_gate_schema_requires_typed_parent_execution_plan() -> None:
+    from moonmind.schemas.temporal_models import MergeAutomationStartInput
+
+    payload = {
+        "workflowType": "MoonMind.MergeAutomation",
+        "parentWorkflowId": "mm:parent",
+        "publishContextRef": "artifact:existing-pr-target",
+        "pullRequest": {
+            "repo": "MoonLadderStudios/MoonMind",
+            "number": 350,
+            "url": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+            "headSha": "abc123",
+        },
+        "mergeAutomationConfig": {
+            "finishMode": "review_only",
+            "reviewLoop": {"enabled": True, "provider": "codex"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="review_only requires parentExecutionPlan"):
+        MergeAutomationStartInput.model_validate(payload)
+
+    payload["parentExecutionPlan"] = _review_only_plan_binding()
+    admitted = MergeAutomationStartInput.model_validate(payload)
+    assert admitted.parent_execution_plan.model_dump(by_alias=True) == _review_only_plan_binding()
+
+
+@pytest.mark.parametrize("finish_mode", ["merge", "fix_only"])
+def test_legacy_gate_start_serialization_omits_new_parent_plan_field(finish_mode) -> None:
+    from moonmind.schemas.temporal_models import MergeAutomationStartInput
+
+    legacy = MergeAutomationStartInput.model_validate({
+        "workflowType": "MoonMind.MergeAutomation",
+        "parentWorkflowId": "mm:parent",
+        "publishContextRef": "artifact:existing-pr-target",
+        "pullRequest": {
+            "repo": "MoonLadderStudios/MoonMind",
+            "number": 350,
+            "url": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+            "headSha": "abc123",
+        },
+        "mergeAutomationConfig": {"finishMode": finish_mode},
+    })
+
+    assert "parentExecutionPlan" not in legacy.model_dump(by_alias=True)
+    assert "parent_execution_plan" not in legacy.model_dump()
 
 
 @pytest.mark.parametrize("finish_mode", ["merge", "fix_only"])
@@ -426,3 +509,20 @@ def test_review_complete_is_success_only_for_review_only_parent_mode() -> None:
     ) is True
     workflow._publish_context["mergeAutomationStatus"] = "review_complete"
     assert workflow._merge_happened() is False
+
+
+@pytest.mark.parametrize("finish_mode", [None, "merge", "fix_only", "review_only"])
+def test_parent_summary_projects_only_explicit_review_only_finish_mode(finish_mode) -> None:
+    parent = MoonMindRunWorkflow()
+    result = {"status": "awaiting_external"}
+    if finish_mode is not None:
+        result["finishMode"] = finish_mode
+    parent._publish_context["mergeAutomationResult"] = result
+
+    summary = parent._merge_automation_summary_from_context()
+
+    assert summary is not None
+    if finish_mode == "review_only":
+        assert summary["finishMode"] == "review_only"
+    else:
+        assert "finishMode" not in summary

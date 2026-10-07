@@ -8152,6 +8152,72 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it.each([
+    { status: 'waiting', finishMode: 'review_only', requested: false, fromSummary: false, message: 'Waiting to request review of the current PR head.' },
+    { status: 'waiting', finishMode: 'review_only', requested: true, fromSummary: false, message: 'Review requested. Waiting for the configured reviewer to complete.' },
+    { status: 'waiting', finishMode: undefined, requested: true, fromSummary: false, message: 'Review requested. Waiting for the configured reviewer to complete.' },
+    { status: 'review_complete', finishMode: 'review_only', requested: false, fromSummary: false, message: 'The requested review is complete. CI and any review findings remain separate obligations.' },
+    { status: 'review_complete', finishMode: 'review_only', requested: false, fromSummary: true, message: 'The requested review is complete. CI and any review findings remain separate obligations.' },
+    { status: 'blocked', finishMode: 'review_only', requested: false, fromSummary: false, message: 'Review-only automation does not launch a resolver.' },
+  ])('renders review-only automation $status mode=$finishMode requested=$requested from summary=$fromSummary without resolver-wait copy', async ({ status, finishMode, requested, fromSummary, message }) => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-review-only-visibility/overview?source=temporal');
+    const mergeAutomation = {
+      enabled: true,
+      workflowId: 'merge-automation:test-review-only-visibility',
+      status,
+      finishMode,
+      latestHeadSha: 'reviewed-head',
+      resolverChildWorkflowIds: [],
+      blockers: [
+        { kind: 'review_comments', summary: 'Two review findings remain unresolved.' },
+        { kind: 'checks_failed', summary: 'Required checks are failing.' },
+      ],
+      reviewLoop: {
+        enabled: true,
+        activeRequest: requested ? { status: 'requested', headSha: 'reviewed-head' } : null,
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-review-only-visibility',
+      workflowId: 'test-review-only-visibility',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Review-only visibility task',
+      summary: 'Fresh review requested for the current PR head.',
+      status: status === 'waiting' ? 'running' : 'completed',
+      state: status === 'waiting' ? 'awaiting_external' : 'completed',
+      publishMode: 'none',
+      ...(fromSummary ? { summaryArtifactRef: 'art-summary-review-only' } : { mergeAutomation }),
+      createdAt: '2026-10-07T06:43:39Z',
+      updatedAt: '2026-10-07T06:54:00Z',
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-review-only/download')) {
+        return Promise.resolve({ ok: true, text: async () => JSON.stringify({ mergeAutomation }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(message)).toBeTruthy();
+      expect(screen.getByText('Two review findings remain unresolved.')).toBeTruthy();
+      expect(screen.getByText('Required checks are failing.')).toBeTruthy();
+    });
+    expect(screen.queryByText('Waiting for required checks before launching pr-resolver.')).toBeNull();
+    expect(screen.queryByText('Resolver Children')).toBeNull();
+  });
+
   it('accepts null merge automation artifact refs from execution detail', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs/overview?source=temporal');
     const mockExecution = {

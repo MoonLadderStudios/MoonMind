@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 
 from moonmind.workflows.merge_automation_review import build_review_request_key
 from moonmind.workflows.temporal.workflows import (
@@ -234,7 +234,9 @@ class _Harness:
             merge_automation_module.workflow,
             "info",
             lambda: SimpleNamespace(
-                workflow_id=MERGE_AUTOMATION_WORKFLOW_ID, run_id=OWNER_RUN_ID
+                workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+                run_id=OWNER_RUN_ID,
+                parent=SimpleNamespace(workflow_id="wf-parent", run_id="run-parent"),
             ),
         )
         monkeypatch.setattr(
@@ -1204,9 +1206,21 @@ async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
     assert len(harness.child_workflow_ids) == 5
 
 
+def _review_only_parent_execution_plan() -> dict[str, str]:
+    return {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art-parent-plan",
+        "taskInputSnapshotRef": "art-parent-task",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+
 def _review_only_payload() -> dict[str, Any]:
     payload = _payload()
     payload["mergeAutomationConfig"]["finishMode"] = "review_only"
+    payload["principal"] = "fixture-review-owner"
+    payload["parentExecutionPlan"] = _review_only_parent_execution_plan()
     # Exercise the actual child-plan preparation boundary if a regression tries
     # to start a resolver, rather than silently taking a legacy runtime path.
     payload["resolverTemplate"] = {"targetRuntime": "omnigent"}
@@ -1282,6 +1296,11 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
 
     from moonmind.workflows.temporal import activity_runtime
     from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
+    from moonmind.auth.bound_acquisition import (
+        AcquiredCredential,
+        BindingMetadata,
+        EphemeralCredential,
+    )
 
     harness = _review_only_harness(
         monkeypatch, readiness=[], request_results=[_posted(HEAD_1)]
@@ -1293,9 +1312,43 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
         "info",
         lambda: SimpleNamespace(activity_id="review-only-readiness"),
     )
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    async def selected_repository_credential(payload, *, repository, operation):
+        assert repository == "MoonLadderStudios/MoonMind"
+        assert operation == "read"
+        assert payload["parentExecutionPlan"] == _review_only_parent_execution_plan()
+        assert payload["principal"] == "fixture-review-owner"
+        return AcquiredCredential(
+            binding=BindingMetadata(
+                bindingDigest="fixture-binding",
+                connectionId="fixture-selected-connection",
+                endpoint="github.com/MoonLadderStudios/MoonMind",
+                routeId="fixture-selected-route",
+                role="collaboration",
+                operations=("read",),
+                policyRevision=1,
+                connectionRevision=1,
+                credentialRevision=1,
+                principalRef="fixture-review-owner",
+                scopeType="system",
+                operationId="fixture-read",
+                issuanceId="fixture-issuance",
+                generation=1,
+                adapterKind="fixture",
+            ),
+            credential=EphemeralCredential(b"fixture-selected-token"),
+        )
+
+    activities = TemporalIntegrationActivities()
+    monkeypatch.setattr(
+        activity_runtime,
+        "_merge_automation_repository_credential",
+        selected_repository_credential,
+    )
 
     def github_response(request):
+        assert request.headers["authorization"] == "Bearer fixture-selected-token"
         path = request.url.path
         if path.endswith("/pulls/350"):
             data = {"state": "open", "head": {"sha": HEAD_1}, "mergeable": True}
@@ -1339,7 +1392,6 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
         lambda **kwargs: client_type(transport=transport, **kwargs),
     )
     original_activity = merge_automation_module.workflow.execute_activity
-    activities = TemporalIntegrationActivities()
 
     async def activity(name, payload, **kwargs):
         if name == "merge_automation.evaluate_readiness":
@@ -1622,3 +1674,119 @@ async def test_review_only_restored_completed_cycle_requires_fresh_completion(
     assert harness.request_payloads == []
     assert result["latestHeadSha"] == HEAD_1
     _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_request_transports_admitted_parent_authority(monkeypatch):
+    payload = _review_only_payload()
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+        request_results=[_posted(HEAD_1)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert len(harness.request_payloads) == 1
+    request = harness.request_payloads[0]
+    # The gate owns ledger idempotency; the distinct admitted parent owns the
+    # immutable repository authority. Neither identity may replace the other.
+    assert request["parentWorkflowId"] == MERGE_AUTOMATION_WORKFLOW_ID
+    assert request["admittedParentWorkflowId"] == payload["parentWorkflowId"]
+    assert request["parentRunId"] == payload["parentRunId"]
+    assert request["principal"] == payload["principal"]
+    assert request["parentExecutionPlan"] == payload["parentExecutionPlan"]
+    assert request["finishMode"] == "review_only"
+    assert "githubToken" not in request
+    assert "token" not in request
+    assert "fixture-selected-token" not in json.dumps(request)
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_mode", ["review_only", "merge", "fix_only"])
+async def test_review_only_summary_projects_mode_without_changing_legacy_summary(
+    monkeypatch, finish_mode
+):
+    if finish_mode == "review_only":
+        payload = _review_only_payload()
+        harness = _review_only_harness(
+            monkeypatch,
+            readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+            request_results=[_posted(HEAD_1)],
+        )
+    else:
+        payload = _payload()
+        payload["mergeAutomationConfig"]["finishMode"] = finish_mode
+        harness = _Harness(
+            monkeypatch,
+            readiness=[_ready(HEAD_1)],
+            child_results=[
+                {
+                    "status": "success",
+                    "mergeAutomationDisposition": (
+                        "merged" if finish_mode == "merge" else "review_clean"
+                    ),
+                }
+            ],
+        )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    if finish_mode == "review_only":
+        assert result["status"] == "review_complete"
+        assert result["finishMode"] == "review_only"
+        _assert_review_only_has_no_resolver(harness, result)
+    else:
+        assert result["status"] == (
+            "merged" if finish_mode == "merge" else "review_clean"
+        )
+        assert "finishMode" not in result
+        assert len(harness.child_payloads) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_binding", ["missing_parent", "wrong_workflow", "wrong_run"])
+async def test_review_only_requires_actual_owning_temporal_parent_before_activities(
+    monkeypatch, parent_binding
+):
+    harness = _review_only_harness(monkeypatch, readiness=[])
+    parent = (
+        None
+        if parent_binding == "missing_parent"
+        else SimpleNamespace(
+            workflow_id="different-parent" if parent_binding == "wrong_workflow" else "wf-parent",
+            run_id="different-run" if parent_binding == "wrong_run" else "run-parent",
+        )
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            run_id=OWNER_RUN_ID,
+            parent=parent,
+        ),
+    )
+    activity_calls = []
+    original_activity = merge_automation_module.workflow.execute_activity
+
+    async def activity(name, payload, **kwargs):
+        activity_calls.append(name)
+        return await original_activity(name, payload, **kwargs)
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+
+    with pytest.raises(
+        ApplicationError, match="review_only requires its owning Temporal parent"
+    ) as rejection:
+        await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+    assert rejection.value.non_retryable is True
+
+    assert activity_calls == []
+    assert harness.typed_activity_names == []
+    assert harness.request_payloads == []
+    assert harness.child_payloads == []
+    assert harness.artifact_names == []
+    assert harness.wait_calls == 0
