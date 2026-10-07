@@ -383,6 +383,15 @@ to the Claude terminal: the step settles when the turn ends and the host is then
 removed, so background work would otherwise finish with no owner to resume the
 session or write its declared outputs.
 
+Workflow-step `claude-native` sessions launch with `--permission-mode
+bypassPermissions`, matching the direct launcher's
+`--dangerously-skip-permissions`. Nobody answers prompts in a step's terminal,
+and launching the workflow is the operator's authorization. Claude Code's
+account default (`auto`) would otherwise let its classifier refuse requested
+work, such as queueing pr-resolver children. Omnigent policy hooks still
+enforce deployment deny rules. A permission flag authored in the session's
+`terminalLaunchArgs` is preserved.
+
 A provider response ending in matched tool output while its session remains
 active is not terminal evidence. The execution driver requests same-session
 continuation only when its caller explicitly owns that recovery. Other hosts

@@ -1143,6 +1143,8 @@ _BOOTSTRAP_APPROVAL_REMEDIATION_ACTIONS: tuple[str, ...] = (
     "execution.start_fresh_rerun",
     "execution.cancel",
     "execution.force_terminate",
+    "session.interrupt_turn",
+    "session.cancel",
     "checkpoint_branch.create_from_remediation_context",
 )
 

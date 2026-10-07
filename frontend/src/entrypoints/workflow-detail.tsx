@@ -1126,6 +1126,8 @@ const RemediationActionCapabilitySchema = z
     supportedHostModes: z.array(z.string()),
     requiredEvidenceClasses: z.array(z.string()),
     blockedReasons: z.array(z.string()),
+    targetSelectorRequired: z.boolean().optional().default(false),
+    targetSelectorOptions: z.array(z.string()).optional().default([]),
   })
   .passthrough();
 
@@ -7663,6 +7665,21 @@ function remediationListValue(items: string[] | null | undefined): string {
   return items && items.length > 0 ? items.join(', ') : '—';
 }
 
+function remediationActionLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    'execution.pause': 'Pause workflow',
+    'execution.resume': 'Resume workflow',
+    'execution.cancel': 'Cancel workflow',
+    'execution.force_terminate': 'Force terminate workflow',
+    'execution.request_rerun_same_workflow': 'Rerun workflow',
+    'execution.start_fresh_rerun': 'Start fresh rerun',
+    'checkpoint_branch.create_from_remediation_context': 'Create corrective branch',
+    'session.interrupt_turn': 'Interrupt turn',
+    'session.cancel': 'Cancel session',
+  };
+  return labels[kind] ?? kind;
+}
+
 function RemediationCapabilityMatrix({
   rows,
 }: {
@@ -7672,7 +7689,7 @@ function RemediationCapabilityMatrix({
   return (
     <details>
       <summary>
-        Action capability matrix ({rows.filter((row) => row.requestable).length} executable / {rows.length} catalog)
+        Action diagnostics ({rows.filter((row) => row.requestable).length} available / {rows.length} catalog)
       </summary>
       <ul className="td-remediation-list">
         {rows.map((row) => (
@@ -8248,7 +8265,11 @@ function RemediationRelationshipsPanel({
                   <Card label="Approval">{item.approvalState?.decision || 'not_required'}</Card>
                   <Card label="Selected Steps">{remediationListValue(item.selectedSteps)}</Card>
                   <Card label="Current Target">{item.currentTargetState || '—'}</Card>
-                  <Card label="Allowed Actions">{remediationListValue(item.allowedActions)}</Card>
+                  <Card label="Available Actions">{remediationListValue(
+                    item.actionCapabilities.filter((row) => row.requestable).map((row) =>
+                      `${remediationActionLabel(row.actionKind)}${row.targetSelectorRequired ? ' (select a session)' : ''}`,
+                    ),
+                  )}</Card>
                   <Card label="Lock">{item.activeLockScope || 'None'}</Card>
                   <Card label="Lock Holder">{item.activeLockHolder || item.lockOutcome?.holder || '—'}</Card>
                   <Card label="Lock Outcome">{item.lockOutcome?.state || '—'}</Card>
@@ -8256,7 +8277,7 @@ function RemediationRelationshipsPanel({
                     <Card label="Lock Released">{formatWhen(item.lockOutcome.releasedAt)}</Card>
                   ) : null}
                 </div>
-                {(!item.allowedActions || item.allowedActions.length === 0) ? (
+                {(!item.actionCapabilities.some((row) => row.requestable)) ? (
                   <p className="notice subtle">
                     {item.authorityMode === 'observe_only'
                       ? 'Observe-only authority: no mutating actions are offered for this target.'

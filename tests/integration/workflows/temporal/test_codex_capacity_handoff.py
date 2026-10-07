@@ -87,6 +87,23 @@ class _CodexCapacityHandoffRun(MoonMindAgentRun):
 
 
 class _HandoffCapacityActivities(_CodexCapacityActivities):
+    def __init__(self, client, *, hold_first_release: bool = False):
+        super().__init__(client)
+        self.hold_first_release = hold_first_release
+        self.first_release_started = asyncio.Event()
+        self.allow_first_release = asyncio.Event()
+
+    @activity.defn(name="provider_profile.sync_slot_leases")
+    async def sync_slot_leases(self, payload: dict) -> dict:
+        if (
+            self.hold_first_release
+            and payload.get("action") == "release_one"
+            and not self.first_release_started.is_set()
+        ):
+            self.first_release_started.set()
+            await self.allow_first_release.wait()
+        return await super().sync_slot_leases(payload)
+
     @activity.defn(name="integration.omnigent.execute")
     async def execute(self, request: AgentExecutionRequest) -> dict:
         ticket = request.admitted_provider_capacity
@@ -107,8 +124,11 @@ class _HandoffCapacityActivities(_CodexCapacityActivities):
         ).model_dump(mode="json", by_alias=True)
 
 
+@pytest.mark.parametrize("hold_first_release", [False, True])
 async def test_starved_codex_worker_returns_capacity_for_the_next_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hold_first_release: bool,
 ) -> None:
     monkeypatch.setattr(agent_run_module, "_OMNIGENT_EXECUTION_HANDOFF_SECONDS", 2)
     monkeypatch.setattr(agent_run_module, "_SLOT_WAIT_TIMEOUT_SECONDS", 1)
@@ -132,7 +152,10 @@ async def test_starved_codex_worker_returns_capacity_for_the_next_run(
             data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
         ) as env:
             await _register_search_attributes(env)
-            capacity = _HandoffCapacityActivities(env.client)
+            capacity = _HandoffCapacityActivities(
+                env.client,
+                hold_first_release=hold_first_release,
+            )
             workflow_queue = get_workflow_task_queue()
             with env.auto_time_skipping_disabled():
                 async with (
@@ -171,6 +194,35 @@ async def test_starved_codex_worker_returns_capacity_for_the_next_run(
                     )
                     # There is deliberately no execution worker. Only Temporal
                     # can decide that each single-shot delivery never started.
+                    if hold_first_release:
+                        await asyncio.wait_for(
+                            capacity.first_release_started.wait(), 15
+                        )
+                        try:
+                            async with asyncio.timeout(15):
+                                while True:
+                                    state = await manager.query("get_state")
+                                    blocked_history = await first.fetch_history()
+                                    scheduled = [
+                                        event
+                                        for event in blocked_history.events
+                                        if event.event_type
+                                        == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+                                        and event.activity_task_scheduled_event_attributes.activity_type.name
+                                        == "integration.omnigent.execute"
+                                    ]
+                                    assert len(scheduled) == 1, (
+                                        "The retry inherited a lease before its durable "
+                                        "release completed"
+                                    )
+                                    if state["pending_requests_ordered"] and any(
+                                        item["requester_workflow_id"] == first.id
+                                        for item in state["pending_requests"]
+                                    ):
+                                        break
+                                    await asyncio.sleep(0.01)
+                        finally:
+                            capacity.allow_first_release.set()
                     try:
                         first_result = await asyncio.wait_for(first.result(), 30)
                     except TimeoutError:
@@ -255,9 +307,20 @@ async def test_starved_codex_worker_returns_capacity_for_the_next_run(
                             == "The next run acquired the returned slot"
                         )
                         assert len(capacity.started) == 1
+                    async with asyncio.timeout(30):
+                        while (await manager.query("get_state"))["profiles"][
+                            "provider-codex-native"
+                        ]["current_leases"]:
+                            await asyncio.sleep(0.01)
                     await manager.signal("shutdown")
                     await manager.result()
+                    manager_history = await manager.fetch_history()
 
+        await Replayer(
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+        ).replay_workflow(manager_history)
         await Replayer(
             workflows=[_CodexCapacityHandoffRun],
             workflow_runner=UnsandboxedWorkflowRunner(),

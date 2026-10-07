@@ -2,7 +2,7 @@
 
 - **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-08-27
+- **Last updated:** 2026-10-06
 - **Document class:** Canonical declarative design
 
 **Related:**
@@ -795,20 +795,23 @@ for unaffected scratch or public-image work.
 ### 11.7 Image lifetime
 
 Images survive job, session, and workflow completion. Deployment-level retention
-evicts unused images and build cache under disk pressure while protecting images
-used by containers. Job cleanup never performs global image pruning.
+expires superseded images and build cache while protecting images used by
+containers. Job cleanup never performs global image pruning.
 
 The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow asks
-the trusted agent-runtime worker to inspect the filesystem that contains
-`/work/agent_jobs`. Below the default 80% high watermark it performs no Docker
-mutation. At or above that watermark it removes unused images older than seven
-days and build cache older than one day. If the filesystem remains at or above
-the default 90% critical watermark, it removes all remaining unused images and
-build cache. Docker volumes and containers are never targets of this automatic
-pressure pass, and failures are surfaced as degraded maintenance for retry on
-the next hourly run.
+the trusted agent-runtime worker to run Docker storage maintenance. Every pass
+removes unused untagged images (superseded digest-pinned releases) older than
+one day, build cache unused for one day, and anonymous volumes that no
+container references. Tagged images, such as a deployment-declared container-job
+image, survive routine passes so the next job reuses them instead of
+re-pulling. If the filesystem that contains `/work/agent_jobs` remains at or
+above the default 90% critical watermark, the pass also removes every remaining
+unused image and all unused build cache. Named volumes and containers are never
+targets, and failures are surfaced as degraded maintenance for retry on the
+next hourly run. [Managed Runtime Cleanup](ManagedRuntimeCleanup.md) owns the
+full maintenance contract.
 
-Operators can disable the pressure pass or tune its two watermarks and minimum
+Operators can disable the maintenance or tune its watermarks and minimum
 ages with the documented `MOONMIND_DOCKER_STORAGE_*` settings. The high
 watermark must be lower than the critical watermark; invalid values fail before
 any prune command runs.
