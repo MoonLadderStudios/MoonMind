@@ -31,7 +31,8 @@ const detail = {
   summary: 'Updated the setup guide and checked the documented commands. Changes and verification notes are saved with this run.',
   taskInstructions: 'Simplify the setup guide. Check the startup commands and keep the examples current.',
   startingBranch: 'main', targetBranch: 'main', profileId: 'docs-example', providerLabel: 'Codex',
-  taskSkills: ['document-author'], publishMode: 'none',
+  taskSkills: ['document-author'], resolvedSkillsetRef: 'example-skills-v1', publishMode: 'none',
+  summaryArtifactRef: 'example-summary', createdAt: '2026-10-07T10:14:00Z',
   startedAt: '2026-10-07T10:15:00Z', closedAt: stamp,
   stepsHref: '/api/executions/example-3/steps', actions: {},
 };
@@ -63,6 +64,7 @@ const server = createServer(async (req, res) => {
     else if (path === '/api/v1/provider-profiles') data = [{ profile_id: 'docs-example', enabled: true, launch_ready: true }];
     else if (path === '/api/executions') data = { items: rows, count: rows.length, total: rows.length };
     else if (path === '/api/executions/facets') data = { facet: url.searchParams.get('facet') || 'status', items: [], values: [] };
+    else if (path === '/api/artifacts/example-summary/download') data = { operatorSummary: detail.summary };
     else if (path === '/api/executions/example-3') data = detail;
     else if (path === '/api/executions/example-3/steps') data = steps;
     else if (path.endsWith('/artifacts')) data = { artifacts: [] };
@@ -73,7 +75,7 @@ const server = createServer(async (req, res) => {
 await new Promise(resolveReady => server.listen(0, '127.0.0.1', resolveReady));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, colorScheme: 'dark' });
+const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1, colorScheme: 'dark' });
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => route.request().url().startsWith(origin + '/') ? route.continue() : route.abort());
@@ -84,12 +86,13 @@ try {
   await page.getByRole('row', { name: /Refresh the setup guide/ }).waitFor();
   await page.evaluate(() => document.fonts.ready);
   if (await page.locator('html').getAttribute('data-theme') !== 'dark') throw new Error('Dark theme not applied');
-  await page.screenshot({ path: resolve(output, 'workflow-list.png') });
+  await page.screenshot({ path: resolve(output, 'workflow-list.png'), clip: { x: 0, y: 0, width: 1600, height: 500 } });
   await page.goto(`${origin}/workflows/example-3/overview?source=temporal`);
   await page.getByRole('heading', { name: 'Refresh the setup guide' }).waitFor();
   await page.getByText(detail.summary, { exact: true }).waitFor();
   await page.evaluate(() => document.fonts.ready);
-  await page.screenshot({ path: resolve(output, 'workflow-detail.png'), fullPage: true });
-  await writeFile(resolve(output, 'capture-evidence.json'), JSON.stringify({ theme: 'dark', viewport: { width: 1440, height: 1000 }, syntheticData: true, unknownRoutes: [...unknown], pageErrors: errors, requests }, null, 2));
+  await page.screenshot({ path: resolve(output, 'workflow-detail.png'), clip: { x: 0, y: 0, width: 1600, height: 900 } });
+  await writeFile(resolve(output, 'capture-evidence.json'), JSON.stringify({ theme: 'dark', viewport: { width: 1600, height: 1000 }, syntheticData: true, unknownRoutes: [...unknown], pageErrors: errors, requests }, null, 2));
+  if (unknown.size) throw new Error(`Unexpected API routes: ${[...unknown].join(', ')}`);
   if (errors.length) throw new Error(errors.join('\n'));
 } finally { await browser.close(); server.close(); }
