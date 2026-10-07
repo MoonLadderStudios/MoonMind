@@ -2777,8 +2777,13 @@ tbody tr:hover {
   width: 18%;
 }
 
-.queue-table-column-runtime {
-  width: 10%;
+.queue-table-column-provider-profile {
+  width: 12%;
+}
+
+/* Long or equal-name recorded Provider Profiles wrap inside the column. */
+.queue-table-cell-provider-profile {
+  overflow-wrap: anywhere;
 }
 
 .queue-table-column-repository {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  workflowDetailHref,
   workflowListApiQueryFromContext,
   workflowListContextParams,
   workflowListHrefFromContext,
@@ -46,5 +47,25 @@ describe("workflowListContextParams", () => {
     );
 
     expect(href).toBe("/workflows?stateIn=completed&limit=100&returnFromWorkflowDetail=1");
+  });
+
+  it("MoonLadderStudios/MoonMind#4640 round-trips Provider Profile filters through list/detail context", () => {
+    const listQuery =
+      "providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50";
+    const detailHref = workflowDetailHref("wf-1", new URLSearchParams(listQuery));
+
+    expect(detailHref).toBe(
+      "/workflows/wf-1?providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50&source=temporal",
+    );
+    const backHref = workflowListHrefFromContext(
+      new URLSearchParams(detailHref.split("?")[1]),
+      { markDetailReturn: true },
+    );
+    expect(backHref).toBe(
+      "/workflows?providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50&returnFromWorkflowDetail=1",
+    );
+    expect(workflowListApiQueryFromContext(new URLSearchParams("providerProfileBlank=true"))).toBe(
+      "source=temporal&pageSize=25&providerProfileBlank=true",
+    );
   });
 });
