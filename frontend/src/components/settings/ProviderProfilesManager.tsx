@@ -1891,7 +1891,34 @@ export function ProviderProfilesManager({
   >(null);
   const [showImportedVolume, setShowImportedVolume] = useState(false);
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
-  const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
+  // MoonLadderStudios/MoonMind#4001: a validation observation belongs to the
+  // exact edit target, runtime, provider, authentication method, and volume it
+  // was requested for. Any change to those inputs, or an explicit reset, makes
+  // the observation (and any response still in flight) stale before save. The
+  // server remains authoritative when the profile is submitted.
+  const [importedVolumeObservation, setImportedVolumeObservation] = useState<string | null>(null);
+  const importedVolumeOwnerKey = JSON.stringify([
+    editingProfileId,
+    form.runtimeId.trim(),
+    form.providerId.trim(),
+    form.authenticationMethod,
+    importedVolumeRef.trim(),
+  ]);
+  const importedVolumeValidated = importedVolumeObservation === importedVolumeOwnerKey;
+  const importedVolumeOwnerRef = useRef({ key: importedVolumeOwnerKey, generation: 0 });
+  if (importedVolumeOwnerRef.current.key !== importedVolumeOwnerKey) {
+    importedVolumeOwnerRef.current = {
+      key: importedVolumeOwnerKey,
+      generation: importedVolumeOwnerRef.current.generation + 1,
+    };
+  }
+  const invalidateImportedVolume = () => {
+    importedVolumeOwnerRef.current = {
+      ...importedVolumeOwnerRef.current,
+      generation: importedVolumeOwnerRef.current.generation + 1,
+    };
+    setImportedVolumeObservation(null);
+  };
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
   // Create-time "use as runtime default" intent cannot be honored at creation:
   // guided creation stores the profile disabled with is_default=false until
@@ -2074,7 +2101,6 @@ export function ProviderProfilesManager({
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     setCreationCapabilitiesError(null);
-    setImportedVolumeValidated(false);
     if (!runtimeId || !providerId) {
       setCreationCapabilities(null);
       return;
@@ -2111,6 +2137,9 @@ export function ProviderProfilesManager({
         return response.json() as Promise<ProviderProfileCreationCapabilities>;
       })
       .then((capabilities) => {
+        // A superseded request may finish decoding after cancellation. Only
+        // the active request owns capabilities and the authentication choice.
+        if (controller.signal.aborted) return;
         setCreationCapabilities(capabilities);
         setForm((current) => {
           const methodStillSupported = capabilities.authentication_methods.some(
@@ -2162,6 +2191,7 @@ export function ProviderProfilesManager({
           return response.json() as Promise<ProviderProfileTierCapabilities>;
         })
         .then((caps) => {
+          if (controller.signal.aborted) return;
           setTierCapabilities(caps);
           if (caps.evidence?.stale) {
             setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
@@ -2174,7 +2204,9 @@ export function ProviderProfilesManager({
             error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
           );
         })
-        .finally(() => setTierCapabilitiesLoading(false));
+        .finally(() => {
+          if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+        });
       return () => controller.abort();
     }
     const runtimeId = form.runtimeId.trim();
@@ -2182,9 +2214,13 @@ export function ProviderProfilesManager({
     if (!runtimeId || !providerId) {
       setTierCapabilities(null);
       setTierCapabilitiesError(null);
+      setTierCapabilitiesLoading(false);
       return;
     }
-    if (isEditing) return;
+    if (isEditing) {
+      setTierCapabilitiesLoading(false);
+      return;
+    }
     setTierCapabilitiesLoading(true);
     setTierCapabilitiesError(null);
     const controller = new AbortController();
@@ -2200,6 +2236,7 @@ export function ProviderProfilesManager({
         return response.json() as Promise<ProviderProfileTierCapabilities>;
       })
       .then((caps) => {
+        if (controller.signal.aborted) return;
         setTierCapabilities(caps);
         if (caps.evidence?.stale) {
           setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
@@ -2212,7 +2249,9 @@ export function ProviderProfilesManager({
           error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
         );
       })
-      .finally(() => setTierCapabilitiesLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+      });
     return () => controller.abort();
   }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
 
@@ -2456,7 +2495,7 @@ export function ProviderProfilesManager({
     setShowAdvanced(false);
     setShowImportedVolume(false);
     setImportedVolumeRef('');
-    setImportedVolumeValidated(false);
+    invalidateImportedVolume();
     onNotice(null);
   };
 
@@ -2500,7 +2539,7 @@ export function ProviderProfilesManager({
     setShowAdvanced(hasUnknownMethod || hasUnknownRole);
     setShowImportedVolume(false);
     setImportedVolumeRef(profile.volume_ref ?? '');
-    setImportedVolumeValidated(false);
+    invalidateImportedVolume();
     onNotice(null);
   };
 
@@ -3222,18 +3261,23 @@ export function ProviderProfilesManager({
   }, [opencodeEnrollment]);
 
   const importedVolumeMutation = useMutation({
-    mutationFn: async () => {
-      const volumeRef = importedVolumeRef.trim();
-      if (!volumeRef) {
+    mutationFn: async (request: {
+      ownerKey: string;
+      generation: number;
+      runtimeId: string;
+      providerId: string;
+      volumeRef: string;
+    }) => {
+      if (!request.volumeRef) {
         throw new Error('Existing credential volume is required.');
       }
       const response = await fetch('/api/v1/provider-profiles/credential-volume/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
-          runtime_id: form.runtimeId.trim(),
-          provider_id: form.providerId.trim(),
-          volume_ref: volumeRef,
+          runtime_id: request.runtimeId,
+          provider_id: request.providerId,
+          volume_ref: request.volumeRef,
         }),
       });
       const payload: unknown = await response.json().catch(() => ({}));
@@ -3245,17 +3289,20 @@ export function ProviderProfilesManager({
         volume_mount_path: string;
       };
     },
-    onSuccess: (result) => {
+    onSuccess: (result, request) => {
+      // A response for superseded inputs neither authorizes nor rewrites the draft.
+      if (request.generation !== importedVolumeOwnerRef.current.generation) return;
       setForm((current) => ({
         ...current,
         volumeRef: result.volume_ref,
         volumeMountPath: result.volume_mount_path,
       }));
-      setImportedVolumeValidated(true);
+      setImportedVolumeObservation(request.ownerKey);
       onNotice({ level: 'ok', text: 'Imported credential volume validated.' });
     },
-    onError: (error: Error) => {
-      setImportedVolumeValidated(false);
+    onError: (error: Error, request) => {
+      if (request.generation !== importedVolumeOwnerRef.current.generation) return;
+      setImportedVolumeObservation(null);
       onNotice({ level: 'error', text: error.message });
     },
   });
@@ -3466,7 +3513,7 @@ export function ProviderProfilesManager({
         setShowAdvanced(false);
         setShowImportedVolume(false);
         setImportedVolumeRef('');
-        setImportedVolumeValidated(false);
+        invalidateImportedVolume();
       }
       // Setup continuation targets the exact saved identity. Incomplete,
       // canceled, or failed enrollment offers Connect/Retry for that saved
@@ -5024,7 +5071,7 @@ export function ProviderProfilesManager({
                           authenticationMethod: asAuthenticationMethod(method.id),
                         }));
                         setShowImportedVolume(false);
-                        setImportedVolumeValidated(false);
+                        invalidateImportedVolume();
                       }}
                     />
                     {method.label}
@@ -5566,7 +5613,7 @@ export function ProviderProfilesManager({
                       className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
                       onClick={() => {
                         setShowImportedVolume((current) => !current);
-                        setImportedVolumeValidated(false);
+                        invalidateImportedVolume();
                       }}
                     >
                       Use an existing credential volume
@@ -5580,7 +5627,7 @@ export function ProviderProfilesManager({
                             value={importedVolumeRef}
                             onChange={(event) => {
                               setImportedVolumeRef(event.target.value);
-                              setImportedVolumeValidated(false);
+                              invalidateImportedVolume();
                             }}
                           />
                         </label>
@@ -5591,7 +5638,15 @@ export function ProviderProfilesManager({
                           type="button"
                           className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
                           disabled={importedVolumeMutation.isPending}
-                          onClick={() => importedVolumeMutation.mutate()}
+                          onClick={() =>
+                            importedVolumeMutation.mutate({
+                              ownerKey: importedVolumeOwnerKey,
+                              generation: importedVolumeOwnerRef.current.generation,
+                              runtimeId: form.runtimeId.trim(),
+                              providerId: form.providerId.trim(),
+                              volumeRef: importedVolumeRef.trim(),
+                            })
+                          }
                         >
                           Validate imported volume
                         </button>
