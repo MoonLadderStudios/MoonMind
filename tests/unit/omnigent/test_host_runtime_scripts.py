@@ -197,7 +197,7 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
         "GIT_CONFIG_VALUE_0",
     } <= passthrough
     assert not any("TOKEN" in name or "SECRET" in name for name in environment)
-    assert "ln -sfn /run/mm-credentials/github/hosts.yml" in _script
+    assert "cp /run/mm-credentials/github/hosts.yml" in _script
     assert "/home/app/.config/gh/hosts.yml" in _script
     assert "> /home/app/.omnigent/moonmind/bin/gh" in _script
     assert "export GH_CONFIG_DIR=/home/app/.config/gh" in _script

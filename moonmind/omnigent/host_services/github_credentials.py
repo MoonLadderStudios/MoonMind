@@ -26,32 +26,17 @@ from moonmind.workflows.executions.repository_contract import (
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _TARGET_PATH = "/run/mm-credentials/github"
+# Positional arguments: runtime uid, runtime gid, GitHub host; token on stdin.
+_HOSTS_WRITER_SCRIPT = (
+    "set -eu; umask 077; mkdir -p /config; "
+    'tmp="/config/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
+    "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
+    "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
+    'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
+    'mv -f "$tmp" /config/hosts.yml; '
+    'chown "$1:$2" /config; chmod 0700 /config'
+)
 _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-
-
-def github_hosts_writer_script(config_dir: str = "/config") -> str:
-    """Return the atomic ``hosts.yml`` writer for one gh config directory.
-
-    Positional arguments: runtime uid, runtime gid, GitHub host; the token is
-    read from stdin so it never enters argv or container metadata. The complete
-    file is written beside the live one and renamed into place, so a reader
-    never observes a truncated configuration.
-    """
-
-    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", config_dir) or ".." in config_dir:
-        raise ValueError("GitHub config directory is unsafe")
-    return (
-        f"set -eu; umask 077; mkdir -p {config_dir}; "
-        f'tmp="{config_dir}/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
-        "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
-        "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
-        'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
-        f'mv -f "$tmp" {config_dir}/hosts.yml; '
-        f'chown "$1:$2" {config_dir}; chmod 0700 {config_dir}'
-    )
-
-
-_HOSTS_WRITER_SCRIPT = github_hosts_writer_script()
 
 
 def github_host_from_endpoint(endpoint: str) -> str:

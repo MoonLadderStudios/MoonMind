@@ -5229,7 +5229,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
         skill_projection=tmp_path / "skills",
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
-        github_token="fixture_token",
+        github_token="fixture-token",
         effective_launch=compile_effective_launch(
             profile_ref="omnigent-codex@1",
             policy_ref="codex-on-demand@1",
