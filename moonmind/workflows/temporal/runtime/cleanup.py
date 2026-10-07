@@ -201,6 +201,7 @@ class ManagedRuntimeCleanupCandidate:
     run_records: tuple[ManagedRunRecord, ...] = ()
     session_records: tuple[CodexManagedSessionRecord, ...] = ()
     sandbox_owner: SandboxWorkspaceOwner | None = None
+    quarantine: bool = False
 
 
 @dataclass(frozen=True)
@@ -329,7 +330,7 @@ ClosedWorkflowProvider = Callable[[Sequence[str]], Mapping[str, datetime | None]
 
 _SANDBOX_STORE = "temporal_sandbox"
 # Name ``_delete_candidate`` gives a path while it is being removed.
-_QUARANTINE_NAME = re.compile(r"^\.gc-[0-9a-f]{32}-.+")
+_QUARANTINE_NAME = re.compile(r"^\.gc-[0-9a-f]{32}-(?P<original>.+)$")
 _CLOSED_WORKFLOW_STATUSES = frozenset(
     {"COMPLETED", "FAILED", "CANCELED", "TERMINATED", "TIMED_OUT"}
 )
@@ -449,6 +450,7 @@ class ManagedRuntimeWorkspaceJanitor:
             self._config.runtime_store_root
         )
         self._closed_workflows: dict[str, datetime | None] = {}
+        self._pass_errors: list[str] = []
 
     def run(self) -> ManagedRuntimeCleanupResult:
         config = self._config
@@ -492,8 +494,7 @@ class ManagedRuntimeWorkspaceJanitor:
 
     def _run_enabled_pass(self) -> ManagedRuntimeCleanupResult:
         errors: list[str] = []
-        if not self._config.dry_run:
-            self._resume_quarantined_deletions(errors)
+        self._pass_errors = errors
         try:
             run_records, session_records, unreadable = self._load_owner_records()
         except OSError as exc:
@@ -532,37 +533,41 @@ class ManagedRuntimeWorkspaceJanitor:
             errors=tuple(errors),
         )
 
-    def _resume_quarantined_deletions(self, errors: list[str]) -> None:
-        """Finish deletions a previous pass quarantined but did not complete.
-
-        Deletion renames a path to ``.gc-<uuid hex>-<name>`` beside it before
-        removing it, and the owner records may already be gone, so a crash or
-        cancellation mid-delete would otherwise leave the bytes forever.
-        """
+    def _quarantine_candidates(self) -> tuple[ManagedRuntimeCleanupCandidate, ...]:
+        """Resume interrupted deletion through normal safety/budget gates."""
 
         root = self._config.runtime_store_root
-        for parent in (
-            root,
-            root / "workspaces",
-            root / _SANDBOX_STORE,
-            self._config.artifact_root,
+        candidates: dict[Path, ManagedRuntimeCleanupCandidate] = {}
+        for parent in dict.fromkeys(
+            (
+                root,
+                root / "workspaces",
+                root / _SANDBOX_STORE,
+                self._config.artifact_root,
+            )
         ):
             try:
-                quarantines = sorted(
-                    child
-                    for child in parent.iterdir()
-                    if _QUARANTINE_NAME.match(child.name) and not child.is_symlink()
-                )
+                paths = sorted(parent.iterdir())
             except FileNotFoundError:
                 continue
             except OSError as exc:
-                errors.append(f"quarantine scan failed for {parent}: {exc}")
+                self._pass_errors.append(f"quarantine scan failed for {parent}: {exc}")
                 continue
-            for quarantine in quarantines:
-                try:
-                    _delete_path(quarantine, progress_callback=self._progress_callback)
-                except OSError as exc:
-                    errors.append(f"quarantine deletion failed for {quarantine}: {exc}")
+            for path in paths:
+                match = _QUARANTINE_NAME.fullmatch(path.name)
+                if match is None:
+                    continue
+                candidates[path] = ManagedRuntimeCleanupCandidate(
+                    kind=(
+                        "artifact"
+                        if parent == self._config.artifact_root
+                        else "workspace"
+                    ),
+                    path=path,
+                    ownership_root=path.with_name(match.group("original")),
+                    quarantine=True,
+                )
+        return tuple(candidates.values())
 
     def _load_owner_records(
         self,
@@ -799,7 +804,16 @@ class ManagedRuntimeWorkspaceJanitor:
         candidates.extend(ambiguous)
         candidates.extend(self._artifact_candidates(run_records, session_records))
         candidates.extend(self._record_candidates(run_records, session_records))
-        return tuple(candidates)
+        quarantines = self._quarantine_candidates()
+        quarantine_paths = {candidate.path for candidate in quarantines}
+        return (
+            *quarantines,
+            *(
+                candidate
+                for candidate in candidates
+                if candidate.path not in quarantine_paths
+            ),
+        )
 
     def _workspace_path_candidates(
         self, known_roots: set[Path]
@@ -905,11 +919,11 @@ class ManagedRuntimeWorkspaceJanitor:
         except ClosedWorkflowLookupError as exc:
             # Keep the answers Temporal gave; the failed owners stay protected.
             closed = exc.closed
-            if errors is not None:
-                errors.append(str(exc))
+            (errors if errors is not None else self._pass_errors).append(str(exc))
         except Exception as exc:
-            if errors is not None:
-                errors.append(f"owner workflow lookup failed: {exc}")
+            (errors if errors is not None else self._pass_errors).append(
+                f"owner workflow lookup failed: {exc}"
+            )
             return
         for workflow_id in workflow_ids:
             if workflow_id in closed:
@@ -1069,6 +1083,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 and not candidate.run_records
                 and not candidate.session_records
                 and candidate.sandbox_owner is None
+                and not candidate.quarantine
             ):
                 return self._decision(
                     candidate,
@@ -1111,14 +1126,14 @@ class ManagedRuntimeWorkspaceJanitor:
                     candidate, "protected_recent", "record retention disabled", newest
                 )
             age = self._now() - newest
-            if age < retention:
+            if not candidate.quarantine and age < retention:
                 return self._decision(
                     candidate,
                     "protected_recent",
                     "retention window has not elapsed",
                     newest,
                 )
-            if age < self._config.grace:
+            if not candidate.quarantine and age < self._config.grace:
                 return self._decision(
                     candidate, "protected_recent", "grace window has not elapsed", newest
                 )
@@ -1238,6 +1253,15 @@ class ManagedRuntimeWorkspaceJanitor:
     ) -> bool:
         ids = set()
         paths = {str(candidate.path)}
+        quarantine_match = (
+            _QUARANTINE_NAME.fullmatch(candidate.path.name)
+            if candidate.quarantine
+            else None
+        )
+        if quarantine_match is not None:
+            original_name = quarantine_match.group("original")
+            ids.add(original_name)
+            paths.add(str(candidate.path.with_name(original_name)))
         for record in candidate.run_records:
             ids.update(
                 value
@@ -1276,9 +1300,13 @@ class ManagedRuntimeWorkspaceJanitor:
         if candidate.path.parent.name == _SANDBOX_STORE:
             # Host containers mount the workspace volume by subpath, so Docker
             # reports daemon-side paths that never equal the worker path.
-            segment = f"/{_SANDBOX_STORE}/{candidate.path.name}"
+            names = {candidate.path.name}
+            if quarantine_match is not None:
+                names.add(quarantine_match.group("original"))
             if any(
                 mount.endswith(segment) or f"{segment}/" in mount
+                for name in names
+                for segment in (f"/{_SANDBOX_STORE}/{name}",)
                 for mount in docker_state.active_mount_paths
             ):
                 return True
@@ -1385,6 +1413,8 @@ class ManagedRuntimeWorkspaceJanitor:
             docker_state = self._docker_reference_state()
             if docker_state.failed:
                 return True
+            if candidate.quarantine:
+                return self._has_live_docker_reference(candidate, docker_state)
             for fresh in current:
                 if fresh.kind == candidate.kind and fresh.path == candidate.path:
                     self._refresh_closed_workflows((fresh,))
@@ -1414,6 +1444,9 @@ class ManagedRuntimeWorkspaceJanitor:
         if candidate.kind == "session_record":
             for record in candidate.session_records:
                 self._session_store.delete(record.session_id)
+            return True
+        if candidate.quarantine:
+            _delete_path(candidate.path, progress_callback=self._progress_callback)
             return True
         quarantine = candidate.path.with_name(
             f".gc-{uuid.uuid4().hex}-{candidate.path.name}"

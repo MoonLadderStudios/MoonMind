@@ -312,10 +312,13 @@ schedule: MoonMind.ManagedRuntimeWorkspaceCleanup
 
 A failed or unavailable Temporal lookup, for the whole pass or for one
 workflow, keeps every affected workspace and is reported as a pass error.
-Each claim records the workflow actually using the workspace, so a running
-reader of a closed owner's workspace keeps it. The janitor holds the claims
-mutex across its final claim check, the move into quarantine and the record
-removal, so a claim accepted after the rescan is never discarded. Owner close
+New claims record the workflow actually using the workspace, so a running
+reader of a closed owner's workspace keeps it. Legacy claims without verified
+reader identity remain protected until expiry. The janitor holds the same
+process- and thread-safe filesystem lock as grant admission across its final
+claim check, the move into quarantine and the record removal. The lock inode
+lives outside the removed records; grant admission rechecks that the workspace
+still exists while holding it, so a late claim cannot reopen deleted content. Owner close
 time, not workspace creation, starts the retention window, so a long-running
 workflow keeps its checkout for the full window after it finishes.
 
@@ -630,13 +633,17 @@ If any gate fails, the candidate must be skipped with a reason.
 
 Use a two-phase filesystem protocol:
 
-1. Acquire the janitor lock and, unless this is a dry run, finish deleting any
-   `.gc-<uuid hex>-<name>` quarantine an interrupted pass left in a candidate
-   parent. Its owner records may already be gone, so it is never a candidate.
-2. Scan stores and filesystem candidates.
+1. Acquire the janitor lock.
+2. Scan stores and filesystem candidates, including exact
+   `.gc-<32 lowercase hex digits>-<name>` quarantines left in candidate parents.
+   Resume quarantines first without restarting retention; they still obey
+   path/symlink checks, fresh Docker protection for both their original and
+   quarantine paths, dry-run mode, and the shared path/byte deletion budgets.
+   Include resumed deletion and protection decisions in the pass result.
 3. Build ownership groups.
 4. Classify candidates as protected, eligible, skipped, or errored.
 5. Re-load records and re-check live Docker state immediately before delete.
+   Report Temporal lookup failures during this rescan as pass errors too.
 6. Rename the candidate to a quarantine path such as `.gc-<uuid>-<name>` in the same parent.
 7. Delete the quarantine path best-effort.
 8. Emit structured pass results.

@@ -103,6 +103,7 @@ def _grant(
                 "grantId": "grant-1",
                 "mode": "exclusive",
                 "granteeWorkflowId": grantee,
+                "granteeIdentityVerified": True,
                 "expiresAt": expires_at.isoformat(),
             }
         ),
@@ -480,3 +481,194 @@ def test_interrupted_deletion_quarantine_is_resumed_on_the_next_pass(
     assert not workspace_quarantine.exists()
     assert unrelated.exists()
     assert result.errors == ()
+
+
+def test_legacy_claim_with_unverified_grantee_stays_protected(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    _grant(root, grantee=OWNER, expires_at=NOW + timedelta(days=1))
+    claim = next(
+        (SandboxWorkspaceRecordStore(root).store_root / f"{WORKSPACE_ID}.grants").glob(
+            "*.json"
+        )
+    )
+    payload = json.loads(claim.read_text())
+    payload.pop("granteeIdentityVerified", None)
+    claim.write_text(json.dumps(payload))
+    _age(claim.parent)
+    result = _janitor(root, _Closures({OWNER: OLD})).run()
+    assert _decision(result, workspace).classification == "protected_shared"
+    assert workspace.exists()
+
+
+def test_claims_mutex_excludes_another_thread(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    attempted, entered = Event(), Event()
+
+    def enter():
+        attempted.set()
+        with store.claims_locked(WORKSPACE_ID):
+            entered.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with store.claims_locked(WORKSPACE_ID):
+            future = pool.submit(enter)
+            assert attempted.wait(1)
+            assert not entered.wait(0.05), "another thread stole a live claim lock"
+        future.result(timeout=2)
+    assert entered.is_set()
+
+
+def test_claim_after_workspace_deletion_is_rejected(tmp_path: Path) -> None:
+    store = SandboxWorkspaceRecordStore(tmp_path)
+    with pytest.raises(ValueError, match="unavailable"):
+        store.claim_existing_workspace(
+            WORKSPACE_ID,
+            SimpleNamespace(
+                grant_id="late",
+                mode="read_only",
+                grantee_workflow_id="mm:reader",
+            ),
+        )
+
+
+@pytest.mark.parametrize("parent", ["", "workspaces", "temporal_sandbox", "artifacts"])
+def test_quarantine_deletion_obeys_zero_path_budget(
+    tmp_path: Path, parent: str
+) -> None:
+    from dataclasses import replace
+
+    root = tmp_path / "agent_jobs"
+    quarantine = root / parent / (".gc-" + "a" * 32 + "-workspace")
+    quarantine.mkdir(parents=True)
+    (quarantine / "saved.txt").write_text("retained")
+    janitor = _janitor(root, _Closures({}))
+    janitor._config = replace(janitor._config, max_delete_paths=0)
+    result = janitor.run()
+    assert quarantine.exists()
+    assert _decision(result, quarantine).classification == "budget_exhausted"
+
+
+def test_quarantine_deletion_obeys_byte_budget(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    root = tmp_path / "agent_jobs"
+    quarantine = root / "temporal_sandbox" / (".gc-" + "a" * 32 + "-workspace")
+    quarantine.mkdir(parents=True)
+    (quarantine / "saved.txt").write_text("retained")
+    janitor = _janitor(root, _Closures({}))
+    janitor._config = replace(janitor._config, max_delete_bytes=1)
+    result = janitor.run()
+    assert quarantine.exists()
+    assert _decision(result, quarantine).classification == "budget_exhausted"
+
+
+@pytest.mark.parametrize("failed_scan", [False, True])
+def test_quarantine_keeps_data_while_docker_mount_is_live_or_unknown(
+    tmp_path: Path, failed_scan: bool
+) -> None:
+    root = tmp_path / "agent_jobs"
+    quarantine = root / "temporal_sandbox" / (".gc-" + "a" * 32 + "-" + WORKSPACE_ID)
+    quarantine.mkdir(parents=True)
+    (quarantine / "saved.txt").write_text("retained")
+    result = _janitor(
+        root,
+        _Closures({}),
+        docker_state=DockerReferenceState(
+            failed=failed_scan,
+            reason="docker offline" if failed_scan else None,
+            active_mount_paths=frozenset(
+                {"/daemon/temporal_sandbox/" + WORKSPACE_ID + "/repo"}
+            ),
+        ),
+    ).run()
+    assert quarantine.exists()
+    assert _decision(result, quarantine).classification == "protected_active"
+
+
+def test_temporal_error_during_final_rescan_is_reported(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    calls = 0
+
+    def closures(workflow_ids):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise ClosedWorkflowLookupError({}, [OWNER])
+        return {OWNER: OLD}
+
+    result = _janitor(root, closures).run()
+    assert _decision(result, workspace).classification == "protected_active"
+    assert result.errors, "a final-rescan outage must not look like a healthy pass"
+    assert workspace.exists()
+
+
+def test_quarantine_deletion_consumes_shared_path_budget(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    root = tmp_path / "agent_jobs"
+    quarantines = [
+        root / "temporal_sandbox" / (".gc-" + digit * 32 + "-workspace")
+        for digit in ("a", "b")
+    ]
+    for quarantine in quarantines:
+        quarantine.mkdir(parents=True)
+        (quarantine / "saved.txt").write_text("retained")
+    janitor = _janitor(root, _Closures({}))
+    janitor._config = replace(janitor._config, max_delete_paths=1)
+    result = janitor.run()
+    assert sum(path.exists() for path in quarantines) == 1
+    assert sum(d.classification == "deleted" for d in result.decisions) == 1
+    assert sum(d.classification == "budget_exhausted" for d in result.decisions) == 1
+    assert result.estimated_deleted_bytes == len("retained")
+
+
+def test_quarantine_lock_rejects_reader_waiting_at_rename(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    root = tmp_path / "agent_jobs"
+    workspace = _sandbox_workspace(root)
+    store = SandboxWorkspaceRecordStore(root)
+    janitor = _janitor(root, _Closures({OWNER: OLD}))
+    attempted, finished = Event(), Event()
+    original_rename = Path.rename
+    futures = []
+
+    def claim():
+        attempted.set()
+        try:
+            store.claim_existing_workspace(
+                WORKSPACE_ID,
+                SimpleNamespace(
+                    grant_id="late",
+                    mode="read_only",
+                    grantee_workflow_id="mm:reader",
+                ),
+            )
+        finally:
+            finished.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        def rename(path, target):
+            if path == workspace:
+                futures.append(pool.submit(claim))
+                assert attempted.wait(1)
+                assert not finished.wait(
+                    0.05
+                ), "a reader entered before quarantine completed"
+            return original_rename(path, target)
+
+        monkeypatch.setattr(Path, "rename", rename)
+        result = janitor.run()
+        assert _decision(result, workspace).classification == "deleted"
+        with pytest.raises(ValueError, match="unavailable"):
+            futures[0].result(timeout=2)
+    assert not workspace.exists()
