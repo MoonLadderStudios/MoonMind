@@ -69,6 +69,64 @@ describe('Settings Entrypoint', () => {
   });
 });
 
+describe('MoonLadderStudios/MoonMind#4019 Source Control on Providers & Secrets', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders Source Control connections with Test connection bound to the selected connection', async () => {
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const respond = (body: unknown) =>
+        ({ ok: true, status: 200, json: async () => body }) as Response;
+      if (url === '/api/v1/repository-connections') {
+        return respond({
+          items: [
+            {
+              id: 'personal-github',
+              displayName: 'Personal GitHub',
+              endpoint: 'https://github.com',
+              credentialKind: 'personal_access_token',
+              lifecycle: 'active',
+              policyRevision: 1,
+              credentialRevision: 1,
+              allowedOperations: ['read'],
+              assignments: [
+                { repository: 'acme/widgets', providerRepoId: '7', operations: ['read'], revision: 1, verified: true },
+              ],
+            },
+          ],
+        });
+      }
+      if (url === '/api/v1/settings/github/token-probe') {
+        return respond({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true });
+      }
+      void init;
+      return new Promise(() => {}) as Promise<Response>;
+    });
+    renderProvidersPage({
+      page: 'settings-providers-secrets',
+      apiBase: '/api',
+      initialData: { settingsPermissions: ['settings.effective.read'] },
+    });
+
+    const section = await screen.findByRole('region', { name: 'Source Control' });
+    expect(within(section).getByRole('button', { name: 'Add token connection' })).toBeTruthy();
+    expect(within(section).getByRole('button', { name: 'Connect GitHub App' })).toBeTruthy();
+    await within(section).findByText('acme/widgets');
+    expect(within(section).queryByText(/SecretRef|GITHUB_TOKEN/)).toBeNull();
+
+    fireEvent.click(within(section).getByRole('button', { name: 'Test connection' }));
+    await within(section).findByText('Read access verified');
+    const probeCalls = fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/v1/settings/github/token-probe');
+    expect(probeCalls).toHaveLength(1);
+    for (const [, init] of probeCalls) {
+      expect(JSON.parse(String((init as RequestInit).body)).connectionId).toBe('personal-github');
+    }
+  });
+});
+
 describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () => {
   const codexProfile = {
     profile_id: 'codex_minimax_team',

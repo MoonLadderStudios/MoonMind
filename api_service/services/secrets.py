@@ -1376,8 +1376,8 @@ class SecretsService:
         """Match the canonical typed secret reference for connections.
 
         Repository connections persist ``{"source": "secret_ref",
-        "credentialRef": {"provider": "managed", "key": "<slug>"}}`` (camel
-        and snake aliases accepted). A literal ``db://`` scan never sees
+        "credentialRef": {"provider": "db" | "managed", "key": "<slug>"}}``
+        (camel and snake aliases accepted). A literal ``db://`` scan never sees
         those rows, so deletion protection must match the typed contract.
         """
         stack: list[Any] = [config]
@@ -1389,7 +1389,7 @@ class SecretsService:
                 if source == "secret_ref" and isinstance(ref, dict):
                     provider = ref.get("provider")
                     key = ref.get("key")
-                    if provider == "managed" and key == slug:
+                    if provider in {"managed", "db"} and key == slug:
                         return True
                 stack.extend(item.values())
             elif isinstance(item, (list, tuple)):
