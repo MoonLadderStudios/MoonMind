@@ -4585,7 +4585,7 @@ export function ProviderProfilesManager({
             role="dialog"
             aria-modal="true"
             aria-labelledby="tmate-oauth-session-title"
-            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-none dark:border-slate-800 dark:bg-slate-900"
+            className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-2xl outline-hidden dark:border-slate-800 dark:bg-slate-900"
           >
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -4677,7 +4677,7 @@ export function ProviderProfilesManager({
             aria-modal="true"
             aria-labelledby="claude-enrollment-title"
             tabIndex={-1}
-            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-none"
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-hidden"
           >
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
@@ -4806,7 +4806,7 @@ export function ProviderProfilesManager({
             aria-modal="true"
             aria-labelledby="opencode-enrollment-title"
             tabIndex={-1}
-            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-none"
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-hidden"
           >
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="space-y-2">
