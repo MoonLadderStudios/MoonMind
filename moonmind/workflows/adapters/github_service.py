@@ -365,11 +365,6 @@ class GitHubService:
     @staticmethod
     def github_permission_profiles() -> dict[str, GitHubPermissionProfile]:
         return {
-            "indexing": GitHubPermissionProfile(
-                profile_id="indexing",
-                required_permissions={"Contents": "read"},
-                optional_permissions={},
-            ),
             "publish": GitHubPermissionProfile(
                 profile_id="publish",
                 required_permissions={
@@ -946,7 +941,14 @@ class GitHubService:
             "defaultBranchAccessible": None,
             "pullRequestAccessible": None,
             "remoteDefaultBranch": None,
-            "observations": {"read": "not_checked", "write": "untested"},
+            "testedBranch": None,
+            "reportedPermissions": None,
+            "retryAfterSeconds": None,
+            "observations": {
+                "read": "not_checked",
+                "branch": "not_checked",
+                "write": "untested",
+            },
             "permissionChecklist": checklist,
             "diagnostics": [],
             "limitations": [
@@ -1039,9 +1041,11 @@ class GitHubService:
                 permission = check["permission"]
                 if "{ref}" in url:
                     if not ref:
-                        # The default branch was not observed; do not guess one.
+                        # No branch was observed; do not guess one.
                         continue
                     url = url.replace("{ref}", ref)
+                    if operation == "branch":
+                        result["testedBranch"] = ref
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
@@ -1049,43 +1053,83 @@ class GitHubService:
                         result[field] = True
                     if operation == "repository":
                         result["observations"]["read"] = "verified"
-                        default_branch = self._probe_default_branch(response)
+                        payload = self._probe_json_object(response)
+                        default_branch = (
+                            str(payload.get("default_branch") or "").strip() or None
+                        )
                         result["remoteDefaultBranch"] = default_branch
+                        result["reportedPermissions"] = self._probe_reported_permissions(
+                            payload
+                        )
                         ref = ref or default_branch or ""
+                    elif operation == "branch":
+                        result["observations"]["branch"] = "verified"
                     if permission:
                         self._mark_probe_permission(
                             result["permissionChecklist"],
                             permission=str(permission),
                             success=True,
                         )
+                    continue
                 except httpx.HTTPStatusError as exc:
                     status_code = exc.response.status_code
                     rate_limit = self._github_rate_limit_event(exc.response)
                     unavailable = status_code >= 500 or rate_limit is not None
-                    if field and not unavailable:
-                        result[field] = False
-                    if operation == "repository":
-                        result["observations"]["read"] = (
-                            "unavailable" if unavailable else "denied"
+                    diagnostic: dict[str, Any] = {
+                        "operation": operation,
+                        "httpStatus": status_code,
+                        "message": self._github_permission_summary(exc.response),
+                        "retryable": unavailable,
+                    }
+                    if rate_limit is not None:
+                        retry_after = resolve_provider_cooldown_seconds(
+                            rate_limit,
+                            now=datetime.now(timezone.utc),
+                            default_seconds=60,
                         )
-                    if permission and not unavailable:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
+                        result["retryAfterSeconds"] = retry_after
+                        diagnostic["retryAfterSeconds"] = retry_after
+                    result["diagnostics"].append(diagnostic)
+                    if unavailable:
+                        if operation == "repository":
+                            result["observations"]["read"] = "unavailable"
+                        elif operation == "branch":
+                            result["observations"]["branch"] = "unavailable"
+                    elif operation == "branch" and status_code in {404, 409}:
+                        # A missing branch says nothing about Contents access.
+                        result[str(field)] = False
+                        result["observations"]["branch"] = (
+                            "empty_repository"
+                            if status_code == 409
+                            else await self._probe_missing_branch_kind(
+                                client, api_base=api_base, repo=repo, headers=headers
+                            )
                         )
-                    result["diagnostics"].append(
-                        {
-                            "operation": operation,
-                            "httpStatus": status_code,
-                            "message": self._github_permission_summary(exc.response),
-                            "retryable": unavailable,
-                        }
-                    )
+                        ref = ""
+                        continue
+                    else:
+                        if field:
+                            result[field] = False
+                        if operation == "repository":
+                            # GitHub hides unshared private repositories as 404.
+                            result["observations"]["read"] = (
+                                "not_found" if status_code == 404 else "denied"
+                            )
+                        elif operation == "branch":
+                            result["observations"]["branch"] = "denied"
+                        if permission:
+                            self._mark_probe_permission(
+                                result["permissionChecklist"],
+                                permission=str(permission),
+                                success=False,
+                            )
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
                     # An outage is not denied access: leave the field unknown.
+                    unavailable = True
                     if operation == "repository":
                         result["observations"]["read"] = "unavailable"
+                    elif operation == "branch":
+                        result["observations"]["branch"] = "unavailable"
                     result["diagnostics"].append(
                         {
                             "operation": operation,
@@ -1093,18 +1137,56 @@ class GitHubService:
                             "retryable": True,
                         }
                     )
+                if unavailable or operation == "repository":
+                    # A throttle or outage ends the test rather than spending
+                    # more requests, and nothing else is observable about an
+                    # unreadable repository. Remaining checks stay unchecked.
+                    break
         return result
 
     @staticmethod
-    def _probe_default_branch(response: httpx.Response) -> str | None:
+    def _probe_json_object(response: httpx.Response) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _probe_reported_permissions(payload: Mapping[str, Any]) -> dict[str, bool] | None:
+        """Permission metadata GitHub reports; it is not an observed write."""
+
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, Mapping):
             return None
-        if not isinstance(payload, dict):
-            return None
-        branch = str(payload.get("default_branch") or "").strip()
-        return branch or None
+        reported = {
+            str(name): value
+            for name, value in permissions.items()
+            if isinstance(value, bool)
+        }
+        return reported or None
+
+    async def _probe_missing_branch_kind(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        api_base: str,
+        repo: str,
+        headers: Mapping[str, str],
+    ) -> str:
+        """Tell an empty repository from a missing branch with one read."""
+
+        try:
+            response = await client.get(
+                f"{api_base}/repos/{repo}/branches?per_page=1", headers=headers
+            )
+            response.raise_for_status()
+            branches = response.json()
+        except (httpx.HTTPError, ValueError):
+            return "not_found"
+        if isinstance(branches, list):
+            return "missing" if branches else "empty_repository"
+        return "not_found"
 
     # -- PR operations ----------------------------------------------------
 

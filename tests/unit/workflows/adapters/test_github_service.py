@@ -805,7 +805,8 @@ async def test_github_permission_diagnostic_redacts_token_like_provider_body(
 def test_github_permission_profiles_define_required_modes():
     profiles = GitHubService.github_permission_profiles()
 
-    assert profiles["indexing"].required_permissions == {"Contents": "read"}
+    # Retired native indexing is not a connection-test profile (#4008).
+    assert "indexing" not in profiles
     assert profiles["publish"].required_permissions["Contents"] == "write"
     assert profiles["publish"].required_permissions["Pull requests"] == "write"
     assert profiles["readiness"].required_permissions["Pull requests"] == "read"
@@ -855,39 +856,6 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
     assert checklist["Checks"]["status"] == "not_checked"
     assert any("resource owner" in item for item in result["limitations"])
     assert any("GitHub App" in item for item in result["limitations"])
-
-
-@pytest.mark.asyncio
-async def test_probe_github_token_uses_indexing_mode_checks(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(
-        side_effect=[
-            _mock_get_response(200, {"full_name": "owner/repo"}),
-            _mock_get_response(200, {"name": "main"}),
-        ]
-    )
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await GitHubService().probe_token(
-            repo="owner/repo", mode="indexing", base_branch="main"
-        )
-
-    assert [call.args[0] for call in mock_client.get.call_args_list] == [
-        "https://api.github.com/repos/owner/repo",
-        "https://api.github.com/repos/owner/repo/branches/main",
-    ]
-    assert result["pullRequestAccessible"] is None
-    checklist = {
-        item["permission"]: item for item in result["permissionChecklist"]
-    }
-    assert checklist["Contents"]["status"] == "passed"
 
 
 @pytest.mark.asyncio
@@ -962,7 +930,11 @@ async def test_probe_token_uses_remote_default_branch_and_reports_untested_write
         "https://api.github.com/repos/owner/repo/branches/trunk"
     )
     assert result["remoteDefaultBranch"] == "trunk"
-    assert result["observations"] == {"read": "verified", "write": "untested"}
+    assert result["observations"] == {
+        "read": "verified",
+        "branch": "verified",
+        "write": "untested",
+    }
 
 
 @pytest.mark.asyncio
@@ -986,17 +958,26 @@ async def test_probe_token_transport_outage_is_unavailable_not_denied(monkeypatc
     assert result["repositoryAccessible"] is None
     assert result["remoteDefaultBranch"] is None
     assert result["observations"]["read"] == "unavailable"
-    # Branch-dependent checks are not guessed against "main" without a branch.
+    # Branch-dependent checks are not guessed against "main" without a branch,
+    # and an outage stops the remaining checks instead of repeating it.
     urls = [call.args[0] for call in mock_client.get.call_args_list]
-    assert not any("/branches/" in url for url in urls)
+    assert urls == ["https://api.github.com/repos/owner/repo"]
     assert result["defaultBranchAccessible"] is None
     assert all(item["status"] != "failed" for item in result["permissionChecklist"])
     assert result["diagnostics"][0]["retryable"] is True
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [403, 404])
-async def test_probe_token_denied_read_is_reported_as_denied(monkeypatch, status):
+@pytest.mark.parametrize(
+    "status,observation",
+    [(401, "denied"), (403, "denied"), (404, "not_found")],
+)
+async def test_probe_token_denied_read_is_reported_as_denied(
+    monkeypatch, status, observation
+):
+    """GitHub hides unshared private repositories as 404, so a 404 says the
+    repository is unknown to this credential rather than an explicit denial."""
+
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(
@@ -1012,7 +993,11 @@ async def test_probe_token_denied_read_is_reported_as_denied(monkeypatch, status
         result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
 
     assert result["repositoryAccessible"] is False
-    assert result["observations"]["read"] == "denied"
+    assert result["observations"]["read"] == observation
+    assert result["observations"]["branch"] == "not_checked"
+    # Later checks cannot add evidence about an unreadable repository.
+    assert mock_client.get.await_count == 1
+    assert all(item["status"] == "not_checked" for item in result["permissionChecklist"])
 
 
 @pytest.mark.asyncio
@@ -1062,7 +1047,7 @@ async def test_probe_token_uses_selected_credential_without_global_fallback(
         return_value=mock_client,
     ):
         await GitHubService().probe_token(
-            repo="owner/repo", mode="indexing", credential=resolved
+            repo="owner/repo", mode="publish", credential=resolved
         )
     headers = mock_client.get.call_args_list[0].kwargs["headers"]
     assert "connection-token" in headers["Authorization"]
@@ -1105,6 +1090,9 @@ async def test_probe_token_rate_limits_are_unavailable_not_denied(
         item["status"] == "not_checked" for item in result["permissionChecklist"]
     )
     assert all(diagnostic["retryable"] for diagnostic in result["diagnostics"])
+    # A confirmed throttle stops the remaining checks (#4008).
+    assert mock_client.get.await_count == 1
+    assert result["retryAfterSeconds"] == 60
 
 
 # ---------------------------------------------------------------------------
@@ -2236,3 +2224,169 @@ def test_github_primary_rate_limit_preserves_reset_time():
     event = GitHubService._github_rate_limit_event(response)
     assert event is not None
     assert event.reset_at == datetime.fromtimestamp(1800000000, timezone.utc).isoformat()
+
+
+def _probe_client(responses):
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=list(responses))
+    mock_client.post = AsyncMock(side_effect=AssertionError("probe must not write"))
+    mock_client.put = AsyncMock(side_effect=AssertionError("probe must not write"))
+    mock_client.patch = AsyncMock(side_effect=AssertionError("probe must not write"))
+    mock_client.delete = AsyncMock(side_effect=AssertionError("probe must not write"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_probe_token_stops_after_throttle_and_reports_server_retry_signal(
+    monkeypatch,
+):
+    """MoonLadderStudios/MoonMind#4008: a throttle ends the test; earlier
+    evidence is kept and the server's retry signal is reported."""
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [
+            _mock_get_response(200, {"default_branch": "trunk"}),
+            _mock_get_response(200, {"name": "trunk"}),
+            _mock_get_response_with_headers(
+                429, {"message": "Too many requests"}, {"retry-after": "120"}
+            ),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="full_pr_automation"
+        )
+
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/trunk",
+        "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+    ]
+    assert result["retryAfterSeconds"] == 120
+    assert result["observations"]["read"] == "verified"
+    assert result["observations"]["branch"] == "verified"
+    assert result["repositoryAccessible"] is True
+    assert result["pullRequestAccessible"] is None
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    assert checklist["Pull requests"]["status"] == "not_checked"
+    assert checklist["Checks"]["status"] == "not_checked"
+    assert result["diagnostics"][-1]["retryAfterSeconds"] == 120
+
+
+@pytest.mark.asyncio
+async def test_probe_token_reset_header_sets_retry_after(monkeypatch):
+    import time
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    reset = int(time.time()) + 300
+    mock_client = _probe_client(
+        [
+            _mock_get_response_with_headers(
+                403,
+                {"message": "API rate limit exceeded"},
+                {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset)},
+            ),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
+
+    assert mock_client.get.await_count == 1
+    assert 290 <= result["retryAfterSeconds"] <= 301
+    assert result["observations"]["read"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "branch_status,listing,expected",
+    [
+        (404, [], "empty_repository"),
+        (409, None, "empty_repository"),
+        (404, [{"name": "trunk"}], "missing"),
+    ],
+)
+async def test_probe_token_distinguishes_empty_repository_and_missing_branch(
+    monkeypatch, branch_status, listing, expected
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    responses = [
+        _mock_get_response(200, {"default_branch": "main"}),
+        _mock_get_response(branch_status, {"message": "Branch not found"}),
+    ]
+    if listing is not None:
+        responses.append(_mock_get_response(200, listing))
+    responses.extend([_mock_get_response(200, []), _mock_get_response(200, [])])
+    mock_client = _probe_client(responses)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="full_pr_automation", base_branch="feature"
+        )
+
+    urls = [call.args[0] for call in mock_client.get.call_args_list]
+    assert urls[:2] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/feature",
+    ]
+    if listing is not None:
+        assert urls[2] == "https://api.github.com/repos/owner/repo/branches?per_page=1"
+    # Commit statuses and checks need a branch, so they are not tried.
+    assert urls[-2:] == [
+        "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+        "https://api.github.com/repos/owner/repo/issues?per_page=1",
+    ]
+    assert not any("/commits/" in url for url in urls)
+    assert result["testedBranch"] == "feature"
+    assert result["observations"]["read"] == "verified"
+    assert result["observations"]["branch"] == expected
+    assert result["repositoryAccessible"] is True
+    assert result["defaultBranchAccessible"] is False
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    # A missing branch neither denies nor proves Contents access.
+    assert checklist["Contents"]["status"] == "not_checked"
+    assert checklist["Commit statuses"]["status"] == "not_checked"
+    assert checklist["Checks"]["status"] == "not_checked"
+
+
+@pytest.mark.asyncio
+async def test_probe_token_reports_permission_metadata_without_claiming_write(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [
+            _mock_get_response(
+                200,
+                {
+                    "default_branch": "trunk",
+                    "permissions": {"admin": False, "push": True, "pull": True},
+                },
+            ),
+            _mock_get_response(200, {"name": "trunk"}),
+            _mock_get_response(200, []),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="publish")
+
+    assert result["reportedPermissions"] == {"admin": False, "push": True, "pull": True}
+    assert result["observations"] == {
+        "read": "verified",
+        "branch": "verified",
+        "write": "untested",
+    }
+    assert result["testedBranch"] == "trunk"
