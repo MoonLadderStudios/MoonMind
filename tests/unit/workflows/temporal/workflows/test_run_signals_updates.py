@@ -406,9 +406,13 @@ async def test_temporal_cancel_propagates_to_active_agent_child(
             else:
                 pytest.fail("active AgentRun child did not start")
 
-            await parent_handle.cancel()
-            with pytest.raises(WorkflowFailureError):
-                await parent_handle.result()
+            # Cancellation needs no timers. Without this, the time-skipping
+            # server can jump to the run timeout before the cancel is
+            # delivered under CI load and close the workflow TIMED_OUT.
+            with env.auto_time_skipping_disabled():
+                await parent_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await parent_handle.result()
 
             parent_description = await parent_handle.describe()
             child_description = await child_handle.describe()

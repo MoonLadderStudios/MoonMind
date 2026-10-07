@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.schemas.temporal_models import (
+    StepExecutionIdentityModel,
+    build_step_execution_id,
+    build_step_execution_idempotency_key,
+)
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
     RemediationLoopPhase,
@@ -236,12 +241,49 @@ def test_repeated_progress_evidence_updates_no_progress_budgets() -> None:
 
 
 def test_semantic_step_execution_id_is_attempt_scoped() -> None:
-    assert remediation_step_execution_id("wf", "run", "loop", "remediation", 2) == (
-        "wf:run:loop:remediation:2"
+    assert remediation_step_execution_id("loop", "remediation", 2) == (
+        "loop:remediation:2"
     )
-    assert remediation_step_execution_id("wf", "run", "loop", "verification", 2) == (
-        "wf:run:loop:verification:2"
+    assert remediation_step_execution_id("loop", "verification", 2) == (
+        "loop:verification:2"
     )
+
+
+def test_semantic_step_execution_id_keeps_legacy_run_prefix_for_replay() -> None:
+    assert remediation_step_execution_id(
+        "loop", "remediation", 2, legacy_id_scope="wf:run"
+    ) == ("wf:run:loop:remediation:2")
+
+
+def test_scheduled_run_remediation_keys_fit_persisted_identifier_columns() -> None:
+    """Step identities are re-prefixed with workflow and run at every boundary.
+
+    A scheduled run's workflow ID carries its fire time, so embedding the
+    workflow and run in the logical step ID as well pushed the agent run ID and
+    the dispatch idempotency key past the 255-character Omnigent lease columns.
+    """
+
+    workflow_id = "mm:20f53104-5635-4463-85ab-49e8a0040b58-2026-10-05T23:00:00Z"
+    run_id = "01a10e4b-a26e-7441-a70b-97d48ef36978"
+    remediation, verification = materialize_attempt_nodes(
+        spec=_spec(6),
+        ordinal=1,
+        workspace_head_ref="artifact://workspace/C1",
+        runtime=_LOOP_RUNTIME,
+    )
+
+    for node in (remediation, verification):
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow_id,
+            runId=run_id,
+            logicalStepId=str(node["id"]),
+            executionOrdinal=1,
+        )
+        assert len(build_step_execution_id(identity)) <= 255
+        assert (
+            len(build_step_execution_idempotency_key(identity, "agent_execute"))
+            <= 255
+        )
 
 
 def test_continue_as_new_state_rejects_inline_or_filesystem_evidence() -> None:
@@ -297,19 +339,13 @@ def test_decision_is_persisted_once_and_drives_projection() -> None:
 def test_materialization_creates_only_the_admitted_pair() -> None:
     remediation, verification = materialize_attempt_nodes(
         spec=_spec(6),
-        workflow_id="wf",
-        run_id="run",
         ordinal=2,
         workspace_head_ref="artifact://workspace/C1",
         runtime=_LOOP_RUNTIME,
     )
 
-    assert remediation["id"] == (
-        "wf:run:issue-implementation-remediation:remediation:2"
-    )
-    assert verification["id"] == (
-        "wf:run:issue-implementation-remediation:verification:2"
-    )
+    assert remediation["id"] == "issue-implementation-remediation:remediation:2"
+    assert verification["id"] == "issue-implementation-remediation:verification:2"
     assert verification["dependsOn"] == [remediation["id"]]
     assert remediation["inputs"]["selectedSkill"] == "auto"
     assert verification["inputs"]["selectedSkill"] == "moonspec-verify"
@@ -319,8 +355,6 @@ def test_materialization_creates_only_the_admitted_pair() -> None:
 def test_materialization_passes_authoritative_verifier_refs_to_remediator() -> None:
     remediation, _ = materialize_attempt_nodes(
         spec=_spec(6),
-        workflow_id="wf",
-        run_id="run",
         ordinal=2,
         workspace_head_ref="artifact://workspace/C1",
         runtime=_LOOP_RUNTIME,
@@ -377,8 +411,6 @@ def test_materialized_attempts_route_to_the_runs_resolved_runtime() -> None:
 
     remediation, verification = materialize_attempt_nodes(
         spec=_spec(6),
-        workflow_id="wf",
-        run_id="run",
         ordinal=1,
         workspace_head_ref="artifact://workspace/C1",
         runtime=_LOOP_RUNTIME,
@@ -394,8 +426,6 @@ def test_materialization_requires_a_resolved_runtime(runtime) -> None:
     with pytest.raises(ValueError, match="resolved agent runtime"):
         materialize_attempt_nodes(
             spec=_spec(6),
-            workflow_id="wf",
-            run_id="run",
             ordinal=1,
             workspace_head_ref="artifact://workspace/C1",
             runtime=runtime,

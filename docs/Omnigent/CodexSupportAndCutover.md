@@ -210,23 +210,43 @@ and architecture already recorded there.
 | Workflow Detail live/replay/resources/controls | proxy and direct compatibility events | supported hermetically; live Omnigent pending | `tests/integration/omnigent/test_bridge_conformance.py`, `tests/integration/omnigent/test_execute_fake_server.py` |
 | Cancellation, timeout, failure, cleanup, janitor | static/on-demand | implemented; live support pending | `tests/integration/omnigent/test_execute_fake_server.py`, `tests/unit/omnigent/test_oauth_host_janitor.py`; live lifecycle artifact required |
 | Checkpoint capture, reattach, cold restore, branches | external-state plus workspace evidence | partially implemented; unsupported as a complete matrix | [`CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md); capture/restore/branch live evidence required |
-| Operator/autonomous remediation | policy-bound actions | partial; autonomous gate closed | Controlling contract `moonmind.omnigent.remediation_matrix` (`operator-remediation-support-matrix/v1`), [`WorkflowRemediation.md`](../Workflows/WorkflowRemediation.md), [`RemediationVerificationCadence.md`](../Workflows/RemediationVerificationCadence.md), `tests/unit/omnigent/test_remediation_matrix.py`; protected per-row browser-to-verification evidence required and the autonomous rollout gate stays a hard blocker |
+| Operator/autonomous remediation | policy-bound actions | ordinary capability checks; live qualification separately unverified; autonomous gate closed | Existing action/admission/verification owners in [`WorkflowRemediation.md`](../Workflows/WorkflowRemediation.md) and [`RemediationVerificationCadence.md`](../Workflows/RemediationVerificationCadence.md); optional live observations and retained strict v1 certification in `moonmind.omnigent.remediation_matrix` |
 | Initial/follow-up RAG | none; native retrieval retired (MoonLadderStudios/MoonMind#4103) | retired; explicit `rag`/`followUpRetrieval` requests are rejected before launch | `tests/unit/config/test_vector_free_regression_4114.py`; the row stays in the protected v1 catalog (`moonmind/omnigent/cutover.py`) until its release owner retires it |
 | Persistent policy and agent-profile UI | immutable selected versions | partial; unsupported as a complete matrix | persisted policy/profile UI and snapshot evidence required |
 | Enforced egress | host/runtime boundary | partial; unsupported | enforcement and denial evidence required; declarations alone do not qualify |
 | Architecture and images | `linux/amd64`; digest-pinned server/host | amd64 evidence contract implemented; other architectures unsupported until proven | `moonmind/omnigent/conformance.py`; each supported architecture requires immutable-image live evidence |
 | Direct runtime reads and fallback | historical read; phases 1–4 explicit fallback | compatibility supported; retirement gated | [`OmnigentBridge.md`](./OmnigentBridge.md), `tests/unit/omnigent/test_direct_compat_historical_reads.py`, `tests/unit/workflows/temporal/test_run_replayer.py` cutover replay tests, compatibility inventory above |
 
-## Operator remediation support matrix v1
+## Optional remediation observations and strict v1 certification
 
-The Codex cutover matrix above qualifies *runtime and submission* support. The
-distinct question "can an operator safely diagnose and repair a real workflow
-through the normal MoonMind UI and a stock profile-bound Omnigent host" is
-qualified by its own versioned controlling artifact
-(`moonmind.omnigent.remediation_matrix`, support-matrix version
-`operator-remediation-support-matrix/v1`; source
-MoonLadderStudios/MoonMind#3626). It reuses the same evidence discipline: support
-is observed, never asserted.
+Ordinary recovery uses the existing admission, target authorization, action
+capability, approval, mutation guard, and exact-result verification owners.
+Current-candidate PR checks reuse their source/action/verification/preservation
+fixtures and the served remediation journey; low-level denial cases do not
+require another browser-to-publication lifecycle or every fault/harness/host
+combination. Revision and images identify what was tested, rather than imposing
+universal component equality.
+
+`/api/omnigent/codex-catalog-readiness` retains `remediationRelease` as an
+**advisory live observation**. It reports observed or unverified support and
+original blockers, without mandatory matrix rows, a catalog inventory, promotion
+authority, critical rollback instructions, or a rollback requirement. Missing,
+expired, malformed, or unavailable optional reports do not disable admission.
+Only independently derived telemetry and thresholds are published; caller
+summaries are never substitute proof. Create labels these as live observations,
+and keeps autonomous mutation disabled even if a report claims authorization.
+`TemporalExecutionService` owns that separately closed authority; it does not
+read the optional matrix to authorize `admin_auto`.
+
+The retained `operator-remediation-support-matrix/v1` contract below applies to
+**explicit strict live certification**, including the existing
+`--mode remediation` runner and release builder. Direct
+`evaluate_remediation_release` / `as_dict()` certification consumers preserve
+all v1 requirements and fail-closed verdicts. This compatibility reader protects
+retained reports and deliberately selected strict certification; it is not the
+default PR or runtime acceptance policy. The following required-row and browser
+rules describe that strict scope only. No existing report bytes, digests, or
+results are rewritten, and no live support is inferred from hermetic tests.
 
 `REMEDIATION_ROW_CATALOG` is the machine-readable required-row inventory. Each
 `RemediationMatrixRow` names scenario identity and owner, target and remediation
@@ -281,8 +301,7 @@ the numerator and denominator for each named row threshold. Both
 `sideEffectAudit` and `scenarioObservation` are cross-checked summaries; neither
 can supply or override a verdict, observation, or threshold count.
 `evaluate_remediation_release` (mounted via
-`MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF`, published on
-`/api/omnigent/codex-catalog-readiness` as `remediationRelease`) re-resolves every
+`MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF`) re-resolves every
 manifest ref, binds its bytes to the recorded digest, re-validates each artifact,
 binds each evidence kind to exactly one artifact, and requires the full row
 cross-product before it allows full-release promotion. Per-operation qualification

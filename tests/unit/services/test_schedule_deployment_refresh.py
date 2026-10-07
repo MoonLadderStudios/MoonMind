@@ -9,7 +9,10 @@ import pytest
 
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
+    OmnigentOAuthHostBindingRecord,
     OmnigentUpstreamAgentProjection,
     TemporalArtifact,
 )
@@ -373,3 +376,318 @@ async def test_failed_plan_compilation_cannot_commit_new_schedule_usage(
         await RecurringWorkflowsService(session, artifact_service=object())._refresh_managed_bootstrap_target(definition)
     assert session.usage.version == definition.version == 1
     assert definition.target == target
+
+
+# A release that publishes a new shared host image cuts the built-in Codex
+# policy (codex-on-demand@19 -> @20) and advances the managed bootstrap Agent
+# Profile (v18 -> v19). A schedule that records an Omnigent execution plan must
+# follow that cut: recompiling against its pinned v18 snapshot planned the
+# retired host image, so every deployment update failed with "effective launch
+# host image conflicts with the selected Host Class" (mm:220e9937, 2026-10-06).
+_BOOTSTRAP = "omnigent-bootstrap-default"
+
+
+class ManagedBootstrapScheduleSession:
+    def __init__(self, *, binding_policy="codex-on-demand@20"):
+        def document(policy):
+            return {
+                "schemaVersion": "moonmind.omnigent-agent-profile.v1",
+                "harness": "codex-native",
+                "model": {"settings": {}},
+                "execution": {
+                    "allowedLaunchPolicyRefs": [policy],
+                    "defaultExecutionProfileRef": "omnigent-codex@1",
+                },
+                "policyRef": policy,
+            }
+
+        self.old = SimpleNamespace(
+            version=18, digest="sha256:" + "8" * 64, document=document("codex-on-demand@19"),
+        )
+        self.active = SimpleNamespace(
+            version=19, digest="sha256:" + "9" * 64, document=document("codex-on-demand@20"),
+        )
+        self.profile = SimpleNamespace(profile_id=_BOOTSTRAP, state="active", active_version=19)
+        self.previous = self.snapshot(self.old)
+        self.usage = SimpleNamespace(
+            profile_id=_BOOTSTRAP, version=18, digest=self.old.digest,
+            effective_snapshot=deepcopy(self.previous),
+        )
+        self.binding = SimpleNamespace(launch_policy_ref=binding_policy)
+        self.provider = SimpleNamespace(profile_id="codex_openai_oauth")
+        self.task_input = SimpleNamespace(
+            created_by_principal="original-task-principal", sha256="a" * 64,
+        )
+
+    @staticmethod
+    def snapshot(version):
+        policy = version.document["policyRef"]
+        return {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": _BOOTSTRAP,
+            "version": version.version,
+            "digest": version.digest,
+            "document": deepcopy(version.document),
+            "providerProfileRef": "codex_openai_oauth",
+            "executionProfileRef": "omnigent-codex@1",
+            "allowedLaunchPolicyRefs": [policy],
+            "launchPolicyRef": policy,
+            "policyRef": policy,
+            "agentId": "codex-native-ui",
+        }
+
+    async def get(self, model, key):
+        if model is OmnigentAgentProfile:
+            return self.profile if key == _BOOTSTRAP else None
+        if model is ManagedAgentProviderProfile:
+            return self.provider
+        if model is TemporalArtifact:
+            return self.task_input
+        raise AssertionError(f"unexpected get {model.__name__}")
+
+    async def scalar(self, statement):
+        entity = statement.column_descriptions[0].get("entity")
+        if entity is OmnigentAgentProfileVersion:
+            number = statement.compile().params.get("version_1")
+            return {18: self.old, 19: self.active}.get(number)
+        if entity is OmnigentAgentProfileUsage:
+            return self.usage
+        if entity is OmnigentOAuthHostBindingRecord:
+            return self.binding
+        raise AssertionError(f"unexpected scalar {entity}")
+
+    async def refresh(self, *_args, **_kwargs):
+        return None
+
+    async def flush(self):
+        return None
+
+
+def _managed_plan_schedule(session):
+    from uuid import uuid4
+    from tests.unit.services.test_recurring_workflows_service import _schedule_plan_binding
+
+    parameters = {
+        "targetRuntime": "omnigent",
+        "model": "gpt-6.1-sol",
+        "effort": "max",
+        "agentProfileSnapshot": deepcopy(session.previous),
+        "omnigentExecutionPlan": _schedule_plan_binding("1"),
+        "task": {"instructions": "Resolve one eligible issue"},
+    }
+    target = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": parameters,
+        "agentProfileSnapshot": deepcopy(session.previous),
+        "runtimeProviderTarget": {"targetId": "codex.legacy-profile-bound-omnigent"},
+    }
+    return SimpleNamespace(id=uuid4(), version=972, target=target, owner_user_id=None)
+
+
+@pytest.fixture
+def managed_snapshot_resolver(monkeypatch):
+    """Resolve the active managed snapshot without provider-readiness I/O."""
+
+    calls = []
+
+    async def resolve(session, *, selection, persist_usage=True, **_kwargs):
+        calls.append({"selection": deepcopy(selection), "persistUsage": persist_usage})
+        assert selection["profileId"] == _BOOTSTRAP
+        assert "version" not in selection  # Resolves the active managed version.
+        return session.snapshot(session.active)
+
+    monkeypatch.setattr(selection, "resolve_agent_profile_snapshot", resolve)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_plan_schedule_follows_managed_bootstrap_policy_cutover(
+    monkeypatch, managed_snapshot_resolver,
+):
+    from api_service.services import omnigent_execution_plan_service
+    from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+    from moonmind.omnigent import deployment_identity
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from tests.unit.services.test_recurring_workflows_service import _schedule_plan_binding
+
+    session = ManagedBootstrapScheduleSession()
+    definition = _managed_plan_schedule(session)
+    compiled = []
+
+    async def compile_plan(**kwargs):
+        compiled.append(deepcopy(kwargs))
+        # Usage is published with the schedule revision, never by compilation.
+        assert session.usage.version == 18
+        return SimpleNamespace(
+            envelope=SimpleNamespace(payload=SimpleNamespace()),
+            binding=OmnigentExecutionPlanBinding.model_validate(_schedule_plan_binding("2")),
+            artifact_refs=("artifact:plan",),
+            resolved_skillset_ref="artifact:skills",
+            runtime_provider_rollout={"targetId": "codex.legacy-profile-bound-omnigent"},
+        )
+
+    monkeypatch.setattr(
+        omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
+    )
+    monkeypatch.setattr(deployment_identity, "assert_plan_matches_deployed_runtime", AsyncMock())
+    monkeypatch.setattr(
+        OmnigentPolicyService, "resolve_runtime_snapshot", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        deployment_identity, "resolve_deployed_server_build_digest", lambda: "sha256:" + "5" * 64
+    )
+
+    service = RecurringWorkflowsService(session, artifact_service=object())
+    assert await service._refresh_managed_bootstrap_target(definition) is True
+
+    planned = compiled[0]["agent_profile_snapshot"]
+    assert planned["version"] == 19
+    assert planned["launchPolicyRef"] == "codex-on-demand@20"
+    assert managed_snapshot_resolver[0]["persistUsage"] is False
+    published = definition.target["initialParameters"]
+    assert published["agentProfileSnapshot"] == definition.target["agentProfileSnapshot"] == planned
+    assert published["omnigentExecutionPlan"] == _schedule_plan_binding("2")
+    # Authored task selections survive the managed profile advance.
+    assert (published["model"], published["effort"]) == ("gpt-6.1-sol", "max")
+    assert published["task"] == {"instructions": "Resolve one eligible issue"}
+    assert session.usage.version == 19
+    assert session.usage.effective_snapshot == planned
+    assert definition.version == 973
+
+
+@pytest.mark.asyncio
+async def test_plan_schedule_waits_for_its_host_binding_to_reach_the_new_policy(
+    monkeypatch, managed_snapshot_resolver,
+):
+    from api_service.services import omnigent_execution_plan_service
+    from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+
+    # The release defers cutting over a binding whose host is still serving.
+    session = ManagedBootstrapScheduleSession(binding_policy="codex-on-demand@19")
+    definition = _managed_plan_schedule(session)
+    original = deepcopy(definition.target)
+    compile_plan = AsyncMock()
+    monkeypatch.setattr(
+        omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
+    )
+
+    service = RecurringWorkflowsService(session, artifact_service=object())
+    assert await service._refresh_managed_bootstrap_target(definition) is False
+
+    compile_plan.assert_not_awaited()
+    assert managed_snapshot_resolver == []
+    assert definition.target == original
+    assert (definition.version, session.usage.version) == (972, 18)
+
+
+@pytest.mark.asyncio
+async def test_current_managed_snapshot_is_not_re_resolved(managed_snapshot_resolver):
+    session = ManagedBootstrapScheduleSession()
+    session.profile.active_version = 18
+    parameters = {"agentProfileSnapshot": deepcopy(session.previous), "model": "gpt-6.1-sol"}
+
+    assert await selection.refresh_schedule_deployment_snapshot(
+        session, parameters=parameters, consumer_id="schedule", user=None,
+    ) == parameters
+    assert managed_snapshot_resolver == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "moved",
+    [None, "policy", "server", "strict", "repository", "edit", "provider", "process"],
+)
+async def test_plan_schedule_refresh_converges_until_authority_moves(
+    monkeypatch, managed_snapshot_resolver, moved,
+):
+    """The bootstrap reconcile pass re-plans a schedule only when it is stale.
+
+    Compilation writes fresh artifacts, so two compiles of unchanged authority
+    never produce equal bindings. Recompiling every 120-second pass rewrote the
+    schedule ~720 times a day with ~17 new artifacts each time.
+    """
+    from api_service.services import omnigent_execution_plan_service
+    from api_service.services import recurring_workflows_service
+    from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+    from moonmind.omnigent import deployment_identity
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from tests.unit.services.test_recurring_workflows_service import _schedule_plan_binding
+
+    monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLAN_INPUTS", {})
+    session = ManagedBootstrapScheduleSession()
+    session.provider.runtime_id, session.provider.provider_id = "codex_cli", "openai"
+    definition = _managed_plan_schedule(session)
+    policy = {"policyRef": "codex-on-demand@20", "boundaries": {"host": {"mode": "on_demand_docker"}}}
+    authority = {"policy": policy, "server": "sha256:" + "5" * 64}
+    compiled = []
+
+    async def compile_plan(**kwargs):
+        compiled.append(kwargs)
+        # Every compile persists new artifacts, so its binding is always new.
+        binding = _schedule_plan_binding(str(len(compiled) + 1))
+        return SimpleNamespace(
+            envelope=SimpleNamespace(
+                payload=SimpleNamespace(
+                    admissionAuthority=SimpleNamespace(
+                        admissionMode="strict" if moved == "strict" else "ordinary"
+                    ),
+                    resolvedTools=(
+                        {"repositoryAccess": {"repo": {}}} if moved == "repository" else {}
+                    ),
+                )
+            ),
+            binding=OmnigentExecutionPlanBinding.model_validate(binding),
+            artifact_refs=("artifact:plan",),
+            resolved_skillset_ref="artifact:skills",
+            runtime_provider_rollout={"targetId": "codex.legacy-profile-bound-omnigent"},
+        )
+
+    async def resolve_policy(_service, policy_ref):
+        assert policy_ref == "codex-on-demand@20"
+        return authority["policy"]
+
+    monkeypatch.setattr(
+        omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
+    )
+    monkeypatch.setattr(OmnigentPolicyService, "resolve_runtime_snapshot", resolve_policy)
+    monkeypatch.setattr(
+        deployment_identity, "resolve_deployed_server_build_digest", lambda: authority["server"]
+    )
+    monkeypatch.setattr(deployment_identity, "assert_plan_matches_deployed_runtime", AsyncMock())
+
+    service = RecurringWorkflowsService(session, artifact_service=object())
+    # The release cut moves the schedule onto the new policy.
+    assert await service._refresh_managed_bootstrap_target(definition) is True
+    assert definition.version == 973
+    published = deepcopy(definition.target)
+    if moved == "policy":
+        authority["policy"] = {**policy, "rollout": {"cohort": "next"}}
+    elif moved == "server":
+        # A compatible server replacement still moves the exact build.
+        authority["server"] = "sha256:" + "6" * 64
+    elif moved == "edit":
+        definition.target["initialParameters"]["task"] = {"instructions": "Edited task"}
+    elif moved == "provider":
+        session.provider.provider_id = "openai-compatible"
+    elif moved == "process":
+        # A restarted API cannot know which image or environment compiled it.
+        monkeypatch.setattr(recurring_workflows_service, "_SCHEDULE_PLAN_INPUTS", {})
+
+    # The next reconcile pass, ~120 seconds later.
+    refreshed = await service._refresh_managed_bootstrap_target(definition)
+
+    if moved is None:
+        assert refreshed is False
+        assert len(compiled) == 1
+        assert definition.target == published
+        assert definition.version == 973
+    else:
+        assert refreshed is True
+        assert len(compiled) == 2
+        assert definition.target["initialParameters"]["omnigentExecutionPlan"] == (
+            _schedule_plan_binding("3")
+        )
+        assert definition.version == 974
+    assert len(recurring_workflows_service._SCHEDULE_PLAN_INPUTS) == (
+        0 if moved in {"strict", "repository"} else 1
+    )

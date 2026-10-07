@@ -214,13 +214,13 @@ const readyOmnigentCatalog = {
     autonomousRolloutAuthorized: false,
     promotionAllowed: false,
     manualPromotionAllowed: false,
-    rollbackRequired: true,
+    rollbackRequired: false,
     expiresAt: null,
     telemetry: {},
     alerts: [{
       code: 'remediation_release_evidence_missing',
-      severity: 'critical',
-      operatorAction: 'block_or_rollback_manual_promotion',
+      severity: 'warning',
+      operatorAction: 'collect_optional_live_support_evidence',
     }],
     blockers: ['autonomous_rollout_gate_closed'],
   },
@@ -404,6 +404,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanupRender?.();
   cleanupRender = null;
+  readyOmnigentCatalog.remediationRelease.autonomousRolloutAuthorized = false;
   fetchSpy.mockRestore();
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -414,6 +415,8 @@ afterEach(async () => {
 describe('routed remediation operator journey', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`authors through normal Create and inspects the created lifecycle at ${viewport.width}px`, async () => {
+      // Even a positive optional report cannot grant autonomous authority.
+      readyOmnigentCatalog.remediationRelease.autonomousRolloutAuthorized = viewport === DESKTOP;
       await page.viewport(viewport.width, viewport.height);
       const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
       cleanupRender = unmount;
@@ -455,17 +458,19 @@ describe('routed remediation operator journey', () => {
         .toBe('admin_healer_default');
       expect(
         within(screen.getByLabelText('Authority')).getByRole('option', {
-          name: 'Administrator automatic (release gated)',
+          name: 'Administrator automatic (disabled)',
         }),
       ).toBeDisabled();
       expect(
-        screen.getByText(/Autonomous mutation remains disabled until the operator remediation release matrix passes/i),
+        screen.getByText(/Autonomous mutation remains disabled by the remediation authority policy/i),
       ).toBeTruthy();
-      await userEvent.click(screen.getByText('Operator remediation release status'));
+      await userEvent.click(screen.getByText('Live remediation observations'));
       expect(screen.getByText('Manual diagnosis')).toBeTruthy();
-      expect(screen.getAllByText('Not qualified')).toHaveLength(2);
-      expect(screen.getByText('Required')).toBeTruthy();
-      expect(screen.getByText(/critical: remediation_release_evidence_missing/)).toBeTruthy();
+      expect(screen.getAllByText('Unverified')).toHaveLength(2);
+      expect(screen.queryByText('Manual promotion')).toBeNull();
+      expect(screen.queryByText('Rollback')).toBeNull();
+      expect(screen.getByText(/Optional live observations do not authorize actions/)).toBeTruthy();
+      expect(screen.getByText(/warning: remediation_release_evidence_missing/)).toBeTruthy();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });

@@ -1369,7 +1369,7 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
                 )
             )
 
-            assert await service.refresh_managed_bootstrap_schedules() == 1
+            assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
             await session.refresh(definition)
 
             assert definition.version == expected["definitionVersion"]
@@ -6993,8 +6993,6 @@ async def test_remediation_does_not_declare_initial_assessment_output(
     loop["budgets"]["hardMaxAttempts"] = 6
     remediation, verification = materialize_attempt_nodes(
         spec=RemediationLoopSpec.model_validate(loop),
-        workflow_id=manifest["incidentWorkflowId"],
-        run_id="incident-replay",
         ordinal=1,
         workspace_head_ref=None,
         runtime={"mode": "omnigent"},

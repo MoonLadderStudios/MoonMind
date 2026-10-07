@@ -1889,6 +1889,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Checkpoint Branch Verification */
+        post: operations["record_checkpoint_branch_verification_api_executions__workflow_id__checkpoint_branches__branch_id__verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/{workflow_id}/checkpoint-branches/{branch_id}/turns": {
         parameters: {
             query?: never;
@@ -6554,6 +6571,14 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /**
+         * CheckpointBranchVerificationRequest
+         * @description Reference to an existing objective-verifier report; no caller verdict.
+         */
+        CheckpointBranchVerificationRequest: {
+            /** Verifierartifactref */
+            verifierArtifactRef: string;
         };
         /** CheckpointListResponse */
         CheckpointListResponse: {
@@ -18204,6 +18229,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointBranchModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_checkpoint_branch_verification_api_executions__workflow_id__checkpoint_branches__branch_id__verification_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointBranchVerificationRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

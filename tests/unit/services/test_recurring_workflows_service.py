@@ -1099,14 +1099,14 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
             )
         )
 
-        assert await service.refresh_managed_bootstrap_schedules() == 0
+        assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 0
         mock_temporal_adapter.update_schedule.assert_not_called()
         assert refresh_calls == []
 
         binding.launch_policy_ref = "codex-on-demand@4"
         await session.commit()
 
-        assert await service.refresh_managed_bootstrap_schedules() == 1
+        assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
 
         await session.refresh(definition)
         assert definition.version == 2
@@ -1175,7 +1175,9 @@ async def test_managed_bootstrap_refresh_contains_individual_failures(
             AsyncMock(),
         )
 
-        assert await service.refresh_managed_bootstrap_schedules() == 1
+        outcome = await service.refresh_managed_bootstrap_schedules()
+        assert outcome.refreshed == 1
+        assert outcome.failures == (f"{definition_ids[0]}: missing usage row",)
         assert set(visited) == set(definition_ids)
 
 
@@ -1184,11 +1186,11 @@ async def test_managed_bootstrap_refresh_reports_why_a_schedule_failed(
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A blocking refresh must name the reason, not only the definition id.
+    """A failed refresh names the reason, not only the definition id.
 
-    The release migration raises this from a detached updater container that is
-    gone by the time an operator reads the receipt, so an id-only message left
-    the failure undiagnosable outside container logs.
+    The release migration records this in its receipt from a detached updater
+    container that is gone by the time an operator reads it, so an id-only
+    message left the failure undiagnosable outside container logs.
     """
 
     async with recurring_db(tmp_path) as session_maker, session_maker() as session:
@@ -1223,10 +1225,10 @@ async def test_managed_bootstrap_refresh_reports_why_a_schedule_failed(
         monkeypatch.setattr(service, "_refresh_managed_bootstrap_target", refresh_target)
         monkeypatch.setattr(service, "_ensure_schedule_action_current", AsyncMock())
 
-        with pytest.raises(RuntimeError) as caught:
-            await service.refresh_managed_bootstrap_schedules(raise_on_failure=True)
+        outcome = await service.refresh_managed_bootstrap_schedules()
 
-        message = str(caught.value)
+        assert outcome.refreshed == 0
+        [message] = outcome.failures
         assert str(definition_id) in message
         assert "not qualified for the requested execution combination" in message
 

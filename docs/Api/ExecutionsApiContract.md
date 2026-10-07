@@ -80,6 +80,15 @@ All request/response bodies are JSON with camelCase external fields.
 | POST | `/api/executions/{workflowId}/update` | Validated update/rerun request | 200 |
 | POST | `/api/executions/{workflowId}/signal` | Asynchronous signal | 202 |
 | POST | `/api/executions/{workflowId}/cancel` | Cancel/terminate | 202 |
+| POST | `/api/executions/{workflowId}/checkpoint-branches/{branchId}/verification` | Admit a runtime-published objective-verifier report for the exact branch head | 200 |
+
+Checkpoint verification accepts only `verifierArtifactRef`, an existing immutable
+artifact reference. The authenticated branch owner validates producer, source
+run, completed turn, Step Execution, exact head, and verdict before recording the
+receipt and continuing pending remediation verification. Rejected evidence
+returns 409 (`checkpoint_verification_rejected`); invalid request fields return
+422. [Checkpoint Branch System §8.5](../Workflows/CheckpointBranchSystem.md#85-launch-branch-turn)
+owns the full report admission contract.
 
 ## 6. Authentication and Authorization
 

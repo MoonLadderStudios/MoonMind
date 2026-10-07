@@ -7192,7 +7192,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText(/Evidence preview: step ledger, diagnostics, and 2000 log lines/)).toBeTruthy();
     expect((
       within(screen.getByLabelText('Remediation authority')).getByRole('option', {
-        name: 'Administrator automatic (release gated)',
+        name: 'Administrator automatic (disabled)',
       }) as HTMLOptionElement
     ).disabled).toBe(true);
 
