@@ -10,7 +10,7 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import SearchAttributeKey, SearchAttributePair
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
@@ -228,7 +228,6 @@ class MoonMindMergeAutomationWorkflow:
             )
         payload = {
             "status": self._status,
-            "finishMode": self._finish_mode(),
             "prNumber": pr.number if pr is not None else None,
             "prUrl": pr.url if pr is not None else None,
             "cycles": len(self._resolver_child_workflow_ids),
@@ -240,6 +239,8 @@ class MoonMindMergeAutomationWorkflow:
             ],
             "artifactRefs": artifact_refs,
         }
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            payload["finishMode"] = FINISH_MODE_REVIEW_ONLY
         if self._review_loop_active():
             payload["reviewLoop"] = {
                 "enabled": True,
@@ -1527,14 +1528,6 @@ class MoonMindMergeAutomationWorkflow:
             progress_signature=continuation.get("progressSignature"),
         )
 
-    def _review_repository_authority(self) -> dict[str, Any]:
-        return {
-            "executionOwner": self._resolver_parent_workflow_id(),
-            "parentExecutionPlan": self._input.resolver_template.get(
-                "parentOmnigentExecutionPlan"
-            ),
-        }
-
     async def _post_automated_review(
         self,
         *,
@@ -1576,22 +1569,30 @@ class MoonMindMergeAutomationWorkflow:
             head_sha=head_sha,
             provider=config.provider,
         )
+        request_payload = {
+            "parentWorkflowId": self._resolver_parent_workflow_id(),
+            "repository": self._input.pull_request.repo,
+            "prNumber": self._input.pull_request.number,
+            "expectedHeadSha": head_sha,
+            "provider": config.provider,
+            "requestKey": request_key,
+        }
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            request_payload.update(
+                {
+                    "finishMode": FINISH_MODE_REVIEW_ONLY,
+                    "parentExecutionPlan": self._input.parent_execution_plan.model_dump(
+                        by_alias=True, mode="json"
+                    ),
+                    "principal": self._principal(),
+                    "admittedParentWorkflowId": self._input.parent_workflow_id,
+                    "parentRunId": self._input.parent_run_id,
+                }
+            )
         try:
             outcome = await workflow.execute_activity(
                 "merge_automation.request_automated_review",
-                {
-                    "parentWorkflowId": self._resolver_parent_workflow_id(),
-                    "repository": self._input.pull_request.repo,
-                    "prNumber": self._input.pull_request.number,
-                    "expectedHeadSha": head_sha,
-                    "provider": config.provider,
-                    "requestKey": request_key,
-                    **(
-                        {"repositoryAuthority": self._review_repository_authority()}
-                        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY
-                        else {}
-                    ),
-                },
+                request_payload,
                 start_to_close_timeout=timedelta(minutes=2),
                 task_queue=INTEGRATIONS_TASK_QUEUE,
                 retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
@@ -1734,9 +1735,6 @@ class MoonMindMergeAutomationWorkflow:
             )
         readiness_payload = self._input.model_dump(by_alias=True, mode="json")
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
-            readiness_payload["repositoryAuthority"] = (
-                self._review_repository_authority()
-            )
             # Review completion is independent of CI, including unavailable
             # check APIs under a deliberately limited repository connection.
             readiness_payload["mergeAutomationConfig"]["gate"]["github"][
@@ -1891,7 +1889,7 @@ class MoonMindMergeAutomationWorkflow:
                     timeout=timeout,
                 )
             except TimeoutError:
-                # No callback arrived; reconcile the same request on the next poll.
+                # The bounded wait elapsed; poll readiness again on the next loop.
                 pass
 
     async def _recover_after_resolver_issue(
@@ -1947,6 +1945,18 @@ class MoonMindMergeAutomationWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._input = MergeAutomationStartInput.model_validate(payload)
+        if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
+            parent = workflow.info().parent
+            if (
+                parent is None
+                or parent.workflow_id != self._input.parent_workflow_id
+                or parent.run_id != self._input.parent_run_id
+            ):
+                raise ApplicationError(
+                    "review_only requires its owning Temporal parent",
+                    type="ReviewOnlyParentAuthorityMismatch",
+                    non_retryable=True,
+                )
         self._continuation_observability_enabled = workflow.patched(
             MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH
         )

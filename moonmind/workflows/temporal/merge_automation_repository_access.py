@@ -5,8 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 
-@asynccontextmanager
-async def merge_automation_repository_token(
+async def acquire_merge_automation_repository_credential(
     authority: Mapping[str, Any], *, repository: str, operation: str
 ):
     """Acquire only the frozen collaboration selection; never use ambient auth."""
@@ -66,6 +65,17 @@ async def merge_automation_repository_token(
     )
     if acquired is None:
         raise ValueError("review-only requires authenticated collaboration authority")
+    return acquired
+
+
+@asynccontextmanager
+async def merge_automation_repository_token(
+    authority: Mapping[str, Any], *, repository: str, operation: str
+):
+    """Keep one selected credential alive through the native review operation."""
+    acquired = await acquire_merge_automation_repository_credential(
+        authority, repository=repository, operation=operation
+    )
     try:
         yield acquired.credential.use_now(lambda raw: raw.decode("utf-8"))
     finally:

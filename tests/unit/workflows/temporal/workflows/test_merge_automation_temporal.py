@@ -210,12 +210,22 @@ def test_merge_automation_summary_preserves_finish_mode(finish_mode: str) -> Non
         "provider": "codex",
         "requireFreshReviewForEveryHead": True,
     }
+    if finish_mode == "review_only":
+        payload["parentExecutionPlan"] = {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art-parent-plan",
+            "taskInputSnapshotRef": "art-parent-task",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        }
     workflow = MoonMindMergeAutomationWorkflow()
     workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
         payload
     )
 
-    assert workflow.summary()["finishMode"] == finish_mode
+    assert workflow.summary().get("finishMode") == (
+        finish_mode if finish_mode == "review_only" else None
+    )
 
 
 def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> None:

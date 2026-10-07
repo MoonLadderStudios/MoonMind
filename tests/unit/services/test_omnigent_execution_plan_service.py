@@ -2877,3 +2877,164 @@ async def test_ordinary_auto_child_still_cannot_broaden_read_only_parent_authori
             )
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "review_config",
+    [
+        {"enabled": "true", "finishMode": "review_only"},
+        {"enabled": True, "finishMode": " review_only "},
+        {"enabled": True, "finish_mode": "review_only"},
+    ],
+    ids=["string-enabled", "trimmed-finish-mode", "finish-mode-alias"],
+)
+@pytest.mark.parametrize("publish_mode", ["none", "auto"])
+async def test_review_only_authority_matches_supported_parent_wire_values(
+    monkeypatch, tmp_path, review_config, publish_mode
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    config = {
+        **review_config,
+        "reviewLoop": {"enabled": True, "provider": "codex"},
+    }
+    parameters = {
+        "repository": repository,
+        "publishMode": publish_mode,
+        "workflow": {
+            "instructions": "Request and observe a review of the existing PR.",
+            "publish": {"mode": publish_mode, "mergeAutomation": config},
+        },
+    }
+    try:
+        if publish_mode != "none":
+            with pytest.raises(ValueError, match="review_only requires publication mode none"):
+                await _compile_opencode_plan(
+                    monkeypatch,
+                    artifacts=artifacts,
+                    launch_policy_ref="opencode-on-demand@1",
+                    plan_store=_PlanStore(object()),
+                    session_factory=sessions,
+                    profile_tools=("gh",),
+                    extra_parameters=parameters,
+                    workflow_id="mm:wire-review-only-parent",
+                )
+        else:
+            parent = await _compile_opencode_plan(
+                monkeypatch,
+                artifacts=artifacts,
+                launch_policy_ref="opencode-on-demand@1",
+                plan_store=_PlanStore(object()),
+                session_factory=sessions,
+                profile_tools=("gh",),
+                extra_parameters=parameters,
+                workflow_id="mm:wire-review-only-parent",
+            )
+            _assert_review_only_repository_plan(parent.envelope.payload, artifacts)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["top-publish", "top-alias"])
+async def test_review_only_authority_uses_first_enabled_parent_config_location(
+    monkeypatch, tmp_path, location
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    review_config = {
+        "enabled": True,
+        "finishMode": "review_only",
+        "reviewLoop": {"enabled": True, "provider": "codex"},
+    }
+    parameters = {
+        "repository": repository,
+        "publishMode": "none",
+        "workflow": {
+            "instructions": "Request and observe a review of the existing PR.",
+            "publish": {
+                "mode": "none",
+                "mergeAutomation": {"enabled": location == "top-publish", "finishMode": "fix_only"},
+            },
+        },
+    }
+    if location == "top-publish":
+        parameters["publish"] = {"mode": "none", "merge_automation": review_config}
+    else:
+        parameters["merge_automation"] = review_config
+
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters=parameters,
+            workflow_id="mm:location-review-only-parent",
+        )
+        _assert_review_only_repository_plan(parent.envelope.payload, artifacts)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publish_mode", [" none ", " pr "])
+async def test_review_only_validates_trimmed_admitted_publish_mode(
+    monkeypatch, tmp_path, publish_mode
+) -> None:
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    parameters = {
+        "repository": repository,
+        "publishMode": publish_mode,
+        "workflow": {
+            "instructions": "Request and observe a review of the existing PR.",
+            "publish": {"mode": "none"},
+        },
+        "publish": {
+            "mode": publish_mode,
+            "mergeAutomation": {
+                "enabled": True,
+                "finishMode": "review_only",
+                "reviewLoop": {"enabled": True, "provider": "codex"},
+            },
+        },
+    }
+    try:
+        if publish_mode.strip() != "none":
+            with pytest.raises(
+                ValueError, match="review_only requires publication mode none"
+            ):
+                await _compile_opencode_plan(
+                    monkeypatch,
+                    artifacts=artifacts,
+                    launch_policy_ref="opencode-on-demand@1",
+                    plan_store=_PlanStore(object()),
+                    session_factory=sessions,
+                    profile_tools=("gh",),
+                    extra_parameters=parameters,
+                    workflow_id="mm:trimmed-mode-review-only-parent",
+                )
+        else:
+            parent = await _compile_opencode_plan(
+                monkeypatch,
+                artifacts=artifacts,
+                launch_policy_ref="opencode-on-demand@1",
+                plan_store=_PlanStore(object()),
+                session_factory=sessions,
+                profile_tools=("gh",),
+                extra_parameters=parameters,
+                workflow_id="mm:trimmed-mode-review-only-parent",
+            )
+            _assert_review_only_repository_plan(parent.envelope.payload, artifacts)
+    finally:
+        await engine.dispose()

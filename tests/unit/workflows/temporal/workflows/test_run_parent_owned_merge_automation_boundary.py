@@ -352,6 +352,13 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
     parent._publish_context["headSha"] = "abc123"
     parameters = {
         "publishMode": "none",
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "artifact:review-parent-plan",
+            "taskInputSnapshotRef": "artifact:review-parent-input",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        },
         "mergeAutomation": {
             "enabled": True,
             "finishMode": "review_only",
@@ -369,6 +376,7 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
         assert summary is not None
         assert summary["finishMode"] == "review_only"
         assert summary["status"] == "awaiting_child"
+        assert payload["parentExecutionPlan"] == parameters["omnigentExecutionPlan"]
         return {"status": "review_complete", "latestHeadSha": "abc123"}
 
     monkeypatch.setattr(
@@ -438,4 +446,6 @@ def test_parent_merge_automation_summary_preserves_result_finish_mode(
         "finishMode": finish_mode,
     }
 
-    assert parent._merge_automation_summary_from_context()["finishMode"] == finish_mode
+    assert parent._merge_automation_summary_from_context().get("finishMode") == (
+        finish_mode if finish_mode == "review_only" else None
+    )
