@@ -71,6 +71,10 @@ class ToolActivityDispatcher:
 
         self._default_skill_handler = handler
 
+    def registered_skill_handler(self, *, skill_name: str) -> SkillHandler | None:
+        """Return an explicitly registered handler, excluding the CLI fallback."""
+        return self._skill_handlers.get(skill_name)
+
     async def execute(
         self,
         *,

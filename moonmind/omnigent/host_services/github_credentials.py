@@ -9,6 +9,9 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
 from moonmind.auth.bound_acquisition import AcquiredCredential, SelectionSnapshot
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    RepositoryAuthorityBinding,
+)
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -141,6 +144,24 @@ class OmnigentGithubCredentialService:
             raise ValueError(
                 "repository operation requires its admitted access snapshot"
             )
+        native_binding = None
+        if "nativeBinding" in access:
+            if request is not None:
+                raise ValueError("native review authority cannot be consumed by an agent")
+            if not repository:
+                raise ValueError("native repository use requires an explicit target")
+            if slot in plan.payload.credentialBindings:
+                raise ValueError("native and agent repository authority conflict")
+            native_binding = RepositoryAuthorityBinding.model_validate(
+                access["nativeBinding"]
+            )
+            if (
+                native_binding.repositoryRole != role
+                or native_binding.repositoryAccessSnapshotRef != access["snapshotRef"]
+                or role not in {"source_read", "collaboration"}
+                or operation not in {"read", "review_request"}
+            ):
+                raise ValueError("native review repository binding conflicts with its scope")
         # Native plan consumers use the gateway's explicit principal ACL;
         # agent consumers retain their linked Step Execution authority.
         body = (
@@ -158,6 +179,16 @@ class OmnigentGithubCredentialService:
         payload = json.loads(body)
         snapshot = SelectionSnapshot.model_validate(payload["selection"])
         identity = RepositoryIdentity.model_validate(payload["repositoryIdentity"])
+        if native_binding is not None and (
+            native_binding.connectionRef != snapshot.connection_id
+            or snapshot.role != native_binding.repositoryRole
+            or set(snapshot.operations) != (
+                {"read"} if role == "source_read" else {"read", "review_request"}
+            )
+        ):
+            raise ValueError(
+                "native review authority conflicts with its admitted snapshot"
+            )
         if (
             normalize_endpoint(identity.endpoint)
             != normalize_endpoint(snapshot.endpoint)
@@ -269,7 +300,11 @@ class OmnigentGithubCredentialService:
                 repository=repository,
             )
         )
-        binding = plan.payload.credentialBindings.get(slot)
+        binding = (
+            RepositoryAuthorityBinding.model_validate(access["nativeBinding"])
+            if "nativeBinding" in access
+            else plan.payload.credentialBindings.get(slot)
+        )
         if snapshot.access_mode == AccessMode.ANONYMOUS:
             if role != "source_read" or operation != "read" or binding is not None:
                 raise ValueError("anonymous access cannot carry credential authority")

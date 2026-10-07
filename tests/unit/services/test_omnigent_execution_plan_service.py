@@ -3080,3 +3080,476 @@ async def test_review_only_validates_trimmed_admitted_publish_mode(
             _assert_review_only_repository_plan(parent.envelope.payload, artifacts)
     finally:
         await engine.dispose()
+
+
+async def _native_review_preset_plan_test(monkeypatch, tmp_path, selection):
+    """Compile the shipped tool-only preset on the default Codex realizer."""
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+    from tests.unit.api.test_pr_review_resolve_preset import _expand
+
+    repository = "MoonLadderStudios/MoonMind"
+    expanded = await _expand(
+        tmp_path,
+        {"repository": repository, "pull_request": "4719", "review_only": True},
+    )
+    selected = (
+        DEFAULT_GIT_CONNECTION_REF
+        if selection in {"default", "unassigned-default"}
+        else "native-selected"
+    )
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "GITHUB_TOKEN"),
+        github_pat_connection("native-selected", "NATIVE_SELECTED_PAT"),
+        assignments=[
+            github_repository_assignment("native-selected", repository),
+            *(
+                [github_repository_assignment(DEFAULT_GIT_CONNECTION_REF, repository)]
+                if selection == "default"
+                else []
+            ),
+        ],
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    _configure_ready_host_image_pair(monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "False")
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="codex-native", policy="codex-on-demand@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    store = InMemoryExecutionPlanStore()
+    target = (
+        repository
+        if selection == "routed"
+        else {
+            "provider": "git",
+            "connectionRef": selected,
+            "repository": {"name": repository},
+            "branch": {"name": "main"},
+        }
+    )
+
+    async def compile_plan(*, workflow=None, parent=None, **parameters):
+        return await service.compile_and_persist_execution_plan(
+            session_factory=sessions,
+            execution_plan_store=store,
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id=(
+                "mm:native-review-preset-test"
+                if parent is None
+                else "mm:native-review-child-test"
+            ),
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "model": "example/model",
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "repository": target,
+                "requiredCapabilities": expanded.get("requiredCapabilities", []),
+                "workflow": deepcopy(expanded if workflow is None else workflow),
+                **parameters,
+            },
+            parent_repository_plan=parent,
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+        )
+
+    return SimpleNamespace(
+        compile=compile_plan,
+        workflow=expanded,
+        artifacts=artifacts,
+        store=store,
+        engine=engine,
+        sessions=sessions,
+        repository=repository,
+        selected=selected,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", ["default", "selected", "routed"])
+async def test_shipped_native_review_preset_admits_selected_authority_without_agent_grant(
+    monkeypatch, tmp_path, selection
+):
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, selection)
+    try:
+        compiled = await context.compile()
+        plan = compiled.envelope.payload
+        assert plan.executionRealizerRef == "codex-profile-bound@1"
+        assert set(plan.credentialBindings) == {"primary-model"}
+        access = plan.resolvedTools.get("repositoryAccess", {})
+        assert set(access) == {"source", "collaboration"}
+        for slot, role, operations in (
+            ("source", "source_read", ["read"]),
+            ("collaboration", "collaboration", ["read", "review_request"]),
+        ):
+            native = access[slot]["nativeBinding"]
+            assert native["authorityKind"] == "repository_connection"
+            assert native["connectionRef"] == context.selected
+            assert native["repositoryRole"] == role
+            assert native["repositoryAccessSnapshotRef"] == access[slot]["snapshotRef"]
+            selection_body = json.loads(
+                context.artifacts.payloads[
+                    access[slot]["artifactRef"].removeprefix("artifact:")
+                ]
+            )["selection"]
+            assert selection_body["operations"] == operations
+        assert await context.store.load(compiled.envelope.planRef) == compiled.envelope
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "agent",
+        "empty",
+        "unknown",
+        "mixed",
+        "dynamic",
+        "remediation",
+        "executor",
+        "nested",
+        "fix_only",
+    ],
+)
+async def test_default_codex_does_not_admit_native_review_authority_to_other_graphs(
+    monkeypatch, tmp_path, case
+):
+    from copy import deepcopy
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "default")
+    workflow = deepcopy(context.workflow)
+    native = workflow["steps"][0]
+    agent = {"type": "agent", "instructions": "Inspect the repository."}
+    if case == "agent":
+        workflow["steps"] = [agent]
+    elif case == "empty":
+        workflow["steps"] = []
+    elif case == "unknown":
+        native["tool"]["id"] = "unknown.native.handler"
+    elif case == "mixed":
+        workflow["steps"].append(agent)
+    elif case == "dynamic":
+        native["tool"]["id"] = "{{ inputs.tool }}"
+    elif case == "remediation":
+        native["annotations"] = {
+            "remediationLoop": {
+                "kind": "remediation_loop",
+                "remediationTool": {"name": "auto", "inputs": {"instructions": "Fix"}},
+                "verificationTool": {
+                    "name": "auto",
+                    "inputs": {"instructions": "Verify"},
+                },
+            }
+        }
+    elif case == "executor":
+        native["tool"]["executor"] = {"activity_type": "mm.agent.execute"}
+    elif case == "nested":
+        native["steps"] = [agent]
+    elif case == "fix_only":
+        workflow["publish"]["mergeAutomation"]["finishMode"] = "fix_only"
+    try:
+        compiled = await context.compile(workflow=workflow)
+        assert compiled.envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
+        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "explicit_agent_plan",
+        "implicit_agent_plan",
+        "input_remediation",
+        "args_remediation",
+    ],
+)
+async def test_native_review_rejects_runtime_graph_replacement_and_dynamic_controllers(
+    monkeypatch, tmp_path, case
+):
+    from copy import deepcopy
+
+    from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
+    from moonmind.workflows.temporal.worker_runtime import _selected_step_tool_inputs
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "default")
+    workflow = deepcopy(context.workflow)
+    if case.endswith("agent_plan"):
+        tool = {"name": "omnigent"}
+        if case == "explicit_agent_plan":
+            tool["type"] = "agent_runtime"
+        workflow["plan"] = [
+            {"tool": tool, "inputs": {"instructions": "Execute replacement graph."}}
+        ]
+    else:
+        loop = RemediationLoopSpec.model_validate(
+            {
+                "kind": "remediation_loop",
+                "loopId": "native-replacement",
+                "remediationTool": {"name": "auto", "inputs": {"instructions": "Fix"}},
+                "verificationTool": {
+                    "name": "auto",
+                    "inputs": {"instructions": "Verify"},
+                },
+                "workspacePolicy": "continue_from_loop_head",
+                "budgets": {"hardMaxAttempts": 1},
+                "terminalPolicy": {
+                    "fullyImplemented": "advance",
+                    "additionalWorkNeeded": "stop",
+                    "blocked": "stop",
+                    "noDetermination": "stop",
+                    "failedUnrecoverable": "stop",
+                },
+                "sideEffectPolicy": "workflow_owned",
+                "publicationPolicy": "evaluate_after_terminal",
+            }
+        ).model_dump(by_alias=True, mode="json")
+        native = workflow["steps"][0]
+        if case == "args_remediation":
+            native["tool"]["args"] = native["tool"].pop("inputs")
+        container = "args" if case == "args_remediation" else "inputs"
+        native["tool"][container]["annotations"] = {"remediationLoop": loop}
+        # This is the same projection consumed by the runtime's controller.
+        assert (
+            _selected_step_tool_inputs(native)["annotations"]["remediationLoop"] == loop
+        )
+    try:
+        compiled = await context.compile(workflow=workflow)
+        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
+        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_native_review_keeps_unassigned_operator_default_connection_rejected(
+    monkeypatch, tmp_path
+):
+    context = await _native_review_preset_plan_test(
+        monkeypatch, tmp_path, "unassigned-default"
+    )
+    try:
+        with pytest.raises(ValueError, match="not assigned"):
+            await context.compile()
+        assert not context.store._plans
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_kind", ["native", "agent"])
+async def test_native_review_plan_cannot_donate_repository_authority_to_children(
+    monkeypatch, tmp_path, child_kind
+):
+    from copy import deepcopy
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "default")
+    try:
+        parent = await context.compile()
+        workflow = deepcopy(context.workflow)
+        if child_kind == "agent":
+            workflow["steps"] = [
+                {"type": "agent", "instructions": "Use parent authority."}
+            ]
+        with pytest.raises(ValueError, match="native.*authority.*child"):
+            await context.compile(workflow=workflow, parent=parent.envelope)
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_generic_tool_executor_without_registered_native_handler_has_no_grant(
+    monkeypatch, tmp_path
+):
+    from moonmind.workflows.temporal import story_output_tools
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "default")
+
+    def only_cli_fallback(dispatcher, **_kwargs):
+        dispatcher.register_default_skill_handler(handler=lambda *_a, **_kw: None)
+
+    monkeypatch.setattr(
+        story_output_tools, "register_story_output_tool_handlers", only_cli_fallback
+    )
+    try:
+        compiled = await context.compile()
+        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
+        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["read", "review_request"])
+async def test_native_review_plan_uses_selected_credential_through_existing_reader(
+    monkeypatch, tmp_path, operation
+):
+    from moonmind.config.settings import settings
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "selected")
+    monkeypatch.setenv("NATIVE_SELECTED_PAT", "native-selected-credential-canary")
+    monkeypatch.setenv("GITHUB_TOKEN", "different-ambient-credential-canary")
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+
+    class NativeArtifacts:
+        async def read_bytes(self, ref):
+            return context.artifacts.payloads[ref.removeprefix("artifact:")]
+
+        async def read_repository_access_snapshot(self, *_args, **_kwargs):
+            pytest.fail("native authority must not use an agent artifact reader")
+
+    try:
+        compiled = await context.compile()
+        reader = OmnigentGithubCredentialService(
+            None, session_factory=context.sessions, artifact_gateway=NativeArtifacts()
+        )
+        acquired = await reader.acquire_repository_use(
+            plan=compiled.envelope,
+            request=None,
+            role="collaboration",
+            operation=operation,
+            repository=context.repository,
+            execution_owner="mm:native-review-preset-test",
+        )
+        try:
+            assert acquired.binding.connection_id == "native-selected"
+            assert (
+                acquired.credential.use_now(lambda raw: raw.decode())
+                == "native-selected-credential-canary"
+            )
+        finally:
+            acquired.credential.clear()
+    finally:
+        await context.engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "agent",
+        "target",
+        "write",
+        "role",
+        "connection",
+        "snapshot",
+        "extra_binding",
+        "owner",
+    ],
+)
+async def test_native_review_reader_rejects_wrong_scope_without_agent_fallback(
+    monkeypatch, tmp_path, case
+):
+    from copy import deepcopy
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        create_execution_plan_envelope,
+    )
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    context = await _native_review_preset_plan_test(monkeypatch, tmp_path, "default")
+
+    class NativeArtifacts:
+        async def read_bytes(self, ref):
+            return context.artifacts.payloads[ref.removeprefix("artifact:")]
+
+        async def read_repository_access_snapshot(self, *_args, **_kwargs):
+            pytest.fail("native authority must never fall back to an agent read")
+
+    try:
+        compiled = await context.compile()
+        plan = compiled.envelope
+        arguments = {
+            "plan": plan,
+            "request": None,
+            "role": "collaboration",
+            "operation": "read",
+            "repository": context.repository,
+            "execution_owner": "mm:native-review-preset-test",
+        }
+        if case == "agent":
+            arguments["request"] = AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="agent",
+                instructionRef="artifact:instructions",
+                idempotencyKey="agent-attempt",
+            )
+        elif case == "target":
+            arguments["repository"] = "MoonLadderStudios/Tactics"
+        elif case == "write":
+            arguments["operation"] = "write"
+        elif case == "owner":
+            arguments["execution_owner"] = None
+        else:
+            tools = deepcopy(plan.payload.resolvedTools)
+            binding = tools["repositoryAccess"]["collaboration"]["nativeBinding"]
+            if case == "role":
+                binding["repositoryRole"] = "destination_write"
+            elif case == "connection":
+                binding["connectionRef"] = "different-connection"
+            elif case == "snapshot":
+                binding["repositoryAccessSnapshotRef"] = (
+                    "repository-access-snapshot:sha256:" + "9" * 64
+                )
+            elif case == "extra_binding":
+                binding["unexpectedAuthority"] = "write"
+            arguments["plan"] = create_execution_plan_envelope(
+                plan.payload.model_copy(update={"resolvedTools": tools})
+            )
+        reader = OmnigentGithubCredentialService(
+            None, session_factory=context.sessions, artifact_gateway=NativeArtifacts()
+        )
+        with pytest.raises(ValueError):
+            await reader.acquire_repository_use(**arguments)
+    finally:
+        await context.engine.dispose()
