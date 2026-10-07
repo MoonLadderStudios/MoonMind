@@ -1273,7 +1273,7 @@ def _review_only_completed(head_sha: str) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ci_state", ["queued", "failure"])
+@pytest.mark.parametrize("ci_state", ["queued", "failure", "unavailable"])
 async def test_review_only_requests_and_waits_for_findings_without_resolver(
     monkeypatch, ci_state
 ):
@@ -1288,6 +1288,7 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
     )
     active_polls = []
     polls = []
+    check_reads = []
     monkeypatch.setattr(
         activity_runtime.temporal_activity,
         "info",
@@ -1311,6 +1312,11 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
         if path.endswith("/pulls/350"):
             data = {"state": "open", "head": {"sha": HEAD_1}, "mergeable": True}
         elif path.endswith("/status"):
+            check_reads.append(path)
+            if ci_state == "unavailable":
+                return httpx.Response(
+                    403, json={"message": "Resource not accessible by integration"}
+                )
             data = {"state": "pending", "statuses": []}
         elif path.endswith("/check-runs"):
             data = {
@@ -1366,6 +1372,7 @@ async def test_review_only_requests_and_waits_for_findings_without_resolver(
     result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
 
     assert result["status"] == "review_complete"
+    assert check_reads == []
     assert result["latestHeadSha"] == HEAD_1
     assert harness.wait_calls >= 1
     assert len(harness.request_payloads) == 1
