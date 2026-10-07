@@ -90,7 +90,7 @@ A supported-but-busy route waits through existing capacity handling. Missing set
 
 ## Provider Profile in the Workflows list
 
-[Workflows List](WorkflowsListPage.md) owns table interaction. This section owns the identity shown there.
+[Workflows List](WorkflowsListPage.md) owns table interaction. This section owns the identity shown there. MoonLadderStudios/MoonMind#4640 implements it through the admission-recorded projection described in [Workflows List §7.3](WorkflowsListPage.md#73-recorded-provider-profile-projection).
 
 Replace the ordinary desktop Runtime column and mobile Runtime field with **Provider Profile**. Show its friendly recorded name, with Harness as optional secondary text in the same cell. Do not add ordinary Provider, Harness, Backend, Host, and Container columns alongside it. Execution details retain authorized provenance.
 
