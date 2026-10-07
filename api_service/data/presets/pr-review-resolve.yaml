@@ -59,7 +59,8 @@ annotations:
         type: string
         title: Automated review provider
         description: Automated reviewer for every head SHA. None uses existing review
-          evidence without requesting a fresh automated review.
+          evidence without requesting a fresh automated review. Review only requires
+          Codex; None is incompatible with Review only.
         enum:
         - codex
         - none

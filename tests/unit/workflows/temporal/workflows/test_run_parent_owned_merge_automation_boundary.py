@@ -449,3 +449,88 @@ def test_parent_merge_automation_summary_preserves_result_finish_mode(
     assert parent._merge_automation_summary_from_context().get("finishMode") == (
         finish_mode if finish_mode == "review_only" else None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_mode", [None, "merge", "fix_only", "review_only"])
+@pytest.mark.parametrize("resolver_plan_patch", [False, True])
+async def test_merge_gate_child_command_preserves_retained_authority_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    finish_mode: str | None,
+    resolver_plan_patch: bool,
+) -> None:
+    """Retained Omnigent modes carry authority only in the resolver template."""
+    _patch_workflow_context(monkeypatch)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: (
+            resolver_plan_patch
+            if patch
+            == run_workflow_module.RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH
+            else True
+        ),
+    )
+    parent = MoonMindRunWorkflow()
+    parent._repo = "MoonLadderStudios/MoonMind"
+    parent._publish_context["headSha"] = "abc123"
+    binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "artifact:parent-plan",
+        "taskInputSnapshotRef": "artifact:parent-input",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    config: dict[str, Any] = {"enabled": True}
+    if finish_mode is not None:
+        config["finishMode"] = finish_mode
+    if finish_mode == "review_only":
+        config["reviewLoop"] = {"enabled": True, "provider": "codex"}
+    calls = []
+
+    async def execute_child(workflow_type, payload, **_kwargs):
+        calls.append((workflow_type, payload))
+        return {
+            "status": (
+                "review_complete" if finish_mode == "review_only" else "review_clean"
+            ),
+            "latestHeadSha": "abc123",
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_child_workflow", execute_child
+    )
+    await parent._maybe_start_merge_gate(
+        parameters={
+            "publishMode": "none" if finish_mode == "review_only" else "pr",
+            "targetRuntime": "omnigent",
+            "omnigentExecutionPlan": binding,
+            "mergeAutomation": config,
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+    )
+
+    assert len(calls) == 1
+    workflow_type, payload = calls[0]
+    assert workflow_type == "MoonMind.MergeAutomation"
+    assert set(payload) == {
+        "workflowType",
+        "parentWorkflowId",
+        "parentRunId",
+        "principal",
+        "publishContextRef",
+        "pullRequest",
+        "jiraIssueKey",
+        "mergeAutomationConfig",
+        "resolverTemplate",
+        "idempotencyKey",
+    } | ({"parentExecutionPlan"} if finish_mode == "review_only" else set())
+    assert payload["resolverTemplate"] == {
+        "repository": parent._repo,
+        "targetRuntime": "omnigent",
+        "requiredCapabilities": ["git", "gh"],
+        "inputs": {"returnToGate": True},
+        **({"parentOmnigentExecutionPlan": binding} if resolver_plan_patch else {}),
+    }
+    if finish_mode == "review_only":
+        assert payload["parentExecutionPlan"] == binding

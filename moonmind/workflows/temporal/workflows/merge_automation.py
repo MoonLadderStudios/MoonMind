@@ -1872,6 +1872,11 @@ class MoonMindMergeAutomationWorkflow:
                     "The requested fresh review completed for this head. "
                     "CI and any review findings remain separate obligations."
                 )
+                # Completion was accepted above, after the deadline/head/open
+                # checks and request-bound evidence validation. This final
+                # snapshot only reports that decision; delayed artifact I/O
+                # must not reopen the accepted outcome or imply merge readiness.
+                await self._write_gate_snapshot(evidence_ready=True)
                 self._publish_visibility()
                 return await self._finish()
             # CI and merge-conflict readiness do not delay a review request.

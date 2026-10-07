@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -322,8 +321,8 @@ async def test_explicit_review_only_false_preserves_fix_only_default(tmp_path) -
 
 
 async def test_review_only_requires_a_configured_review_provider(tmp_path) -> None:
-    with pytest.raises((PresetValidationError, ValidationError)):
-        expanded = await _expand(
+    with pytest.raises(PresetValidationError) as exc_info:
+        await _expand(
             tmp_path,
             {
                 "pull_request": "350",
@@ -331,12 +330,75 @@ async def test_review_only_requires_a_configured_review_provider(tmp_path) -> No
                 "review_provider": "none",
             },
         )
-        merge_automation = expanded["publish"]["mergeAutomation"]
-        MergeAutomationConfigModel.model_validate(
-            {
-                "resolver": {"mergeMethod": merge_automation["mergeMethod"]},
-                "finishMode": merge_automation["finishMode"],
-                "timeouts": merge_automation["timeouts"],
-                "reviewLoop": merge_automation["reviewLoop"],
-            }
-        )
+    assert exc_info.value.errors == [
+        {
+            "path": "preset.inputs.review_provider",
+            "message": (
+                "Review only requires a fresh automated reviewer; "
+                "choose Codex or turn off Review only."
+            ),
+            "code": "invalid_review_provider",
+            "recoverable": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize("review_only", [None, False])
+@pytest.mark.parametrize("finish_with_pr_resolver", [False, True])
+async def test_existing_review_mode_preserves_explicit_disabled_provider(
+    tmp_path, review_only, finish_with_pr_resolver
+) -> None:
+    inputs = {
+        "pull_request": "350",
+        "review_provider": "none",
+        "finish_with_pr_resolver": finish_with_pr_resolver,
+    }
+    if review_only is not None:
+        inputs["review_only"] = review_only
+
+    expanded = await _expand(tmp_path, inputs)
+
+    merge_automation = expanded["publish"]["mergeAutomation"]
+    assert merge_automation["finishMode"] == (
+        "merge" if finish_with_pr_resolver else "fix_only"
+    )
+    assert merge_automation["automatedReview"] == "disabled"
+    assert merge_automation["reviewLoop"]["enabled"] is False
+    assert expanded["appliedTemplate"]["inputs"]["review_provider"] == "none"
+
+
+async def test_nested_review_only_rejects_disabled_provider(tmp_path) -> None:
+    async with _catalog_db(tmp_path) as maker:
+        async with maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+            await service.create_template(
+                slug="parent-review",
+                title="Parent review",
+                description="Includes an existing pull request review.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": _SLUG,
+                        "alias": "review",
+                        "scope": "global",
+                        "inputMapping": {
+                            "pull_request": "350",
+                            "review_only": True,
+                            "review_provider": "none",
+                        },
+                    }
+                ],
+            )
+            with pytest.raises(PresetValidationError, match="fresh automated reviewer"):
+                await service.expand_template(
+                    slug="parent-review",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={},
+                    context={"repository": "MoonLadderStudios/MoonMind"},
+                )
