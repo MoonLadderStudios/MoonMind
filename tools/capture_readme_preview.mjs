@@ -59,7 +59,8 @@ const server = createServer(async (req, res) => {
     }
     if (path.startsWith('/workflows')) { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(shell); return; }
     let data;
-    if (path === '/api/ui/info') data = { app: 'MoonMind', apiBase: '/api', features: {} };
+    if (path === '/api/ui/info') data = { app: 'MoonMind', apiBase: '/api', features: { workflowList: true, workflowActions: true, settingsProvidersSecrets: true, settingsInstance: true, settingsOperations: true } };
+    else if (path === '/api/v1/provider-profiles') data = [{ profile_id: 'docs-example', enabled: true, launch_ready: true }];
     else if (path === '/api/executions') data = { items: rows, count: rows.length, total: rows.length };
     else if (path === '/api/executions/facets') data = { facet: url.searchParams.get('facet') || 'status', items: [], values: [] };
     else if (path === '/api/executions/example-3') data = detail;
