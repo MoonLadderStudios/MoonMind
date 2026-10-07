@@ -13663,6 +13663,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "node_id": node_id,
                                 **(
                                     {
+                                        "repositoryAuthority": {
+                                            "executionOwner": workflow.info().workflow_id,
+                                            "parentExecutionPlan": parameters.get(
+                                                "omnigentExecutionPlan"
+                                            ),
+                                        }
+                                    }
+                                    if tool_name == "github.resolve_pull_request_target"
+                                    and (self._merge_automation_request(parameters) or {}).get(
+                                        "finishMode"
+                                    ) == "review_only"
+                                    else {}
+                                ),
+                                **(
+                                    {
                                         "execution_principal": parameters.get(
                                             "executionPrincipal"
                                         )

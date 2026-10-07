@@ -139,9 +139,11 @@ def test_resolve_plan_json_pointer_rejects_scalar_traversal() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("selection_patched", [True, False])
+@pytest.mark.parametrize("finish_mode", [None, "review_only", "fix_only"])
 async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_run(
     monkeypatch: pytest.MonkeyPatch,
     selection_patched: bool,
+    finish_mode: str | None,
 ) -> None:
     """Mixed tool dependency: consume resolves produce's outputs via dispatch."""
 
@@ -153,6 +155,9 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         "profileId": "codex_openai_oauth",
     }
     captured: list[tuple[str, Any, dict[str, Any]]] = []
+    producer_tool = (
+        "github.resolve_pull_request_target" if finish_mode else "test.produce"
+    )
 
     async def fake_execute_activity(
         activity_type: str,
@@ -169,7 +174,7 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
                 return json.dumps(
                     {
                         "skills": [
-                            _tool_definition_payload("test.produce"),
+                            _tool_definition_payload(producer_tool),
                             _tool_definition_payload("test.consume"),
                         ]
                     }
@@ -178,7 +183,7 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
                 [
                     {
                         "id": "produce",
-                        "tool": {"type": "skill", "name": "test.produce"},
+                        "tool": {"type": "skill", "name": producer_tool},
                         "inputs": {"prompt": "hello"},
                     },
                     {
@@ -256,7 +261,22 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         ),
     )
 
-    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+    parameters = (
+        {
+            "omnigentExecutionPlan": {"planRef": "parent-frozen-plan"},
+            "workflow": {
+                "publish": {
+                    "mode": "none",
+                    "mergeAutomation": {"enabled": True, "finishMode": finish_mode},
+                }
+            },
+        }
+        if finish_mode
+        else {}
+    )
+    await workflow._run_execution_stage(
+        parameters=parameters, plan_ref="art:sha256:plan"
+    )
 
     tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
     assert len(tool_calls) == 2
@@ -264,6 +284,17 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         call for call in tool_calls if call[1]["invocation_payload"]["id"] == "consume"
     )
     assert consume_call[1]["invocation_payload"]["inputs"]["ticket"] == "MM-1"
+    producer_call = next(
+        call for call in tool_calls if call[1]["invocation_payload"]["id"] == "produce"
+    )
+    if finish_mode == "review_only":
+        assert producer_call[1]["context"]["repositoryAuthority"] == {
+            "executionOwner": "wf-1",
+            "parentExecutionPlan": parameters["omnigentExecutionPlan"],
+        }
+    else:
+        assert "repositoryAuthority" not in producer_call[1]["context"]
+    assert "repositoryAuthority" not in consume_call[1]["context"]
     # Tools see the run's provider selection, e.g. so issue search can check
     # the profile's capacity before claiming work the run cannot start.
     # Histories recorded before the marker keep their original arguments.

@@ -107,7 +107,7 @@ class OmnigentGithubCredentialService:
 
     def __init__(
         self,
-        backend: DockerCommandBackend,
+        backend: DockerCommandBackend | None,
         *,
         session_factory: Any | None = None,
         artifact_gateway: Any | None = None,

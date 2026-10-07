@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -18,7 +19,9 @@ _HEAD = "abc1234abc1234abc1234abc1234abc1234abc12"
 
 
 class _FakeService:
-    def __init__(self, *, resolution: PullRequestSelectorResult, token: str = "t") -> None:
+    def __init__(
+        self, *, resolution: PullRequestSelectorResult, token: str = "t"
+    ) -> None:
         self._resolution = resolution
         self._token = token
 
@@ -150,3 +153,75 @@ async def test_empty_selector_reports_successful_skip() -> None:
     assert result.status == "COMPLETED"
     assert result.outputs["skipped"] is True
     assert "skipped" in result.outputs["summary"].lower()
+
+
+async def test_review_only_target_uses_context_authority_for_both_reads(monkeypatch):
+    from moonmind.workflows.temporal import merge_automation_repository_access
+
+    authority = {
+        "executionOwner": "parent",
+        "parentExecutionPlan": {"planRef": "frozen"},
+    }
+    uses = []
+
+    @asynccontextmanager
+    async def selected_token(value, *, repository, operation):
+        uses.append((value, repository, operation))
+        yield "selected-token"
+
+    class BoundService(_FakeService):
+        async def resolve_pull_request_selector(self, **kwargs):
+            assert kwargs["github_token"] == "selected-token"
+            return self._resolution
+
+        async def resolve_github_token(self, *_args, **_kwargs):
+            pytest.fail("admitted target reads must not resolve ambient auth")
+
+    monkeypatch.setattr(
+        merge_automation_repository_access,
+        "merge_automation_repository_token",
+        selected_token,
+    )
+    client = _client(
+        _response(
+            {
+                "state": "open",
+                "merged": False,
+                "head": {"sha": _HEAD, "ref": "feature"},
+                "base": {"ref": "main"},
+            }
+        )
+    )
+    with patch(
+        "moonmind.workflows.temporal.story_output_tools.httpx.AsyncClient",
+        return_value=client,
+    ):
+        result = await resolve_pull_request_target(
+            {
+                "repository": _REPO,
+                "pullRequest": "feature",
+                "repositoryAuthority": {"forged": True},
+            },
+            {"repositoryAuthority": authority},
+            github_service_factory=lambda: BoundService(resolution=_resolved()),
+        )
+    assert result.status == "COMPLETED"
+    assert uses == [(authority, _REPO, "read")]
+    assert (
+        client.get.call_args.kwargs["headers"]["Authorization"]
+        == "Bearer selected-token"
+    )
+
+
+async def test_invalid_review_authority_never_falls_back_to_ambient(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    client = _client(_response({}, status_code=403))
+    with patch(
+        "moonmind.workflows.temporal.story_output_tools.httpx.AsyncClient",
+        return_value=client,
+    ), pytest.raises(ValueError, match="authority is incomplete"):
+        await resolve_pull_request_target(
+            {"repository": _REPO, "pullRequest": "350"},
+            {"repositoryAuthority": {}},
+        )
+    client.get.assert_not_awaited()

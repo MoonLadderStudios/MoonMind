@@ -1175,6 +1175,7 @@ async def _load_verified_execution_plan(
     binding: OmnigentExecutionPlanBinding,
     *,
     workflow_id: str | None = None,
+    run_id: str | None = None,
     step_execution_id: str | None = None,
     admitted_principal: str | None = None,
 ):
@@ -1209,16 +1210,17 @@ async def _load_verified_execution_plan(
             "execution plan binding conflicts with task-input snapshot authority"
         )
     if persisted.payload.resolvedTools.get("repositoryAccess") and workflow_id:
-        # The normal Step identity carries the actual parent Temporal run.
-        # Legacy unstructured identifiers do not synthesize an execution link.
+        # Trusted native Activities have a real workflow/run identity without
+        # an AgentRun. Agent consumers derive that identity from their Step.
+        execution_run_id = run_id
         prefix = f"{workflow_id}:"
         step_id = str(step_execution_id or "")
-        if step_id.startswith(prefix):
+        if execution_run_id is None and step_id.startswith(prefix):
             execution_identity, separator, ordinal = step_id[len(prefix) :].rpartition(
                 ":execution:"
             )
-            run_id, logical_separator, logical_step_id = execution_identity.partition(
-                ":"
+            step_run_id, logical_separator, logical_step_id = (
+                execution_identity.partition(":")
             )
             if (
                 separator
@@ -1227,18 +1229,20 @@ async def _load_verified_execution_plan(
                 and logical_separator
                 and logical_step_id
             ):
-                from moonmind.omnigent.bridge_artifacts import (
-                    link_verified_execution_plan_inputs,
-                )
+                execution_run_id = step_run_id
+        if execution_run_id:
+            from moonmind.omnigent.bridge_artifacts import (
+                link_verified_execution_plan_inputs,
+            )
 
-                await link_verified_execution_plan_inputs(
-                    session_factory=async_session_maker,
-                    plan=persisted,
-                    binding=binding,
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                )
-                admitted_principal = f"workflow:{workflow_id}"
+            await link_verified_execution_plan_inputs(
+                session_factory=async_session_maker,
+                plan=persisted,
+                binding=binding,
+                workflow_id=workflow_id,
+                run_id=execution_run_id,
+            )
+            admitted_principal = f"workflow:{workflow_id}"
 
     async def read_plan_json(ref):
         if admitted_principal is None:
@@ -1248,7 +1252,9 @@ async def _load_verified_execution_plan(
     artifact_payload = await read_plan_json(binding.plan_artifact_ref)
     artifact_plan = verify_execution_plan_envelope(artifact_payload)
     if artifact_plan != persisted:
-        raise ValueError("execution plan artifact conflicts with durable plan authority")
+        raise ValueError(
+            "execution plan artifact conflicts with durable plan authority"
+        )
     authority = persisted.payload.authority
     if authority is not None and (
         authority.taskInputSnapshotRef != binding.task_input_snapshot_ref
