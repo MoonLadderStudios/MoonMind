@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import postcss, { type Plugin, type Root } from "postcss";
+import postcss, { type AnyNode, type Plugin, type Root } from "postcss";
 
 const require = createRequire(import.meta.url);
 const config = require("../../postcss.config.cjs") as {
@@ -63,5 +63,21 @@ describe("dashboard Tailwind compilation", () => {
       if (rule.selector.includes(".dark\\:text-white")) darkSelectors.push(rule.selector);
     });
     expect(darkSelectors).toEqual([".dark\\:text-white:is(.dark *)"]);
+  });
+
+  it("keeps utility classes in the same cascade as the dashboard's base rules", () => {
+    const layers: string[] = [];
+    let utilityFound = false;
+    styles.walkRules(".text-xs", (rule) => {
+      utilityFound = true;
+      let parent: AnyNode | undefined = rule.parent;
+      while (parent) {
+        if (parent.type === "atrule" && parent.name === "layer") layers.push(parent.params);
+        parent = parent.parent;
+      }
+    });
+    // An unlayered `button { font: inherit }` must not outrank a text utility.
+    expect(utilityFound).toBe(true);
+    expect(layers).toEqual([]);
   });
 });

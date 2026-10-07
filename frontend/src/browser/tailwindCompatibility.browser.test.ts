@@ -43,6 +43,14 @@ describe("Tailwind dashboard compatibility", () => {
     expect(parseFloat(getComputedStyle(host.children[0]!).fontSize)).toBeGreaterThan(16);
   });
 
+  it("lets control utilities override the generic dashboard control defaults", () => {
+    host.innerHTML = '<button class="text-xs px-3 py-1.5">Compact action</button>';
+    const style = getComputedStyle(host.children[0]!);
+    expect(style.fontSize).toBe("12px");
+    expect(style.paddingLeft).toBe("12px");
+    expect(style.paddingTop).toBe("6px");
+  });
+
   it("generates layout utilities from frontend sources", () => {
     host.className = "grid grid-cols-2 gap-4";
     host.style.width = "320px";
