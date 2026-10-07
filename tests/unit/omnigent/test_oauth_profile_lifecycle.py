@@ -1686,11 +1686,9 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("gh_projected", [False, True])
 async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     tmp_path,
     monkeypatch,
-    gh_projected,
 ) -> None:
     payload = b"---\nname: pr-resolver\ndescription: test\n---\n"
     content_ref = "art-skill-pr-resolver"
@@ -1780,10 +1778,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "manifest_checks": 0,
     }
 
-    commands: list[tuple[tuple[str, ...], dict]] = []
-
-    async def run(*args, **kwargs):
-        commands.append((args, kwargs))
+    async def run(*args, **_kwargs):
         if args[:2] == ("docker", "ps"):
             return (0, "", "")  # No initializer survived the previous launch.
         if args[:3] == ("docker", "inspect", "--format"):
@@ -1899,15 +1894,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "cleanup_authority_store": cleanup_authority_store,
         "effective_launch": launch,
     }
-    if gh_projected:
-        # The image tool probe and mounted-tool preflight have their own owners
-        # and tests; this case proves the credential delivery and its report.
-        runtime._initialize_required_tools = AsyncMock()  # type: ignore[method-assign]
-        runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
-            return_value={}
-        )
-        request["github_token"] = "selected_token_B"
-        request["required_capabilities"] = ("gh",)
 
     first = await runtime.prepare_host(**request)
     mount_source = state["mount_source"]
@@ -1948,25 +1934,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in runtime_profile_environment
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
-    # MoonLadderStudios/MoonMind#4011: a projected gh credential is reported as
-    # agent-readable rather than confined, and never enters container metadata.
-    assert first["githubCredentialExposure"] == (
-        "agent_readable_unconfined" if gh_projected else "not_projected"
-    )
-    host_launch, host_kwargs = next(
-        (args, kwargs)
-        for args, kwargs in commands
-        if args[:3] == ("docker", "run", "-d")
-    )
-    assert not any("selected_token_B" in str(arg) for arg in host_launch)
-    assert "GH_TOKEN" not in host_launch
-    assert "selected_token_B" not in dict(host_kwargs.get("env") or {}).values()
-    writers = [
-        kwargs["input_bytes"]
-        for _args, kwargs in commands
-        if kwargs.get("input_bytes") is not None
-    ]
-    assert writers == ([b"selected_token_B"] if gh_projected else [])
 
 
 @pytest.mark.asyncio

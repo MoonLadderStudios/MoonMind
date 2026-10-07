@@ -69,11 +69,10 @@ def test_generic_host_projection_declares_the_gh_schema_version() -> None:
     script = _generic_host_entrypoint()
 
     assert (
-        f"ln -sfn /run/mm-credentials/github/hosts.yml {GH_CONFIG_DIR}/hosts.yml"
-        in script
+        f"cp /run/mm-credentials/github/hosts.yml {GH_CONFIG_DIR}/hosts.yml" in script
     )
     assert f"""printf 'version: "1"\\n' > {GH_CONFIG_DIR}/config.yml""" in script
-    assert f"chmod 0600 {GH_CONFIG_DIR}/config.yml" in script
+    assert f"chmod 0600 {GH_CONFIG_DIR}/hosts.yml {GH_CONFIG_DIR}/config.yml" in script
 
     syntax = subprocess.run(
         ["/bin/sh", "-n"],

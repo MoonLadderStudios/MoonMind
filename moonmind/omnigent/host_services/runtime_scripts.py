@@ -341,10 +341,7 @@ class OmnigentRuntimeScriptService:
             "chmod 0700 " + opencode_wrapper + "; fi; "
             "if [ -d /run/mm-credentials/github ]; then "
             "mkdir -p /home/app/.config/gh; "
-            # Read the attempt-owned projection in place rather than copying
-            # it once at start: an atomic same-owner rewrite of the mounted
-            # hosts.yml is then what the running gh sees (#4011).
-            "ln -sfn /run/mm-credentials/github/hosts.yml "
+            "cp /run/mm-credentials/github/hosts.yml "
             "/home/app/.config/gh/hosts.yml; "
             # gh migrates an unversioned config on every invocation and reads
             # the account name from api.github.com to do it, so one blocked or
@@ -354,7 +351,8 @@ class OmnigentRuntimeScriptService:
             # and the git credential helper without a provider round trip.
             "printf 'version: \"1\"\\n' > /home/app/.config/gh/config.yml; "
             "chmod 0700 /home/app/.config/gh; "
-            "chmod 0600 /home/app/.config/gh/config.yml; "
+            "chmod 0600 /home/app/.config/gh/hosts.yml "
+            "/home/app/.config/gh/config.yml; "
             "mkdir -p " + _RUNTIME_BIN_DIR + "; "
             "printf '%s\\n' '#!/bin/sh' "
             f"'{_GITHUB_TOKEN_ENV_UNSET}' "

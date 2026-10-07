@@ -24,9 +24,6 @@ from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.host_services.github_credentials import (
-    github_hosts_writer_script,
-)
 from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
@@ -99,7 +96,9 @@ from moonmind.workflows.skills.run_projection import (
     verify_skill_projection,
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
-from moonmind.workflows.temporal.runtime.git_auth import build_isolated_git_environment
+from moonmind.workflows.temporal.runtime.git_auth import (
+    build_github_token_git_environment,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -186,8 +185,6 @@ _DEFAULT_HOST_PATH = (
 _RUNNER_PROXY_ENV_NAMES = tuple(
     proxy_env.partition("=")[0] for proxy_env in omnigent_proxy_env()
 )
-_GITHUB_CONFIG_HOME = "/home/app/.cache/moonmind-xdg"
-_GITHUB_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 _RUNNER_GITHUB_ENV_NAMES = (
     "XDG_CONFIG_HOME",
     "GH_PROMPT_DISABLED",
@@ -776,11 +773,6 @@ class OmnigentOAuthHostRuntime:
         )
         launched_container_name: str | None = None
         static_compose_env: Mapping[str, str] | None = None
-        # Routing isolation is not confinement: a projected gh credential is
-        # readable by arbitrary agent code in the host, so report it as such
-        # rather than as a confined grant (RepositoryAccessAndWorkspaceDesign
-        # QUALITY-003, MoonLadderStudios/MoonMind#4011).
-        github_credential_exposure = "not_projected"
         if binding.host_launch_profile_ref:
             container_job_environment = self._container_job_environment(
                 binding=binding,
@@ -801,10 +793,7 @@ class OmnigentOAuthHostRuntime:
             host_runtime_environment = self._host_runtime_environment(
                 container_job_environment
             )
-            gh_required = "gh" in {
-                item.strip().lower() for item in required_capabilities
-            }
-            if gh_required:
+            if "gh" in {item.strip().lower() for item in required_capabilities}:
                 await self._initialize_required_tools(
                     image_ref=str(launch["hostImageRef"])
                 )
@@ -821,16 +810,11 @@ class OmnigentOAuthHostRuntime:
                 skill_projection=skill_projection,
                 runtime_scripts=runtime_scripts,
                 current_step_execution_id=current_step_execution_id,
-                # A clone-only credential stays with the trusted clone above;
-                # agent code receives the admitted credential only when the
-                # step declares gh (MoonLadderStudios/MoonMind#4011).
-                github_token=github_token if gh_required else None,
+                github_token=github_token,
                 container_job_environment=host_runtime_environment,
                 effective_launch=launch,
                 egress_attestation=egress_attestation,
             )
-            if github_token and gh_required:
-                github_credential_exposure = "agent_readable_unconfined"
         else:
             daemon_workspace_root = await self._resolve_daemon_workspace_root()
             daemon_workspace_source = daemon_visible_workspace_path(
@@ -887,7 +871,6 @@ class OmnigentOAuthHostRuntime:
                 "workspacePath": "/workspaces/run",
                 "egressAttestation": dict(egress_evidence),
                 "egressEvidenceRef": launch_ref,
-                "githubCredentialExposure": github_credential_exposure,
             }
 
         try:
@@ -1115,7 +1098,6 @@ class OmnigentOAuthHostRuntime:
             validated["workspaceMountAttested"] = True
             validated["skillDeliveryAttested"] = True
             validated["restrictedEgressAttested"] = True
-            validated["githubCredentialExposure"] = github_credential_exposure
             # Preserve only bounded, non-secret fields required to prove the
             # exact registered host against an immutable execution plan. The
             # full provider host object is deliberately not returned.
@@ -2601,21 +2583,14 @@ class OmnigentOAuthHostRuntime:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
         if github_token:
-            # The admitted credential reaches gh as lease-private config in the
-            # host's own cache volume, never as a container variable that
-            # Docker would record in Config.Env (MoonLadderStudios/MoonMind#4011).
-            await self._project_github_credential(
-                github_token,
-                cache_volume=cache_volume,
-                host_image_ref=host_image_ref,
-                runtime_uid=int(effective_launch["runtimeUid"]),
-                runtime_gid=int(effective_launch["runtimeGid"]),
-            )
+            child_env["GH_TOKEN"] = github_token
             runner_env_passthrough.extend(_RUNNER_GITHUB_ENV_NAMES)
             args.extend(
                 [
                     "--env",
-                    f"XDG_CONFIG_HOME={_GITHUB_CONFIG_HOME}",
+                    "GH_TOKEN",
+                    "--env",
+                    "XDG_CONFIG_HOME=/home/app/.cache/moonmind-xdg",
                     "--env",
                     "GH_PROMPT_DISABLED=1",
                     "--env",
@@ -2653,54 +2628,6 @@ class OmnigentOAuthHostRuntime:
         except BaseException:
             await self._run("docker", "rm", "-f", container_name, check=False)
             raise
-
-    async def _project_github_credential(
-        self,
-        github_token: str,
-        *,
-        cache_volume: str,
-        host_image_ref: str,
-        runtime_uid: int,
-        runtime_gid: int,
-    ) -> None:
-        """Write the admitted gh ``hosts.yml`` into the host's cache volume.
-
-        Reuses the shared atomic projection writer. The token travels on stdin
-        to a networkless, capability-free one-shot container running as the
-        host's runtime identity, so it is absent from argv, container metadata
-        and the host environment, and a relaunch atomically replaces the prior
-        issuance instead of truncating it.
-        """
-
-        if not _GITHUB_TOKEN_PATTERN.fullmatch(github_token):
-            raise OmnigentOAuthHostError(
-                "GitHub credential contains unsupported characters",
-                code="github_auth_unavailable",
-            )
-        await self._run(
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--user",
-            f"{runtime_uid}:{runtime_gid}",
-            "--network",
-            "none",
-            *structured_container_security_args(),
-            "--read-only",
-            "--mount",
-            f"type=volume,src={cache_volume},dst=/home/app/.cache",
-            "--entrypoint",
-            "/bin/sh",
-            host_image_ref,
-            "-ceu",
-            github_hosts_writer_script(f"{_GITHUB_CONFIG_HOME}/gh"),
-            "--",
-            str(runtime_uid),
-            str(runtime_gid),
-            "github.com",
-            input_bytes=github_token.encode(),
-        )
 
     def _container_job_environment(
         self,
@@ -3255,13 +3182,11 @@ class OmnigentOAuthHostRuntime:
         commit = str(checkout_commit or "").strip()
         workspace.parent.mkdir(parents=True, exist_ok=True)
 
-        # Only the admitted credential reaches Git: ambient tokens, helpers,
-        # headers, askpass and config overrides are excluded for selected and
-        # anonymous clones alike (MoonLadderStudios/MoonMind#4011).
-        git_env = build_isolated_git_environment(
-            github_token if source_kind == "github_https" else None,
-            base_env=os.environ,
-        )
+        git_env = dict(os.environ)
+        if source_kind == "github_https" and github_token:
+            git_env = build_github_token_git_environment(
+                github_token, base_env=os.environ
+            )
 
         clone_args = ["git", "clone"]
         # A remote clone can fetch just the authored branch; a local source keeps
@@ -4464,12 +4389,10 @@ class OmnigentOAuthHostRuntime:
         *args: str,
         env: Mapping[str, str] | None = None,
         check: bool = True,
-        input_bytes: bytes | None = None,
     ) -> tuple[int, str, str]:
         return_code, stdout, stderr = await run_runtime_command(
             args,
             env=env,
-            input_bytes=input_bytes,
             timeout_seconds=600,
             output_limit_bytes=4096,
         )
