@@ -552,6 +552,7 @@ const SkillRuntimeSchema = z
 const MergeAutomationSchema = z
   .object({
     enabled: z.boolean().optional(),
+    finishMode: z.string().nullable().optional(),
     workflowId: z.string().nullable().optional(),
     childWorkflowId: z.string().nullable().optional(),
     status: z.string().nullable().optional(),
@@ -2392,6 +2393,14 @@ function MergeAutomationPanel({
       }));
   const blockers = mergeAutomation.blockers || [];
   const artifactRefs = mergeAutomation.artifactRefs;
+  let noResolverMessage = 'Waiting for required checks before launching pr-resolver.';
+  if (mergeAutomation.status === 'review_complete') {
+    noResolverMessage = 'Review complete. No resolver was launched.';
+  } else if (mergeAutomation.finishMode === 'review_only') {
+    noResolverMessage = ['awaiting_child', 'waiting', 'executing'].includes(mergeAutomation.status || '')
+      ? 'Waiting for fresh review of the current PR head.'
+      : 'Review-only automation does not launch pr-resolver.';
+  }
 
   return (
     <section className="stack">
@@ -2448,7 +2457,7 @@ function MergeAutomationPanel({
           </ul>
         </div>
       ) : (
-        <p className="small">Waiting for required checks before launching pr-resolver.</p>
+        <p className="small">{noResolverMessage}</p>
       )}
 
       {blockers.length ? (

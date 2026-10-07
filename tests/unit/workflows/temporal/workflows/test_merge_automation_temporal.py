@@ -201,6 +201,23 @@ def test_merge_automation_workflow_child_task_queue_is_replay_patched(
     assert MoonMindMergeAutomationWorkflow._workflow_child_task_queue() == "mm.workflow"
 
 
+@pytest.mark.parametrize("finish_mode", ["merge", "fix_only", "review_only"])
+def test_merge_automation_summary_preserves_finish_mode(finish_mode: str) -> None:
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = finish_mode
+    payload["mergeAutomationConfig"]["reviewLoop"] = {
+        "enabled": True,
+        "provider": "codex",
+        "requireFreshReviewForEveryHead": True,
+    }
+    workflow = MoonMindMergeAutomationWorkflow()
+    workflow._input = merge_automation_module.MergeAutomationStartInput.model_validate(
+        payload
+    )
+
+    assert workflow.summary()["finishMode"] == finish_mode
+
+
 def test_merge_automation_summary_payload_bounds_published_artifact_refs() -> None:
     workflow = MoonMindMergeAutomationWorkflow()
     max_refs = merge_automation_module.MAX_PUBLISHED_ARTIFACT_REFS

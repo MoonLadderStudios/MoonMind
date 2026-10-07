@@ -93,6 +93,8 @@ Existing-PR adoption replaces the initial implementation/publish phase with a tr
 
 For review-only adoption, the scope itself permits no repository publication. The gate requests and awaits fresh review without resolver children, preparation, or remediation.
 
+Readiness and review-request Activities consume the parent plan’s admitted collaboration snapshot through the shared bound credential service. The selected connection, repository, operations, and current connection revision remain authoritative; missing or revoked authority never falls back to an ambient account. The GitHub.com gate rejects a different admitted host before acquiring credentials. Restored completed reviews still require a live observation that the originally admitted head remains open before reporting completion.
+
 ## 8. Workflow Type
 
 `MoonMind.MergeAutomation` is the existing internal durable owner for this distinct long-lived behavior. It is not an additional user-selectable runtime, preset mode, or dependency type. Definition and rollout evidence belong to their existing implementation owners rather than a second migration framework.

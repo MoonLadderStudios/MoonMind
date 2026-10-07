@@ -54,6 +54,9 @@ from moonmind.security.outbound_scan import (
     scan_outbound_text,
 )
 from moonmind.jules.status import JulesStatusClassification, normalize_jules_status
+from moonmind.workflows.temporal.merge_automation_repository_access import (
+    merge_automation_repository_token,
+)
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
     resolve_managed_workspace_locator,
@@ -4805,17 +4808,27 @@ class TemporalIntegrationActivities:
         if not isinstance(active_review_request, Mapping):
             active_review_request = None
 
-        readiness = await GitHubService().evaluate_pull_request_readiness(
-            repo=str(pull_request.get("repo") or ""),
-            pr_number=int(pull_request.get("number") or 0),
-            head_sha=str(pull_request.get("headSha") or ""),
-            policy=dict(policy),
-            github_token=payload.get("githubToken"),
-            review_loop_enabled=bool(review_loop.get("enabled")),
-            review_request=dict(active_review_request)
-            if active_review_request
-            else None,
+        credential_context = (
+            merge_automation_repository_token(
+                payload["repositoryAuthority"],
+                repository=str(pull_request.get("repo") or ""),
+                operation="read",
+            )
+            if "repositoryAuthority" in payload
+            else contextlib.nullcontext(payload.get("githubToken"))
         )
+        async with credential_context as github_token:
+            readiness = await GitHubService().evaluate_pull_request_readiness(
+                repo=str(pull_request.get("repo") or ""),
+                pr_number=int(pull_request.get("number") or 0),
+                head_sha=str(pull_request.get("headSha") or ""),
+                policy=dict(policy),
+                github_token=github_token,
+                review_loop_enabled=bool(review_loop.get("enabled")),
+                review_request=(
+                    dict(active_review_request) if active_review_request else None
+                ),
+            )
         evidence = readiness.model_dump(by_alias=True)
 
         jira_issue_key = str(payload.get("jiraIssueKey") or "").strip()
@@ -4925,15 +4938,25 @@ class TemporalIntegrationActivities:
         # previous ambiguous attempt actually created is still reconcilable.
         reconcile_from = parsed_attempt_started_at - timedelta(minutes=2)
 
-        result = await GitHubService().request_automated_review(
-            repo=repository,
-            pr_number=pr_number,
-            expected_head_sha=expected_head_sha,
-            provider=provider_record.provider,
-            attempt_started_at=reconcile_from.isoformat(),
-            recorded_comment_id=entry.request_comment_id,
-            github_token=payload.get("githubToken"),
+        credential_context = (
+            merge_automation_repository_token(
+                payload["repositoryAuthority"],
+                repository=repository,
+                operation="review_request",
+            )
+            if "repositoryAuthority" in payload
+            else contextlib.nullcontext(payload.get("githubToken"))
         )
+        async with credential_context as github_token:
+            result = await GitHubService().request_automated_review(
+                repo=repository,
+                pr_number=pr_number,
+                expected_head_sha=expected_head_sha,
+                provider=provider_record.provider,
+                attempt_started_at=reconcile_from.isoformat(),
+                recorded_comment_id=entry.request_comment_id,
+                github_token=github_token,
+            )
         outcome = result.model_dump(by_alias=True, mode="json")
         posted = outcome.get("status") in {"requested", "reconciled", "recorded"}
         requested_at = None

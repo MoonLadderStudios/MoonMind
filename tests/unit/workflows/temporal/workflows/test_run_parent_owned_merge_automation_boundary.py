@@ -365,6 +365,10 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
         **_kwargs: Any,
     ) -> dict[str, Any]:
         assert payload["mergeAutomationConfig"]["finishMode"] == "review_only"
+        summary = parent._merge_automation_summary_from_context()
+        assert summary is not None
+        assert summary["finishMode"] == "review_only"
+        assert summary["status"] == "awaiting_child"
         return {"status": "review_complete", "latestHeadSha": "abc123"}
 
     monkeypatch.setattr(
@@ -379,6 +383,9 @@ async def test_parent_owned_review_only_accepts_review_complete_without_publicat
     )
 
     assert parent._publish_context["mergeAutomationStatus"] == "review_complete"
+    assert (
+        parent._merge_automation_summary_from_context()["finishMode"] == "review_only"
+    )
     assert parent._awaiting_external is False
     assert parent._merge_happened() is False
     assert parent._publish_status != "published"
@@ -419,3 +426,16 @@ async def test_parent_owned_default_mode_rejects_review_complete(
 
     assert parent._publish_context["mergeAutomationStatus"] == "failed"
     assert parent._awaiting_external is False
+
+
+@pytest.mark.parametrize("finish_mode", ["merge", "fix_only", "review_only"])
+def test_parent_merge_automation_summary_preserves_result_finish_mode(
+    finish_mode: str,
+) -> None:
+    parent = MoonMindRunWorkflow()
+    parent._publish_context["mergeAutomationResult"] = {
+        "status": "review_complete" if finish_mode == "review_only" else "review_clean",
+        "finishMode": finish_mode,
+    }
+
+    assert parent._merge_automation_summary_from_context()["finishMode"] == finish_mode

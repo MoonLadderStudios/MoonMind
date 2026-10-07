@@ -20614,6 +20614,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "enabled": True,
             "status": status or "unknown",
         }
+        finish_mode = self._coerce_text(
+            result_map.get("finishMode") or context.get("mergeAutomationFinishMode"),
+            max_chars=20,
+        )
+        if finish_mode:
+            summary["finishMode"] = finish_mode
         if pr_number is not None:
             summary["prNumber"] = pr_number
         if pr_url:
@@ -20909,6 +20915,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
+        self._publish_context["mergeAutomationFinishMode"] = payload[
+            "mergeAutomationConfig"
+        ]["finishMode"]
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"
         self._waiting_reason = "Waiting for PR merge automation."
         self._attention_required = False
