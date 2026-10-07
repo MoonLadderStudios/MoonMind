@@ -9787,6 +9787,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         return "\n".join(lines)
 
     @staticmethod
+    def _gate_transition_admits_evidence_rerun(
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Only a verifier gate may rerun itself to collect missing evidence.
+
+        The transition owns the verifier-role check and the replay patch, so a
+        reviewed implementation step never repeats its paid work this way.
+        """
+        return transition.reason_code == "verifier_requested_evidence_rerun"
+
+    @staticmethod
     def _gate_transition_allows_review_retry(
         *,
         plan_routed_moonspec_remediation_enabled: bool,
@@ -14377,12 +14388,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                         ),
                         honor_explicit_evidence_rerun=(
-                            review_verdict.verdict == "NO_DETERMINATION"
-                            and review_verdict.recommended_next_action
-                            == "reattempt_current_step"
-                            and workflow.patched(
-                                RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH
-                            )
+                            self._gate_transition_admits_evidence_rerun(transition)
                         ),
                     ):
                         review_retry_count += 1
