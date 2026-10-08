@@ -55,21 +55,15 @@ REQUIRED_ACTION_REMOVE = "safe_to_remove"
 class CheckpointCompatDrainUsage:
     """Deployment-observed drain inputs for the compat registration.
 
-    Counts must come from live deployment probes, never from fixture replay.
-    The dimensions are those produced by
-    ``TemporalClientAdapter.observe_checkpoint_compat_drain`` (see
-    :func:`collect_checkpoint_compat_drain_observations`): a
-    ``MoonMind.CheckpointBranchTurn`` history is a compat consumer when it
-    scheduled ``checkpoint_branch.turn.*`` persistence on a queue other
-    than the artifacts queue. A missing patch marker alone does not make a
-    history a consumer.
+    Counts must come from live deployment probes, never from fixture replay:
 
-    - ``open_pre_cutover_histories``: running consumer histories.
-    - ``pending_old_queue_tasks``: those running histories'
-      ``checkpoint_branch.turn.*`` activities still unclosed on the old
-      queue.
-    - ``supported_resets_pending``: closed consumer histories Visibility
-      still returns; resetting one replays onto the old route.
+    - ``open_pre_cutover_histories``: open workflow histories recorded
+      without the artifacts-fleet patch marker (``get_drain_metrics``
+      scoped to the workflow task queue, filtered to pre-marker histories).
+    - ``pending_old_queue_tasks``: pending activity tasks still addressed
+      to the workflow queue for ``checkpoint_branch.turn.*`` types.
+    - ``supported_resets_pending``: retained histories with a supported
+      reset obligation that has not been discharged.
     """
 
     open_pre_cutover_histories: int = 0
@@ -139,17 +133,21 @@ class CheckpointCompatDrainObservations:
     """Deployment probe observations feeding the drain gate.
 
     Each dimension is a live deployment count or ``None`` when that
-    dimension is unobservable (a failed Visibility listing or an
-    unreadable history). ``None`` is fail-closed: an unobservable
-    dimension retains the compat registration, so fixture replay or a
-    partial probe can never authorize removal.
+    dimension is unobservable (missing visibility, failed probe, or an
+    explicitly unsupported reset ledger). ``None`` is fail-closed: an
+    unobservable dimension retains the compat registration, so fixture
+    replay or a partial probe can never authorize removal.
 
-    The dimensions have the meanings defined on
-    :class:`CheckpointCompatDrainUsage`, as collected by
-    ``TemporalClientAdapter.observe_checkpoint_compat_drain``: running and
-    closed ``MoonMind.CheckpointBranchTurn`` histories that scheduled
-    ``checkpoint_branch.turn.*`` persistence off the artifacts queue, plus
-    the running histories' persistence activities still unclosed there.
+    Source dimensions (MoonLadderStudios/MoonMind#3949 scope 3):
+
+    - ``open_pre_cutover_histories``: ``get_drain_metrics`` scoped to the
+      workflow task queue, filtered to histories recorded without the
+      ``checkpoint-branch-artifact-fleet-v1`` marker.
+    - ``pending_old_queue_tasks``: pending-activity inspection for
+      ``checkpoint_branch.turn.*`` tasks still addressed to the workflow
+      queue.
+    - ``supported_resets_pending``: retained histories with a supported
+      reset obligation that has not been discharged.
     """
 
     open_pre_cutover_histories: int | None = None
@@ -268,15 +266,16 @@ def render_checkpoint_compat_drain_report(
     observations: CheckpointCompatDrainObservations | None = None,
     workflow_task_queue: str = "mm.workflow",
 ) -> str:
-    """Render a drain verdict with its probe definitions and removal checklist.
+    """Render the operator procedure that produced (or must produce) a verdict.
 
-    The report names the dimensions
-    ``TemporalExecutionService.observe_checkpoint_compat_drain`` collects
-    automatically, the observed inputs when supplied, and, when the gate is
-    open, the removal checklist that retires the workflow-queue
-    registration. It renders a verdict already produced by
-    :func:`evaluate_checkpoint_compat_drain_observations`; it does not run
-    probes or perform removal.
+    The report names the exact live-deployment probes behind each dimension
+    and, when the gate is open, the removal checklist that retires the
+    workflow-queue registration. It is the executable counterpart to the
+    decision predicate: operators (or deployment tooling importing only this
+    stdlib module) collect the three probe outputs, feed them through
+    :func:`collect_checkpoint_compat_drain_observations` and
+    :func:`evaluate_checkpoint_compat_drain_observations`, and follow the
+    checklist below once ``may_remove_workflow_queue_handlers`` is true.
     """
 
     blocking = ", ".join(decision.blocking_dimensions) or "none"

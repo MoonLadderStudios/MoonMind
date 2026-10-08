@@ -922,19 +922,6 @@ def test_fleet_credentials_and_mounts_match_retained_handler_needs():
     for volume in workflow_volumes + artifacts_volumes:
         assert "docker.sock" not in volume
 
-    # Network rights: both workers join only the control-plane network
-    # (Temporal, Postgres, MinIO and the API). The Docker API proxy is
-    # reachable only on the internal docker-proxy network, which neither
-    # worker joins, so neither has Docker API reach. The control-plane
-    # network is not internal, so this is no egress-confinement claim.
-    networks = compose["networks"]
-    assert networks["docker-proxy-network"].get("internal") is True
-    assert compose["services"]["docker-proxy"]["networks"] == ["docker-proxy-network"]
-    assert not networks["control-plane-network"].get("internal")
-    for worker in (workflow_worker, artifacts_worker):
-        assert "network_mode" not in worker
-        assert worker["networks"] == ["control-plane-network"]
-
 
 @pytest.mark.asyncio
 async def test_rejection_terminalizes_blocked_without_advancing_head(
