@@ -8029,7 +8029,16 @@ def _record_default_connection(monkeypatch, *, secret_ref: str, read):
     monkeypatch.setattr(
         managed_api_key_resolve, "load_repository_connection_for_launch", load
     )
+
+    # Managed db:// references are read with their revision in one atomic read.
+    async def read_with_revision(reference: str) -> tuple[str, str]:
+        return await read(reference), "fixture-managed-revision"
+
     monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", read)
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
+        read_with_revision,
+    )
     return load
 
 
