@@ -99,6 +99,7 @@ with workflow.unsafe.imports_passed_through():
         TemporalActivityRoute,
         WORKFLOW_TASK_QUEUE,
         build_default_activity_catalog,
+        get_workflow_child_task_queue,
     )
     from moonmind.config.settings import settings
     from moonmind.schemas.agent_run_progress import (
@@ -1079,7 +1080,9 @@ class MoonMindAgentRun:
     @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
-            return settings.temporal.user_workflow_v2_task_queue
+            return get_workflow_child_task_queue(
+                workflow.info().task_queue, settings.temporal
+            )
         return WORKFLOW_TASK_QUEUE
 
     @staticmethod

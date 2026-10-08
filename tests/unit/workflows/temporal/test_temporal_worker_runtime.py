@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 import json
@@ -4353,8 +4354,13 @@ async def test_main_async_workflow_fleet(
     mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
-    mock_topology.task_queues = ["mm.workflow.user.v2", "mm.workflow"]
+    mock_topology.task_queues = [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    ]
     mock_topology.concurrency_limit = 7
+    mock_topology.queue_concurrency_limits = {"mm.workflow.merge_automation": 2}
     mock_describe.return_value = mock_topology
 
     mock_client = MagicMock()
@@ -4366,17 +4372,32 @@ async def test_main_async_workflow_fleet(
     mock_worker_replay = MagicMock()
     mock_worker_replay.run = AsyncMock()
     mock_worker_replay.shutdown = AsyncMock()
-    mock_worker_cls.side_effect = [mock_worker_v2, mock_worker_replay]
+    mock_worker_merge = MagicMock()
+    mock_worker_merge.run = AsyncMock()
+    mock_worker_merge.shutdown = AsyncMock()
+    mock_worker_cls.side_effect = [
+        mock_worker_v2,
+        mock_worker_replay,
+        mock_worker_merge,
+    ]
 
     # Run
     await main_async()
 
-    # Verify Worker creation uses the mock workflows
-    assert mock_worker_cls.call_count == 2
-    assert [call.kwargs["task_queue"] for call in mock_worker_cls.call_args_list] == [
-        "mm.workflow.user.v2",
-        "mm.workflow",
+    # One process serves every workflow lane, each with its own budget.
+    assert mock_worker_cls.call_count == 3
+    assert [
+        (
+            call.kwargs["task_queue"],
+            call.kwargs["max_concurrent_workflow_tasks"],
+        )
+        for call in mock_worker_cls.call_args_list
+    ] == [
+        ("mm.workflow.user.v2", 7),
+        ("mm.workflow", 7),
+        ("mm.workflow.merge_automation", 2),
     ]
+    merge_kwargs = mock_worker_cls.call_args_list[2].kwargs
     kwargs = mock_worker_cls.call_args_list[0].kwargs
     from moonmind.workflows.temporal.workflows.agent_session import (
         MoonMindAgentSessionWorkflow,
@@ -4460,9 +4481,96 @@ async def test_main_async_workflow_fleet(
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
 
+    # Every lane registers the same workflows and activities.
+    assert merge_kwargs["workflows"] == kwargs["workflows"]
+    assert merge_kwargs["activities"] == kwargs["activities"]
+
     # Verify worker run is called
     mock_worker_v2.run.assert_awaited_once()
     mock_worker_replay.run.assert_awaited_once()
+    mock_worker_merge.run.assert_awaited_once()
+    # One readiness owner reported every lane's pollers.
+    health_state = mock_healthcheck.call_args.args[0]
+    assert health_state.readiness_metadata["taskQueues"] == [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    ]
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
+@patch("moonmind.workflows.temporal.worker_runtime.Worker")
+async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
+    mock_worker_cls,
+    mock_connect,
+    mock_describe,
+    mock_healthcheck,
+):
+    """#3937: a failed merge-lane poller is not ready and stops the group."""
+
+    mock_healthcheck_server = MagicMock()
+    mock_healthcheck_server.wait_closed = AsyncMock()
+    mock_healthcheck.return_value = mock_healthcheck_server
+    mock_topology = MagicMock()
+    mock_topology.fleet = WORKFLOW_FLEET
+    mock_topology.task_queues = [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    ]
+    mock_topology.concurrency_limit = 8
+    mock_topology.queue_concurrency_limits = {"mm.workflow.merge_automation": 2}
+    mock_describe.return_value = mock_topology
+    mock_connect.return_value = MagicMock()
+
+    shutdowns: list[str] = []
+
+    def _lane(name: str, *, fails: bool = False) -> MagicMock:
+        released = asyncio.Event()
+
+        async def run():
+            # Like the SDK: validation precedes is_running, then polling.
+            await asyncio.sleep(0.01)
+            if fails:
+                raise RuntimeError(f"{name} poller unavailable")
+            worker.is_running = True
+            await released.wait()
+
+        async def shutdown():
+            shutdowns.append(name)
+            released.set()
+
+        worker = MagicMock()
+        worker.is_running = False
+        worker.run = AsyncMock(side_effect=run)
+        worker.shutdown = AsyncMock(side_effect=shutdown)
+        return worker
+
+    mock_worker_cls.side_effect = [
+        _lane("user.v2"),
+        _lane("replay"),
+        _lane("merge", fails=True),
+    ]
+
+    with patch(
+        "moonmind.workflows.temporal.release_routing.bootstrap_version_routing",
+        new=AsyncMock(return_value={"status": "unversioned"}),
+    ) as routing:
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await main_async()
+
+    assert exc_info.group_contains(RuntimeError, match="merge poller unavailable")
+    routing.assert_not_awaited()
+    health_state = mock_healthcheck.call_args.args[0]
+    assert health_state.pollers_started is False
+    assert health_state.ready is False
+    assert health_state.startup_error
+    # The surviving lanes drained instead of polling on alone.
+    assert sorted(shutdowns) == ["merge", "replay", "user.v2"]
+    mock_healthcheck_server.close.assert_called_once()
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
@@ -4485,6 +4593,7 @@ async def test_main_async_activity_fleet(
     mock_topology.fleet = "artifacts"
     mock_topology.task_queues = ["mm.activity.artifacts"]
     mock_topology.concurrency_limit = 3
+    mock_topology.queue_concurrency_limits = {}
     mock_describe.return_value = mock_topology
 
     mock_client = MagicMock()

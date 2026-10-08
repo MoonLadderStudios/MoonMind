@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -324,7 +325,20 @@ def test_run_workflow_child_task_queue_is_replay_patched(
         "patched",
         lambda patch_id: patch_id == RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2"),
+    )
     assert workflow._workflow_child_task_queue() == "mm.workflow.custom.v2"
+    # MoonMind#3937: merge-lane descendants stay on the merge lane now that
+    # the lane shares the workflow process instead of overriding settings.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.merge_automation"),
+    )
+    assert workflow._workflow_child_task_queue() == "mm.workflow.merge_automation"
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
