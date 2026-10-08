@@ -53,11 +53,17 @@ async def journals(tmp_path, monkeypatch):
         target_metadata={},
     )
 
-    async def publish(count, *, complete=True, embedded=False):
+    async def publish(count, *, complete=True, embedded=False, chunk=None):
         refs = []
         async with sessions() as session:
             artifacts = service(session)
             for kind in ("raw", "normalized"):
+                if embedded:
+                    name = f"runtime.omnigent.embedded.sse.{kind}/{count}.jsonl"
+                elif chunk is None:
+                    name = f"runtime.omnigent.sse.{kind}.{count:08d}.jsonl"
+                else:
+                    name = f"runtime.omnigent.sse.{kind}.{chunk:08d}.{count:08d}.jsonl"
                 artifact, _ = await artifacts.create(
                     principal="service:omnigent-generic-host",
                     link={
@@ -67,11 +73,7 @@ async def journals(tmp_path, monkeypatch):
                         "link_type": f"runtime.omnigent.sse.{kind}",
                     },
                     metadata_json={
-                        "name": (
-                            f"runtime.omnigent.embedded.sse.{kind}/{count}.jsonl"
-                            if embedded
-                            else f"runtime.omnigent.sse.{kind}.{count:08d}.jsonl"
-                        ),
+                        "name": name,
                         "correlation_id": "journal-test",
                     },
                 )
@@ -425,3 +427,135 @@ async def test_ordinary_deletion_cannot_remove_current_recovery_journal(journals
         )
         assert artifact.status is TemporalArtifactStatus.COMPLETE
         assert blobs.resolve_storage_key(artifact.storage_key).exists()
+
+
+async def _artifact(sessions, service, ref):
+    async with sessions() as session:
+        return await service(session)._repository.get_artifact(
+            ref.removeprefix("artifact:")
+        )
+
+
+@pytest.mark.asyncio
+async def test_next_chunk_retains_completed_chunk_in_journal_history(journals):
+    store, session_id, sessions, service, blobs, publish = journals
+    first = await publish(1, chunk=0)
+    completed = await publish(2, chunk=0)
+    following = await publish(1, chunk=2)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=first[0], normalized_ref=first[1], new_chunk=True
+    )
+    await store.append_events(
+        session_id,
+        [
+            {
+                "eventType": "response.delta",
+                "artifactRef": first[1],
+                "deduplicationKey": "chunk-zero-event",
+            }
+        ],
+    )
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=completed[0], normalized_ref=completed[1]
+    )
+    await store.attach_active_journal_refs(
+        session_id,
+        raw_ref=following[0],
+        normalized_ref=following[1],
+        new_chunk=True,
+    )
+
+    row = await store.get_bridge_session(session_id)
+    assert (row.raw_events_ref, row.normalized_events_ref) == following
+    assert row.metadata_[bridge_store.SEALED_JOURNAL_CHUNKS_KEY] == [
+        {"raw": completed[0], "normalized": completed[1]}
+    ]
+    # Within a chunk the longer version supersedes the shorter one; starting
+    # the next chunk neither re-points nor reclaims the completed chunk.
+    assert (await store.list_events(session_id))[0].artifact_ref == completed[1]
+    for ref in first:
+        assert (await _artifact(sessions, service, ref)).hard_deleted_at is not None
+    for ref in completed:
+        artifact = await _artifact(sessions, service, ref)
+        assert artifact.status is TemporalArtifactStatus.COMPLETE
+        assert blobs.read_bytes(artifact.storage_key) == b"event\nevent\n"
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_different_chunk_requires_retaining_it(journals):
+    store, session_id, _sessions, _service, _blobs, publish = journals
+    current = await publish(4, chunk=0)
+    unrelated = await publish(5, chunk=4)
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=current[0], normalized_ref=current[1], new_chunk=True
+    )
+    with pytest.raises(RuntimeError, match="progress"):
+        await store.attach_active_journal_refs(
+            session_id, raw_ref=unrelated[0], normalized_ref=unrelated[1]
+        )
+    row = await store.get_bridge_session(session_id)
+    assert (row.raw_events_ref, row.normalized_events_ref) == current
+    assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY not in (row.metadata_ or {})
+
+
+@pytest.mark.asyncio
+async def test_completed_chunks_of_live_journal_survive_troubleshooting_expiry(
+    journals,
+):
+    store, session_id, sessions, service, blobs, publish = journals
+    completed = await publish(2, chunk=0)
+    current = await publish(1, chunk=2)
+    for refs in (completed, current):
+        await store.attach_active_journal_refs(
+            session_id, raw_ref=refs[0], normalized_ref=refs[1], new_chunk=True
+        )
+    async with sessions() as session:
+        artifacts = service(session)
+        for ref in (*completed, *current):
+            artifact = await artifacts._repository.get_artifact(
+                ref.removeprefix("artifact:")
+            )
+            artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await artifacts._repository.commit()
+        result = await artifacts.sweep_lifecycle(
+            principal="service:storage-maintenance"
+        )
+        assert result.soft_deleted_count == 0
+        with pytest.raises(TemporalArtifactStateError, match="active recovery journal"):
+            await artifacts.soft_delete(
+                artifact_id=completed[0].removeprefix("artifact:"),
+                principal="service:storage-maintenance",
+            )
+
+        row = await session.get(OmnigentBridgeSession, session_id)
+        row.status = "completed"
+        await session.commit()
+        result = await artifacts.sweep_lifecycle(
+            principal="service:storage-maintenance"
+        )
+        assert result.soft_deleted_count == 4
+
+
+@pytest.mark.asyncio
+async def test_complete_terminal_journals_replace_chunk_history(journals):
+    store, session_id, _sessions, _service, _blobs, publish = journals
+    completed = await publish(2, chunk=0)
+    current = await publish(1, chunk=2)
+    for refs in (completed, current):
+        await store.attach_active_journal_refs(
+            session_id, raw_ref=refs[0], normalized_ref=refs[1], new_chunk=True
+        )
+    final = await publish(3)
+    await store.mark_terminal(
+        "journal-test",
+        status="completed",
+        terminal_refs={
+            "metadataRefs": {
+                "rawSseStreamRef": final[0],
+                "normalizedEventStreamRef": final[1],
+            }
+        },
+    )
+    row = await store.get_bridge_session(session_id)
+    assert (row.raw_events_ref, row.normalized_events_ref) == final
+    assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY not in (row.metadata_ or {})

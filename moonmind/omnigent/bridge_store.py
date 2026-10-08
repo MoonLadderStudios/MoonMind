@@ -47,8 +47,11 @@ from moonmind.utils.logging import redact_sensitive_payload
 BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
 
 logger = getLogger(__name__)
+# ``<kind>.<count>`` names one accumulated journal prefix; ``<kind>.<start>.<count>``
+# names a prefix of the chunk that begins at normalized event ``start``.
 _ACTIVE_JOURNAL_NAME = re.compile(
-    r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./](\d+)\.jsonl"
+    r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./]"
+    r"(?:(\d+)\.)?(\d+)\.jsonl"
 )
 
 
@@ -57,13 +60,21 @@ def _journal_artifact_id(ref: str | None) -> str | None:
     return value if value.startswith("art_") else None
 
 
-def _journal_prefix(artifact: Any) -> tuple[str, int, str] | None:
+def _journal_prefix(
+    artifact: Any,
+) -> tuple[tuple[str, int | None, str], int] | None:
+    """Return a live journal's (kind, chunk, correlation) family and length.
+
+    Versions within one family are successive prefixes of the same journal
+    chunk, so a longer version supersedes a shorter one.
+    """
     metadata = artifact.metadata_json or {}
     match = _ACTIVE_JOURNAL_NAME.fullmatch(str(metadata.get("name", "")))
     correlation = str(metadata.get("correlation_id", ""))
     if match is None or not correlation:
         return None
-    return match[1], int(match[2]), correlation
+    chunk = int(match[2]) if match[2] is not None else None
+    return (match[1], chunk, correlation), int(match[3])
 
 
 def _journal_artifact_service(session: AsyncSession) -> Any:
@@ -96,6 +107,9 @@ FIRST_MESSAGE_ITEM_FRONTIER_KEY = "first_message_pre_dispatch_item_ids"
 # §8.2 step 6, §10.3) is recorded here before the bridge attempts any
 # first-message prepare/post.
 BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
+# Completed live journal chunks, oldest first, as ``{"raw", "normalized"}`` ref
+# pairs. The durable journal is this history followed by the row's current refs.
+SEALED_JOURNAL_CHUNKS_KEY = "sealedJournalChunks"
 SESSION_CREATED_EVENT_TYPE = "session.created"
 RESOURCE_HARVEST_COMPLETED_KEY = "resource_harvest_completed_at"
 PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
@@ -1060,6 +1074,7 @@ class OmnigentBridgeSessionStore:
                     prior_attempts.append(prior_attempt)
                     reset_metadata["unpostedAttemptHistory"] = prior_attempts[-10:]
                     reset_metadata.pop("initialRetrieval", None)
+                    reset_metadata.pop(SEALED_JOURNAL_CHUNKS_KEY, None)
                     row.metadata_ = reset_metadata
                     row.status = STATUS_DECLARED
                     row.first_message_state = FIRST_MESSAGE_NOT_PREPARED
@@ -2992,8 +3007,14 @@ class OmnigentBridgeSessionStore:
                 # Keep the first-class evidence ref columns in sync with the
                 # capture bundle instead of leaving them NULL for post-migration
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
-                for column, value in _canonical_ref_columns(safe_terminal_refs).items():
+                canonical_refs = _canonical_ref_columns(safe_terminal_refs)
+                for column, value in canonical_refs.items():
                     setattr(row, column, value)
+                if {"raw_events_ref", "normalized_events_ref"} <= set(canonical_refs):
+                    # The capture bundle's journals hold the complete history.
+                    row_metadata = dict(row.metadata_ or {})
+                    if row_metadata.pop(SEALED_JOURNAL_CHUNKS_KEY, None) is not None:
+                        row.metadata_ = row_metadata
             if events:
                 # Replace only provider events. Lifecycle rows are independent
                 # terminal evidence and must survive provider stream indexing.
@@ -3178,8 +3199,7 @@ class OmnigentBridgeSessionStore:
                         prefix = _journal_prefix(previous) if previous else None
                         if (
                             prefix
-                            and (prefix[0], prefix[2])
-                            == (current_prefix[0], current_prefix[2])
+                            and prefix[0] == current_prefix[0]
                             and prefix[1] < current_prefix[1]
                         ):
                             event["artifactRef"] = row.normalized_events_ref
@@ -3248,9 +3268,20 @@ class OmnigentBridgeSessionStore:
             return rows
 
     async def attach_active_journal_refs(
-        self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
+        self,
+        bridge_session_id: str,
+        *,
+        raw_ref: str,
+        normalized_ref: str,
+        new_chunk: bool = False,
     ) -> None:
-        """Commit a complete journal pair before reclaiming superseded prefixes."""
+        """Commit a complete journal pair before reclaiming superseded prefixes.
+
+        By default the pair is a longer version of the current journal chunk and
+        supersedes it. ``new_chunk`` starts the next chunk instead: the current
+        pair is retained, unchanged, as the newest entry of the row's chunk
+        history.
+        """
         from api_service.db.models import TemporalArtifactStatus
         from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
 
@@ -3274,38 +3305,52 @@ class OmnigentBridgeSessionStore:
                         "Journal replacement must be complete"
                     )
                 old_id = _journal_artifact_id(old_ref)
-                if old_id is None:
+                if new_chunk or old_id is None:
                     continue
                 old_artifact = await repository.get_artifact(old_id)
                 old_prefix, new_prefix = _journal_prefix(old_artifact), _journal_prefix(
                     artifact
                 )
-                if (
-                    not old_prefix
-                    or not new_prefix
-                    or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
-                ):
+                if not old_prefix or not new_prefix:
                     continue
+                if old_prefix[0] != new_prefix[0]:
+                    if old_prefix[0][1] is None and new_prefix[0][1] is None:
+                        continue
+                    # Replacing a different chunk would drop it from the journal.
+                    raise OmnigentIdempotencyError(
+                        "Journal replacement would discard verified progress"
+                    )
                 if new_prefix[1] < old_prefix[1]:
                     raise OmnigentIdempotencyError(
                         "Journal replacement would discard verified progress"
                     )
                 if new_prefix[1] > old_prefix[1]:
-                    # Index rows locate event bodies within the accumulated
-                    # prefix. Advance them in the same commit as the pair,
-                    # even if a pin/claim preserves the original snapshot.
+                    # Index rows locate event bodies within the chunk prefix.
+                    # Advance them in the same commit as the pair, even if a
+                    # pin/claim preserves the original snapshot.
                     await session.execute(
                         update(OmnigentBridgeSessionEvent)
                         .where(
+                            OmnigentBridgeSessionEvent.bridge_session_id
+                            == bridge_session_id,
                             OmnigentBridgeSessionEvent.artifact_ref.in_(
                                 (old_ref, old_id, f"artifact:{old_id}")
-                            )
+                            ),
                         )
                         .values(artifact_ref=replacement_ref)
                     )
+            if new_chunk and any(previous) and previous != replacements:
+                metadata = dict(row.metadata_ or {})
+                metadata[SEALED_JOURNAL_CHUNKS_KEY] = [
+                    *(metadata.get(SEALED_JOURNAL_CHUNKS_KEY) or []),
+                    {"raw": previous[0], "normalized": previous[1]},
+                ]
+                row.metadata_ = metadata
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
             await session.commit()
+        if new_chunk:
+            return
         for old_ref, replacement_ref in zip(previous, replacements):
             if old_ref and old_ref != replacement_ref:
                 try:
@@ -3351,7 +3396,7 @@ class OmnigentBridgeSessionStore:
             if (
                 old_prefix is None
                 or new_prefix is None
-                or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
+                or old_prefix[0] != new_prefix[0]
                 or old_prefix[1] >= new_prefix[1]
                 or replacement.status is not TemporalArtifactStatus.COMPLETE
                 or previous.retention_class is TemporalArtifactRetentionClass.PINNED
@@ -3609,6 +3654,7 @@ __all__ = [
     "OmnigentBridgeSessionStore",
     "OmnigentDigestMismatchError",
     "OmnigentIdempotencyError",
+    "SEALED_JOURNAL_CHUNKS_KEY",
     "bridge_failure_class",
     "coalesce_bridge_status",
 ]
