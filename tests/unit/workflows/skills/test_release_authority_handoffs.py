@@ -584,6 +584,13 @@ async def test_release_selects_omnigent_inside_the_main_compose_pass(
             raise RuntimeError(f"registry refused https://x:{token}@ghcr.io")
         return {"status": "advanced", "revision": 2}
 
+    async def prepare_storage(runner):
+        order.append(("journal-storage", runner.project_name))
+
+    async def prepare_journals(project):
+        order.append(("journal-prepare", project))
+        return {"status": "prepared", "scanned": 1, "compacted": 1, "events": 8}
+
     async def execute(self, inputs, context):
         order.append(("lock",))
         await self.before_compose()
@@ -591,6 +598,8 @@ async def test_release_selects_omnigent_inside_the_main_compose_pass(
         return ToolResult(status="FAILED", outputs={"failure": {"reason": "stop"}})
 
     monkeypatch.setattr(release, "select_omnigent", select)
+    monkeypatch.setattr(release, "prepare_journal_storage", prepare_storage)
+    monkeypatch.setattr(release, "prepare_journal_transition", prepare_journals)
     monkeypatch.setattr(DeploymentUpdateExecutor, "execute", execute)
     request = tmp_path / "request.json"
     request.write_text(
@@ -611,8 +620,13 @@ async def test_release_selects_omnigent_inside_the_main_compose_pass(
     assert order == [
         ("lock",),
         ("select", "owner", "example/image@sha256:pinned"),
+        ("journal-storage", executor.runner.project_name),
+        ("journal-prepare", executor.runner.project_name),
         ("compose",),
     ] * 2
+    assert json.loads((tmp_path / "journal-preparation.json").read_text()) == {
+        "status": "prepared", "scanned": 1, "compacted": 1, "events": 8,
+    }
     selection = json.loads((tmp_path / "omnigent-selection.json").read_text())
     assert selection["owner"] == "owner"
     assert len(selection["attempts"]) == 2
