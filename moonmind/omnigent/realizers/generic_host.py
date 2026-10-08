@@ -215,6 +215,14 @@ class GenericOmnigentHostRealizer:
 
         assert_agent_execution_authority(plan.payload.credentialBindings)
 
+        from moonmind.omnigent.workspace_intent import authored_repository_source
+
+        authored_repository_source(request)
+        if plan.payload.resolvedTools.get("repositoryAccess", {}).get("collaboration"):
+            await self._host_runtime.validate_repository_intent(
+                request=request, plan=plan
+            )
+
         if plan.payload.executionRealizerRef != self.ref:
             raise HarnessPlatformError(
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
@@ -515,6 +523,29 @@ class GenericOmnigentHostRealizer:
                     binding, updates={"cleanupAuthorityRefs": cleanup}
                 )
 
+            github_projection_reservation = None
+            if "gh" in plan.payload.resolvedTools.get(
+                "tools", []
+            ) and plan.payload.resolvedTools.get("repositoryAccess", {}).get(
+                "collaboration"
+            ):
+                from moonmind.omnigent.runtime_bindings import reserve_github_projection
+
+                binding, github_projection_reservation = (
+                    await reserve_github_projection(self._runtime_bindings, binding)
+                )
+
+            async def verify_github_projection() -> None:
+                from moonmind.omnigent.runtime_bindings import (
+                    validate_github_projection,
+                )
+
+                await validate_github_projection(
+                    self._runtime_bindings,
+                    binding.bindingId,
+                    github_projection_reservation,
+                )
+
             prepared = await self._host_runtime.prepare(
                 request=request,
                 plan=plan,
@@ -522,6 +553,8 @@ class GenericOmnigentHostRealizer:
                 launch_policy=launch_policy,
                 repository_owner_ref=f"{binding.bindingId}:{binding.fencingGeneration}",
                 authority_sink=record_prepared,
+                github_projection_reservation=github_projection_reservation,
+                github_projection_verifier=verify_github_projection,
             )
             await self._assert_host_capacity_admits()
             binding = await self._update_binding(

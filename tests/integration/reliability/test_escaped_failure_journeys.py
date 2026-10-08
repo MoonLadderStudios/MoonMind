@@ -5292,6 +5292,13 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         github_token="fixture_token",
+        github_projection_reservation={
+            "ownerRef": f"host-lease:{host_lease.lease_id}",
+            "revision": 1,
+            "reservationId": "c1ff73e9-c42d-48b5-acce-1e8c0f07c9c3",
+        },
+        recovery_request=SimpleNamespace(),
+        recovery_store=SimpleNamespace(validate_github_projection=AsyncMock()),
         effective_launch=compile_effective_launch(
             profile_ref="omnigent-codex@1",
             policy_ref="codex-on-demand@1",

@@ -29,7 +29,7 @@ from moonmind.omnigent.host_failures import (
     OmnigentOAuthHostError,
 )
 from moonmind.omnigent.host_services.github_credentials import (
-    github_hosts_writer_script,
+    github_projection_script,
 )
 from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
@@ -746,6 +746,53 @@ class OmnigentOAuthHostRuntime:
                 "execution fan-out requires a run-dedicated Omnigent host",
                 code="OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED",
             )
+        github_projection_reservation = None
+        gh_required = "gh" in normalized_capabilities
+        if gh_required and binding.host_launch_profile_ref:
+            try:
+                if (
+                    evidence_request is None
+                    or cleanup_authority_store is None
+                    or github_token_resolver is None
+                    or github_token is not None
+                ):
+                    raise OmnigentOAuthHostError(
+                        "GitHub projection requires a durable reservation before value acquisition"
+                    )
+                github_projection_reservation = (
+                    await cleanup_authority_store.reserve_github_projection(
+                        request=evidence_request,
+                        host_lease_ref=host_lease.lease_id,
+                    )
+                )
+                await self.reserve_github_projection(
+                    host_lease=host_lease,
+                    effective_launch=launch,
+                    reservation=github_projection_reservation,
+                )
+                await cleanup_authority_store.validate_github_projection(
+                    request=evidence_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+                github_token = await github_token_resolver()
+                if not github_token:
+                    raise OmnigentOAuthHostError(
+                        "selected GitHub credential is unavailable"
+                    )
+                await cleanup_authority_store.validate_github_projection(
+                    request=evidence_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+            except Exception as exc:
+                # No workspace, skill, or live-host mutation has happened. The
+                # coordinator's existing deferred-cleanup handoff retains this
+                # owner and its saved work when reserve/acquisition is uncertain.
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation or acquisition failed; retain owned work for retry",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
@@ -813,9 +860,6 @@ class OmnigentOAuthHostRuntime:
             host_runtime_environment = self._host_runtime_environment(
                 container_job_environment
             )
-            gh_required = "gh" in {
-                item.strip().lower() for item in required_capabilities
-            }
             if gh_required:
                 await self._initialize_required_tools(
                     image_ref=str(launch["hostImageRef"])
@@ -838,6 +882,7 @@ class OmnigentOAuthHostRuntime:
                     # agent code receives the admitted credential only when the
                     # step declares gh (MoonLadderStudios/MoonMind#4011).
                     github_token=github_token if gh_required else None,
+                    github_projection_reservation=github_projection_reservation,
                     container_job_environment=host_runtime_environment,
                     effective_launch=launch,
                     egress_attestation=egress_attestation,
@@ -2324,6 +2369,7 @@ class OmnigentOAuthHostRuntime:
             AgentExecutionRequest | OmnigentEgressEvidenceRequestIdentity | None
         ) = None,
         artifact_gateway: Any | None = None,
+        cleanup_authority_store: Any | None = None,
     ) -> dict[str, Any]:
         attachment_identity = str(
             (egress_evidence or {}).get("attachmentIdentity") or ""
@@ -2393,6 +2439,14 @@ class OmnigentOAuthHostRuntime:
                 await self.assert_container_owned(
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
+            await self._retire_github_projection(
+                host_lease=host_lease,
+                container_name=container_name,
+                effective_launch=(
+                    effective_launch or host_lease.effective_launch_snapshot or {}
+                ),
+                cleanup_authority_store=cleanup_authority_store,
+            )
             await self._containers.remove_initializer(
                 container_name=container_name, lease_id=host_lease.lease_id
             )
@@ -2561,6 +2615,7 @@ class OmnigentOAuthHostRuntime:
         runtime_scripts: Path,
         current_step_execution_id: str,
         github_token: str | None = None,
+        github_projection_reservation: Mapping[str, Any] | None = None,
         container_job_environment: Mapping[str, str] | None = None,
         effective_launch: Mapping[str, Any],
         egress_attestation: EgressAttestation,
@@ -2570,6 +2625,33 @@ class OmnigentOAuthHostRuntime:
     ) -> bool:
         """Launch a host, returning whether an owned running host was retained."""
         recovery_receipt = None
+
+        async def validate_projection() -> None:
+            if (
+                not github_projection_reservation
+                or github_projection_reservation.get("ownerRef")
+                != f"host-lease:{host_lease.lease_id}"
+                or recovery_request is None
+                or recovery_store is None
+            ):
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation owner is unavailable",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            try:
+                await recovery_store.validate_github_projection(
+                    request=recovery_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+            except Exception as exc:
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation owner changed",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
+
+        if github_token:
+            await validate_projection()
         # An existing container for this lease recovers without re-admission:
         # the run was already admitted under its persisted launch authority,
         # so historical shared-CPU bindings keep their recovery path here.
@@ -2581,8 +2663,10 @@ class OmnigentOAuthHostRuntime:
             if github_token:
                 if await self._existing_github_projection_is_compatible(container_name):
                     try:
+                        await validate_projection()
                         await self._project_github_credential(
                             github_token,
+                            github_projection_reservation=github_projection_reservation,
                             cache_volume=f"{container_name}-cache",
                             host_image_ref=str(effective_launch["hostImageRef"]),
                             runtime_uid=int(effective_launch["runtimeUid"]),
@@ -2607,15 +2691,20 @@ class OmnigentOAuthHostRuntime:
                     # Normal launch below retains the same state/artifact/cache
                     # volumes, host identity, session, and immutable policy.
                     return await self._launch_on_demand(
-                        binding=binding, host_lease=host_lease,
-                        container_name=container_name, workspace_source=workspace_source,
-                        skill_projection=skill_projection, runtime_scripts=runtime_scripts,
+                        binding=binding,
+                        host_lease=host_lease,
+                        container_name=container_name,
+                        workspace_source=workspace_source,
+                        skill_projection=skill_projection,
+                        runtime_scripts=runtime_scripts,
                         current_step_execution_id=current_step_execution_id,
                         github_token=github_token,
+                        github_projection_reservation=github_projection_reservation,
                         container_job_environment=container_job_environment,
                         effective_launch=effective_launch,
                         egress_attestation=egress_attestation,
-                        recovery_request=recovery_request, recovery_store=recovery_store,
+                        recovery_request=recovery_request,
+                        recovery_store=recovery_store,
                         recovery_artifact_gateway=recovery_artifact_gateway,
                     )
             return True
@@ -2866,8 +2955,10 @@ class OmnigentOAuthHostRuntime:
             # The admitted credential reaches gh as lease-private config in the
             # host's own cache volume, never as a container variable that
             # Docker would record in Config.Env (MoonLadderStudios/MoonMind#4011).
+            await validate_projection()
             await self._project_github_credential(
                 github_token,
+                github_projection_reservation=github_projection_reservation,
                 cache_volume=cache_volume,
                 host_image_ref=host_image_ref,
                 runtime_uid=int(effective_launch["runtimeUid"]),
@@ -3290,6 +3381,169 @@ class OmnigentOAuthHostRuntime:
             # existing host. Preserve the preexisting recovery path unchanged.
             return False
 
+    async def _retire_github_projection(
+        self,
+        *,
+        host_lease: OmnigentHostLease,
+        container_name: str,
+        effective_launch: Mapping[str, Any],
+        cleanup_authority_store: Any | None,
+    ) -> None:
+        """Fence pending writers before the cleanup owner deletes a cache."""
+        reservation = None
+        if cleanup_authority_store is not None:
+            reservation = (
+                await cleanup_authority_store.get_github_projection_cleanup_authority(
+                    host_lease_ref=host_lease.lease_id,
+                    expected_last_heartbeat_at=host_lease.last_heartbeat_at,
+                    expected_provider_lease_id=host_lease.provider_lease_id,
+                    expected_credential_generation=host_lease.credential_generation,
+                )
+            )
+        if not await self._volume_present(f"{container_name}-cache"):
+            return
+        # Historical cleanup has no stamp to claim. Its distinct action refuses
+        # a volume if any newer reservation or installed stamp is present.
+        if reservation is None:
+            from uuid import NAMESPACE_URL, uuid5
+
+            reservation = {
+                "ownerRef": f"host-lease:{host_lease.lease_id}",
+                "revision": 1,
+                "reservationId": str(
+                    uuid5(NAMESPACE_URL, f"legacy-cleanup:{host_lease.lease_id}")
+                ),
+            }
+            action = "retire_legacy"
+        else:
+            if reservation.get("ownerRef") != f"host-lease:{host_lease.lease_id}":
+                raise OmnigentOAuthHostError(
+                    "GitHub cleanup reservation owner changed",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            action = "retire"
+        try:
+            await self._run_github_projection(
+                action=action,
+                reservation=reservation,
+                cache_volume=f"{container_name}-cache",
+                host_image_ref=str(effective_launch.get("hostImageRef") or self._image),
+                runtime_uid=int(effective_launch.get("runtimeUid", 1000)),
+                runtime_gid=int(effective_launch.get("runtimeGid", 1000)),
+            )
+        except Exception as exc:
+            raise OmnigentOAuthHostError(
+                "GitHub projection cleanup authority is unavailable; retain host resources",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            ) from exc
+
+    async def reserve_github_projection(
+        self,
+        *,
+        host_lease: OmnigentHostLease,
+        effective_launch: Mapping[str, Any],
+        reservation: Mapping[str, Any],
+    ) -> None:
+        """Install the durable destination fence before acquiring its value."""
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+        if await self.container_exists(container_name):
+            await self.assert_container_owned(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
+        if reservation.get("ownerRef") != f"host-lease:{host_lease.lease_id}":
+            raise OmnigentOAuthHostError(
+                "GitHub projection reservation owner changed",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        cache_volume = f"{container_name}-cache"
+        uid, gid = int(effective_launch["runtimeUid"]), int(
+            effective_launch["runtimeGid"]
+        )
+        image = str(effective_launch["hostImageRef"])
+        # Fresh Docker volumes start root-owned. Initialize only the cache root;
+        # the runtime identity creates its private config directories below it.
+        await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--network",
+            "none",
+            *structured_container_security_args(),
+            "--cap-add",
+            "CHOWN",
+            "--cap-add",
+            "FOWNER",
+            "--read-only",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
+            "--entrypoint",
+            "/bin/sh",
+            image,
+            "-ceu",
+            'chown "$1:$2" /home/app/.cache; chmod 0700 /home/app/.cache',
+            "--",
+            str(uid),
+            str(gid),
+        )
+        await self._run_github_projection(
+            action="reserve",
+            reservation=reservation,
+            cache_volume=cache_volume,
+            host_image_ref=image,
+            runtime_uid=uid,
+            runtime_gid=gid,
+        )
+
+    async def _run_github_projection(
+        self,
+        *,
+        action: str,
+        reservation: Mapping[str, Any],
+        cache_volume: str,
+        host_image_ref: str,
+        runtime_uid: int,
+        runtime_gid: int,
+        input_bytes: bytes | None = None,
+    ) -> tuple[int, str, str]:
+        cleanup = action in {"retire", "retire_legacy"}
+        # Cleanup must also inspect an abandoned, root-owned empty cache. The
+        # helper can access only this lease's mounted cache and never a network.
+        cleanup_capabilities = (
+            ("--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER")
+            if cleanup
+            else ()
+        )
+        return await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "--user",
+            "0:0" if cleanup else f"{runtime_uid}:{runtime_gid}",
+            "--network",
+            "none",
+            *structured_container_security_args(),
+            *cleanup_capabilities,
+            "--read-only",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
+            "--entrypoint",
+            "/bin/sh",
+            host_image_ref,
+            "-ceu",
+            github_projection_script(f"{_GITHUB_CONFIG_HOME}/gh", action=action),
+            "--",
+            str(runtime_uid),
+            str(runtime_gid),
+            "github.com",
+            json.dumps(dict(reservation), sort_keys=True, separators=(",", ":")),
+            **({"input_bytes": input_bytes} if input_bytes is not None else {}),
+        )
+
     async def _project_github_credential(
         self,
         github_token: str,
@@ -3298,45 +3552,48 @@ class OmnigentOAuthHostRuntime:
         host_image_ref: str,
         runtime_uid: int,
         runtime_gid: int,
+        github_projection_reservation: Mapping[str, Any] | None = None,
     ) -> None:
-        """Write the admitted gh ``hosts.yml`` into the host's cache volume.
+        """Publish exactly the reservation that preceded value acquisition.
 
-        Reuses the shared atomic projection writer. The token travels on stdin
-        to a networkless, capability-free one-shot container running as the
-        host's runtime identity, so it is absent from argv, container metadata
-        and the host environment, and a relaunch atomically replaces the prior
-        issuance instead of truncating it.
+        Token bytes and their stamp share one atomic hosts.yml replacement.
+        Lost acknowledgments reconcile only the installed non-secret stamp;
+        they never allocate newer authority to an already acquired value.
         """
-
+        if not github_projection_reservation:
+            raise OmnigentOAuthHostError(
+                "GitHub projection reservation is required",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
         if not _GITHUB_TOKEN_PATTERN.fullmatch(github_token):
             raise OmnigentOAuthHostError(
                 "GitHub credential contains unsupported characters",
-                code="github_auth_unavailable",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
             )
-        await self._run(
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--user",
-            f"{runtime_uid}:{runtime_gid}",
-            "--network",
-            "none",
-            *structured_container_security_args(),
-            "--read-only",
-            "--mount",
-            f"type=volume,src={cache_volume},dst=/home/app/.cache",
-            "--entrypoint",
-            "/bin/sh",
-            host_image_ref,
-            "-ceu",
-            github_hosts_writer_script(f"{_GITHUB_CONFIG_HOME}/gh"),
-            "--",
-            str(runtime_uid),
-            str(runtime_gid),
-            "github.com",
-            input_bytes=github_token.encode(),
-        )
+        arguments = {
+            "reservation": github_projection_reservation,
+            "cache_volume": cache_volume,
+            "host_image_ref": host_image_ref,
+            "runtime_uid": runtime_uid,
+            "runtime_gid": runtime_gid,
+        }
+        try:
+            await self._run_github_projection(
+                action="publish", input_bytes=github_token.encode(), **arguments
+            )
+        except Exception as exc:
+            try:
+                code, output, _ = await self._run_github_projection(
+                    action="inspect", **arguments
+                )
+                installed = json.loads(output) if code == 0 else None
+            except Exception:  # noqa: BLE001 - an unavailable stamp is not confirmation
+                installed = None
+            if installed != dict(github_projection_reservation):
+                raise OmnigentOAuthHostError(
+                    "GitHub publication is unconfirmed; retain owned work for retry",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
 
     def _container_job_environment(
         self,

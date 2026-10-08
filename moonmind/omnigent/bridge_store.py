@@ -1268,6 +1268,169 @@ class OmnigentBridgeSessionStore:
             await session.refresh(stored)
             return _detached(session, stored)
 
+    async def _locked_github_projection_owner(
+        self,
+        session: AsyncSession,
+        *,
+        request: AgentExecutionRequest,
+        host_lease_ref: str,
+    ) -> tuple[Any, OmnigentBridgeSession]:
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+        from moonmind.omnigent.oauth_hosts import HEARTBEAT_HOST_STATES
+
+        lease = (
+            await session.execute(
+                select(OmnigentOAuthHostLeaseRecord)
+                .where(OmnigentOAuthHostLeaseRecord.lease_id == host_lease_ref)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        row = (
+            await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == request.idempotency_key)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            row is None
+            or lease is None
+            or lease.status not in HEARTBEAT_HOST_STATES
+            or lease.idempotency_key != request.idempotency_key
+            or row.host_lease_ref != host_lease_ref
+            or row.provider_profile_id != lease.provider_profile_id
+            or row.host_binding_ref != lease.binding_ref
+            or row.provider_lease_id != lease.provider_lease_id
+            or row.credential_generation != lease.credential_generation
+        ):
+            raise OmnigentIdempotencyError("GitHub projection lease authority changed")
+        return lease, row
+
+    async def validate_github_projection(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        host_lease_ref: str,
+        reservation: Mapping[str, Any],
+    ) -> None:
+        """Reject a resumed worker after its durable owner or reservation changed."""
+        async with self._session_factory() as session:
+            _lease, row = await self._locked_github_projection_owner(
+                session,
+                request=request,
+                host_lease_ref=host_lease_ref,
+            )
+            if (row.metadata_ or {}).get("githubProjectionReservation") != dict(
+                reservation
+            ):
+                raise OmnigentIdempotencyError(
+                    "GitHub projection reservation authority changed"
+                )
+
+    async def get_github_projection_cleanup_authority(
+        self,
+        *,
+        host_lease_ref: str,
+        expected_last_heartbeat_at: datetime,
+        expected_provider_lease_id: str,
+        expected_credential_generation: int,
+    ) -> dict[str, Any] | None:
+        """Return the latest stamp only to the lease's durable cleanup owner."""
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+
+        async with self._session_factory() as session:
+            lease = (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord)
+                    .where(
+                        OmnigentOAuthHostLeaseRecord.lease_id == host_lease_ref,
+                        OmnigentOAuthHostLeaseRecord.last_heartbeat_at
+                        == expected_last_heartbeat_at,
+                        OmnigentOAuthHostLeaseRecord.provider_lease_id
+                        == expected_provider_lease_id,
+                        OmnigentOAuthHostLeaseRecord.credential_generation
+                        == expected_credential_generation,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if lease is None or lease.status not in {"draining", "stopped", "failed"}:
+                raise OmnigentIdempotencyError(
+                    "GitHub projection cleanup authority changed"
+                )
+            row = (
+                await session.execute(
+                    select(OmnigentBridgeSession)
+                    .where(
+                        OmnigentBridgeSession.idempotency_key == lease.idempotency_key
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if (
+                row is None
+                or (row.metadata_ or {}).get("githubProjectionReservation") is None
+            ):
+                return None
+            if (
+                row.host_lease_ref != host_lease_ref
+                or row.provider_lease_id != lease.provider_lease_id
+                or row.provider_profile_id != lease.provider_profile_id
+                or row.credential_generation != lease.credential_generation
+            ):
+                raise OmnigentIdempotencyError(
+                    "GitHub projection cleanup authority changed"
+                )
+            reservation = (row.metadata_ or {}).get("githubProjectionReservation")
+            if reservation is not None and (
+                not isinstance(reservation, dict)
+                or reservation.get("ownerRef") != f"host-lease:{host_lease_ref}"
+            ):
+                raise OmnigentIdempotencyError(
+                    "GitHub projection cleanup authority changed"
+                )
+            return dict(reservation) if reservation is not None else None
+
+    async def reserve_github_projection(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        host_lease_ref: str,
+    ) -> dict[str, Any]:
+        """Allocate publication order under the durable host/bridge owner fence.
+
+        A new reservation precedes credential acquisition. Retries of a value
+        carry the reservation they already received instead of calling here.
+        """
+        async with self._session_factory() as session:
+            lease, row = await self._locked_github_projection_owner(
+                session,
+                request=request,
+                host_lease_ref=host_lease_ref,
+            )
+            metadata = dict(row.metadata_ or {})
+            previous = metadata.get("githubProjectionReservation")
+            owner = f"host-lease:{host_lease_ref}"
+            if previous is not None and (
+                not isinstance(previous, dict)
+                or previous.get("ownerRef") != owner
+                or type(previous.get("revision")) is not int
+                or previous["revision"] < 1
+            ):
+                raise OmnigentIdempotencyError(
+                    "GitHub projection reservation authority changed"
+                )
+            reservation = {
+                "ownerRef": owner,
+                "revision": previous["revision"] + 1 if previous else 1,
+                "reservationId": str(uuid4()),
+            }
+            metadata["githubProjectionReservation"] = reservation
+            row.metadata_ = metadata
+            lease.last_heartbeat_at = datetime.now(UTC)
+            await session.commit()
+            return reservation
+
     async def record_host_credential_recovery(
         self, *, request: AgentExecutionRequest, host_lease_ref: str,
         phase: str, checkpoint: Mapping[str, Any] | None = None,

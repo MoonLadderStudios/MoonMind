@@ -862,23 +862,6 @@ class OmnigentProfileBoundExecutionCoordinator:
             return budget_rejection
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = request_identity(request)
-        action_github_token: str | None = None
-        action_github_token_resolved = False
-        if action_credential_required and profile_id:
-            # Recheck the selected action grant and resolve its credential before
-            # touching an idempotent provider slot or an existing recovery host.
-            # A revocation between metadata preflight and this boundary must not
-            # trigger normal cleanup of work this attempt has never mutated.
-            try:
-                action_github_token = await self._github_token(request)
-            except OmnigentOAuthHostError as exc:
-                return AgentRunResult(
-                    summary=str(exc),
-                    failureClass="user_error",
-                    providerErrorCode=exc.code,
-                    retryRecommendation="correct_github_action_authority",
-                )
-            action_github_token_resolved = True
         await self._run_store.get_or_create(
             request=request,
             endpoint_ref="pending",
@@ -1425,8 +1408,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                     expected_status="allocating",
                     new_status="starting",
                 )
-            github_token = action_github_token
-            github_token_resolved = action_github_token_resolved
+            github_token: str | None = None
+            github_token_resolved = False
             github_publication_token_resolved = False
 
             async def resolve_github_token(
@@ -1447,9 +1430,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                     github_token_resolved = True
                 return github_token
 
-            # Agent-facing credentials were checked before ownership mutation.
-            # Clone-only authority remains lazy: the workspace owner acquires it
-            # only when materialization is needed, preserving already-saved work.
+            # The host owner reserves destination publication before acquiring
+            # agent-facing credentials. Clone-only authority stays lazy and is
+            # acquired only when workspace materialization is necessary.
             current_stage = "container_start"
             await emit(current_stage, "started")
             workspace_locator_payload = (
@@ -1473,9 +1456,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 evidence_request=request,
                 cleanup_authority_store=self._run_store,
                 recovery_artifact_gateway=self._artifact_gateway,
-                target_repository=str(
-                    (request.parameters or {}).get("repository") or ""
-                ).strip(),
+                target_repository=self._repository_source(request),
                 required_capabilities=self._required_capabilities(request),
                 execution_fanout_authorization=fanout_authorization,
                 github_token=github_token,
@@ -1954,10 +1935,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         publication_identity=request.idempotency_key,
                                         publish_mode=publish_mode,
                                         base_branch=self._starting_branch(request),
-                                        repository=str(
-                                            (request.parameters or {}).get("repository")
-                                            or ""
-                                        ).strip(),
+                                        repository=self._repository_source(request),
                                         github_token=await resolve_github_token(
                                             for_publication=True
                                         ),
@@ -2637,12 +2615,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     else None
                                 ),
                                 launch_evidence_ref=(
-                                    str(preflight.get("egressEvidenceRef") or "") or None
+                                    str(preflight.get("egressEvidenceRef") or "")
+                                    or None
                                     if isinstance(preflight, Mapping)
                                     else None
                                 ),
                                 evidence_request=request,
                                 artifact_gateway=self._artifact_service,
+                                cleanup_authority_store=self._run_store,
                             )
                         authority_cleanup_evidence = dict(cleanup_evidence or {})
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)

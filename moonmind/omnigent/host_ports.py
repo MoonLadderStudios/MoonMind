@@ -177,6 +177,7 @@ class OmnigentGithubCredentialPort(Protocol):
         role: str,
         operation: str,
         repository: str | None = None,
+        validate_current: bool = False,
     ) -> AdmittedRepositoryIdentity:
         raise NotImplementedError
 
@@ -219,6 +220,8 @@ class OmnigentGithubCredentialPort(Protocol):
         expected_omnigent_version: str = "",
         plan: OmnigentExecutionPlanEnvelope,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        projection_reservation: dict[str, Any] | None = None,
+        projection_verifier: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...
@@ -375,6 +378,7 @@ class OmnigentHostReleasePort(Protocol):
         launch_evidence_ref: str | None = None,
         evidence_request: Any | None = None,
         artifact_gateway: Any | None = None,
+        cleanup_authority_store: Any | None = None,
     ) -> dict[str, Any]: ...
 
 

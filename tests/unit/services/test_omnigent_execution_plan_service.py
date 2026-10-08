@@ -2913,7 +2913,11 @@ async def test_ordinary_auto_child_still_cannot_broaden_read_only_parent_authori
                 plan_store=_PlanStore(object()),
                 session_factory=sessions,
                 profile_tools=("gh",),
-                extra_parameters={"repository": repository, "publishMode": "auto"},
+                extra_parameters={
+                    "repository": repository,
+                    "publishMode": "auto",
+                    "githubOperations": ["write", "branch_write", "review_request"],
+                },
                 workflow_id="mm:ordinary-auto-child",
                 parent_repository_plan=parent.envelope,
             )
@@ -2968,7 +2972,11 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
             plan_store=_PlanStore(object()),
             session_factory=sessions,
             profile_tools=("gh",),
-            extra_parameters={"repository": repository, "publishMode": "auto"},
+            extra_parameters={
+                "repository": repository,
+                "publishMode": "auto",
+                "githubOperations": ["write", "branch_write", "review_request"],
+            },
             workflow_id="mm:existing-pr-resolver-child",
             parent_repository_plan=parent.envelope,
         )

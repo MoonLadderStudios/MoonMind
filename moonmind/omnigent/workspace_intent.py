@@ -49,23 +49,89 @@ def _parameters(request: AgentExecutionRequest) -> Mapping[str, Any]:
 
 
 def authored_repository_source(request: AgentExecutionRequest) -> str:
+    from moonmind.workflows.executions.repository_contract import (
+        github_repository_name_from_value,
+    )
+
     spec = _spec(request)
     parameters = _parameters(request)
-    for candidate in (
-        spec.get("repository"),
-        spec.get("repo"),
-        parameters.get("repository"),
+    workflow = parameters.get("workflow") or parameters.get("task")
+    workflow = workflow if isinstance(workflow, Mapping) else {}
+    candidates: list[Any] = []
+    for projection in (
+        spec,
+        parameters.get("workspaceSpec"),
+        parameters.get("workspace"),
+        workflow.get("workspace"),
     ):
+        if not isinstance(projection, Mapping):
+            continue
+        candidates.extend(
+            (
+                projection.get("repository"),
+                projection.get("repo"),
+                projection.get("repositoryTarget"),
+            )
+        )
+        source = projection.get("workspaceSource")
+        if isinstance(source, Mapping) and source.get("kind") == "repository":
+            candidates.extend(
+                (source.get("repository"), source.get("repositoryTarget"))
+            )
+    candidates.extend((parameters.get("repository"), workflow.get("repository")))
+    sources: list[tuple[str, str]] = []
+    explicit_authority: dict[str, str] = {}
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        provider = None
         if isinstance(candidate, Mapping):
+            provider = candidate.get("provider")
+            # These are the authored target's provider/connection axes. A
+            # legacy scalar omits them, but explicit conflicting authorities
+            # cannot become equivalent merely because their display names are.
+            for key in ("provider", "connectionRef"):
+                raw = candidate.get(key)
+                if raw is None or raw == "":
+                    continue
+                if not isinstance(raw, str):
+                    raise WorkspaceIntentCompilationError(
+                        "repository_intent_conflict",
+                        f"repository {key} must be a string",
+                    )
+                declared = raw.strip()
+                if key in explicit_authority and explicit_authority[key] != declared:
+                    raise WorkspaceIntentCompilationError(
+                        "repository_intent_conflict",
+                        f"repository {key} projections conflict across the authored request",
+                    )
+                explicit_authority[key] = declared
             nested = candidate.get("repository")
             if isinstance(nested, Mapping):
-                value = str(nested.get("name") or "").strip()
-                if value:
-                    return value
-        value = str(candidate or "").strip()
+                value = str(nested.get("name") or "").strip() or value
+            elif candidate.get("name"):
+                value = str(candidate["name"]).strip()
         if value:
-            return value
-    return ""
+            # GitHub's repository-name equivalence does not apply to Lore,
+            # local paths, or other hosting services.
+            github_name = (
+                github_repository_name_from_value(value).lower()
+                if provider in (None, "git")
+                else ""
+            )
+            sources.append((value, github_name))
+    if not sources:
+        return ""
+    source, github_name = sources[0]
+    for candidate, candidate_github_name in sources[1:]:
+        if candidate == source:
+            continue
+        if github_name and candidate_github_name == github_name:
+            continue
+        raise WorkspaceIntentCompilationError(
+            "repository_intent_conflict",
+            "repository projections conflict across the authored request",
+        )
+    return source
 
 
 def authored_starting_branch(request: AgentExecutionRequest) -> str | None:
@@ -229,6 +295,7 @@ def authored_github_operations(
             )
         return tuple(dict.fromkeys(raw))
 
+    repository_source = authored_repository_source(request)
     parameters = _parameters(request)
     # Runtime parameters are an extensible JSON mapping, not typed authoring
     # fields. Validate before normalizing so truthy malformed values cannot
@@ -342,7 +409,7 @@ def authored_github_operations(
     # local and other-provider publishers must not acquire GitHub authority.
     github_action_relevant = (
         gh_required
-        or _classify_repository(authored_repository_source(request)) == "github_https"
+        or _classify_repository(repository_source) == "github_https"
         or kind == "merge_pull_request"
         or any(
             "githubOperations" in source

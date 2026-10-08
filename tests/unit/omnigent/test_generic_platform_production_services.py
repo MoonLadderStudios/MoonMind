@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -11,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -1147,6 +1150,8 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
             if argv[1:3] == ["volume", "inspect"]:
                 owner_ref = "lease-owner-1"
                 return 0, hashlib.sha256(owner_ref.encode()).hexdigest()[:32], ""
+            if argv[1] == "run":
+                return 0, argv[-1], ""
             return 0, "", ""
 
     request = _request().model_copy(
@@ -1162,6 +1167,11 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     backend = Backend()
     service = OmnigentGithubCredentialService(backend)
     monkeypatch.setattr(service, "acquire_repository_use", acquire)
+    monkeypatch.setattr(
+        service,
+        "admitted_repository_identity",
+        AsyncMock(return_value=SimpleNamespace(endpoint="https://github.com")),
+    )
     attachment = await service.materialize(
         request=request,
         resolved_tools={
@@ -1171,6 +1181,12 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
             },
         },
         owner_ref="lease-owner-1",
+        projection_reservation={
+            "ownerRef": "lease-owner-1",
+            "revision": next(_projection_revisions),
+            "reservationId": str(uuid4()),
+        },
+        projection_verifier=AsyncMock(),
         writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
         runtime_uid=1000,
         runtime_gid=1000,
@@ -1208,6 +1224,9 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
     ]
 
 
+_projection_revisions = itertools.count(1)
+
+
 class _ProjectionBackend:
     """Docker double that records the projection writer and fails on request."""
 
@@ -1232,6 +1251,17 @@ class _ProjectionBackend:
                 "writer interrupted",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
+        if argv[1] == "run":
+            return (
+                0,
+                (
+                    "null"
+                    if "action = 'inspect'"
+                    in shlex.split(argv[argv.index("-ceu") + 1])[3]
+                    else argv[-1]
+                ),
+                "",
+            )
         return 0, "", ""
 
 
@@ -1244,6 +1274,11 @@ async def _materialize_projection(monkeypatch, backend, secret: str):
 
     service = OmnigentGithubCredentialService(backend)
     monkeypatch.setattr(service, "acquire_repository_use", acquire)
+    monkeypatch.setattr(
+        service,
+        "admitted_repository_identity",
+        AsyncMock(return_value=SimpleNamespace(endpoint="https://github.com")),
+    )
     return await service.materialize(
         request=_request(),
         resolved_tools={
@@ -1253,6 +1288,12 @@ async def _materialize_projection(monkeypatch, backend, secret: str):
             },
         },
         owner_ref="lease-owner-1",
+        projection_reservation={
+            "ownerRef": "lease-owner-1",
+            "revision": next(_projection_revisions),
+            "reservationId": str(uuid4()),
+        },
+        projection_verifier=AsyncMock(),
         writer_image_ref="ghcr.io/example/opencode:latest",
         runtime_uid=1000,
         runtime_gid=1000,
@@ -1260,22 +1301,27 @@ async def _materialize_projection(monkeypatch, backend, secret: str):
 
 
 def _projection_writer(backend, config_dir: Path) -> list[str]:
-    """Return the production writer process, retargeted at a local volume."""
-    argv = next(argv for argv, kwargs in backend.calls if kwargs.get("input_bytes"))
-    script = argv[argv.index("-ceu") + 1]
-    host = argv[-1]
-    uid, gid = (
-        (argv[-3], argv[-2]) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+    """Execute the production reservation and return its matching writer."""
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_projection_script,
     )
-    return [
-        "sh",
-        "-ceu",
-        script.replace("/config", str(config_dir)),
-        "--",
-        str(uid),
-        str(gid),
-        host,
-    ]
+
+    argv = next(argv for argv, kwargs in backend.calls if kwargs.get("input_bytes"))
+    uid, gid, host, stamp = argv[-4:]
+    if os.geteuid() != 0:
+        uid, gid = os.getuid(), os.getgid()
+    args = ["--", str(uid), str(gid), host, stamp]
+    subprocess.run(
+        [
+            "sh",
+            "-ceu",
+            github_projection_script(str(config_dir), action="reserve"),
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return ["sh", "-ceu", github_projection_script(str(config_dir)), *args]
 
 
 def _real_gh_token(config_dir: Path) -> str:
@@ -1354,58 +1400,41 @@ async def test_github_projection_interrupted_refresh_keeps_complete_issuance(
 @pytest.mark.asyncio
 async def test_github_projection_overlapping_writers_with_same_container_pid(
     monkeypatch, tmp_path
-) -> None:
+):
+    # Both Docker writers commonly have PID1; ordering comes from durable
+    # reservations, independent of PID namespaces and transport completion.
     config = tmp_path / "volume"
-    backend = _ProjectionBackend(existing=True)
-    await _materialize_projection(monkeypatch, backend, "initial-token")
-    argv = _projection_writer(backend, config)
-    # Separate Docker PID namespaces both normally give the writer PID 1.
-    # Run the actual shell locally with that same expansion in both writers.
-    argv[2] = argv[2].replace("$$", "1")
-    await asyncio.to_thread(subprocess.run, argv, input=b"initial-token", check=True)
-    original = (config / "hosts.yml").read_bytes()
-    writers = []
+    old_backend = _ProjectionBackend(existing=True)
+    await _materialize_projection(monkeypatch, old_backend, "older-value")
+    old = await asyncio.to_thread(
+        subprocess.Popen,
+        _projection_writer(old_backend, config),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     try:
-        for token in (b"first-partial", b"second-partial"):
-            writer = await asyncio.to_thread(
-                subprocess.Popen,
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            writers.append(writer)
-            writer.stdin.write(token)
-            writer.stdin.flush()
-            for _ in range(200):
-                temporaries = list(config.glob(".hosts.yml.*"))
-                if any(token in path.read_bytes() for path in temporaries):
-                    break
-                await asyncio.sleep(0.01)
-            else:
-                pytest.fail("writer did not consume its partial token")
-            assert (config / "hosts.yml").read_bytes() == original
-
-        assert len(temporaries) == 2, "overlapping writers shared one temporary file"
-        await asyncio.to_thread(writers[0].communicate, input=b"-complete", timeout=5)
-        assert writers[0].returncode == 0
-        first_complete = (config / "hosts.yml").read_bytes()
-        assert b"oauth_token: first-partial-complete\n" in first_complete
-        assert b"second-partial" not in first_complete
-        assert len(list(config.glob(".hosts.yml.*"))) == 1
-
-        await asyncio.to_thread(writers[1].communicate, input=b"-complete", timeout=5)
-        assert writers[1].returncode == 0
-        second_complete = (config / "hosts.yml").read_bytes()
-        assert b"oauth_token: second-partial-complete\n" in second_complete
-        assert b"first-partial" not in second_complete
-        assert not list(config.glob(".hosts.yml.*"))
+        old.stdin.write(b"older-")
+        old.stdin.flush()
+        new_backend = _ProjectionBackend(existing=True)
+        await _materialize_projection(monkeypatch, new_backend, "newer-value")
+        await asyncio.to_thread(
+            subprocess.run,
+            _projection_writer(new_backend, config),
+            input=b"newer-value",
+            check=True,
+            capture_output=True,
+        )
+        installed = (config / "hosts.yml").read_bytes()
+        await asyncio.to_thread(old.communicate, b"value", timeout=5)
+        assert old.returncode != 0
+        assert (config / "hosts.yml").read_bytes() == installed
+        assert _real_gh_token(config) == "newer-value"
         assert (config / "hosts.yml").stat().st_mode & 0o777 == 0o600
-        assert config.stat().st_mode & 0o777 == 0o700
     finally:
-        for writer in writers:
-            if writer.poll() is None:
-                await asyncio.to_thread(writer.communicate, timeout=5)
+        if old.poll() is None:
+            old.kill()
+        await asyncio.to_thread(old.wait)
 
 
 @pytest.mark.asyncio
@@ -1450,7 +1479,7 @@ async def test_github_projection_overlapping_failure_preserves_success(
                     )
                 self.live_token = kwargs["input_bytes"]
                 self.published.set()
-                return 0, "", ""
+                return 0, argv[-1], ""
             if argv[1:3] == ["volume", "rm"]:
                 self.live_token = None
             return await super().run(argv, **kwargs)
@@ -1533,16 +1562,13 @@ async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     assert not any(argv[1:3] == ["volume", "rm"] for argv, _kwargs in fresh.calls)
     # A same-owner retry can finish the retained preparation.
     fresh.fail_writer = False
-    await _materialize_projection(monkeypatch, fresh, "replacement-token")
+    current_attachment = await _materialize_projection(
+        monkeypatch, fresh, "replacement-token"
+    )
     assert sum(argv[1:3] == ["volume", "create"] for argv, _kwargs in fresh.calls) == 1
     # The persisted, fenced lifecycle authority reclaims failed preparations.
     service = OmnigentGithubCredentialService(fresh)
-    await service.cleanup(
-        service.anticipated_attachment(
-            {"tools": ["gh"], "repositoryAccess": {"collaboration": True}},
-            owner_ref="lease-owner-1",
-        )
-    )
+    await service.cleanup(current_attachment)
     assert fresh.calls[-1][0][1:3] == ["volume", "rm"]
     assert not fresh.existing
 
