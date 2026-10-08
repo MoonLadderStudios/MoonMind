@@ -288,7 +288,6 @@ from moonmind.workflows.executions.runtime_capabilities import (
 )
 from moonmind.workflows.executions.runtime_defaults import (
     normalize_runtime_id,
-    resolve_default_workflow_runtime,
 )
 from moonmind.workflows.executions.runtime_inheritance import (
     ExecutionPrincipal,
@@ -14848,7 +14847,14 @@ def _raw_request_defaults_to_omnigent(
         {"initialParameters": parameters}
     ).runtime_ids:
         return False
-    return resolve_default_workflow_runtime(settings.workflow) == "omnigent"
+    return (
+        resolve_runtime_target_selection(
+            surface=AuthoringSurface.workflow_create,
+            workflow_settings=settings.workflow,
+            record_metrics=False,
+        ).runtime_id
+        == "omnigent"
+    )
 
 
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
