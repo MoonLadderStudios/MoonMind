@@ -232,7 +232,7 @@ COPY NOTICE /app/NOTICE
 FROM runtime-dependencies AS test-runtime
 ARG INSTALL_TEST_DEPS=true
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
-COPY api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
+COPY --chown=app:app api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -242,11 +242,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
-        python /tmp/cache_temporal_test_server.py; \
     fi && \
-    rm -f /tmp/requirements-tests.txt /tmp/cache_temporal_test_server.py
+    rm -f /tmp/requirements-tests.txt
 ENV HOME=/home/app
 USER app
+RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
+        python /tmp/cache_temporal_test_server.py; \
+    fi && \
+    rm -f /tmp/cache_temporal_test_server.py
 
 FROM runtime-dependencies AS runtime-base
 
