@@ -262,6 +262,9 @@ COPY moonmind /app/moonmind/
 # needs its source. No API or worker runtime path imports it: deployment
 # updates reach the deploy/controller endpoint over HTTP.
 COPY moonmind_controller /app/moonmind_controller/
+# The existing host-owned bootstrap can run this small stdlib controller
+# from the already-published application image before an update submission.
+COPY deploy/controller /app/deploy/controller/
 COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
 # The enforcer's own policy is image-owned and lives in its own source
 # directory. It must never be copied out of the deployment-mounted directory:
