@@ -49,6 +49,8 @@ def resolver_cli(tmp_path):
         "runs": [],
         "jobs": [],
         "base_sha": "c" * 40,
+        "protected": False,
+        "required_checks": [],
     }
     (transport / "replay.py").write_text(
         "import json,os\n"
@@ -63,11 +65,17 @@ def resolver_cli(tmp_path):
         "  return data.get('pr_after_inventory', data['pr']) if full_reads>1 else data['pr']\n"
         " path=target.split('?')[0].removeprefix('https://api.github.com/').removeprefix('/')\n"
         " if path=='graphql': return {'data':{'repository':{'pullRequest':{'reviewThreads':{'nodes':[], 'pageInfo':{'hasNextPage':False}}}}}}\n"
-        " if path.endswith('/branches/main'):\n"
+        " if path=='repos/owner/repo/branches/main':\n"
         "  observed=[json.loads(line) for line in Path(os.environ['REPLAY_CALLS']).read_text().splitlines()]\n"
         "  full_reads=sum(k=='view' and 'isDraft' in t for k,t in observed)\n"
         "  sha=data.get('base_after_inventory',data['base_sha']) if full_reads>1 else data['base_sha']\n"
-        "  return {'protected':False,'commit':{'sha':sha}}\n"
+        "  return {'protected':data['protected'],'commit':{'sha':sha}}\n"
+        " if path.endswith('/branches/main/protection'):\n"
+        "  observed=[json.loads(line) for line in Path(os.environ['REPLAY_CALLS']).read_text().splitlines()]\n"
+        "  full_reads=sum(k=='view' and 'isDraft' in t for k,t in observed)\n"
+        "  contexts=data.get('required_after_inventory',data['required_checks']) if full_reads>1 else data['required_checks']\n"
+        "  return {'required_status_checks':{'contexts':contexts}}\n"
+        " if path.endswith('/rules/branches/main'): return []\n"
         " if path.endswith('/check-runs'): return {'check_runs':data['checks']}\n"
         " if path.endswith('/statuses'): return data['statuses']\n"
         " if path.endswith('/actions/runs'): return {'workflow_runs':data['runs']}\n"
@@ -533,6 +541,35 @@ def test_unknown_base_commit_cannot_authorize_completion(resolver_cli):
     state, run = resolver_cli
     state["checks"][0].update(status="completed", conclusion="success")
     state["base_sha"] = None
+    result, snapshot, _ = run()
+    assert result["reason"] == "snapshot_refresh_failed"
+    assert not snapshot
+
+
+def test_required_context_change_refreshes_an_unchanged_head_wait(resolver_cli):
+    state, run = resolver_cli
+    state["checks"][0].update(status="completed", conclusion="success")
+    state["protected"] = True
+    state["required_checks"] = ["external"]
+    state["statuses"] = [{"context": "external", "state": "pending"}]
+    assert run()[0]["reason"] == "ci_running"
+    result, snapshot, calls = run()
+    assert result["reason"] == "ci_running"
+    assert snapshot["observationOnly"] is True
+    wait_calls = calls
+    state["required_checks"] = []
+    result, snapshot, calls = run()
+    assert result["status"] == "review_clean"
+    assert snapshot.get("observationOnly") is not True
+    assert any(kind == "http" for kind, _ in calls)
+    assert len(wait_calls) == 6  # PR/base/checks/statuses plus protection and rules.
+
+
+def test_requirement_change_during_inventory_cannot_authorize_completion(resolver_cli):
+    state, run = resolver_cli
+    state["checks"][0].update(status="completed", conclusion="success")
+    state["protected"] = True
+    state["required_after_inventory"] = ["new-security-check"]
     result, snapshot, _ = run()
     assert result["reason"] == "snapshot_refresh_failed"
     assert not snapshot

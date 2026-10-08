@@ -1540,10 +1540,12 @@ def _reconcile_ci_check_runs(
     return applicable, evidence, [runs, enriched]
 
 
-def _poll_fingerprint(pr: dict, checks: object, statuses: object, runs: object) -> str:
+def _poll_fingerprint(
+    pr: dict, checks: object, statuses: object, runs: object, required_checks: object
+) -> str:
     """Equality is only a reason to keep waiting, never evidence to act."""
     return hashlib.sha256(
-        json.dumps([pr, checks, statuses, runs], sort_keys=True).encode()
+        json.dumps([pr, checks, statuses, runs, required_checks], sort_keys=True).encode()
     ).hexdigest()
 
 
@@ -1662,8 +1664,13 @@ def main():
     head_check_runs, check_evidence, run_observation = _reconcile_ci_check_runs(
         head_check_runs, pr_repo=pr_repo, head_sha=head_sha
     )
+    required_checks = _fetch_required_status_checks(
+        pr_repo=pr_repo,
+        base_branch=pr_data.get("baseRefName"),
+        branch_data=base_branch_data,
+    )
     fingerprint = _poll_fingerprint(
-        pr_data, fetched_runs, fetched_statuses, run_observation
+        pr_data, fetched_runs, fetched_statuses, run_observation, required_checks
     )
     if args.poll_waits and fetched_runs is not None and fetched_statuses is not None:
         waiting = _unchanged_ci_wait(
@@ -1677,11 +1684,6 @@ def main():
             print("CI observation unchanged; retaining a wait-only snapshot.")
             return
 
-    required_checks = _fetch_required_status_checks(
-        pr_repo=pr_repo,
-        base_branch=pr_data.get("baseRefName"),
-        branch_data=base_branch_data,
-    )
     from pr_resolver_core.github_checks import (
         head_ci_reported,
         partition_commit_statuses,
@@ -1890,15 +1892,21 @@ def main():
     # Bind every full inventory to the current target, even with the review
     # loop disabled. A race cannot authorize fixes or a fix-only clean receipt.
     completed_pr, _, _ = fetch_pr_data(args.pr)
+    completed_requirements = None
     if isinstance(completed_pr, dict):
+        completed_base = _fetch_base_branch(
+            pr_repo=pr_repo, base_branch=completed_pr.get("baseRefName")
+        )
         completed_pr = {
             **completed_pr,
-            "baseRefOid": _base_commit_sha(
-                _fetch_base_branch(
-                    pr_repo=pr_repo, base_branch=completed_pr.get("baseRefName")
-                )
-            ),
+            "baseRefOid": _base_commit_sha(completed_base),
         }
+        if completed_base is not None:
+            completed_requirements = _fetch_required_status_checks(
+                pr_repo=pr_repo,
+                base_branch=completed_pr.get("baseRefName"),
+                branch_data=completed_base,
+            )
     observed_fields = (
         "number", "url", "headRefOid", "headRefName", "baseRefName", "baseRefOid",
         "statusCheckRollup", "updatedAt", "isDraft", "state", "mergeable",
@@ -1908,12 +1916,15 @@ def main():
         not head_sha
         or not isinstance(completed_pr, dict)
         or any(completed_pr.get(key) != pr_data.get(key) for key in observed_fields)
+        or completed_requirements != required_checks
     ):
         changed = (
             [key for key in observed_fields if completed_pr.get(key) != pr_data.get(key)]
             if isinstance(completed_pr, dict)
             else ["metadata_unavailable"]
         )
+        if completed_requirements != required_checks:
+            changed.append("requiredChecks")
         print(
             "PR head, target or gate changed during review collection; refresh the snapshot. "
             + "Changed fields: " + ", ".join(changed),
