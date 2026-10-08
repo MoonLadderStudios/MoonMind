@@ -688,7 +688,13 @@ async def test_exact_images_run_the_required_concurrency_level(tmp_path) -> None
 
 async def _credential_recovery_host_class(backend, client, image_ref):
     """Bind this recovery row to observed build/version and canonical harness identity."""
-    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+    from api_service.services.omnigent_agent_profile_service import (
+        _overlay_native_harnesses,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        InMemoryHarnessCatalogRepository,
+        OmnigentHarnessCatalogService,
+    )
 
     _, build_digest, _ = await backend.run(
         [
@@ -724,16 +730,21 @@ async def _credential_recovery_host_class(backend, client, image_ref):
             "from importlib.metadata import version; print(version('omnigent'))",
         ]
     )
-    raw = next(
-        (row for row in await client.list_harnesses() if row.get("id") == HARNESS_ID),
+    # The upstream picker catalog omits native wrappers such as
+    # ``opencode-native``; production catalog sync publishes them through the
+    # deployment-owned native overlay, so derive the identity the same way.
+    observed = await OmnigentHarnessCatalogService(
+        client=client,
+        repository=InMemoryHarnessCatalogRepository(),
+        endpoint_ref="credential-recovery",
+        omnigent_build_digest=build_digest.strip(),
+        observation_overlay=_overlay_native_harnesses,
+    ).synchronize()
+    harness = next(
+        (item for item in observed.snapshot.harnesses if item.id == HARNESS_ID),
         None,
     )
-    assert raw is not None, "exact recovery harness catalog is unavailable"
-    harness = _normalize_harness(
-        raw,
-        omnigent_version=version.strip(),
-        omnigent_build_digest=build_digest.strip(),
-    )
+    assert harness is not None, "exact recovery harness catalog is unavailable"
     payload = _host_class(image_ref).model_dump(mode="json", by_alias=True)
     payload.update(
         omnigentVersion=version.strip(),
