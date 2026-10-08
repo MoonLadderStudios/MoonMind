@@ -4697,6 +4697,7 @@ async def _drive_authority_chain_coordinator(
     *,
     publication: dict | None = None,
     completion_evidence: list[dict] | None = None,
+    session_inspector: OmnigentOAuthHostRuntime | None = None,
     request_parameters: dict | None = None,
     session_interruption: bool = True,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
@@ -4836,6 +4837,8 @@ async def _drive_authority_chain_coordinator(
             }
 
         async def inspect_session_completion(self, _session_id):
+            if session_inspector is not None:
+                return await session_inspector.inspect_session_completion(_session_id)
             if completion_sequence:
                 return completion_sequence.pop(0)
             return {
@@ -5427,6 +5430,94 @@ async def test_runtime_completion_requires_assistant_after_latest_tool(tmp_path)
     assert incomplete["terminalAssistantAfterWork"] is False
     assert incomplete["toolResultCount"] == 1
     assert complete["terminalAssistantAfterWork"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "harness",
+    [
+        "codex-native",
+        "claude-native",
+        "opencode-native",
+        "custom",
+        "codex-native-ui",
+        None,
+    ],
+)
+async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
+    tmp_path,
+    harness,
+) -> None:
+    def assistant(text: str) -> dict:
+        return {
+            "type": "message",
+            "data": {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            },
+        }
+
+    user = {"type": "message", "data": {"role": "user", "content": []}}
+    tool_call = {
+        "type": "function_call",
+        "data": {"name": "shell", "call_id": "exec-1"},
+    }
+    tool_output = {
+        "type": "function_call_output",
+        "data": {"call_id": "exec-1", "output": "ok"},
+    }
+    # Codex-native mirrors the turn's working-tree diff after its final answer.
+    turn_diff = [
+        {
+            "type": "function_call",
+            "data": {"name": "turn_diff", "call_id": "codex_turn_diff_turn-1"},
+        },
+        {
+            "type": "function_call_output",
+            "data": {"call_id": "codex_turn_diff_turn-1", "output": "diff"},
+        },
+    ]
+    client = SimpleNamespace(
+        get_session=AsyncMock(
+            side_effect=[
+                {
+                    "status": "idle",
+                    "harness": harness,
+                    "items": [
+                        user,
+                        tool_call,
+                        tool_output,
+                        assistant("Done"),
+                        *turn_diff,
+                    ],
+                },
+                {
+                    "status": "idle",
+                    "harness": harness,
+                    "items": [
+                        user,
+                        assistant("Working"),
+                        tool_call,
+                        tool_output,
+                        *turn_diff,
+                    ],
+                },
+            ]
+        )
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=client,
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    answered = await runtime.inspect_session_completion("session-1")
+    tool_only = await runtime.inspect_session_completion("session-1")
+
+    assert answered["terminalAssistantAfterWork"] is (harness == "codex-native")
+    assert answered["toolResultCount"] == (1 if harness == "codex-native" else 2)
+    assert tool_only["terminalAssistantAfterWork"] is False
+    assert tool_only["toolResultCount"] == (1 if harness == "codex-native" else 2)
 
 
 @pytest.mark.asyncio
