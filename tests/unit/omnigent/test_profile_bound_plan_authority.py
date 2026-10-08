@@ -423,11 +423,18 @@ class _LaunchDispatched(Exception):
     pass
 
 
-def _successor_request(binding, *, reason, explicit_host_class):
+def _successor_request(
+    binding,
+    *,
+    reason,
+    explicit_host_class,
+    policy="codex-on-demand@16",
+    publish_mode="auto",
+):
     ordinal = 1 if reason == "initial_execution" else 2
     omnigent = {
         "executionTargetRef": "omnigent-codex@1",
-        "launchPolicyRef": "codex-on-demand@16",
+        "launchPolicyRef": policy,
     }
     if explicit_host_class:
         omnigent["hostClassRef"] = "omnigent-codex@1"
@@ -440,7 +447,7 @@ def _successor_request(binding, *, reason, explicit_host_class):
             "idempotencyKey": f"attempt-{ordinal}",
             "parameters": {
                 "targetRuntime": "omnigent",
-                "publishMode": "auto",
+                "publishMode": publish_mode,
                 "omnigent": omnigent,
             },
             "omnigentExecutionPlan": binding.model_dump(by_alias=True, mode="json"),
@@ -457,7 +464,7 @@ def _successor_request(binding, *, reason, explicit_host_class):
     )
 
 
-async def _dispatched_launch(coordinator, request, snapshot):
+async def _dispatched_launch(coordinator, request, snapshot, runtime_id="codex_cli"):
     """Run the real coordinator to its recorded dispatch authority.
 
     The coordinator records the launch it will hand to the host runtime as the
@@ -479,7 +486,7 @@ async def _dispatched_launch(coordinator, request, snapshot):
     )
     coordinator._profile_authority = SimpleNamespace(
         resolve=AsyncMock(
-            return_value=SimpleNamespace(runtime_id="codex_cli", launch_ready=True)
+            return_value=SimpleNamespace(runtime_id=runtime_id, launch_ready=True)
         )
     )
 
@@ -598,3 +605,203 @@ async def test_codex_interrupted_successor_never_adopts_foreign_or_tampered_laun
     tampered["policyDigest"] = "sha256:" + "9" * 64
     with pytest.raises(HarnessPlatformError, match="launch authority has drifted"):
         await _dispatched_launch(coordinator, request, tampered)
+
+
+def _static_policy_snapshot(*, policy, host_image_ref, harness="codex-native"):
+    """A retained static host policy pinned to one shared host image."""
+
+    from api_service.services.omnigent_policies import bootstrap_document
+    from moonmind.omnigent.policies import compile_policy_snapshot
+
+    document = bootstrap_document(
+        host_mode="static_compose",
+        execution_profile_ref=f"omnigent-{harness.removesuffix('-native')}@1",
+        server_image_ref="ghcr.io/example/omnigent-server@sha256:" + "a" * 64,
+        host_image_ref=host_image_ref,
+        harness=harness,
+        agent_identities=(
+            ("claude-native-ui",) if harness == "claude-native" else ("codex",)
+        ),
+        compatible_providers=(
+            ("anthropic",) if harness == "claude-native" else ("codex",)
+        ),
+    ).model_dump(mode="json", by_alias=True)
+    policy_id, _, version = policy.rpartition("@")
+    return compile_policy_snapshot(
+        policy_id=policy_id,
+        version=int(version),
+        document=document,
+        validation={"valid": True},
+    )
+
+
+async def _static_compose_env(tmp_path, launch):
+    """Run the real static Compose launch and return the env it hands Compose."""
+
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime._deployment_compose_command = lambda: ("docker", "compose")
+    await runtime._compose_static_check(
+        workspace_source=tmp_path, effective_launch=launch
+    )
+    ((args, kwargs),) = runtime._run.await_args_list
+    assert args[-3:-1] == ("up", "-d")
+    return kwargs["env"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "explicit_host_class", "installed", "expected"),
+    [
+        ("initial_execution", False, "same", "old"),
+        ("runtime_recovered", False, "same", "installed"),
+        ("runtime_recovered", True, "same", "old"),
+        ("runtime_recovered", False, "foreign", "old"),
+    ],
+)
+async def test_static_codex_interrupted_successor_follows_installed_shared_host(
+    monkeypatch, tmp_path, reason, explicit_host_class, installed, expected
+):
+    """#4627 R4: a retained static host continues on the image the update installed.
+
+    The update recreated the shared static Compose service on a rebuilt image
+    from the same repository. The ``runtime_recovered`` successor of the step
+    it interrupted reuses its workflow's admitted plan, and the real
+    coordinator dispatches it on that installed image, so the per-attempt
+    ``docker compose up`` keeps the service on it instead of re-rendering the
+    pre-update digest. The first attempt, an explicit Host Class and a foreign
+    image family keep the plan's recorded image.
+    """
+
+    old_image = "ghcr.io/example/omnigent-host@sha256:" + "f" * 64
+    installed_image = (
+        "ghcr.io/example/omnigent-host@sha256:" + "e" * 64
+        if installed == "same"
+        else "ghcr.io/example/other-host@sha256:" + "e" * 64
+    )
+    policy = "codex-static@16"
+    _configure_ready_host_image_pair(monkeypatch)
+    snapshot = _static_policy_snapshot(policy=policy, host_image_ref=old_image)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", old_image)
+    plan, admitted_launch, coordinator, binding = await _admit_codex_plan(
+        monkeypatch, snapshot=snapshot, policy=policy, workflow_id="mm:interrupted"
+    )
+    assert admitted_launch["hostMode"] == "static_compose"
+    assert plan.payload.hostImageRef == old_image
+    # The update recreates the static service on the installed image and
+    # records it as the deployment's shared host image.
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_image)
+
+    request = _successor_request(
+        binding,
+        reason=reason,
+        explicit_host_class=explicit_host_class,
+        policy=policy,
+        # A static host shares one service, so it runs read-only steps.
+        publish_mode="none",
+    )
+    launch = await _dispatched_launch(coordinator, request, snapshot)
+
+    image = installed_image if expected == "installed" else old_image
+    assert launch["hostImageRef"] == image
+    assert launch["boundaries"]["host"]["hostImageRef"] == image
+    assert {
+        key: value
+        for key, value in launch.items()
+        if key not in {"hostImageRef", "boundaries", "snapshotRef"}
+    } == {
+        key: value
+        for key, value in admitted_launch.items()
+        if key not in {"hostImageRef", "boundaries", "snapshotRef"}
+    }
+    compose_env = await _static_compose_env(tmp_path, launch)
+    assert compose_env["OMNIGENT_SHARED_HOST_IMAGE_REF"] == image
+    assert compose_env["OMNIGENT_HOST_IMAGE_REF"] == image
+    assert compose_env["OMNIGENT_EFFECTIVE_LAUNCH_REF"] == launch["snapshotRef"]
+    # The admitted plan and its launch record keep the predecessor's image.
+    assert plan.payload.hostImageRef == old_image
+    assert admitted_launch["hostImageRef"] == old_image
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [("initial_execution", "old"), ("runtime_recovered", "installed")],
+)
+async def test_static_claude_interrupted_successor_follows_installed_shared_host(
+    monkeypatch, tmp_path, reason, expected
+):
+    """#4627 R4: a retained static Claude host gets the same continuation.
+
+    Static Claude reaches the profile-bound coordinator without an admitted
+    plan; its launch is compiled from the binding's pinned policy snapshot.
+    The ``runtime_recovered`` successor still continues on the shared image
+    the update installed instead of reverting the static service.
+    """
+
+    from moonmind.omnigent.profile_bound_execution import (
+        OmnigentProfileBoundExecutionCoordinator,
+    )
+
+    old_image = "ghcr.io/example/omnigent-host@sha256:" + "f" * 64
+    installed_image = "ghcr.io/example/omnigent-host@sha256:" + "e" * 64
+    policy = "claude-static@16"
+    _configure_ready_host_image_pair(monkeypatch)
+    snapshot = _static_policy_snapshot(
+        policy=policy, host_image_ref=old_image, harness="claude-native"
+    )
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_image)
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=object(),
+        host_repository=object(),
+        host_runtime=object(),
+        run_store=object(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=_ReadableArtifacts(),
+    )
+    ordinal = 1 if reason == "initial_execution" else 2
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "executionProfileRef": "claude",
+            "correlationId": "workflow-1",
+            "idempotencyKey": f"attempt-{ordinal}",
+            "parameters": {
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "omnigent": {
+                    "executionTargetRef": "omnigent-claude@1",
+                    "launchPolicyRef": policy,
+                },
+            },
+            "stepExecution": {
+                "workflowId": "mm:interrupted",
+                "runId": "run-1",
+                "logicalStepId": "implement",
+                "executionOrdinal": ordinal,
+                "stepExecutionId": f"mm:interrupted:run-1:implement:execution:{ordinal}",
+                "runtimeContextPolicy": "fresh_agent_run",
+                "reason": reason,
+            },
+        }
+    )
+
+    launch = await _dispatched_launch(
+        coordinator, request, snapshot, runtime_id="claude_code"
+    )
+
+    image = installed_image if expected == "installed" else old_image
+    assert launch["hostMode"] == "static_compose"
+    assert launch["harness"] == "claude-native"
+    assert launch["hostImageRef"] == image
+    assert launch["boundaries"]["host"]["hostImageRef"] == image
+    compose_env = await _static_compose_env(tmp_path, launch)
+    assert compose_env["OMNIGENT_SHARED_HOST_IMAGE_REF"] == image

@@ -479,29 +479,64 @@ class OmnigentProfileBoundExecutionCoordinator:
     ) -> dict[str, Any]:
         """Move a recovered attempt's admitted launch to the installed image.
 
-        A ``runtime_recovered`` successor reuses its workflow's admitted plan
+        A ``runtime_recovered`` successor reuses its workflow's admitted launch
         but launches on the deployment's installed host image, exactly as the
-        generic realizer does (#4627). The same planned-host resolver selects
-        the installed same-repository image of the plan's Host Class, and the
-        same deterministic reconciliation changes only the launch's image.
+        generic realizer does (#4627). An on-demand host asks the same
+        planned-host resolver fresh admission uses for the installed
+        same-repository image of the plan's Host Class. A static Codex or
+        Claude host is the shared Compose service the update recreated, so its
+        installed image is the deployment's shared host image that fresh
+        static launches read, with or without an admitted plan.
+        The same deterministic reconciliation changes only the launch's image,
+        and the per-attempt ``docker compose up`` keeps the service on it.
         An explicitly requested Host Class, a foreign image family, or no
-        qualifying installed image keeps the plan's recorded image. Static
-        hosts are Compose services outside per-attempt Host Class selection.
+        qualifying installed image keeps the admitted image.
         """
 
         from moonmind.omnigent.realizers.generic_host import (
             launches_on_installed_runtime,
         )
 
-        plan = self._execution_plan
-        if (
-            plan is None
-            or plan.payload.hostImageRef is None
-            or not launches_on_installed_runtime(request)
-            or str(effective_launch.get("hostMode") or "")
-            not in {"on-demand", "on_demand_docker"}
-        ):
+        if not launches_on_installed_runtime(request):
             return effective_launch
+        plan = self._execution_plan
+        host_mode = str(effective_launch.get("hostMode") or "")
+        try:
+            if host_mode in {"static_compose", "static-connected"}:
+                from moonmind.omnigent.harness_platform.host_classes import (
+                    resolve_shared_host_image_ref,
+                )
+
+                installed_image = resolve_shared_host_image_ref()
+            elif (
+                host_mode in {"on-demand", "on_demand_docker"}
+                and plan is not None
+                and plan.payload.hostImageRef is not None
+            ):
+                installed_image = await self._installed_on_demand_image(plan)
+            else:
+                return effective_launch
+        except HarnessPlatformError as exc:
+            logger.info(
+                "recovered attempt keeps its admitted host image: "
+                "installed host selection is unavailable (%s)",
+                str(exc)[:300],
+            )
+            return effective_launch
+        from moonmind.omnigent.host_image_drift import (
+            reconcile_effective_launch_to_selected_host,
+        )
+
+        return (
+            reconcile_effective_launch_to_selected_host(
+                effective_launch, installed_image
+            )
+            or effective_launch
+        )
+
+    async def _installed_on_demand_image(
+        self, plan: OmnigentExecutionPlanEnvelope
+    ) -> str:
         resolver = self._planned_host_resolver
         if resolver is None:
             from moonmind.omnigent.harness_platform.catalog_service import (
@@ -515,25 +550,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                 catalog_repository=DbHarnessCatalogRepository(self._session_factory),
                 artifact_gateway=self._artifact_gateway,
             )
-        try:
-            host_class, _policy = await resolver(plan, installed_runtime=True)
-        except HarnessPlatformError as exc:
-            logger.info(
-                "recovered Codex attempt keeps its admitted host image: "
-                "installed host selection is unavailable (%s)",
-                str(exc)[:300],
-            )
-            return effective_launch
-        from moonmind.omnigent.host_image_drift import (
-            reconcile_effective_launch_to_selected_host,
-        )
-
-        return (
-            reconcile_effective_launch_to_selected_host(
-                effective_launch, host_class.imageRef
-            )
-            or effective_launch
-        )
+        host_class, _policy = await resolver(plan, installed_runtime=True)
+        return host_class.imageRef
 
     async def _write_plan_runtime_evidence(
         self,
