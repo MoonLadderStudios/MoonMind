@@ -4296,7 +4296,8 @@ async def _saved_work_destination_authority(
     ``github:repository-default`` is the deployment's default repository
     connection: a recorded connection's credential is read and no ambient
     token substitutes for it. The authority reference records only the
-    redaction-safe credential source and recorded connection revisions. A
+    redaction-safe credential source, recorded connection revisions, and the
+    selected managed SecretRef's atomically read revisions. A
     changed connection invalidates the persisted decision while a token value
     never enters workflow history.
     """
@@ -4346,6 +4347,8 @@ async def _saved_work_destination_authority(
             f"#{access.connection.id}:policy:{access.connection.policy_revision}:"
             f"credential:{access.connection.credential_revision}"
         )
+    if credential.reference_revision is not None:
+        authority_ref += f"#secret:{credential.reference_revision}"
     if admitted_authority_ref is not None and authority_ref != admitted_authority_ref:
         raise temporal_exceptions.ApplicationError(
             "destination authority changed since the decision was admitted",
