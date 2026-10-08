@@ -22,7 +22,7 @@ describe('Workflows Entrypoint', () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
-    fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+    fetchSpy = vi.spyOn(window, 'fetch').mockReset().mockResolvedValue({
       ok: true,
       json: async () => ({
         items: [
@@ -141,8 +141,12 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('table')).toBeTruthy();
-    for (const header of ['Workflow', 'Status', 'Progress', 'Repo', 'Runtime', 'Updated']) {
+    for (const header of ['Workflow', 'Status', 'Progress', 'Repo', 'Provider Profile', 'Updated']) {
       expect(screen.getByRole('columnheader', { name: new RegExp(header, 'i') })).toBeTruthy();
+    }
+    // One replacement column: no ordinary Runtime/Harness/Backend/Host columns.
+    for (const retired of ['Runtime', 'Harness', 'Backend', 'Container', 'Host']) {
+      expect(screen.queryByRole('columnheader', { name: new RegExp(`^${retired}`, 'i') })).toBeNull();
     }
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Create a workflow' }).getAttribute('href')).toBe('/workflows/new');
@@ -192,6 +196,29 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
     await waitFor(() => {
       expect(document.activeElement).toBe(filtersTrigger);
+    });
+  });
+
+  it('moves focus into a column filter popover and returns it to the filter button on Escape', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const statusFilter = screen.getByRole('button', { name: 'Status filter. No filter applied.' });
+    statusFilter.focus();
+    fireEvent.click(statusFilter);
+
+    const popover = screen.getByRole('dialog', { name: 'Status filter' });
+    await waitFor(() => {
+      expect(popover.contains(document.activeElement)).toBe(true);
+    });
+
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: 'Status filter. No filter applied.' }),
+      );
     });
   });
 
@@ -277,7 +304,7 @@ describe('Workflows Entrypoint', () => {
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
     const runtimeHeaderButton = screen.getByRole('button', {
-      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
+      name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i,
     });
     expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('none');
 
@@ -286,7 +313,7 @@ describe('Workflows Entrypoint', () => {
     await waitFor(() => {
       expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
       expect(runtimeHeaderButton.getAttribute('aria-label')).toBe(
-        'Runtime. Sorted ascending, current page only. Activate to sort descending.',
+        'Provider Profile. Sorted ascending, current page only. Activate to sort descending.',
       );
     });
   });
@@ -300,7 +327,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
 
     const runtimeHeaderButton = screen.getByRole('button', {
-      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
+      name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i,
     });
     // Tooltip text reinforces the current-page-only scope.
     expect(runtimeHeaderButton.getAttribute('title')).toBe('Sorting applies to the current page only.');
@@ -994,9 +1021,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), {
-      target: { value: 'jules' },
-    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Pending selection/ }));
     fireEvent.change(screen.getByLabelText('Title filter value'), {
       target: { value: 'Example' },
     });
@@ -1004,7 +1029,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=jules&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&providerProfileStateIn=pending&titleContains=Example',
       );
     });
   });
@@ -1035,7 +1060,7 @@ describe('Workflows Entrypoint', () => {
     expect(window.location.search).toBe('?updatedFrom=2026-04-01&updatedTo=2026-04-30&limit=50');
   });
 
-  it('applies runtime and skill exclude modes from the drawer', async () => {
+  it('applies Provider Profile and skill exclude modes from the drawer', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1048,6 +1073,11 @@ describe('Workflows Entrypoint', () => {
             state: 'completed',
             rawState: 'completed',
             targetRuntime: 'codex_cli',
+            providerProfile: {
+              selectionState: 'recorded',
+              profiles: [{ id: 'acct-1', label: 'OpenAI · Primary' }],
+              profileCount: 1,
+            },
             targetSkill: 'pr-resolver',
             createdAt: '2026-03-28T00:00:00Z',
           },
@@ -1059,14 +1089,21 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     openFilterDrawer();
-    fireEvent.change(screen.getByLabelText('Runtime filter mode'), { target: { value: 'exclude' } });
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText('Provider Profile filter mode'), {
+      target: { value: 'exclude' },
+    });
+    fireEvent.change(screen.getByLabelText('Provider Profile filter value'), {
+      target: { value: 'acct-1' },
+    });
     applyFilterDrawer();
 
     await waitFor(() => {
-      expect(lastExecutionListUrl()).toContain('targetRuntimeNotIn=codex_cli');
+      expect(lastExecutionListUrl()).toContain('providerProfileIdNotIn=acct-1');
     });
-    expect(screen.getByRole('button', { name: 'Runtime filter: not Codex CLI' })).toBeTruthy();
+    expect(lastExecutionListUrl()).not.toContain('targetRuntime');
+    expect(
+      screen.getByRole('button', { name: 'Provider Profile filter: not OpenAI · Primary' }),
+    ).toBeTruthy();
     await screen.findAllByText('Example task');
 
     openFilterDrawer();
@@ -1076,30 +1113,26 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       const url = lastExecutionListUrl();
-      expect(url).toContain('targetRuntimeNotIn=codex_cli');
+      expect(url).toContain('providerProfileIdNotIn=acct-1');
       expect(url).toContain('targetSkillNotIn=pr-resolver');
     });
     expect(screen.getByRole('button', { name: 'Skill filter: not pr-resolver' })).toBeTruthy();
   }, 10_000);
 
-  it('offers every supported runtime identifier in the runtime filter', async () => {
+  it('MoonLadderStudios/MoonMind#4640 offers no hardcoded runtime fallback as a filter', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     openFilterDrawer();
 
-    const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
-    expect(runtimeFilter.multiple).toBe(false);
-    // Skip the leading placeholder option that prompts the user to add a value.
-    expect(
-      Array.from(runtimeFilter.options)
-        .map((option) => option.value)
-        .filter((value) => value !== ''),
-    ).toEqual([
-      'codex_cli',
-      'claude_code',
-      'jules',
-    ]);
+    expect(screen.queryByLabelText('Runtime filter value')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Legacy runtime filter' })).toBeNull();
+    const profileFilter = screen.getByLabelText('Provider Profile filter value') as HTMLSelectElement;
+    const optionValues = Array.from(profileFilter.options)
+      .map((option) => option.value)
+      .filter(Boolean);
+    expect(optionValues).not.toContain('codex_cli');
+    expect(optionValues).not.toContain('claude_code');
   });
 
   it('keeps workflow-kind browsing controls out of the normal workflow list', async () => {
@@ -1150,7 +1183,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex_cli%2Cclaude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex_cli%2Cclaude_code&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI +1' })).toBeTruthy();
   });
 
   it('canonicalizes loaded Claude Code runtime filter labels before fetching', async () => {
@@ -1168,7 +1201,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=claude_code',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=claude_code&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Claude Code' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Claude Code' })).toBeTruthy();
   });
 
   it('preserves raw stored runtime identifiers from loaded include filters', async () => {
@@ -1186,7 +1219,7 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeIn=codex%2Cclaude&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: Codex CLI +1' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI +1' })).toBeTruthy();
   });
 
   it('preserves raw stored runtime identifiers from loaded exclude filters', async () => {
@@ -1204,7 +1237,9 @@ describe('Workflows Entrypoint', () => {
       '/api/executions?source=temporal&pageSize=50&targetRuntimeNotIn=codex%2Cclaude',
     );
     expect(window.location.search).toBe('?targetRuntimeNotIn=codex%2Cclaude&limit=50');
-    expect(screen.getByRole('button', { name: 'Runtime filter: not (Codex CLI +1)' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Legacy runtime filter: not (Codex CLI +1)' }),
+    ).toBeTruthy();
   });
 
   it('shows a clear validation error for contradictory canonical URL filters', async () => {
@@ -2134,21 +2169,21 @@ describe('Workflows Entrypoint', () => {
     applyFilterDrawer();
     await screen.findAllByText('Example task');
     openFilterDrawer();
-    fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Not applicable/ }));
     applyFilterDrawer();
 
     await waitFor(() => {
       const activeFilterText = document.querySelector('.workflow-list-filter-chips')?.textContent || '';
       expect(activeFilterText).toContain('completed');
       expect(activeFilterText).toContain('owner/repo');
-      expect(activeFilterText).toContain('Codex CLI');
+      expect(activeFilterText).toContain('Not applicable');
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Repo filter: owner/repo' }));
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&providerProfileStateIn=not_applicable',
       );
     });
     // The drawer opens focused on the chip's field.
@@ -2160,7 +2195,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo&providerProfileStateIn=not_applicable',
       );
       expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
@@ -2336,7 +2371,7 @@ describe('Workflows Entrypoint', () => {
     expect((await screen.findAllByText('Blocked by 2 prerequisites'))[0]).toBeTruthy();
   });
 
-  it('renders human-readable runtime labels in list rows', async () => {
+  it('renders the recorded Provider Profile instead of the runtime in list rows', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -2345,6 +2380,11 @@ describe('Workflows Entrypoint', () => {
             taskId: 'task-321',
             source: 'temporal',
             targetRuntime: 'codex_cli',
+            providerProfile: {
+              selectionState: 'recorded',
+              profiles: [{ id: 'acct-1', label: 'OpenAI · Primary', harness: 'codex' }],
+              profileCount: 1,
+            },
             title: 'Readable runtime task',
             status: 'running',
             state: 'executing',
@@ -2358,7 +2398,9 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect((await screen.findAllByText('Readable runtime task'))[0]).toBeTruthy();
-    expect((await screen.findAllByText('Codex CLI'))[0]).toBeTruthy();
+    expect((await screen.findAllByText('OpenAI · Primary'))[0]).toBeTruthy();
+    expect(screen.getAllByText('Harness: codex')[0]).toBeTruthy();
+    expect(screen.queryByText('Codex CLI')).toBeNull();
   });
 
   it('renders the desktop table with constrained columns for long workflow IDs', async () => {
@@ -2820,6 +2862,565 @@ describe('Workflows Entrypoint', () => {
       .map((element) => element.closest('tr'))
       .find((candidate): candidate is HTMLTableRowElement => Boolean(candidate));
     expect(missingProgressRow?.querySelector('.queue-table-cell-progress')?.textContent).toContain('—');
+  });
+
+  describe('MoonLadderStudios/MoonMind#4640 recorded Provider Profile', () => {
+    const profileRow = (
+      id: string,
+      title: string,
+      providerProfile: unknown,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      taskId: id,
+      workflowId: id,
+      source: 'temporal',
+      title,
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      createdAt: '2026-03-28T00:00:00Z',
+      targetRuntime: 'omnigent',
+      providerProfile,
+      ...extra,
+    });
+
+    const mockListAndFacets = (
+      items: unknown[],
+      facet?: (url: string) => Promise<Response>,
+    ) => {
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/executions/facets') && facet) return facet(url);
+        if (url.includes('/api/executions/facets')) {
+          return Promise.resolve({
+            ok: false,
+            statusText: 'Service Unavailable',
+            json: async () => ({}),
+          } as Response);
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ items }) } as Response);
+      });
+    };
+
+    it('renders every recorded identity state from parsed rows on desktop and mobile', async () => {
+      mockListAndFacets([
+        profileRow('wf-single', 'Single profile', {
+          selectionState: 'recorded',
+          profiles: [{ id: 'opencode-go', label: 'OpenCode Go', harness: 'opencode-native' }],
+          profileCount: 1,
+        }, {
+          // Execution-configuration identity must never masquerade as the account.
+          profileId: 'profile-opencode-native',
+          agentProfile: { profileId: 'profile-opencode-native' },
+        }),
+        profileRow('wf-id-only', 'ID only profile', {
+          selectionState: 'recorded',
+          profiles: [{ id: 'acct-legacy' }],
+          profileCount: 1,
+        }),
+        profileRow('wf-multi', 'Multi profile', {
+          selectionState: 'recorded',
+          profiles: [
+            { id: 'acct-a', label: 'Work' },
+            { id: 'acct-b', label: 'Work' },
+          ],
+          profileCount: 3,
+        }),
+        profileRow('wf-pending', 'Pending profile', {
+          selectionState: 'pending',
+          profiles: [],
+          profileCount: 0,
+        }),
+        profileRow('wf-old', 'Historical run', {
+          selectionState: 'not_recorded',
+          profiles: [],
+          profileCount: 0,
+        }),
+        profileRow('wf-none', 'Tool only', {
+          selectionState: 'not_applicable',
+          profiles: [],
+          profileCount: 0,
+        }),
+        profileRow('wf-unavailable', 'Unavailable projection', undefined),
+      ]);
+      const baselineCalls = fetchSpy.mock.calls.length;
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      const singleRow = await screen.findByRole('row', { name: /Single profile/ });
+      expect(within(singleRow).getByText('OpenCode Go')).toBeTruthy();
+      expect(within(singleRow).getByText('Harness: opencode-native')).toBeTruthy();
+      expect(singleRow.textContent).not.toContain('profile-opencode-native');
+      expect(within(screen.getByRole('row', { name: /ID only profile/ })).getByText('acct-legacy')).toBeTruthy();
+      const multiRow = screen.getByRole('row', { name: /Multi profile/ });
+      expect(within(multiRow).getByText('Multiple profiles')).toBeTruthy();
+      // Equal names stay distinct with a compact stable-ID suffix.
+      expect(within(multiRow).getByText('Work · acct-a +2')).toBeTruthy();
+      expect(within(screen.getByRole('row', { name: /Pending profile/ })).getByText('Pending selection')).toBeTruthy();
+      expect(within(screen.getByRole('row', { name: /Historical run/ })).getByText('Not recorded')).toBeTruthy();
+      expect(within(screen.getByRole('row', { name: /Tool only/ })).getByText('Not applicable')).toBeTruthy();
+      expect(
+        within(screen.getByRole('row', { name: /Unavailable projection/ })).getByText('Unavailable'),
+      ).toBeTruthy();
+
+      const cards = document.querySelectorAll('.queue-card');
+      const singleCard = Array.from(cards).find((card) => card.textContent?.includes('Single profile'));
+      const terms = Array.from(singleCard?.querySelectorAll('dt') || []).map((term) => term.textContent);
+      expect(terms).toContain('Provider Profile');
+      expect(terms).not.toContain('Runtime');
+      expect(singleCard?.textContent).toContain('OpenCode Go');
+      // Bounded summaries only: no per-row detail, profile, or history lookups.
+      const requested = fetchSpy.mock.calls.slice(baselineCalls).map(([url]) => String(url));
+      expect(requested.filter((url) => !url.startsWith('/api/executions?'))).toEqual([]);
+    });
+
+    it('sorts the current page by recorded display text with stable-ID tie-breaks', async () => {
+      mockListAndFacets([
+        profileRow('wf-1', 'Zulu run', {
+          selectionState: 'recorded',
+          profiles: [{ id: 'acct-z', label: 'Zulu' }],
+          profileCount: 1,
+        }),
+        profileRow('wf-2', 'Alpha run', {
+          selectionState: 'recorded',
+          profiles: [{ id: 'acct-a', label: 'Alpha' }],
+          profileCount: 1,
+        }),
+        profileRow('wf-3', 'Pending run', { selectionState: 'pending', profiles: [], profileCount: 0 }),
+      ]);
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      await screen.findByRole('row', { name: /Zulu run/ });
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: /Provider Profile\. Not sorted\. Activate to sort the current page ascending\./i,
+        }),
+      );
+
+      await waitFor(() => {
+        const titles = Array.from(document.querySelectorAll('tbody tr .workflow-list-row-title')).map(
+          (link) => link.textContent,
+        );
+        expect(titles).toEqual(['Alpha run', 'Zulu run', 'Pending run']);
+      });
+      expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
+      expect(window.location.search).not.toContain('sort=');
+    });
+
+    it('round-trips Provider Profile IDs and states through URL, chips, and detail links', async () => {
+      window.history.pushState(
+        {},
+        'Provider Profile filter',
+        '/workflows?providerProfileIdIn=acct-1&providerProfileStateIn=pending&limit=50',
+      );
+      mockListAndFacets([
+        profileRow('wf-1', 'Profile run', {
+          selectionState: 'recorded',
+          profiles: [{ id: 'acct-1', label: 'OpenAI · Primary' }],
+          profileCount: 1,
+        }),
+      ]);
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      await screen.findByRole('row', { name: /Profile run/ });
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=acct-1&providerProfileStateIn=pending',
+      );
+      expect(window.location.search).toBe(
+        '?providerProfileIdIn=acct-1&providerProfileStateIn=pending&limit=50',
+      );
+      expect(
+        await screen.findByRole('button', { name: 'Provider Profile filter: OpenAI · Primary +1' }),
+      ).toBeTruthy();
+      const detailLink = screen.getAllByRole('link', { name: 'Profile run' })[0];
+      expect(detailLink?.getAttribute('href')).toBe(
+        '/workflows/wf-1?providerProfileIdIn=acct-1&providerProfileStateIn=pending&limit=50&source=temporal',
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Provider Profile filter' }));
+      await waitFor(() => {
+        expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
+      });
+    });
+
+    it('preserves disjoint legacy include/exclude IDs and states while staging either selection', async () => {
+      window.history.pushState({}, '', '/workflows?providerProfileIn=acct-a,acct-extra&providerProfileNotIn=acct-b&providerProfileStateIn=pending&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50');
+      mockListAndFacets([profileRow('wf-mixed', 'Mixed profile run', {
+        selectionState: 'recorded', profiles: [{ id: 'acct-a', label: 'Alpha' }, { id: 'acct-b', label: 'Beta' }],
+      })]);
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      await screen.findByRole('row', { name: /Mixed profile run/ });
+      const expected = '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=acct-a&providerProfileIdIn=acct-extra&providerProfileIdNotIn=acct-b&providerProfileStateIn=pending&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli';
+      expect(lastExecutionListUrl()).toBe(expected);
+      expect(screen.getByRole('button', { name: 'Provider Profile filter: Alpha +2; not (Beta +1)' })).toBeTruthy();
+      const link = screen.getAllByRole('link', { name: 'Mixed profile run' })[0];
+      const context = new URL(link!.getAttribute('href')!, window.location.origin).searchParams;
+      expect(context.getAll('providerProfileIdIn')).toEqual(['acct-a', 'acct-extra']);
+      expect(context.getAll('providerProfileIdNotIn')).toEqual(['acct-b']);
+      openFilterDrawer();
+      const section = screen.getByRole('region', { name: 'Provider Profile filter' });
+      expect(within(section).getByText('Alpha')).toBeTruthy();
+      fireEvent.change(within(section).getByLabelText('Provider Profile filter mode'), { target: { value: 'exclude' } });
+      expect(within(section).getByText('Beta')).toBeTruthy();
+      expect((within(section).getByRole('checkbox', { name: 'Not applicable' }) as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(within(section).getByRole('checkbox', { name: 'Not recorded' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel filters' }));
+      expect(lastExecutionListUrl()).toBe(expected);
+      openFilterDrawer();
+      fireEvent.change(screen.getByLabelText('Provider Profile filter mode'), { target: { value: 'exclude' } });
+      expect((screen.getByRole('checkbox', { name: 'Not recorded' }) as HTMLInputElement).checked).toBe(false);
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Not recorded' }));
+      applyFilterDrawer();
+      await waitFor(() => expect(lastExecutionListUrl()).toContain('providerProfileStateNotIn=not_applicable%2Cnot_recorded'));
+      const applied = new URL(String(lastExecutionListUrl()), window.location.origin).searchParams;
+      expect(applied.getAll('providerProfileIdIn')).toEqual(['acct-a', 'acct-extra']);
+      expect(applied.getAll('providerProfileIdNotIn')).toEqual(['acct-b']);
+      expect(applied.get('providerProfileStateIn')).toBe('pending');
+      expect(applied.get('targetRuntimeIn')).toBe('codex_cli');
+    });
+
+    it('round-trips comma IDs without confusing IDs with state tokens', async () => {
+      window.history.pushState({}, '', '/workflows?providerProfileIdIn=account%2Cprimary&providerProfileIdIn=pending&providerProfileStateNotIn=pending&limit=50');
+      mockListAndFacets([profileRow('wf-comma', 'Comma profile run', {
+        selectionState: 'recorded', profiles: [{ id: 'account,primary', label: 'Primary account' }],
+      })]);
+      const { unmount } = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      await screen.findByRole('row', { name: /Comma profile run/ });
+      const expected = '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=account%2Cprimary&providerProfileIdIn=pending&providerProfileStateNotIn=pending';
+      expect(lastExecutionListUrl()).toBe(expected);
+      const detail = screen.getAllByRole('link', { name: 'Comma profile run' })[0];
+      expect(new URL(detail!.getAttribute('href')!, window.location.origin).searchParams.getAll('providerProfileIdIn')).toEqual(['account,primary', 'pending']);
+      openFilterDrawer();
+      const selected = screen.getByRole('list', { name: 'Selected Provider Profile filters' });
+      expect(within(selected).getByText('Primary account')).toBeTruthy();
+      expect(within(selected).getByText('pending')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel filters' }));
+      unmount();
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      await screen.findByRole('row', { name: /Comma profile run/ });
+      expect(lastExecutionListUrl()).toBe(expected);
+    });
+
+    it.each([
+      ['providerProfileIdIn=account%2Cprimary&providerProfileIdNotIn=account%2Cprimary', 'Provider Profile IDs cannot be both included and excluded.'],
+      ['providerProfileStateIn=pending&providerProfileStateNotIn=pending', 'Provider Profile states cannot be both included and excluded.'],
+    ])('rejects genuinely overlapping profile filters: %s', async (query, message) => {
+      window.history.pushState({}, '', `/workflows?${query}`);
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(executionListCalls()).toHaveLength(0);
+    });
+
+    it('loads one profile facet page per click, preserves prior options on failure, and retries the cursor', async () => {
+      let continuationAttempts = 0;
+      let resolveContinuation: ((response: Response) => void) | undefined;
+      const profileUrls: string[] = [];
+      window.history.pushState({}, '', '/workflows?stateIn=executing&providerProfileIdIn=acct-gone&providerProfileStateNotIn=not_applicable&limit=50');
+      mockListAndFacets([], (url) => {
+        if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false, statusText: 'Unavailable' } as Response);
+        profileUrls.push(url);
+        if (new URL(url, window.location.origin).searchParams.has('nextPageToken')) {
+          continuationAttempts++;
+          if (continuationAttempts === 1) return new Promise<Response>((resolve) => { resolveContinuation = resolve; });
+          return Promise.resolve({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
+            { value: 'acct-first', label: 'First account', count: 2 },
+            { value: 'account,primary', label: 'Later account', count: 1 },
+          ], truncated: true, nextPageToken: 'third-page', source: 'authoritative' }) } as Response);
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
+          { value: 'acct-first', label: 'First account', count: 2 },
+        ], stateItems: [{ value: 'pending', label: 'Pending selection', count: 3 }], truncated: true, nextPageToken: 'second-page', source: 'authoritative' }) } as Response);
+      });
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      openFilterDrawer();
+      const section = screen.getByRole('region', { name: 'Provider Profile filter' });
+      const loadMore = await within(section).findByRole('button', { name: 'Load more Provider Profiles' });
+      expect(profileUrls).toHaveLength(1);
+      expect(within(section).getByRole('option', { name: 'First account' })).toBeTruthy();
+      fireEvent.click(within(section).getByRole('checkbox', { name: 'Pending selection (3)' }));
+      fireEvent.click(loadMore);
+      fireEvent.click(loadMore);
+      await waitFor(() => expect(continuationAttempts).toBe(1));
+      expect((loadMore as HTMLButtonElement).disabled).toBe(true);
+      resolveContinuation!({ ok: false, statusText: 'Service Unavailable' } as Response);
+      expect(await within(section).findByText('More Provider Profile values unavailable. Previously loaded values are still available.')).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'First account' })).toBeTruthy();
+      expect((within(section).getByRole('checkbox', { name: 'Pending selection (3)' }) as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(within(section).getByRole('button', { name: 'Retry loading Provider Profiles' }));
+      expect(await within(section).findByRole('option', { name: 'Later account' })).toBeTruthy();
+      expect(within(section).getAllByRole('option', { name: 'First account' })).toHaveLength(1);
+      expect(profileUrls).toHaveLength(3);
+      for (const url of profileUrls) {
+        const params = new URL(url, window.location.origin).searchParams;
+        expect(params.get('pageSize')).toBe('50');
+        expect(params.get('stateIn')).toBe('executing');
+        for (const key of ['providerProfileIdIn', 'providerProfileIdNotIn', 'providerProfileIn', 'providerProfileNotIn', 'providerProfileStateIn', 'providerProfileStateNotIn', 'providerProfileBlank']) expect(params.has(key)).toBe(false);
+      }
+      expect(new URL(profileUrls[1]!, window.location.origin).searchParams.get('nextPageToken')).toBe('second-page');
+      expect(new URL(profileUrls[2]!, window.location.origin).searchParams.get('nextPageToken')).toBe('second-page');
+      fireEvent.change(within(section).getByLabelText('Provider Profile filter value'), { target: { value: 'account,primary' } });
+      applyFilterDrawer();
+      await waitFor(() => expect(String(lastExecutionListUrl())).toContain('providerProfileIdIn=account%2Cprimary'));
+      const applied = new URL(String(lastExecutionListUrl()), window.location.origin).searchParams;
+      expect(applied.getAll('providerProfileIdIn')).toEqual(['account,primary', 'acct-gone']);
+      expect(applied.get('providerProfileStateIn')).toBe('pending');
+      expect(applied.get('providerProfileStateNotIn')).toBe('not_applicable');
+      expect(profileUrls).toHaveLength(3);
+    });
+
+    it('refreshes only the first facet page after changing and returning to an earlier filter context', async () => {
+      const profileUrls: string[] = [];
+      mockListAndFacets([], (url) => {
+        if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false } as Response);
+        profileUrls.push(url);
+        const continued = new URL(url, window.location.origin).searchParams.has('nextPageToken');
+        return Promise.resolve({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
+          { value: continued ? 'acct-later' : 'acct-first', label: continued ? 'Later account' : 'First account', count: 1 },
+        ], truncated: !continued, nextPageToken: continued ? null : 'page-two', source: 'authoritative' }) } as Response);
+      });
+      const { queryClient } = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      openFilterDrawer();
+      fireEvent.click(await screen.findByRole('button', { name: 'Load more Provider Profiles' }));
+      await screen.findByRole('option', { name: 'Later account' });
+      fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'another/repo' } });
+      applyFilterDrawer();
+      await queryClient.invalidateQueries({ queryKey: ['workflow-list-facet'], refetchType: 'none' });
+      openFilterDrawer();
+      await screen.findByRole('option', { name: 'First account' });
+      fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: '' } });
+      applyFilterDrawer();
+      const previousRequests = profileUrls.length;
+      openFilterDrawer();
+      await waitFor(() => expect(profileUrls.length).toBeGreaterThan(previousRequests));
+      await waitFor(() => expect(screen.queryByText('Loading facet values...')).toBeNull());
+      expect(profileUrls.slice(previousRequests)).toHaveLength(1);
+      expect(profileUrls.filter((url) => url.includes('nextPageToken='))).toHaveLength(1);
+      expect(screen.queryByRole('option', { name: 'Later account' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Load more Provider Profiles' })).toBeTruthy();
+    });
+
+    it('ignores a canceled continuation after a newer filter context opens', async () => {
+      let resolveOldPage: ((response: Response) => void) | undefined;
+      mockListAndFacets([], (url) => {
+        if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false } as Response);
+        const params = new URL(url, window.location.origin).searchParams;
+        if (params.has('nextPageToken')) return new Promise<Response>((resolve) => { resolveOldPage = resolve; });
+        const newer = params.has('repoContains');
+        return Promise.resolve({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
+          { value: newer ? 'acct-new' : 'acct-old', label: newer ? 'New scope account' : 'Original account', count: 1 },
+        ], truncated: !newer, nextPageToken: newer ? null : 'old-page-two', source: 'authoritative' }) } as Response);
+      });
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+      openFilterDrawer();
+      fireEvent.click(await screen.findByRole('button', { name: 'Load more Provider Profiles' }));
+      await waitFor(() => expect(resolveOldPage).toBeDefined());
+      fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'new/repo' } });
+      applyFilterDrawer();
+      openFilterDrawer();
+      await screen.findByRole('option', { name: 'New scope account' });
+      resolveOldPage!({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
+        { value: 'acct-stale', label: 'Stale continuation account', count: 1 },
+      ], nextPageToken: null, source: 'authoritative' }) } as Response);
+      await waitFor(() => expect(screen.queryByText('Loading facet values...')).toBeNull());
+      expect(screen.queryByRole('option', { name: 'Stale continuation account' })).toBeNull();
+      expect(screen.getByRole('option', { name: 'New scope account' })).toBeTruthy();
+    });
+
+    it('keeps the blank shortcut meaning as explicit absence states', async () => {
+      window.history.pushState({}, 'Blank', '/workflows?providerProfileBlank=true&limit=50');
+      mockListAndFacets([]);
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      await waitFor(() => {
+        expect(lastExecutionListUrl()).toBe(
+          '/api/executions?source=temporal&pageSize=50&providerProfileStateIn=pending%2Cnot_recorded%2Cnot_applicable',
+        );
+      });
+      expect(
+        screen.getByRole('button', {
+          name: 'Provider Profile filter: Pending selection +2',
+        }),
+      ).toBeTruthy();
+    });
+
+    it('rejects unknown Provider Profile states before requesting results', async () => {
+      const baselineCalls = executionListCalls().length;
+      window.history.pushState(
+        {},
+        'Bad state',
+        '/workflows?providerProfileStateIn=recorded&limit=50',
+      );
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      expect(
+        await screen.findByText(
+          'providerProfileStateIn accepts only: pending, not_recorded, not_applicable.',
+        ),
+      ).toBeTruthy();
+      expect(executionListCalls().length).toBe(baselineCalls);
+    });
+
+    it('keeps a legacy runtime URL constraint labeled and unchanged beside Provider Profile filters', async () => {
+      window.history.pushState(
+        {},
+        'Legacy runtime',
+        '/workflows?targetRuntimeIn=codex_cli&providerProfileIdIn=acct-1&limit=50',
+      );
+      mockListAndFacets([]);
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      await waitFor(() => {
+        expect(lastExecutionListUrl()).toBe(
+          '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=acct-1&targetRuntimeIn=codex_cli',
+        );
+      });
+      expect(screen.getByRole('button', { name: 'Legacy runtime filter: Codex CLI' })).toBeTruthy();
+      // The runtime value is never relabeled as a Provider Profile ID.
+      expect(screen.getByRole('button', { name: 'Provider Profile filter: acct-1' })).toBeTruthy();
+
+      openFilterDrawer();
+      const legacySection = screen.getByRole('region', { name: 'Legacy runtime filter' });
+      expect(legacySection.textContent).toContain('Codex CLI');
+      fireEvent.click(within(legacySection).getByRole('button', { name: 'Remove legacy runtime constraint' }));
+      applyFilterDrawer();
+
+      await waitFor(() => {
+        expect(lastExecutionListUrl()).toBe(
+          '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=acct-1',
+        );
+      });
+    });
+
+    it.each(['unavailable', 'late-partial'] as const)(
+      'preserves selected IDs and staged states with %s facets',
+      async (facetState) => {
+        let resolveFacet: ((response: Response) => void) | undefined;
+        window.history.pushState({}, 'Selected', '/workflows?providerProfileIdIn=acct-gone&limit=50');
+        mockListAndFacets(
+          [
+            profileRow('wf-1', 'Profile run', {
+              selectionState: 'recorded',
+              profiles: [{ id: 'acct-1', label: 'Primary' }],
+              profileCount: 1,
+            }),
+          ],
+          (url) => {
+            if (facetState === 'late-partial' && url.includes('facet=providerProfile')) {
+              return new Promise<Response>((resolve) => {
+                resolveFacet = resolve;
+              });
+            }
+            return Promise.resolve({
+              ok: false,
+              statusText: 'Service Unavailable',
+              json: async () => ({ detail: { code: 'temporal_unavailable' } }),
+            } as Response);
+          },
+        );
+
+        renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+        await screen.findByRole('row', { name: /Profile run/ });
+        openFilterDrawer();
+        fireEvent.click(screen.getByRole('checkbox', { name: /Pending selection/ }));
+
+        const section = screen.getByRole('region', { name: 'Provider Profile filter' });
+        if (facetState === 'late-partial') {
+          await waitFor(() => expect(resolveFacet).toBeDefined());
+          resolveFacet!({
+            ok: true,
+            json: async () => ({
+              facet: 'providerProfile', items: [], stateItems: [], blankCount: 0,
+              source: 'authoritative', countMode: 'exact', truncated: true, nextPageToken: 'more',
+            }),
+          } as Response);
+          expect(await within(section).findByText('Facet values truncated by the server.')).toBeTruthy();
+        } else {
+          expect(
+            await within(section).findByText('Facet values unavailable. Showing current page values only.'),
+          ).toBeTruthy();
+        }
+        // Partial facets must not trigger browser enumeration of remaining pages.
+        expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('nextPageToken='))).toBe(false);
+        const selected = within(section).getByRole('list', { name: 'Selected Provider Profile filters' });
+        expect(within(selected).getByText('acct-gone')).toBeTruthy();
+        expect(within(section).getByRole('option', { name: 'Primary' })).toBeTruthy();
+        expect((screen.getByRole('checkbox', { name: /Pending selection/ }) as HTMLInputElement).checked).toBe(
+          true,
+        );
+        applyFilterDrawer();
+
+        await waitFor(() => {
+          expect(lastExecutionListUrl()).toBe(
+            '/api/executions?source=temporal&pageSize=50&providerProfileIdIn=acct-gone&providerProfileStateIn=pending',
+          );
+        });
+      },
+    );
+
+    it('shows facet values with ID disambiguation and state counts from the server', async () => {
+      window.history.pushState({}, 'Facet', '/workflows?stateIn=executing&providerProfileIdIn=acct-1&limit=50');
+      const facetUrls: string[] = [];
+      mockListAndFacets([], (url) => {
+        facetUrls.push(url);
+        if (!url.includes('facet=providerProfile')) {
+          return Promise.resolve({ ok: false, statusText: 'nope', json: async () => ({}) } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            facet: 'providerProfile',
+            items: [
+              { value: 'acct-1', label: 'Work', count: 5 },
+              { value: 'acct-2', label: 'Work', count: 3 },
+              { value: 'acct-retired', label: 'acct-retired', count: 1 },
+            ],
+            stateItems: [
+              { value: 'pending', label: 'Pending selection', count: 2 },
+              { value: 'not_recorded', label: 'Not recorded', count: 4 },
+              { value: 'not_applicable', label: 'Not applicable', count: 0 },
+            ],
+            blankCount: 6,
+            countMode: 'exact',
+            truncated: false,
+            source: 'authoritative',
+          }),
+        } as Response);
+      });
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      openFilterDrawer();
+      const section = await screen.findByRole('region', { name: 'Provider Profile filter' });
+      expect(await within(section).findByRole('option', { name: 'Work · acct-2' })).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'acct-retired' })).toBeTruthy();
+      expect(within(section).getByText('Work · acct-1')).toBeTruthy();
+      expect(within(section).getByRole('checkbox', { name: 'Not recorded (4)' })).toBeTruthy();
+      const profileFacetUrl = facetUrls.find((url) => url.includes('facet=providerProfile')) || '';
+      expect(profileFacetUrl).toContain('stateIn=executing');
+      expect(profileFacetUrl).not.toContain('providerProfileIdIn');
+    });
+
+    it('carries a saved Runtime column preference to the Provider Profile column', async () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: DASHBOARD_PREFERENCES_VERSION,
+          preferences: { workflowListColumnVisibility: { targetRuntime: false } },
+        }),
+      );
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      await screen.findAllByText('Example task');
+      expect(screen.queryByRole('columnheader', { name: /Provider Profile/i })).toBeNull();
+      expect(screen.getByRole('columnheader', { name: /Updated/i })).toBeTruthy();
+    });
   });
 });
 

@@ -41,7 +41,7 @@ export const TOGGLEABLE_WORKFLOW_LIST_COLUMNS = [
   'status',
   'progress',
   'repository',
-  'targetRuntime',
+  'providerProfile',
   'updatedAt',
 ] as const;
 
@@ -110,7 +110,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
     status: true,
     progress: true,
     repository: true,
-    targetRuntime: true,
+    providerProfile: true,
     updatedAt: true,
   },
   workflowListDefaultStatuses: [],
@@ -148,6 +148,13 @@ function sanitizeColumnVisibility(
     if (typeof candidate === 'boolean') {
       base[column] = candidate;
     }
+  }
+  // MoonLadderStudios/MoonMind#4640: Provider Profile replaced the Runtime
+  // column, so a stored Runtime visibility choice carries over until the
+  // preference is saved again. Only visibility migrates; saved runtime query
+  // filters keep their own meaning.
+  if (typeof value.providerProfile !== 'boolean' && typeof value.targetRuntime === 'boolean') {
+    base.providerProfile = value.targetRuntime;
   }
   return base;
 }

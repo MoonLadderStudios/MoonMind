@@ -85,12 +85,20 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
 ):
     client = await resolver_test_client(
         additional_search_attributes={
-            name: (
-                IndexedValueType.INDEXED_VALUE_TYPE_DATETIME
-                if name == "mm_updated_at"
-                else IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST
-            )
-            for name in ("mm_target_runtime", "mm_target_skill", "mm_title", "mm_updated_at")
+            **{
+                name: (
+                    IndexedValueType.INDEXED_VALUE_TYPE_DATETIME
+                    if name == "mm_updated_at"
+                    else IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST
+                )
+                for name in (
+                    "mm_target_runtime",
+                    "mm_target_skill",
+                    "mm_title",
+                    "mm_updated_at",
+                )
+            },
+            "mm_provider_profile": IndexedValueType.INDEXED_VALUE_TYPE_TEXT,
         }
     )
     owner = str(uuid4())
