@@ -503,6 +503,20 @@ async def test_missing_ci_wait_is_bounded_after_fresh_producer_and_consumer_upgr
         "resolve_github_token",
         AsyncMock(return_value=("fixture-only", None)),
     )
+    # The gate reads with its owning run's admitted connection. This retained
+    # history predates a recorded connection, so model the deployment default
+    # that owns the fixture token instead of consulting repository state.
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_admitted_repository_access",
+        AsyncMock(return_value=("", False)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-only")
 
     @activity.defn(name="merge_automation.evaluate_readiness")
     async def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
