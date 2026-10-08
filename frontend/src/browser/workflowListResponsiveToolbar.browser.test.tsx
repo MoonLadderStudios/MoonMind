@@ -310,6 +310,7 @@ describe('workflow list recorded Provider Profile', () => {
       name: 'Provider Profile filter. No filter applied.',
     });
     filterButton.focus();
+    await waitFor(() => expect(document.activeElement).toBe(filterButton));
     await userEvent.keyboard('{Enter}');
     const popover = await screen.findByRole('dialog', { name: 'Provider Profile filter' });
     await waitFor(() => expect(popover.contains(document.activeElement)).toBe(true));
