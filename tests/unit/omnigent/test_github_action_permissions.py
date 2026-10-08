@@ -52,6 +52,7 @@ async def run_request(
     patches = {
         "run-agent-required-capabilities-propagation-v1",
         "run-resolved-skill-required-capabilities-v1",
+        "run-execution-fanout-authorization-v1",
     }
     if enabled:
         patches.add(PATCH)
@@ -174,6 +175,10 @@ async def test_resolved_skill_accepts_exact_operations(
             "publishMode": "none" if skill_name.startswith("batch-") else "auto"
         },
         skill_payload={"inputs": {"finishMode": finish}} if finish else {},
+    )
+    assert (
+        OmnigentProfileBoundExecutionCoordinator._repository_mutation_required(built)
+        is (operations != ("read",))
     )
     connection = github_pat_connection(
         DEFAULT_GIT_CONNECTION_REF, "ACTION_PAT"

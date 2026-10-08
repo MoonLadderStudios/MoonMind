@@ -1431,44 +1431,59 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             return reservation
 
+    @staticmethod
+    def _verify_recovery_projection_owner(
+        metadata: Mapping[str, Any], expected: Mapping[str, Any] | None
+    ) -> None:
+        """Fence recovery writes by the already-reserved credential delivery."""
+        current = metadata.get("githubProjectionReservation")
+        if current is not None or expected is not None:
+            if not isinstance(expected, Mapping) or dict(expected) != current:
+                raise OmnigentIdempotencyError(
+                    "credential recovery reservation owner changed"
+                )
+
     async def record_host_credential_recovery(
-        self, *, request: AgentExecutionRequest, host_lease_ref: str,
-        phase: str, checkpoint: Mapping[str, Any] | None = None,
+        self,
+        *,
+        request: AgentExecutionRequest,
+        host_lease_ref: str,
+        phase: str,
+        checkpoint: Mapping[str, Any] | None = None,
         terminal_ref: str | None = None,
         retained_cpu_limit: Mapping[str, Any] | None = None,
         source_container_id: str | None = None,
+        expected_projection_reservation: Mapping[str, Any] | None = None,
+        replacement_egress_pending: bool = False,
     ) -> dict[str, Any]:
         """Keep credential replacement under the existing bridge and lease fence.
 
         The host row lock serializes preservation with the cleanup CAS. A save
         is an immutable receipt, never permission to restore over current work.
         """
-        from api_service.db.models import OmnigentOAuthHostLeaseRecord
         from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
-        from moonmind.omnigent.oauth_hosts import HEARTBEAT_HOST_STATES
 
         if phase not in {"waiting", "saved", "recreated", "completed"}:
             raise ValueError("unsupported host credential recovery phase")
         async with self._session_factory() as session:
-            lease = (await session.execute(
-                select(OmnigentOAuthHostLeaseRecord)
-                .where(OmnigentOAuthHostLeaseRecord.lease_id == host_lease_ref)
-                .with_for_update()
-            )).scalar_one_or_none()
-            row = (await session.execute(
-                select(OmnigentBridgeSession)
-                .where(OmnigentBridgeSession.idempotency_key == request.idempotency_key)
-                .with_for_update()
-            )).scalar_one_or_none()
-            if row is None:
-                raise OmnigentIdempotencyError("credential recovery bridge is unavailable")
-            if (lease is None or lease.status not in HEARTBEAT_HOST_STATES
-                    or row.host_lease_ref != host_lease_ref
-                    or row.provider_lease_id != lease.provider_lease_id
-                    or row.credential_generation != lease.credential_generation):
-                raise OmnigentIdempotencyError("credential recovery lease authority changed")
+            lease, row = await self._locked_github_projection_owner(
+                session,
+                request=request,
+                host_lease_ref=host_lease_ref,
+            )
             metadata = dict(row.metadata_ or {})
+            self._verify_recovery_projection_owner(
+                metadata, expected_projection_reservation
+            )
             previous = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
+            phases = {"waiting": 0, "saved": 1, "recreated": 2, "completed": 3}
+            if previous and (
+                previous.get("phase") not in phases
+                or phases[phase] < phases[previous["phase"]]
+            ):
+                raise OmnigentIdempotencyError(
+                    "credential recovery progress cannot move backward"
+                )
             if previous and (
                 previous.get("hostLeaseRef") != host_lease_ref
                 or previous.get("credentialGeneration") != lease.credential_generation
@@ -1478,13 +1493,25 @@ class OmnigentBridgeSessionStore:
                 or previous.get("omnigentHostId") not in {None, row.omnigent_host_id}
             ):
                 raise OmnigentIdempotencyError("preserved host authority changed")
-            if previous and previous.get("phase") == "completed":
-                raise OmnigentIdempotencyError("credential recovery already settled")
             checkpoint_fields = {
                 "kind", "baseCommit", "headCommit", "archiveRef", "archiveDigest",
                 "manifestRef", "manifestDigest", "workspaceDigest",
                 "workspaceIdentityDigest", "createdAt", "checkpointRef",
             }
+            if previous and previous.get("phase") == "completed":
+                if (
+                    phase == "completed"
+                    and checkpoint is not None
+                    and {
+                        key: checkpoint[key]
+                        for key in checkpoint_fields
+                        if key in checkpoint
+                    }
+                    == previous.get("checkpoint")
+                    and terminal_ref == previous.get("terminalRef")
+                ):
+                    return dict(previous)
+                raise OmnigentIdempotencyError("credential recovery already settled")
             receipt = {
                 "schemaVersion": 1, "hostLeaseRef": host_lease_ref,
                 "credentialGeneration": lease.credential_generation,
@@ -1534,7 +1561,14 @@ class OmnigentBridgeSessionStore:
                 receipt["checkpoint"] = {key: saved_checkpoint[key] for key in checkpoint_fields if key in saved_checkpoint}
             if phase in {"saved", "recreated", "completed"} and not receipt.get("checkpoint"):
                 raise OmnigentIdempotencyError("credential recovery requires saved current work")
-            if phase == "saved":
+            if type(replacement_egress_pending) is not bool or (
+                replacement_egress_pending
+                and (phase not in {"saved", "recreated"} or checkpoint is None)
+            ):
+                raise OmnigentIdempotencyError(
+                    "replacement requires a current stopped-host save"
+                )
+            if phase == "saved" or replacement_egress_pending:
                 receipt["replacementEgressPending"] = True
             if phase == "completed":
                 if checkpoint is None or not terminal_ref:
@@ -1557,8 +1591,10 @@ class OmnigentBridgeSessionStore:
         launch_evidence_ref: str,
         phase: str = "attested",
         replaces_launch_evidence_ref: str | None = None,
+        expected_projection_reservation: Mapping[str, Any] | None = None,
     ) -> OmnigentBridgeSession:
         """Persist or monotonically attest authority required by a later janitor."""
+        from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
 
         safe_evidence = redact_sensitive_payload(dict(egress_evidence))
         if not isinstance(safe_evidence, dict):
@@ -1606,18 +1642,23 @@ class OmnigentBridgeSessionStore:
                 },
             }
             metadata = dict(row.metadata_ or {})
+
+            if metadata.get(HOST_CREDENTIAL_RECOVERY_KEY):
+                self._verify_recovery_projection_owner(
+                    metadata, expected_projection_reservation
+                )
             existing = metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
             if replaces_launch_evidence_ref is not None:
-                from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
                 recovery = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
                 if not (
                     isinstance(existing, dict)
-                    and existing.get("launchEvidenceRef") == replaces_launch_evidence_ref
+                    and existing.get("launchEvidenceRef")
+                    == replaces_launch_evidence_ref
                     and existing.get("hostLeaseRef") == host_lease_ref
                     and existing.get("effectiveLaunchRef") == effective_launch_ref
                     and recovery.get("ownerIdempotencyKey") == request.idempotency_key
                     and recovery.get("hostLeaseRef") == host_lease_ref
-                    and recovery.get("phase") == "saved"
+                    and recovery.get("phase") in {"saved", "recreated"}
                     and recovery.get("replacementEgressPending") is True
                     and recovery.get("checkpoint")
                     and phase == "launched"
@@ -1671,10 +1712,12 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "bridge session has malformed egress cleanup authority"
                 )
-            from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
             recovery = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
-            if (phase == "launched" and recovery.get("phase") == "saved"
-                    and recovery.get("replacementEgressPending") is True):
+            if (
+                phase == "launched"
+                and recovery.get("phase") in {"saved", "recreated"}
+                and recovery.get("replacementEgressPending") is True
+            ):
                 metadata[HOST_CREDENTIAL_RECOVERY_KEY] = {
                     **recovery, "replacementEgressPending": False, "phase": "recreated",
                 }
