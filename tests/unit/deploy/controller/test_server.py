@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 from wsgiref.simple_server import make_server
 
+import pytest
 from conftest import load
 
 
@@ -527,6 +528,8 @@ def _verification_runner(engine, ps_state="running"):
 
         def run(self, args, timeout_seconds):
             self.commands.append(tuple(args))
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
             if "ps" in args:
                 return {
                     "exit": 0,
@@ -535,6 +538,165 @@ def _verification_runner(engine, ps_state="running"):
             return {"exit": 0, "output": "ok"}
 
     return _Runner()
+
+
+def test_journal_preparation_uses_installed_source_for_rollback_and_restart(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "projectDir": str(tmp_path),
+              "composeFiles": ["docker-compose.yaml"],
+              "services": ["temporal-worker-agent-runtime", "temporal-worker-artifacts"]}
+    op = _begin_op(record, store, target)
+    calls = []
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": "writer\nsweeper"}
+            assert args[:2] == ("docker", "inspect")
+            return {"exit": 0, "output": json.dumps([
+                {"Image": "sha256:installed-new", "Config": {"Env": [], "Labels": {
+                    "com.docker.compose.project": target["project"],
+                    "com.docker.compose.service": name}}}
+                for name in target["services"]
+            ])}
+
+    def helper(store, operation, **kwargs):
+        calls.append((kwargs["helper_image"], kwargs["phase"]))
+        assert store.load(op["operationId"])["journalTransition"]["sourceImages"] == ["sha256:installed-new"]
+        return {"status": "prepared", "compacted": 1}
+
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    server.prepare_controller_journals(store, op, runner=Runner(), overlay="overlay")
+
+    class UnavailableRunner:
+        def run(self, *args, **kwargs):
+            pytest.fail("restart must retain source image after partial recreation")
+
+    server.prepare_controller_journals(store, op, runner=UnavailableRunner(), overlay="overlay")
+    assert calls == [("sha256:installed-new", "journal-prepare")] * 2
+
+
+def test_journal_preparation_falls_back_to_capable_staged_target(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test"})
+    store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:old"]})
+    images = []
+
+    def helper(store, operation, **kwargs):
+        images.append(kwargs["helper_image"])
+        return {"status": "unsupported" if len(images) == 1 else "prepared"}
+
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    server.prepare_controller_journals(store, op, runner=None, overlay="overlay")
+    assert images == ["sha256:old", op["desired"]["image"]]
+
+
+def test_subsequent_rollback_retains_bootstrapped_application_helper(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test"})
+    store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:old"]})
+    (store.state_dir / "controller-image.json").write_text(json.dumps({
+        "pinned": "sha256:controller-app-source", "verified": True,
+    }))
+
+    def helper(store, operation, **kwargs):
+        return {"status": "prepared" if kwargs["helper_image"] == "sha256:controller-app-source" else "unsupported"}
+
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    result = server.prepare_controller_journals(store, op, runner=None, overlay="overlay")
+    assert result["status"] == "prepared"
+    assert store.load(op["operationId"])["journalTransition"]["helperImage"] == "sha256:controller-app-source"
+
+
+def test_partial_recreation_requiesces_and_recompacts_before_retry(
+    controller_path, tmp_path, monkeypatch
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    services = ["temporal-worker-agent-runtime", "temporal-worker-artifacts", "postgres", "minio"]
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"],
+        "services": services})
+    store.record_journal_transition(op["operationId"], {"sourceImages": ["sha256:source"]})
+    phases = []
+    attempts = 0
+    storage_running = False
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            nonlocal attempts, storage_running
+            if "pull" in args:
+                phases.append("pull")
+            if "up" in args:
+                if "--no-recreate" in args:
+                    assert args[-2:] == ("postgres", "minio")
+                    storage_running = True
+                    phases.append("storage")
+                    return {"exit": 0, "output": ""}
+                assert phases[-1] == "journal-prepare"
+                phases.append("up")
+                attempts += 1
+                if attempts == 1:
+                    return {"exit": 1, "output": "only writer recreated"}
+            if "ps" in args:
+                return {"exit": 0, "output": json.dumps([
+                    {"Service": name, "State": "running"} for name in services])}
+            return {"exit": 0, "output": ""}
+
+    def helper(store, operation, **kwargs):
+        assert storage_running
+        assert kwargs["helper_image"] == "sha256:source"
+        phases.append(kwargs["phase"])
+        return {"status": "prepared" if kwargs["phase"] == "journal-prepare" else "quiesced"}
+
+    monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
+    monkeypatch.setattr(server, "run_omnigent_step", helper)
+    result = server._apply_with_bounded_retries(store, op["operationId"],
+        lambda operation: server.production_apply(store, operation))
+    assert result["status"] == "succeeded"
+    assert phases == ["pull", "storage", "journal-prepare", "up", "journal-quiesce",
+                      "pull", "storage", "journal-prepare", "up"]
+    assert "only writer recreated" in result["attempts"][0]["error"]
+
+
+def test_journal_oneoff_runs_recorded_source_with_controller_transport(
+    controller_path, tmp_path
+):
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    op = _begin_op(record, store, {"project": "moonmind-test",
+        "projectDir": str(tmp_path), "composeFiles": ["docker-compose.yaml"]})
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            assert "--no-deps" in args
+            assert args[args.index("--pull") + 1] == "never"
+            overlay = [args[i + 1] for i, arg in enumerate(args) if arg == "-f"][-1]
+            helper = json.loads(Path(overlay).read_text())["services"][server.LEGACY_CONTROL_SERVICE]
+            assert helper["image"] == "sha256:recorded-source"
+            assert helper["environment"]["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+            assert args[-2] == "journal-prepare"
+            assert "controller_journal_cli" in args[-3]
+            return {"exit": 0, "output": "MOONMIND_OMNIGENT_RESULT={\"status\":\"prepared\"}"}
+
+    assert server.run_omnigent_step(store, op, runner=Runner(), overlay="overlay",
+        phase="journal-prepare", helper_image="sha256:recorded-source") == {"status": "prepared"}
 
 
 def _begin_op(record, store, target):
@@ -598,6 +760,8 @@ def test_production_apply_accepts_completed_one_shot_services(
 
     class _Runner:
         def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
             if "ps" in args:
                 rows = [{"Service": "api", "State": "running"}]
                 if "--all" in args:  # Compose hides exited containers otherwise.
@@ -637,6 +801,8 @@ def test_production_apply_still_fails_a_one_shot_that_exited_non_zero(
 
     class _Runner:
         def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
             if "ps" in args:
                 rows = [
                     {"Service": "api", "State": "running"},
@@ -748,6 +914,7 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["operationId"] == op["operationId"]
                 assert payload["target"] == target
                 assert payload["moonmindImage"] == op["desired"]["image"]
+                assert payload["controllerCapabilities"] == ["active-journal-transition"]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
                     phase.append("select")

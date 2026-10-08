@@ -744,6 +744,18 @@ Terminal event-index rows point to the complete normalized journal in the same
 transaction that publishes terminal status, so expired chunks can be reclaimed
 without invalidating the terminal payload locators.
 
+Deployment transitions stop the observed journal writers and retention workers
+through the existing deployment owner, then compact any sealed history once
+into the full JSONL prefix understood by older readers. The bridge store keeps
+the old chunks until the complete pair and current-attempt index locators commit
+atomically; it does not terminalize the provider turn or change dispatch intent.
+Raw frames and event order/provenance survive unchanged. The compacted normalized
+stream restores the original provider `artifactRef` projection from `artifactRefs`,
+so a legacy decoder cannot resurrect transient chunk locators. Lost acknowledgments
+reuse completed compaction uploads and reconcile current refs before repeating.
+The update and rollback sequence is owned by
+[Docker Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services).
+
 Current canonical refs, the chunk history of a non-terminal bridge session,
 operator pins and live artifact use claims remain protected; a non-terminal
 session's journal survives ordinary expiry. The artifact service records

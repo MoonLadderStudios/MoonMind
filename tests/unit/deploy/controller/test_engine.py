@@ -5,9 +5,8 @@ with `up -d --pull never --no-build --remove-orphans --wait` under bounded
 timeouts. Full `down` and force-recreate are explicit repair operations only,
 never automatic escalation. No volume/image pruning.
 """
-from conftest import load
-
 import pytest
+from conftest import load
 
 
 class FakeRunner:
@@ -21,6 +20,66 @@ class FakeRunner:
             if key in args:
                 raise failure
         return {"exit": 0, "output": "ok"}
+
+
+def test_apply_prepares_journals_after_staging_before_any_recreation(controller_path):
+    engine = load("engine")
+    runner = FakeRunner()
+    seen = []
+
+    def prepare():
+        assert "pull" in runner.commands[-1][0]
+        assert not any("up" in command for command, _ in runner.commands)
+        seen.append("prepared")
+
+    engine.apply(
+        runner,
+        project="moonmind-test",
+        project_dir="/srv/moonmind",
+        compose_files=("docker-compose.yaml",),
+        services=("api",),
+        images=("image",),
+        before_compose=prepare,
+    )
+    assert seen == ["prepared"]
+    assert "up" in runner.commands[-1][0]
+
+
+def test_failed_journal_preparation_never_recreates_consumers(controller_path):
+    engine = load("engine")
+    runner = FakeRunner()
+
+    def prepare():
+        raise RuntimeError("journal readers still running")
+
+    with pytest.raises(RuntimeError, match="journal readers"):
+        engine.apply(
+            runner,
+            project="moonmind-test",
+            project_dir="/srv/moonmind",
+            compose_files=("docker-compose.yaml",),
+            services=("api",),
+            images=("image",),
+            before_compose=prepare,
+        )
+    assert not any("up" in command for command, _ in runner.commands)
+
+
+def test_journal_storage_prepass_starts_only_selected_storage_without_recreation(controller_path):
+    engine = load("engine")
+    runner = FakeRunner()
+    base = ("docker", "compose", "--project-name", "moonmind-test")
+    engine.ensure_journal_storage(runner, base, ("api", "postgres", "minio", "worker"))
+    assert len(runner.commands) == 1
+    args, timeout = runner.commands[0]
+    assert args[:len(base)] == base
+    assert args[-2:] == ("postgres", "minio")
+    assert "--no-recreate" in args and "--no-deps" in args
+    assert "--wait" in args and timeout <= 900
+    assert args[args.index("--pull") + 1] == "never"
+    runner.commands.clear()
+    engine.ensure_journal_storage(runner, base, ("api", "external-db-worker"))
+    assert runner.commands == []
 
 
 def test_apply_names_the_target_checkout_compose_files(controller_path):
