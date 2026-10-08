@@ -10,6 +10,10 @@ from pathlib import Path
 
 import pytest
 
+# These journeys launch the real CLI/collectors; keep their complete coverage
+# in the existing slow owner rather than the pure-Python fast shard.
+pytestmark = pytest.mark.slow
+
 ROOT = Path(__file__).resolve().parents[2]
 HEAD = "a" * 40
 

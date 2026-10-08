@@ -234,7 +234,14 @@ INTEGRATION_CI_PREFIXES = (
 
 INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
 
-UNIT_SLOW_PREFIXES = ("tests/unit/api/routers/test_agent_runs.py",)
+UNIT_SLOW_PREFIXES = (
+    "tests/unit/api/routers/test_agent_runs.py",
+    # The resolver's subprocess journeys retain their existing required owner
+    # on direct test/helper changes as well as on full-backend runs.
+    "tests/unit/test_pr_resolver_wait_polling.py",
+    ".agents/skills/pr-resolver/",
+    ".agents/skills/fix-comments/",
+)
 
 RELIABILITY_JOURNEY_EXACT = {
     "api_service/main.py",
