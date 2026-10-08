@@ -97,7 +97,11 @@ from moonmind.schemas.workflow_recovery_models import (
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
-from moonmind.config.settings import settings
+from moonmind.config.settings import (
+    FeatureFlagsSettings,
+    TemporalDashboardSettings,
+    settings,
+)
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
@@ -18954,7 +18958,7 @@ def test_saved_work_publication_uses_the_existing_rollout_admission(
 @pytest.mark.parametrize(
     ("flags", "submit_enabled", "reason"),
     [
-        # The shipped default: the rollout gate is off and stays off.
+        # An operator who turns the rollout gate off keeps it off.
         (
             {"publication_recovery_enabled": False},
             True,
@@ -19011,6 +19015,49 @@ def test_saved_work_publication_availability_is_projected_from_the_rollout_polic
     detail_body = published.json()["detail"]
     assert detail_body.get("reason", detail_body.get("code")) == reason
     adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_is_available_on_a_default_installation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4003: publication-only recovery of saved work
+    works with shipped defaults, without a hidden rollout flag."""
+
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    # Shipped field defaults, independent of this process's environment.
+    monkeypatch.setattr(
+        settings, "temporal_dashboard", TemporalDashboardSettings.model_construct()
+    )
+    monkeypatch.setattr(
+        settings, "feature_flags", FeatureFlagsSettings.model_construct()
+    )
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+        published = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is True
+    assert "canPublishSavedWork" not in actions["disabledReasons"]
+    assert actions["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "draft_pr", "branch"]
+    }
+    assert published.status_code == 201, published.json()
+    assert published.json()["rolloutGeneration"] != "disabled"
+    adapter.start_workflow.assert_awaited_once()
+    assert (
+        adapter.start_workflow.await_args.kwargs["memo"][
+            "publication_recovery_generation"
+        ]
+        != "disabled"
+    )
 
 
 def test_saved_work_publication_availability_survives_an_invalid_rollout_setting(
