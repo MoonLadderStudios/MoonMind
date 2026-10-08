@@ -424,6 +424,13 @@ def build_resolver_run_request(
     if review_loop_enabled:
         args["reviewProvider"] = parsed_review_loop.provider
         args["requireFreshReview"] = True
+    else:
+        # The gate owns review effects and rejects a child's review request
+        # when it runs no loop. Say so explicitly: without these inputs the
+        # child infers a review requirement from repository or task prose and
+        # waits on every pass for a review nobody will request.
+        args["reviewProvider"] = "none"
+        args["requireFreshReview"] = False
     title = f"Resolve PR #{pr.number}"
     runtime_payload: dict[str, Any] = {"mode": target_runtime}
     if provider_profile:
@@ -466,7 +473,13 @@ def build_resolver_run_request(
                     "--require-fresh-review to every pr_resolve_finalize.py "
                     "invocation, and never post the review request yourself."
                     if review_loop_enabled
-                    else ""
+                    else " This merge automation runs no automated review loop, "
+                    "and its gate owns review requirements: pass --review-provider "
+                    "none and --no-require-fresh-review to every "
+                    "pr_resolve_finalize.py and pr_resolve_orchestrate.py "
+                    "invocation, and do not request or wait for an automated "
+                    "review. Repository or task guidance about an owning review "
+                    "refers to this gate's policy."
                 )
                 + (
                     " Return external CI/provider waits to this durable parent: "

@@ -97,7 +97,11 @@ from moonmind.schemas.workflow_recovery_models import (
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
-from moonmind.config.settings import settings
+from moonmind.config.settings import (
+    FeatureFlagsSettings,
+    TemporalDashboardSettings,
+    settings,
+)
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
@@ -18954,7 +18958,7 @@ def test_saved_work_publication_uses_the_existing_rollout_admission(
 @pytest.mark.parametrize(
     ("flags", "submit_enabled", "reason"),
     [
-        # The shipped default: the rollout gate is off and stays off.
+        # An operator who turns the rollout gate off keeps it off.
         (
             {"publication_recovery_enabled": False},
             True,
@@ -19011,6 +19015,49 @@ def test_saved_work_publication_availability_is_projected_from_the_rollout_polic
     detail_body = published.json()["detail"]
     assert detail_body.get("reason", detail_body.get("code")) == reason
     adapter.start_workflow.assert_not_awaited()
+
+
+def test_saved_work_publication_is_available_on_a_default_installation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4003: publication-only recovery of saved work
+    works with shipped defaults, without a hidden rollout flag."""
+
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, _SavedWorkArtifacts())
+    _override_temporal_client(app)
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    # Shipped field defaults, independent of this process's environment.
+    monkeypatch.setattr(
+        settings, "temporal_dashboard", TemporalDashboardSettings.model_construct()
+    )
+    monkeypatch.setattr(
+        settings, "feature_flags", FeatureFlagsSettings.model_construct()
+    )
+
+    with TestClient(app) as test_client:
+        detail = test_client.get("/api/executions/mm:wf-1")
+        published = test_client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
+
+    assert detail.status_code == 200, detail.json()
+    actions = detail.json()["actions"]
+    assert actions["canPublishSavedWork"] is True
+    assert "canPublishSavedWork" not in actions["disabledReasons"]
+    assert actions["actionEvidence"]["publishSavedWork"] == {
+        "allowedModes": ["pr", "draft_pr", "branch"]
+    }
+    assert published.status_code == 201, published.json()
+    assert published.json()["rolloutGeneration"] != "disabled"
+    adapter.start_workflow.assert_awaited_once()
+    assert (
+        adapter.start_workflow.await_args.kwargs["memo"][
+            "publication_recovery_generation"
+        ]
+        != "disabled"
+    )
 
 
 def test_saved_work_publication_availability_survives_an_invalid_rollout_setting(
@@ -21560,6 +21607,32 @@ def test_list_row_reports_not_recorded_for_historical_rows_4640() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "memo",
+    [
+        {},
+        {"providerProfile": None},
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [],
+                "profileCount": 1,
+            }
+        },
+    ],
+)
+def test_list_row_reports_unavailable_for_indexed_but_unusable_projection(memo) -> None:
+    record = _build_execution_record()
+    record.memo = memo
+    record.search_attributes["mm_provider_profile"] = "ppstrecorded"
+
+    payload = _serialize_execution_list_item(record).model_dump(
+        by_alias=True, mode="json"
+    )
+
+    assert payload["providerProfile"] is None
+
+
 def test_list_query_applies_provider_profile_membership_before_pagination_4640() -> None:
     from moonmind.workflows.executions.provider_profile_projection import (
         provider_profile_id_token,
@@ -21849,6 +21922,87 @@ def test_provider_profile_facets_report_old_incomplete_projection_4640() -> None
     assert response.status_code == 200
     assert response.json()["truncated"] is True
     assert response.json()["items"][0]["value"] == "known"
+
+
+@pytest.mark.parametrize(
+    "memo",
+    [
+        {},
+        {"providerProfile": None},
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [],
+                "profileCount": 0,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "invalid",
+                "profiles": [{"id": "known"}],
+                "profileCount": 1,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [{"id": "known"}, {}],
+                "profileCount": 2,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [{"id": "known"}],
+                "profileCount": None,
+            }
+        },
+    ],
+)
+def test_provider_profile_facets_keep_malformed_coverage_incomplete_across_pages(
+    memo,
+) -> None:
+    first = SimpleNamespace(
+        memo=AsyncMock(return_value=memo),
+        search_attributes={"mm_provider_profile": ["ppstrecorded"]},
+    )
+    last = SimpleNamespace(
+        memo=AsyncMock(
+            return_value={
+                "providerProfile": {
+                    "selectionState": "recorded",
+                    "profiles": [{"id": "last"}],
+                    "profileCount": 1,
+                }
+            }
+        )
+    )
+    temporal_client = _provider_profile_temporal_client()
+    temporal_client.list_workflows.side_effect = lambda **kwargs: SimpleNamespace(
+        current_page=[last] if kwargs["next_page_token"] else [first],
+        next_page_token=None if kwargs["next_page_token"] else b"last-page",
+        fetch_next_page=AsyncMock(),
+    )
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        params = {"source": "temporal", "facet": "providerProfile", "pageSize": 1}
+        response = test_client.get("/api/executions/facets", params=params)
+        assert response.status_code == 200, response.text
+        first_body = response.json()
+        assert first_body["truncated"] is True
+        if (memo.get("providerProfile") or {}).get("profiles"):
+            assert [item["value"] for item in first_body["items"]] == ["known"]
+        params["nextPageToken"] = first_body["nextPageToken"]
+        response = test_client.get("/api/executions/facets", params=params)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["truncated"] is True
+        assert body["nextPageToken"] is None
+        assert [item["value"] for item in body["items"]] == ["last"]
+        assert [item["value"] for item in body["stateItems"]] == [
+            "pending",
+            "not_recorded",
+            "not_applicable",
+        ]
 
 
 @pytest.mark.parametrize(

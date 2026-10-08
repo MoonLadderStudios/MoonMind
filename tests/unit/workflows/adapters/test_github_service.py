@@ -1322,6 +1322,7 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert isinstance(result, PullRequestReadinessResult)
     assert result.ready is False
     assert result.checks_complete is False
+    assert result.checks_reported is True
     assert result.blockers[0]["kind"] == "checks_running"
 
 
@@ -1399,6 +1400,7 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
         )
 
     assert result.checks_complete is None
+    assert result.checks_reported is None
     assert result.blockers[0]["kind"] == "readiness_evidence_unavailable"
     assert result.blockers[0]["missingPermission"] == "Checks: read"
 
@@ -1654,6 +1656,67 @@ async def test_durable_readiness_uses_branch_policy_for_current_head_statuses(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "statuses,expected_ready",
+    [
+        # Nothing has reported for the head yet: CI has not been queued after a
+        # push, or never runs for this base. The pr-resolver Skill reads this as
+        # ``ci_signal_degraded``, so opening the gate only relaunches an agent
+        # that hands straight back (#4726/#4743 looped ~30 times this way).
+        ([], False),
+        # An unprotected base that reported advisory status is a clean signal.
+        ([{"context": "GitBook", "state": "success"}], True),
+    ],
+)
+async def test_readiness_waits_until_the_head_reports_ci(
+    monkeypatch, statuses, expected_ready
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    async def get(url, **kwargs):
+        if url.endswith("/pulls/341"):
+            return _mock_get_response(
+                200,
+                {
+                    "state": "open",
+                    "head": {"sha": "current"},
+                    "base": {"ref": "moonmind-job-1"},
+                },
+            )
+        if "/branches/moonmind-job-1" in url:
+            return _mock_get_response(200, {"protected": False})
+        if "/commits/current/status" in url:
+            return _mock_get_response(
+                200,
+                {"state": "pending" if not statuses else "success", "statuses": statuses},
+            )
+        if "/commits/current/check-runs" in url:
+            return _mock_get_response(200, {"check_runs": []})
+        raise AssertionError(url)
+
+    client = AsyncMock()
+    client.get = get
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=client,
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="current",
+            policy={"checks": "required", "automatedReview": "disabled"},
+        )
+    assert result.ready is expected_ready
+    assert result.checks_complete is expected_ready
+    assert result.checks_reported is bool(statuses)
+    if not expected_ready:
+        assert [blocker["kind"] for blocker in result.blockers] == ["checks_running"]
+        assert "No checks have reported" in result.blockers[0]["summary"]
+
+
+@pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_opens_after_checks_and_review(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
@@ -1821,7 +1884,10 @@ async def test_evaluate_pull_request_readiness_respects_failed_combined_status_w
     mock_client.get = AsyncMock(
         side_effect=[
             _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
-            _mock_get_response(200, {"state": "failure", "statuses": []}),
+            _mock_get_response(
+                200,
+                {"state": "failure", "statuses": [{"context": "ci", "state": "failure"}]},
+            ),
             _mock_get_response(200, {"check_runs": []}),
         ]
     )
@@ -2129,7 +2195,10 @@ async def test_evaluate_pull_request_readiness_reports_reaction_permission_missi
     mock_client.get = AsyncMock(
         side_effect=[
             _mock_get_response(200, {"state": "open", "head": {"sha": "abc123"}}),
-            _mock_get_response(200, {"state": "success", "statuses": []}),
+            _mock_get_response(
+                200,
+                {"state": "success", "statuses": [{"context": "ci", "state": "success"}]},
+            ),
             _mock_get_response(200, {"check_runs": []}),
             _mock_get_response(200, []),
             _mock_get_response_with_headers(

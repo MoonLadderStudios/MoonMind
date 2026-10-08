@@ -357,7 +357,7 @@ function providerProfileDisplay(
   summary: ProviderProfileSummary | null | undefined,
   ambiguousLabels: ReadonlySet<string>,
 ): ProviderProfileDisplay {
-  if (!summary) {
+  if (!summary || (summary.selectionState === 'recorded' && !summary.profiles.length)) {
     return {
       primary: 'Unavailable',
       title: 'Provider Profile information is unavailable for this row.',
@@ -366,12 +366,11 @@ function providerProfileDisplay(
       tieBreakId: '',
     };
   }
-  const first = summary.selectionState === 'recorded' ? summary.profiles[0] : undefined;
-  if (!first) {
-    const state = summary.selectionState === 'recorded' ? 'not_recorded' : summary.selectionState;
-    const label = PROVIDER_PROFILE_STATE_LABELS[state];
+  if (summary.selectionState !== 'recorded') {
+    const label = PROVIDER_PROFILE_STATE_LABELS[summary.selectionState];
     return { primary: label, title: label, sortRank: 1, sortKey: label.toLowerCase(), tieBreakId: '' };
   }
+  const first = summary.profiles[0]!;
   const firstLabel = providerProfileLabel(first, ambiguousLabels);
   const describe = summary.profiles
     .map((profile) => {
@@ -2309,6 +2308,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       const opposite = draft[draft.mode === 'include' ? 'exclude' : 'include'];
       const profileOptions = valueOptionsForField('providerProfile').filter((id) => !opposite.values.includes(id));
       const facetData = facetByField.providerProfile.data;
+      const profileCounts = new Map(
+        (facetData?.facet === 'providerProfile' ? facetData.items : []).map((item) => [
+          item.value,
+          item.count,
+        ]),
+      );
       const stateCounts = new Map(
         (facetData?.facet === 'providerProfile' ? facetData.stateItems || [] : []).map((item) => [
           item.value,
@@ -2333,7 +2338,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           <FilterPillMultiSelect
             values={selection.values}
             options={profileOptions}
-            formatValue={formatProviderProfileId}
+            formatValue={(id) => {
+              const label = formatProviderProfileId(id);
+              const count = profileCounts.get(id);
+              return typeof count === 'number' ? `${label} (${count})` : label;
+            }}
             disabled={!listEnabled}
             ariaLabelAdd="Provider Profile filter value"
             ariaLabelSelected="Selected Provider Profile filters"

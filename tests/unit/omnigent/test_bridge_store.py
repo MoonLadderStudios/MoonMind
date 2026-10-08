@@ -414,7 +414,10 @@ async def test_egress_cleanup_authority_round_trips_and_terminal_refs_persist(
 
 
 @pytest.mark.asyncio
-async def test_egress_cleanup_authority_upgrades_launch_to_attested_phase(store) -> None:
+@pytest.mark.parametrize("refresh_fails", [False, True])
+async def test_egress_cleanup_authority_upgrades_launch_to_attested_phase(
+    store, monkeypatch, refresh_fails
+) -> None:
     request = _request()
     policy_authority = {
         "policyId": "codex-static",
@@ -453,22 +456,35 @@ async def test_egress_cleanup_authority_upgrades_launch_to_attested_phase(store)
         launch_evidence_ref="artifact://launch-pending",
         phase="launched",
     )
-    await store.bind_egress_cleanup_authority(
-        request=request,
-        host_lease_ref="lease-1",
-        egress_evidence={
-            **provisional,
-            "deniedConnectionCount": 2,
-            "networkIdentity": "network-1",
-            "endpointIdentity": "endpoint-1",
-        },
-        launch_evidence_ref="artifact://launch-attested",
-        phase="attested",
-    )
 
-    authority = await store.get_egress_cleanup_authority(
-        host_lease_ref="lease-1"
-    )
+    async def attest():
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="lease-1",
+            egress_evidence={
+                **provisional,
+                "deniedConnectionCount": 2,
+                "networkIdentity": "network-1",
+                "endpointIdentity": "endpoint-1",
+            },
+            launch_evidence_ref="artifact://launch-attested",
+            phase="attested",
+        )
+
+    if refresh_fails:
+
+        async def unavailable_refresh(*_args, **_kwargs):
+            raise RuntimeError("committed authority refresh unavailable")
+
+        monkeypatch.setattr(AsyncSession, "refresh", unavailable_refresh)
+        with pytest.raises(
+            RuntimeError, match="committed authority refresh unavailable"
+        ):
+            await attest()
+    else:
+        await attest()
+
+    authority = await store.get_egress_cleanup_authority(host_lease_ref="lease-1")
 
     assert authority is not None
     assert authority["phase"] == "attested"

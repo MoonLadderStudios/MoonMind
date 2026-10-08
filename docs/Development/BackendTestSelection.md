@@ -52,7 +52,7 @@ full_frontend=true|false
 
 ### Backend Detection
 
-Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. Canonical prose such as `AGENTS.md`, `README.md`, and `docs/` does not itself select backend execution unless another sensitive or unknown path requires it.
+Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. The selector exempts six explicitly audited prose paths from the general Markdown fast-unit rule. Unlisted Markdown retains existing coverage, including executable examples and Skill contracts. Sensitive, mixed, unknown, and full-run changes keep their existing suite decisions; prose exemptions never override them. Always-run preflight policy and ownership checks remain required.
 
 Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage. `test-frontend` aggregates selected frontend jobs even when intentional nonselection leaves both browser jobs skipped.
 
@@ -169,6 +169,8 @@ The existing workflow streams combined pytest output through `tee`, captures the
 
 Keep normal success evidence small: tested revision, suite/shard and attempt identity, real output, any JUnit report, and useful slow-case timings. Existing artifacts use finite retention and distinct shard/attempt names. Richer service diagnostics belong on the failure path where useful, from known test-owned locations with redaction. Do not collect whole environments, source trees, tokens, or unrelated host files.
 
+The disposable fresh, upgrade, and controller journeys retain redacted Compose startup output in `var/artifacts/first-run-3938/<mode>/compose-startup-<phase>-<attempt>.log`. Each attempt keeps the first 5,000 lines and final 40 without overlap, with an explicit omission notice when middle lines are dropped. Retained lines carry UTC receipt timestamps, and the summary records phase, attempt, elapsed whole seconds, and the original Compose exit status. Receipt time describes arrival at the host recorder. The console prints the final 40 lines and summary; the workflow uploads these bounded logs for successful and failed journey rows. A logging failure fails the journey without retrying a successful Compose startup.
+
 Missing or partial JUnit is unavailable/incomplete evidence, never zero tests or a pass. Preserve the original failure through logging, report generation, and cleanup. Bound secondary operations separately so a hung log command cannot consume the rest of the job. Matrix cancellation is best effort for artifact collection, and a hard job kill or runner loss can prevent final uploads entirely.
 
 Validate interruption with a real disposable subprocess through the production reporting path. Fabricating post-kill artifacts proves a parser can read them, not that a killed test leaves them. No new universal fault-injection framework or documentation-wording tests are required.
@@ -188,6 +190,20 @@ Compose, Docker/runtime infrastructure, database and migration changes, integrat
 - Single-user integration suites select `integration_ci=true` through the `tests/integration/` prefix (reliability-owned `tests/integration/reliability/` stays excluded). Required-check aggregation needs no workflow change: the existing `integration-ci` job in `.github/workflows/pytest-unit-tests.yml` already runs whenever `integration_ci=true`, and `ci-required` already aggregates its result.
 
 `tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. CI's existing image layer cache and per-file xdist execution are reused. The journey and transport rows build the candidate deployable image with the same inputs as `omnigent-exact-artifact` and read that job's layer cache scope without writing it. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
+
+The shared conftest's crash-recovery override depends on pytest-xdist 3.8.0's
+private `LoadScopeScheduling` state behind the public scheduler hook. It retains
+the original failed-test report, drops completed files from requeueing, and
+supplies a replacement worker's required next item before execution. The latter
+matches [upstream #1328](https://github.com/pytest-dev/pytest-xdist/pull/1328).
+`tests/unit/workflows/temporal/test_pytest_worker_crash_recovery.py` is the slow,
+real-subprocess compatibility coverage, including a replacement facing queued
+single-test files. When updating the declared xdist dependency, run these cases
+against the native scheduler; remove the override once a released version
+preserves the failed exit, runs each survivor once, and finishes those cases.
+The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
+cleans only Temporal servers directly owned by that worker. Neither mechanism
+fixes the test that caused the original worker failure.
 
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
 image from `ghcr.io/coollabsio/minio` by release and digest. The original
