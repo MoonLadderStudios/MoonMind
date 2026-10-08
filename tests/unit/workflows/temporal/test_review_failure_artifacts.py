@@ -172,6 +172,7 @@ def test_failure_metadata_is_compact_canonical_and_survives_continuation():
         (403, "expiry"),
         (429, "expiry"),
         (429, "legacy_refusal"),
+        (429, "retired_cycle"),
     ],
 )
 async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
@@ -243,6 +244,8 @@ async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
     ):
         queue = f"failure-metadata-{quota_status}-{finish}"
         payload = _payload()
+        if finish == "retired_cycle":
+            payload["reviewCycles"][0]["status"] = "superseded"
         payload["expireAt"] = (
             await env.get_current_time() + timedelta(seconds=30)
         ).isoformat()
@@ -279,7 +282,7 @@ async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
 
             old_workflow = (
                 _BeforeFailureSettlement
-                if finish == "legacy_refusal"
+                if finish in {"legacy_refusal", "retired_cycle"}
                 else _BeforeFailureMetadata
             )
             async with Worker(
@@ -300,6 +303,36 @@ async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
                 old_pending = await handle.query(
                     MoonMindMergeAutomationWorkflow.summary
                 )
+            if finish == "retired_cycle":
+                retained = old_pending["reviewLoop"]
+                assert retained["cycleRecords"][0]["status"] == "superseded"
+                await Replayer(
+                    data_converter=pydantic_data_converter,
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(old_history)
+                async with Worker(
+                    env.client,
+                    task_queue=queue,
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    max_cached_workflows=0,
+                ):
+                    await env.sleep(timedelta(seconds=3))
+                    retired_result = await asyncio.wait_for(handle.result(), timeout=30)
+                    retired_history = await handle.fetch_history()
+                assert retired_result["status"] == "blocked"
+                assert retired_result["reviewLoop"] == retained
+                saved = json.loads(
+                    await artifacts.read(retired_result["artifactRefs"]["summary"])
+                )
+                assert saved["reviewLoop"] == retained
+                await Replayer(
+                    data_converter=pydantic_data_converter,
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(retired_history)
+                return
             if finish == "legacy_refusal":
                 assert old_result["status"] == "blocked"
                 assert old_result["reviewLoop"]["activeRequest"] is not None

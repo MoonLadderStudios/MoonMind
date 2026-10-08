@@ -1911,6 +1911,19 @@ class MoonMindMergeAutomationWorkflow:
 
         if not self._active_review_request or not isinstance(evaluation, Mapping):
             return
+        if (
+            self._review_cycles
+            and self._review_cycles[-1].get("status") in {"failed", "superseded", "stale"}
+            and self._review_failure_settlement_enabled(
+                evaluation.get("readinessObservationId")
+            )
+        ):
+            return ReadinessBlockerModel(
+                kind="automated_review_request_failed",
+                source="policy",
+                retryable=False,
+                summary="A failed, superseded, or stale review cycle cannot be resumed as the active request.",
+            )
         adoption_blocker = self._review_adoption_blocker(evaluation)
         if adoption_blocker is not None:
             return ReadinessBlockerModel.model_validate(adoption_blocker)
@@ -1981,6 +1994,8 @@ class MoonMindMergeAutomationWorkflow:
                 != self._active_review_request.get("requestCommentId")
                 or _parse_review_timestamp(evaluation.get("automatedReviewRequestedAt"))
                 != requested_at
+                or cycle is None
+                or cycle.get("status") != "requested"
                 or not self._active_review_cycle_matches()
                 or not provider_refusal
                 or requested_at is None
@@ -2013,7 +2028,6 @@ class MoonMindMergeAutomationWorkflow:
                 cycle["status"] = "stale"
             self._active_review_request = None
             self._refresh_tracked_head_sha_on_next_evaluation = True
-
 
     async def _evaluate_readiness_once(
         self,

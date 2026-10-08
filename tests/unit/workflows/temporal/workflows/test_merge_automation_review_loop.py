@@ -2582,3 +2582,95 @@ async def test_malformed_refusal_is_bounded_even_when_settlement_is_ineligible(
         b["kind"] in {"automated_review_request_failed", "stale_revision"}
         for b in result["blockers"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cycle_status", ["failed", "superseded", "stale", "completed"])
+@pytest.mark.parametrize("outcome", ["completion", "refusal"])
+@pytest.mark.parametrize("legacy_observation", [False, True])
+async def test_retained_terminal_cycles_are_not_reopened(
+    monkeypatch, cycle_status, outcome, legacy_observation
+):
+    from moonmind.schemas.temporal_models import MergeAutomationStartInput
+
+    payload = _payload()
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": "retained-cycle",
+        "requestCommentId": 100,
+        "requestedAt": "2026-08-24T22:00:00Z",
+    }
+    cycle = {"cycle": 1, **active, "status": cycle_status}
+    if cycle_status == "failed":
+        cycle["requestFailure"] = {
+            "kind": "issue_comment",
+            "id": 101,
+            "failedAt": "2026-08-24T22:01:00Z",
+            "providerErrorClass": "rate_limit",
+        }
+    elif cycle_status == "completed":
+        cycle.update(
+            completionKind="review",
+            completionId=101,
+            completedAt="2026-08-24T22:01:00Z",
+        )
+    payload.update(activeReviewRequest=active, reviewCycles=[cycle])
+    expected_cycle = MergeAutomationStartInput.model_validate(payload).model_dump(
+        by_alias=True
+    )["reviewCycles"][0]
+    observation = _ready(
+        HEAD_1,
+        readinessObservationId="restored-terminal-observation",
+        automatedReviewRequestCommentId=100,
+        automatedReviewRequestedAt=active["requestedAt"],
+        automatedReviewCompletionKind="issue_comment",
+        automatedReviewCompletionId=102,
+        automatedReviewCompletedAt="2026-08-24T22:02:00Z",
+    )
+    if outcome == "refusal":
+        observation.update(
+            ready=False,
+            automatedReviewComplete=None,
+            automatedReviewCompletionKind=None,
+            automatedReviewCompletionId=None,
+            automatedReviewCompletedAt=None,
+            automatedReviewRequestFailure={
+                "kind": "issue_comment",
+                "id": 102,
+                "failedAt": "2026-08-24T22:02:00Z",
+                "providerErrorClass": "rate_limit",
+            },
+            blockers=[
+                {
+                    "kind": "automated_review_request_failed",
+                    "source": "codex",
+                    "retryable": False,
+                    "summary": "Provider refused.",
+                    "providerFailure": {"providerErrorClass": "rate_limit"},
+                }
+            ],
+        )
+    harness = _Harness(
+        monkeypatch,
+        readiness=[observation],
+        child_results=[{"status": "success", "mergeAutomationDisposition": "merged"}],
+    )
+    if legacy_observation:
+        monkeypatch.setattr(
+            MoonMindMergeAutomationWorkflow,
+            "_review_failure_settlement_enabled",
+            lambda self, observation: False,
+        )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    historical_completion = outcome == "completion" and (
+        legacy_observation or cycle_status == "completed"
+    )
+    assert result["status"] == ("merged" if historical_completion else "blocked")
+    if historical_completion:
+        assert result["reviewLoop"]["activeRequest"] is None
+        assert result["reviewLoop"]["cycleRecords"][0]["status"] == "completed"
+    else:
+        assert harness.child_payloads == []
+        assert result["reviewLoop"]["cycleRecords"] == [expected_cycle]
+        assert result["reviewLoop"]["activeRequest"]["requestCommentId"] == 100
