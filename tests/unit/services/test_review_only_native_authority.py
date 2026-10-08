@@ -18,6 +18,221 @@ from tests.unit.services.test_omnigent_execution_plan_service import _snapshot
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("harness", ["codex-native", "opencode-native"])
+@pytest.mark.parametrize("snapshot_mutation", [None, "workspace", "digest"])
+async def test_create_review_only_freezes_compiled_workspace_before_native_admission(
+    monkeypatch, tmp_path, harness, snapshot_mutation
+) -> None:
+    """The supported create request freezes profile authority before starting work."""
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.api.routers import executions
+    from api_service.db.base import get_async_session
+    from api_service.db.models import (
+        Base,
+        ManagedAgentProviderProfile,
+        OmnigentExecutionPlanRecord,
+        ProviderProfileAuthState,
+    )
+    from api_service.services.presets.catalog import PresetCatalogService
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+    from tests.unit.api.routers.test_executions import (
+        _build_execution_record,
+        _override_user_dependencies,
+    )
+    from tests.unit.api.test_pr_review_resolve_preset import _seed_dir
+
+    repository = "MoonLadderStudios/MoonMind"
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "GITHUB_TOKEN"),
+        assignments=[
+            github_repository_assignment(DEFAULT_GIT_CONNECTION_REF, repository)
+        ],
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    policy = f"{harness.removesuffix('-native')}-on-demand@1"
+    snapshot = _snapshot(harness=harness, policy=policy, provider_id="review-provider")
+    async with sessions() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=snapshot["providerProfileRef"],
+                runtime_id="codex_cli" if harness == "codex-native" else "opencode",
+                provider_id="openai",
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                default_model="example/model",
+            )
+        )
+        await PresetCatalogService(session).sync_seed_templates(
+            seed_dir=_seed_dir(tmp_path)
+        )
+        await session.commit()
+
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "7" * 64,
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness=harness, policy=policy)
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    profile_resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        executions, "resolve_default_agent_profile_snapshot", profile_resolver
+    )
+
+    class Artifacts(_ArtifactService):
+        async def read(self, *, artifact_id, **_kwargs):
+            body = self.payloads[artifact_id]
+            if snapshot_mutation == "digest":
+                body += b" "
+            return SimpleNamespace(), body
+
+    artifacts = Artifacts()
+    monkeypatch.setattr(
+        executions, "get_temporal_artifact_service", lambda _session: artifacts
+    )
+    if snapshot_mutation == "workspace":
+        persist_json_artifact = service.persist_json_artifact
+
+        async def persist_altered_snapshot(**kwargs):
+            # Inject different authority at the storage boundary with a valid
+            # digest. The producer and graph validator both remain real.
+            if kwargs["artifact_class"] == "original_task_input_snapshot":
+                kwargs["payload"] = copy.deepcopy(kwargs["payload"])
+                kwargs["payload"]["draft"]["workspace"] = {"mutation": "forbidden"}
+            return await persist_json_artifact(**kwargs)
+
+        monkeypatch.setattr(service, "persist_json_artifact", persist_altered_snapshot)
+
+    temporal_service = AsyncMock()
+
+    async def start_execution(**kwargs):
+        record = _build_execution_record(owner_id="system")
+        record.workflow_id = kwargs["_workflow_id"]
+        record.parameters = kwargs["initial_parameters"]
+        return record
+
+    temporal_service.create_execution.side_effect = start_execution
+    app = FastAPI()
+    app.include_router(executions.router)
+    app.dependency_overrides[executions._get_service] = lambda: temporal_service
+    _override_user_dependencies(app, is_superuser=False)
+
+    async def session_dependency():
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = session_dependency
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/executions",
+                json={
+                    "type": "workflow",
+                    "payload": {
+                        "repository": repository,
+                        "targetRuntime": "omnigent",
+                        "workflow": {
+                            "taskTemplate": {
+                                "slug": "pr-review-resolve",
+                                "scope": "global",
+                            },
+                            "inputs": {"pull_request": "350", "review_only": True},
+                        },
+                    },
+                },
+            )
+
+        profile_resolver.assert_awaited_once()
+        assert snapshot["document"]["workspace"] == {"mutation": "allowed"}
+        if snapshot_mutation is not None:
+            assert response.status_code == 422, response.text
+            detail = response.json()["detail"]
+            assert detail["code"] == "omnigent_execution_plan_invalid"
+            assert detail["message"] == (
+                "native review graph conflicts with frozen task-input snapshot"
+                if snapshot_mutation == "workspace"
+                else "native review graph task-input snapshot digest mismatch"
+            )
+            temporal_service.create_execution.assert_not_awaited()
+            async with sessions() as session:
+                assert (
+                    await session.scalars(select(OmnigentExecutionPlanRecord))
+                ).all() == []
+            return
+
+        assert response.status_code == 201, response.text
+        temporal_service.create_execution.assert_awaited_once()
+        parameters = temporal_service.create_execution.await_args.kwargs[
+            "initial_parameters"
+        ]
+        assert parameters["agentProfileSnapshot"] == snapshot
+        assert parameters["workspace"] == {"mutation": "allowed"}
+        workflow = parameters["workflow"]
+        assert workflow["publish"]["mode"] == "none"
+        assert workflow["publish"]["mergeAutomation"]["finishMode"] == "review_only"
+        assert len(workflow["steps"]) == 1
+        assert workflow["steps"][0]["tool"]["id"] == (
+            "github.resolve_pull_request_target"
+        )
+        binding = parameters["omnigentExecutionPlan"]
+        frozen_bytes = artifacts.payloads[binding["taskInputSnapshotRef"]]
+        assert service._sha256(frozen_bytes) == binding["taskInputSnapshotDigest"]
+        frozen = json.loads(frozen_bytes)
+        assert frozen["draft"]["workspace"] == parameters["workspace"]
+        assert service._native_review_graph(frozen["draft"]) == (
+            service._native_review_graph(parameters)
+        )
+        plan = await DbExecutionPlanStore(sessions).load(binding["planRef"])
+        assert plan is not None
+        access = plan.payload.resolvedTools["repositoryAccess"]
+        assert set(access) == {"collaboration"}
+        assert plan.payload.credentialBindings["collaboration"].consumer == "native"
+        selection = json.loads(
+            artifacts.payloads[
+                access["collaboration"]["artifactRef"].removeprefix("artifact:")
+            ]
+        )["selection"]
+        assert set(selection["operations"]) == {"read", "review_request"}
+        assert selection["connectionId"] == DEFAULT_GIT_CONNECTION_REF
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "graph_kind,selection",
     [

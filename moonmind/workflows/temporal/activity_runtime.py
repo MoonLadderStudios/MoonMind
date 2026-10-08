@@ -4293,14 +4293,18 @@ async def _saved_work_destination_authority(
 ) -> tuple[str, str]:
     """Resolve the destination's admitted GitHub authority and its safe identity.
 
-    The authority reference records only the redaction-safe credential source,
-    so a changed connection invalidates the persisted decision while a token
-    value never enters workflow history.
+    ``github:repository-default`` is the deployment's default repository
+    connection: a recorded connection's credential is read and no ambient
+    token substitutes for it. The authority reference records only the
+    redaction-safe credential source, so a changed connection invalidates the
+    persisted decision while a token value never enters workflow history.
     """
 
-    from moonmind.auth.github_credentials import resolve_github_credential
+    from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+        resolve_default_github_connection_credential,
+    )
 
-    credential = await resolve_github_credential(
+    credential = await resolve_default_github_connection_credential(
         repo=contract.destination.repository
     )
     if not credential.token:

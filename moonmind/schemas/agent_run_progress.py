@@ -428,9 +428,9 @@ class AgentRunProgressProjection(BaseModel):
     Compact by construction: ``extra="forbid"`` excludes arbitrary
     metadata, raw events/logs, provider session/turn IDs, host/Docker/
     workspace locators, profile leases, credential generations, credential
-    handles, and chat-binding authority. Safe display labels are resolved
-    separately from the recorded plan; only the validated diagnostic ref
-    crosses the boundary.
+    handles, and chat-binding authority. Only a bounded granted Provider
+    Profile identity/display label and the validated diagnostic ref cross
+    this boundary.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
@@ -465,6 +465,13 @@ class AgentRunProgressProjection(BaseModel):
     summary: str | None = Field(None)
     attention_required: bool = Field(False, alias="attentionRequired")
     diagnostic_artifact_ref: str | None = Field(None, alias="diagnosticArtifactRef")
+    # Display-only recorded association, never a lease or release authority.
+    provider_profile_id: str | None = Field(
+        None, alias="providerProfileId", min_length=1, max_length=128
+    )
+    provider_profile_label: str | None = Field(
+        None, alias="providerProfileLabel", max_length=120
+    )
 
     @field_validator(
         "agent_run_workflow_id",
@@ -535,6 +542,8 @@ def build_progress_projection(
     diagnostic_artifact_ref: str | None = None,
     agent_run_run_id: str | None = None,
     attempt_index: int = 0,
+    provider_profile_id: str | None = None,
+    provider_profile_label: str | None = None,
 ) -> AgentRunProgressProjection:
     """Build one validated immutable projection payload for a revision."""
 
@@ -555,6 +564,8 @@ def build_progress_projection(
             "summary": summary,
             "attentionRequired": attention_required,
             "diagnosticArtifactRef": diagnostic_artifact_ref,
+            "providerProfileId": provider_profile_id,
+            "providerProfileLabel": provider_profile_label,
         }
     )
 
