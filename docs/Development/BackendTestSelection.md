@@ -191,6 +191,22 @@ Compose, Docker/runtime infrastructure, database and migration changes, integrat
 
 `tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. CI's existing image layer cache and per-file xdist execution are reused. The journey and transport rows build the candidate deployable image with the same inputs as `omnigent-exact-artifact` and read that job's layer cache scope without writing it. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
 
+The shared conftest's crash-recovery override depends on pytest-xdist 3.8.0's
+private `LoadScopeScheduling` state behind the public scheduler hook. It retains
+the original failed-test report, drops completed files from requeueing, and
+supplies a replacement worker's required next item before execution. The latter
+matches [upstream #1328](https://github.com/pytest-dev/pytest-xdist/pull/1328).
+`tests/unit/workflows/temporal/test_pytest_worker_crash_recovery.py` is the slow,
+real-subprocess compatibility coverage, including a replacement facing queued
+single-test files. When updating the declared xdist dependency, run these cases
+against the native scheduler; remove the override once a released version
+preserves the failed exit, runs each survivor once, and finishes those cases.
+The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
+cleans only SDK time-skipping and local dev-server children directly owned by
+that worker. The image-build cache owner materializes both SDK-selected binaries
+before hermetic runtime execution. Neither mechanism
+fixes the test that caused the original worker failure.
+
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
 image from `ghcr.io/coollabsio/minio` by release and digest. The original
 `quay.io/minio/minio` image is no longer publicly pullable. The replacement is
