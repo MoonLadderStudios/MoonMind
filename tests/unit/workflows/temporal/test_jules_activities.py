@@ -1048,12 +1048,18 @@ async def _record_owner_selecting_team_b(monkeypatch, tmp_path):
         record_repository_connections,
     )
 
+    connection = github_pat_connection("repository-connection:team-b", "TEAM_B_PAT")
+    merge_operations = (*connection.allowed_operations, "merge_request")
+    connection = connection.model_copy(update={"allowed_operations": merge_operations})
+
     return await record_repository_connections(
         monkeypatch,
         tmp_path,
-        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        connection,
         assignments=[
-            github_repository_assignment("repository-connection:team-b", "org/repo")
+            github_repository_assignment(
+                "repository-connection:team-b", "org/repo", operations=merge_operations
+            )
         ],
         admitted_runs={
             _OWNER_RUN: {
