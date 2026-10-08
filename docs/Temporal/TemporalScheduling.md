@@ -143,6 +143,12 @@ retained; rejection does not rewrite an existing definition.
 A new target that omits the runtime while the deployment default is Omnigent is
 admitted as an Omnigent schedule, with its plan compiled at creation like an
 explicit `targetRuntime: omnigent` target.
+An edit of a retained snapshot-only target compiles its missing plan from the
+exact snapshot in that schedule's durable Agent Profile usage, preserving the
+recorded Profile, provider, model, and policy. An unverified copied snapshot
+cannot bypass admission; new authoring uses the normal Agent Profile selection
+or deployment defaults. Existing stored snapshot-only definitions retain their
+documented compatibility behavior until an edit admits a plan.
 
 For generic Omnigent schedules, every occurrence resolves the current promoted default —
 Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
