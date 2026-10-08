@@ -508,6 +508,11 @@ async def test_missing_ci_wait_is_bounded_after_fresh_producer_and_consumer_upgr
     # that owns the fixture token instead of consulting repository state.
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "acquire_admitted_repository_use",
+        AsyncMock(return_value=(None, None)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
         "load_admitted_repository_access",
         AsyncMock(return_value=("", False)),
     )
