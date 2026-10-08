@@ -32,7 +32,7 @@ async def test_bound_native_plan_validation_precedes_effective_plan_execution(
     monkeypatch.setattr(
         run_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="wf", run_id="run", namespace="default"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="wf", run_id="run", namespace="default"),
     )
     monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda *_: None)
     monkeypatch.setattr(

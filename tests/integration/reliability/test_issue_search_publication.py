@@ -303,6 +303,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id="mm:replay",
             run_id="run",

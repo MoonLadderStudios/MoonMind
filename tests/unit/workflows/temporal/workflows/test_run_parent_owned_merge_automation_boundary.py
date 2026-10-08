@@ -13,7 +13,7 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-parent", "run_id": "run-parent"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-parent", "run_id": "run-parent"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))

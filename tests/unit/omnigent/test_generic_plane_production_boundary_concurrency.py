@@ -607,6 +607,7 @@ def dispatch_runtime(monkeypatch: pytest.MonkeyPatch):
         agent_run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id=workflow_ids["current"],
             run_id=f"run-{workflow_ids['current']}",

@@ -251,6 +251,7 @@ async def _finalize_and_capture_summary(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-auto-publish",
             "run_id": "run-auto-publish",
@@ -413,7 +414,7 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     
@@ -1087,7 +1088,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -1204,6 +1205,7 @@ async def test_run_execution_stage_routes_generic_container_tool_to_durable_job(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -1465,6 +1467,7 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-pause-boundary",
             "run_id": "run-pause-boundary",
@@ -1628,6 +1631,7 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-omnigent-retry-boundary",
             "run_id": "run-omnigent-retry-boundary",

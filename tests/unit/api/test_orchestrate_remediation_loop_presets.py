@@ -174,6 +174,7 @@ def run_workflow(monkeypatch: pytest.MonkeyPatch) -> run_module.MoonMindRunWorkf
             "WorkflowInfo",
             (),
             {
+                "task_queue": "mm.workflow.user.v2",
                 "namespace": "default",
                 "workflow_id": "wf-4268",
                 "run_id": "run-1",

@@ -3172,7 +3172,7 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
     monkeypatch.setattr(temporal_activity, "info", lambda: SimpleNamespace(
         namespace="default", workflow_id="parent-wf:agent:verify", workflow_run_id="child-run",
     ))
-    monkeypatch.setattr(run_module.workflow, "info", lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"))
+    monkeypatch.setattr(run_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="parent-wf", run_id="run"))
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
     monkeypatch.setattr(run_module.workflow, "now", lambda: datetime(2026, 9, 13, tzinfo=timezone.utc))
     async with temporal_db(tmp_path) as session_maker:
@@ -3522,7 +3522,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             monkeypatch.setattr(
                 run_module.workflow,
                 "info",
-                lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"),
+                lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="parent-wf", run_id="run"),
             )
             monkeypatch.setattr(
                 run_module.workflow,

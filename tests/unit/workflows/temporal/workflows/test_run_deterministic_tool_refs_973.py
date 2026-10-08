@@ -244,6 +244,7 @@ async def test_run_execution_stage_resolves_tool_dependency_ref_without_agent_ru
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -367,6 +368,7 @@ async def test_run_execution_stage_rejects_unresolvable_tool_ref_explicitly(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -493,6 +495,7 @@ async def test_run_execution_stage_skill_business_failure_maps_once(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -578,6 +581,7 @@ async def test_run_execution_stage_skill_route_ignores_caller_chosen_binding(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -696,6 +700,7 @@ async def test_execute_container_job_tool_cancellation_is_request_not_stop_proof
             "WorkflowInfo",
             (),
             {
+                "task_queue": "mm.workflow.user.v2",
                 "namespace": "default",
                 "workflow_id": "wf-973",
                 "run_id": "run-1",
@@ -930,7 +935,7 @@ async def test_container_job_derives_stable_key_and_reconciles_lost_ack(
         type(
             "WorkflowInfo",
             (),
-            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
+            {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
              "search_attributes": {}},
         ),
     )
@@ -1098,7 +1103,7 @@ async def test_run_execution_stage_skips_preserved_tool_step_without_redispatch(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1",
          "search_attributes": {}},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
@@ -1234,6 +1239,7 @@ async def test_skill_execute_payload_carries_no_model_profile_or_github_connecti
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -1356,6 +1362,7 @@ async def test_raised_transient_activity_failure_records_once_with_retry_bounds(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -1506,6 +1513,7 @@ async def test_large_plan_output_ref_resolves_from_recorded_results_after_artifa
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",
@@ -1601,6 +1609,7 @@ async def test_unresolvable_ref_marks_step_ledger_failed_with_diagnostics(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-1",
             "run_id": "run-1",

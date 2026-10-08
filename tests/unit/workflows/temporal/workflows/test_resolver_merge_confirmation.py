@@ -61,7 +61,7 @@ async def test_resolver_merge_refreshes_remote_head_before_finalization(
     monkeypatch.setattr(module.workflow, "patched", lambda name: True)
     monkeypatch.setattr(module.workflow, "now", lambda: datetime.now(timezone.utc))
     monkeypatch.setattr(
-        module.workflow, "info", lambda: SimpleNamespace(workflow_id="merge-test")
+        module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="merge-test")
     )
     monkeypatch.setattr(module.workflow, "upsert_memo", lambda value: None)
     monkeypatch.setattr(module.workflow, "upsert_search_attributes", lambda value: None)

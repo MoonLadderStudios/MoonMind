@@ -247,7 +247,7 @@ def test_initialize_from_payload_does_not_project_lore_target_to_github_repo(
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", parent=None))
     workflow = MoonMindRunWorkflow()
     monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
     monkeypatch.setattr(
@@ -306,7 +306,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: False)
@@ -423,7 +423,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -503,6 +503,7 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "mm:wf-1",
             "run_id": "run-1",
@@ -608,6 +609,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "mm:wf-1",
             "run_id": "run-1",
@@ -739,6 +741,7 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "mm:wf-2",
             "run_id": "run-2",
@@ -886,7 +889,7 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -991,7 +994,7 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -1138,7 +1141,7 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -1351,7 +1354,7 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -1464,7 +1467,7 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
         fake_wait_condition,
     )
     def fake_workflow_info() -> Any:
-        return type("WorkflowInfo", (), {"workflow_id": "wf-1"})()
+        return type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "workflow_id": "wf-1"})()
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -1918,7 +1921,7 @@ async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
         return type(
             "WorkflowInfo",
             (),
-            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+            {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
         )()
 
     monkeypatch.setattr(
@@ -2324,7 +2327,7 @@ async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
         _timeout_wait_condition,
     )
     def fake_workflow_info() -> Any:
-        return type("WorkflowInfo", (), {"workflow_id": "wf-1"})()
+        return type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "workflow_id": "wf-1"})()
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -2489,7 +2492,7 @@ async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: False)
@@ -2518,7 +2521,7 @@ def test_build_agent_execution_request_includes_bundle_metadata(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
@@ -2551,7 +2554,7 @@ def test_build_agent_execution_request_enforces_read_repository_operation(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
@@ -2624,7 +2627,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -2713,7 +2716,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -2812,7 +2815,7 @@ async def test_run_execution_stage_publish_none_blocks_after_failed_agent_child(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -2983,7 +2986,7 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3064,7 +3067,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3134,7 +3137,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3254,7 +3257,7 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3381,7 +3384,7 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3524,7 +3527,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3723,7 +3726,7 @@ def test_activity_result_provider_failure_summary_ignores_generic_activity_failu
 async def test_skipped_jira_blocker_wait_restores_executing_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", parent=None))
     workflow = MoonMindRunWorkflow()
 
     async def fake_wait_condition(
@@ -3904,7 +3907,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -4107,7 +4110,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -4268,7 +4271,7 @@ async def test_run_execution_stage_does_not_retry_permanent_agent_runtime_failur
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -4977,7 +4980,7 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -5123,7 +5126,7 @@ async def test_run_execution_stage_reopens_pr_gate_after_later_push(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -5326,7 +5329,7 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -5552,7 +5555,7 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     enabled_patches = {
@@ -5844,7 +5847,7 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -6088,7 +6091,7 @@ async def test_dynamic_remediation_final_pass_replaces_prior_blocking_verdict(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     enabled_patches = {
@@ -6233,7 +6236,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -6364,7 +6367,7 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -6497,7 +6500,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -6614,7 +6617,7 @@ async def test_run_execution_stage_skips_native_pr_after_prepublication_failure(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
@@ -6745,7 +6748,7 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -6863,7 +6866,7 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -6887,7 +6890,7 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
 def test_update_memo_persists_pull_request_url_under_canonical_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", parent=None))
     workflow = MoonMindRunWorkflow()
     workflow._title = "Temporal task"
     workflow._summary = "Waiting on review."

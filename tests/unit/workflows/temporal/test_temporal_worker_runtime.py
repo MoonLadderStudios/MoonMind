@@ -3179,7 +3179,7 @@ def test_runtime_planner_pr_resolver_timeout_reaches_agent_execution_request(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(
         "moonmind.workflows.temporal.workflows.run.workflow.info",
