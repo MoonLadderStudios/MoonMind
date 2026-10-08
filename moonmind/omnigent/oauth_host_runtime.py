@@ -786,6 +786,7 @@ class OmnigentOAuthHostRuntime:
             runtime_gid=int(launch["runtimeGid"]),
         )
         launched_container_name: str | None = None
+        retained_host = False
         static_compose_env: Mapping[str, str] | None = None
         # Routing isolation is not confinement: a projected gh credential is
         # readable by arbitrary agent code in the host, so report it as such
@@ -824,25 +825,27 @@ class OmnigentOAuthHostRuntime:
                 or deterministic_host_container_name(host_lease.lease_id)
             )
             launched_container_name = container_name
-            await self._launch_on_demand(
-                binding=binding,
-                host_lease=host_lease,
-                container_name=container_name,
-                workspace_source=workspace_source,
-                skill_projection=skill_projection,
-                runtime_scripts=runtime_scripts,
-                current_step_execution_id=current_step_execution_id,
-                # A clone-only credential stays with the trusted clone above;
-                # agent code receives the admitted credential only when the
-                # step declares gh (MoonLadderStudios/MoonMind#4011).
-                github_token=github_token if gh_required else None,
-                container_job_environment=host_runtime_environment,
-                effective_launch=launch,
-                egress_attestation=egress_attestation,
-                recovery_request=evidence_request,
-                recovery_store=cleanup_authority_store,
-                recovery_artifact_gateway=recovery_artifact_gateway,
-            )
+            retained_host = (
+                await self._launch_on_demand(
+                    binding=binding,
+                    host_lease=host_lease,
+                    container_name=container_name,
+                    workspace_source=workspace_source,
+                    skill_projection=skill_projection,
+                    runtime_scripts=runtime_scripts,
+                    current_step_execution_id=current_step_execution_id,
+                    # A clone-only credential stays with the trusted clone above;
+                    # agent code receives the admitted credential only when the
+                    # step declares gh (MoonLadderStudios/MoonMind#4011).
+                    github_token=github_token if gh_required else None,
+                    container_job_environment=host_runtime_environment,
+                    effective_launch=launch,
+                    egress_attestation=egress_attestation,
+                    recovery_request=evidence_request,
+                    recovery_store=cleanup_authority_store,
+                    recovery_artifact_gateway=recovery_artifact_gateway,
+                )
+            ) is True
             if github_token and gh_required:
                 github_credential_exposure = "agent_readable_unconfined"
         else:
@@ -892,6 +895,9 @@ class OmnigentOAuthHostRuntime:
             **server_image_evidence,
         }
 
+        retained_cleanup_evidence: Mapping[str, Any] | None = None
+        retained_cleanup_ref: str | None = None
+
         def prepared_host_evidence() -> dict[str, Any]:
             return {
                 "status": "launched",
@@ -899,8 +905,16 @@ class OmnigentOAuthHostRuntime:
                 "runtimeId": binding.credential_mount_ref.auth_volume_ref.runtime_id,
                 "credentialGeneration": host_lease.credential_generation,
                 "workspacePath": "/workspaces/run",
-                "egressAttestation": dict(egress_evidence),
-                "egressEvidenceRef": launch_ref,
+                "egressAttestation": dict(
+                    retained_cleanup_evidence
+                    if retained_cleanup_evidence is not None
+                    else egress_evidence
+                ),
+                "egressEvidenceRef": (
+                    retained_cleanup_ref
+                    if retained_cleanup_evidence is not None
+                    else launch_ref
+                ),
                 "githubCredentialExposure": github_credential_exposure,
             }
 
@@ -937,26 +951,80 @@ class OmnigentOAuthHostRuntime:
                     and isinstance(existing_authority, Mapping)):
                 replacing_launch_ref = str(existing_authority["launchEvidenceRef"])
                 existing_authority = None
-            if evidence_request is not None and artifact_gateway is not None:
-                if isinstance(existing_authority, Mapping):
-                    stored_launch = existing_authority.get("effectiveLaunch")
-                    stored_evidence = existing_authority.get("egressEvidence")
-                    if (
-                        not isinstance(stored_launch, Mapping)
-                        or stored_launch.get("snapshotRef") != launch.get("snapshotRef")
-                        or not isinstance(stored_evidence, Mapping)
-                        or stored_evidence.get("attachmentIdentity")
-                        != attachment_identity
+                # A recreated host replaces the stopped legacy host's authority;
+                # it never retains that authority as a reused live host.
+                retained_host = False
+            if isinstance(existing_authority, Mapping):
+                stored_launch = existing_authority.get("effectiveLaunch")
+                stored_evidence = existing_authority.get("egressEvidence")
+                launch_ref = (
+                    str(existing_authority.get("launchEvidenceRef") or "").strip()
+                    or None
+                )
+                if (
+                    not isinstance(stored_launch, Mapping)
+                    or stored_launch.get("snapshotRef") != launch.get("snapshotRef")
+                    or not isinstance(stored_evidence, Mapping)
+                    or stored_evidence.get("attachmentIdentity") != attachment_identity
+                    or not launch_ref
+                    or existing_authority.get("phase", "attested")
+                    not in {"launched", "attested"}
+                ):
+                    raise OmnigentOAuthHostError(
+                        "durable egress cleanup authority does not match the launch",
+                        code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+                    )
+                if retained_host:
+                    # Cleanup must use the original authority even when the
+                    # current gateway or later workload checks reject reuse.
+                    retained_cleanup_evidence = stored_evidence
+                    retained_cleanup_ref = launch_ref
+                    # Workspace preparation can outlast a rollout. Observe the
+                    # live gateway again at the existing host-reuse boundary.
+                    egress_attestation = await self._attest_egress(launch)
+                    # The live gateway was independently attested above. A
+                    # replacement image can change its derived rule digest
+                    # without changing the admitted security boundary. Retain
+                    # the owned host's original launch labels and provenance;
+                    # never rewrite durable authority to match a new gateway.
+                    try:
+                        retained_attestation = self._attestation_from_workload_evidence(
+                            stored_evidence
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise OmnigentOAuthHostError(
+                            "durable egress launch attestation is invalid",
+                            code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+                        ) from exc
+                    security_fields = (
+                        "profile_ref",
+                        "profile_digest",
+                        "enforcer_implementation",
+                        "backend_ref",
+                        "network_ref",
+                        "gateway_ref",
+                        "config_digest",
+                    )
+                    if any(
+                        getattr(retained_attestation, field)
+                        != getattr(egress_attestation, field)
+                        for field in security_fields
                     ):
                         raise OmnigentOAuthHostError(
-                            "durable egress cleanup authority does not match the launch",
-                            code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+                            "live gateway security authority changed from host launch",
+                            code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH",
                         )
-                    launch_ref = (
-                        str(existing_authority.get("launchEvidenceRef") or "").strip()
-                        or None
+                    egress_attestation = retained_attestation
+                    egress_evidence.update(
+                        retained_attestation.model_dump(by_alias=True, mode="json")
                     )
-                else:
+            elif retained_host:
+                raise OmnigentOAuthHostError(
+                    "retained host has no durable egress cleanup authority",
+                    code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+                )
+            if evidence_request is not None and artifact_gateway is not None:
+                if not isinstance(existing_authority, Mapping):
                     provisional_launch = self._host_egress_evidence_payload(
                         binding=binding,
                         host_lease=host_lease,
@@ -994,43 +1062,50 @@ class OmnigentOAuthHostRuntime:
             )
             observed_egress["attachmentRef"] = f"container:{attachment_identity}"
             egress_evidence.update(observed_egress)
-            if evidence_request is not None and artifact_gateway is not None:
-                existing_phase = (
-                    str(existing_authority.get("phase") or "attested")
-                    if isinstance(existing_authority, Mapping)
-                    else ""
+            existing_phase = (
+                str(existing_authority.get("phase") or "attested")
+                if isinstance(existing_authority, Mapping)
+                else ""
+            )
+            if existing_phase == "attested":
+                launch_ref = self._validate_reused_cleanup_authority(
+                    authority=existing_authority,
+                    launch=launch,
+                    egress_evidence=egress_evidence,
                 )
-                if existing_phase == "attested":
-                    launch_ref = self._validate_reused_cleanup_authority(
-                        authority=existing_authority,
-                        launch=launch,
+            elif evidence_request is not None and artifact_gateway is not None:
+                launch_evidence = self._host_egress_evidence_payload(
+                    binding=binding,
+                    host_lease=host_lease,
+                    launch=launch,
+                    egress_evidence=egress_evidence,
+                    evidence_request=evidence_request,
+                    state="launched",
+                    cleanup_result="pending",
+                    reconciliation_result="not_required",
+                )
+                launch_ref = await self._publish_host_egress_evidence(
+                    artifact_gateway=artifact_gateway,
+                    evidence_request=evidence_request,
+                    name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
+                    payload=launch_evidence,
+                )
+                if cleanup_authority_store is not None:
+                    await cleanup_authority_store.bind_egress_cleanup_authority(
+                        request=evidence_request,
+                        host_lease_ref=host_lease.lease_id,
                         egress_evidence=egress_evidence,
+                        launch_evidence_ref=launch_ref,
+                        phase="attested",
                     )
-                else:
-                    launch_evidence = self._host_egress_evidence_payload(
-                        binding=binding,
-                        host_lease=host_lease,
-                        launch=launch,
-                        egress_evidence=egress_evidence,
-                        evidence_request=evidence_request,
-                        state="launched",
-                        cleanup_result="pending",
-                        reconciliation_result="not_required",
-                    )
-                    launch_ref = await self._publish_host_egress_evidence(
-                        artifact_gateway=artifact_gateway,
-                        evidence_request=evidence_request,
-                        name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
-                        payload=launch_evidence,
-                    )
-                    if cleanup_authority_store is not None:
-                        await cleanup_authority_store.bind_egress_cleanup_authority(
-                            request=evidence_request,
-                            host_lease_ref=host_lease.lease_id,
-                            egress_evidence=egress_evidence,
-                            launch_evidence_ref=launch_ref,
-                            phase="attested",
-                        )
+                    if retained_host:
+                        retained_cleanup_evidence = dict(egress_evidence)
+                        retained_cleanup_ref = launch_ref
+            elif retained_host:
+                raise OmnigentOAuthHostError(
+                    "retained host attestation cannot be durably completed",
+                    code="OMNIGENT_EGRESS_EVIDENCE_UNAVAILABLE",
+                )
 
             # Only after full cleanup authority is durable may host login,
             # projection, registration, harness, or mounted-tool checks run.
@@ -1053,9 +1128,7 @@ class OmnigentOAuthHostRuntime:
                         host_lease=host_lease,
                         credential_ready=True,
                         projection_ready=False,
-                        elapsed_seconds=(
-                            time.monotonic() - static_enrollment_started
-                        ),
+                        elapsed_seconds=(time.monotonic() - static_enrollment_started),
                         fallback=exc,
                     )
             try:
@@ -1310,8 +1383,12 @@ class OmnigentOAuthHostRuntime:
         result without producing the assistant's final answer. Provider status
         alone is therefore not authoritative task-completion evidence. This
         check reads only item ordering and roles; prompt text, assistant text,
-        tool arguments, and tool output never cross this boundary.
+        tool arguments, and tool output never cross this boundary. Native turn
+        instrumentation mirrored after the final answer is not tool work only
+        when the provider snapshot identifies the canonical native Codex harness.
         """
+
+        from moonmind.omnigent.execute import turn_instrumentation_item_indexes
 
         normalized_session_id = str(session_id or "").strip()
         if not normalized_session_id:
@@ -1327,8 +1404,11 @@ class OmnigentOAuthHostRuntime:
         terminal_assistant_index = -1
         assistant_message_count = 0
         tool_result_count = 0
+        instrumentation_indexes = turn_instrumentation_item_indexes(
+            items, harness=snapshot.get("harness")
+        )
         for index, raw_item in enumerate(items):
-            if not isinstance(raw_item, Mapping):
+            if not isinstance(raw_item, Mapping) or index in instrumentation_indexes:
                 continue
             item_type = str(raw_item.get("type") or "").strip()
             data = raw_item.get("data")
@@ -2486,7 +2566,8 @@ class OmnigentOAuthHostRuntime:
         recovery_request: AgentExecutionRequest | None = None,
         recovery_store: Any | None = None,
         recovery_artifact_gateway: Any | None = None,
-    ) -> None:
+    ) -> bool:
+        """Launch a host, returning whether an owned running host was retained."""
         recovery_receipt = None
         # An existing container for this lease recovers without re-admission:
         # the run was already admitted under its persisted launch authority,
@@ -2536,7 +2617,7 @@ class OmnigentOAuthHostRuntime:
                         recovery_request=recovery_request, recovery_store=recovery_store,
                         recovery_artifact_gateway=recovery_artifact_gateway,
                     )
-            return
+            return True
         if (recovery_store is not None and recovery_request is not None
                 and hasattr(recovery_store, "get_existing")):
             row = await recovery_store.get_existing(recovery_request.idempotency_key)
@@ -2848,6 +2929,7 @@ class OmnigentOAuthHostRuntime:
             if recovery_receipt is None:
                 await self._run("docker", "rm", "-f", container_name, check=False)
             raise
+        return False
 
     @staticmethod
     def _retained_cpu_args(limit):

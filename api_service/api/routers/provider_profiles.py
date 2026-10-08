@@ -40,6 +40,7 @@ from api_service.services.provider_profile_creation import (
     infer_authentication_method,
     provider_api_key_strategy,
     provider_profile_creation_capabilities,
+    provider_profile_creation_choices,
     required_secret_roles,
     validate_credential_contract,
     validate_manual_credential_contract,
@@ -344,9 +345,12 @@ def _validate_profile_tier_policy(row: ManagedAgentProviderProfile) -> None:
     row.default_model_tier = default_model_tier
 
 
+PROFILE_ID_MAX_LENGTH = 128
+
+
 class ProviderProfileCreate(BaseModel):
     execution_configuration: ProfileExecutionConfiguration | None = None
-    profile_id: str = Field(..., max_length=128)
+    profile_id: str = Field(..., max_length=PROFILE_ID_MAX_LENGTH)
     runtime_id: str = Field(..., max_length=64)
     provider_id: str = Field(default="unknown", max_length=64)
     provider_label: Optional[str] = None
@@ -685,6 +689,24 @@ class ProviderProfileCreationPresetResponse(BaseModel):
     diagnostics: list[ProviderProfileCreationPresetDiagnostic]
     manual_creation_allowed: bool = False
     required_manual_fields: list[str] = Field(default_factory=list)
+
+
+class ProviderProfileCreationProviderChoice(BaseModel):
+    provider_id: str
+    label: str
+
+
+class ProviderProfileCreationHarnessChoice(BaseModel):
+    runtime_id: str
+    label: str
+    providers: list[ProviderProfileCreationProviderChoice]
+    custom_provider_allowed: bool = False
+
+
+class ProviderProfileCreationChoicesResponse(BaseModel):
+    version: str
+    harnesses: list[ProviderProfileCreationHarnessChoice]
+    profile_id_max_length: int
 
 
 class ProviderProfileTierPreviewStep(BaseModel):
@@ -1237,6 +1259,22 @@ async def get_creation_capabilities(
 
 
 @router.get(
+    "/creation-choices",
+    response_model=ProviderProfileCreationChoicesResponse,
+)
+async def get_creation_choices(
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Supported Harness/Provider choices for the creation form (#4001)."""
+
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    return {
+        **provider_profile_creation_choices(),
+        "profile_id_max_length": PROFILE_ID_MAX_LENGTH,
+    }
+
+
+@router.get(
     "/{profile_id}/capabilities",
     response_model=dict,
 )
@@ -1388,7 +1426,14 @@ async def create_profile(
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
-        raise HTTPException(status_code=409, detail="Profile already exists")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "provider_profile_id_conflict",
+                "field": "profile_id",
+                "message": "Profile already exists",
+            },
+        )
     normalization_body = body
     if body.import_existing_credential_volume:
         normalization_body = body.model_copy(

@@ -12,7 +12,10 @@ const CONNECTION_A: ProbeConnection = {
   displayName: 'Personal GitHub',
   policyRevision: 1,
   credentialRevision: 1,
-  assignmentCount: 1,
+  endpoint: 'https://github.com',
+  credentialKind: 'personal_access_token',
+  allowedOperations: ['read'],
+  assignments: [{ repository: 'owner/repo', providerRepoId: '1', operations: ['read'], revision: 1, verified: true }],
   lifecycle: 'active',
 };
 
@@ -21,7 +24,10 @@ const CONNECTION_B: ProbeConnection = {
   displayName: 'Work GitHub',
   policyRevision: 3,
   credentialRevision: 2,
-  assignmentCount: 0,
+  endpoint: 'https://github.com',
+  credentialKind: 'personal_access_token',
+  allowedOperations: ['read'],
+  assignments: [],
   lifecycle: 'active',
 };
 
@@ -51,7 +57,8 @@ const READ_RESPONSE = {
   defaultBranchAccessible: true,
   pullRequestAccessible: true,
   remoteDefaultBranch: 'trunk',
-  observations: { read: 'verified', write: 'untested' },
+  testedBranch: 'trunk',
+  observations: { read: 'verified', branch: 'verified', write: 'untested' },
   diagnostics: [],
   limitations: [],
 };
@@ -167,6 +174,31 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
     expect(await screen.findByText(/no assigned repositories/i)).toBeTruthy();
   });
 
+  it('reports an unassigned repository as not checked, never as verified', async () => {
+    stubFetch({
+      connectionId: 'work-github',
+      repo: 'other/unassigned',
+      credentialSource: { resolved: false },
+      repositoryAccessible: null,
+      observations: { read: 'not_checked', branch: 'not_checked', write: 'untested' },
+      diagnostics: [
+        {
+          operation: 'repository_assignment',
+          message: 'other/unassigned is not assigned to this connection; assign it before testing.',
+          retryable: false,
+        },
+      ],
+    });
+    renderPanel({ connection: CONNECTION_B, initialRepo: 'other/unassigned' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText('Read access was not checked')).toBeTruthy();
+    expect(screen.getByText(/is not assigned to this connection/i)).toBeTruthy();
+    expect(screen.getByText(/Tests read only assigned repositories/i)).toBeTruthy();
+    expect(screen.queryByText(/Read access verified/i)).toBeNull();
+  });
+
   it('discards a late response after switching A to B and back to A', async () => {
     const { fetchMock, pending } = deferredFetch();
     const { select } = renderPanel();
@@ -253,6 +285,73 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
     expect(screen.getByText(/requires the settings.effective.read permission/i)).toBeTruthy();
     select({ ...CONNECTION_A, lifecycle: 'disabled' });
     expect(button().disabled).toBe(true);
+  });
+
+  it('distinguishes an unknown repository, an empty repository and a missing branch', async () => {
+    stubFetch({
+      ...READ_RESPONSE,
+      repositoryAccessible: false,
+      defaultBranchAccessible: null,
+      remoteDefaultBranch: null,
+      testedBranch: null,
+      observations: { read: 'not_found', branch: 'not_checked', write: 'untested' },
+    });
+    const { unmount } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/Repository not found, or this connection cannot see it/)).toBeTruthy();
+    expect(screen.queryByText(/Read access denied/)).toBeNull();
+    unmount();
+
+    stubFetch({
+      ...READ_RESPONSE,
+      defaultBranchAccessible: false,
+      testedBranch: 'main',
+      remoteDefaultBranch: 'main',
+      observations: { read: 'verified', branch: 'empty_repository', write: 'untested' },
+    });
+    const empty = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/The repository is empty/)).toBeTruthy();
+    expect(screen.getByText('Read access verified')).toBeTruthy();
+    empty.unmount();
+
+    stubFetch({
+      ...READ_RESPONSE,
+      defaultBranchAccessible: false,
+      testedBranch: 'release',
+      observations: { read: 'verified', branch: 'missing', write: 'untested' },
+    });
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+    expect(await screen.findByText(/was not found in this repository/)).toBeTruthy();
+    expect(screen.getByText('release')).toBeTruthy();
+  });
+
+  it('labels reported permissions as metadata, not a tested write', async () => {
+    stubFetch({ ...READ_RESPONSE, reportedPermissions: { push: true, pull: true } });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(/GitHub reports push permission/)).toBeTruthy();
+    expect(screen.getByText(/Write access not tested/i)).toBeTruthy();
+  });
+
+  it.each([60, 90])('recommends a %s-second throttle retry without claiming its provenance', async (seconds) => {
+    stubFetch({
+      ...OUTAGE_RESPONSE,
+      retryAfterSeconds: seconds,
+      diagnostics: [
+        { operation: 'repository', httpStatus: 429, message: 'Too many requests', retryable: true },
+      ],
+    });
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
+
+    expect(await screen.findByText(new RegExp(`Wait about ${seconds} seconds before testing again`))).toBeTruthy();
+    expect(screen.queryByText(/GitHub asked/)).toBeNull();
+    expect(screen.queryByText(/Read access denied/)).toBeNull();
   });
 
   it('renders backend error responses with their detail and surfaces a notice', async () => {

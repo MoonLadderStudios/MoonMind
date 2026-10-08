@@ -296,6 +296,7 @@ Optional (only when product filtering requires them):
 - `mm_target_skill` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_stage` (owner: `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md §5.2`)
 - `mm_title` (owner: `moonmind/workflows/temporal/service.py`)
+- `mm_provider_profile` (owner: `moonmind/workflows/temporal/service.py`)
 - `mm_has_dependencies` (owner: `moonmind/workflows/temporal/workflows/run.py`)
 - `mm_dependency_count` (owner: `moonmind/workflows/temporal/workflows/run.py`)
 - `AgentRunId` (owner: `moonmind/workflows/temporal/workflows/run.py`)

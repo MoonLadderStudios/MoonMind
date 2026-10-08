@@ -684,6 +684,115 @@ async def test_create_execution_omits_blank_runtime_and_skill_search_attributes(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_records_provider_profile_projection_4640(tmp_path):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        provider_profile_id_token,
+        provider_profile_state_token,
+    )
+
+    async with temporal_db(tmp_path) as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="acct-primary",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                account_label="OpenAI · Primary",
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="acct-review",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        await session.commit()
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Profile run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "acct-primary",
+                "agentProfile": {"profileId": "execution-config-1"},
+                "workflow": {
+                    "instructions": "Do the work.",
+                    "steps": [
+                        {
+                            "instructions": "Review",
+                            "runtime": {
+                                "mode": "codex_cli",
+                                "providerProfileRef": "acct-review",
+                            },
+                        }
+                    ],
+                },
+            },
+            idempotency_key=None,
+        )
+
+        assert record.memo["providerProfile"] == {
+            "selectionState": "recorded",
+            "profiles": [
+                {"id": "acct-primary", "label": "OpenAI · Primary"},
+                {"id": "acct-review"},
+            ],
+            "profileCount": 2,
+        }
+        assert record.search_attributes["mm_provider_profile"].split() == [
+            provider_profile_state_token("recorded"),
+            provider_profile_id_token("acct-primary"),
+            provider_profile_id_token("acct-review"),
+        ]
+
+        # Renaming or deleting the live profile cannot rewrite the snapshot.
+        live = await session.get(ManagedAgentProviderProfile, "acct-primary")
+        await session.delete(live)
+        await session.commit()
+        stored = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
+        assert stored.memo["providerProfile"]["profiles"][0]["label"] == (
+            "OpenAI · Primary"
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_records_pending_provider_profile_without_guessing_4640(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Default profile run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "model": "gpt-5",
+                "workflow": {"instructions": "Do the work."},
+            },
+            idempotency_key=None,
+        )
+
+        assert record.memo["providerProfile"] == {
+            "selectionState": "pending",
+            "profiles": [],
+            "profileCount": 0,
+        }
+        assert record.search_attributes["mm_provider_profile"] == "ppstpending"
+
+
+@pytest.mark.asyncio
 async def test_create_execution_routes_user_workflow_after_mm730_cutover(
     tmp_path,
     mock_client_adapter,

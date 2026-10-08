@@ -150,7 +150,11 @@ export function WorkflowActionsMenu({
       className="td-workflow-actions-menu"
       ref={rootRef}
       onBlur={(event) => {
-        if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        // Window/tab blur has no related target in Firefox, but focus stays
+        // on the menu item within this document. Only dismiss when it leaves
+        // the menu, not when another browser page becomes active.
+        const nextFocus = event.relatedTarget ?? event.currentTarget.ownerDocument.activeElement;
+        if (open && !event.currentTarget.contains(nextFocus as Node | null)) {
           setOpen(false);
         }
       }}

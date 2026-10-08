@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlsplit
 
 from moonmind.auth.bound_acquisition import AcquiredCredential, SelectionSnapshot
@@ -134,7 +134,7 @@ class OmnigentGithubCredentialService:
 
     def __init__(
         self,
-        backend: DockerCommandBackend,
+        backend: DockerCommandBackend | None,
         *,
         session_factory: Any | None = None,
         artifact_gateway: Any | None = None,
@@ -147,10 +147,11 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> tuple[
         str, dict[str, Any], dict[str, Any], SelectionSnapshot, RepositoryIdentity
     ]:
@@ -159,6 +160,17 @@ class OmnigentGithubCredentialService:
             "collaboration": "collaboration",
             "destination_write": "destination",
         }.get(role)
+        if consumer not in {"agent", "native"}:
+            raise ValueError("repository consumer is unsupported")
+        if consumer == "native" and (
+            request is not None or role != "collaboration" or operation not in {"read", "review_request"}
+        ):
+            raise ValueError("native repository consumer only admits trusted review operations")
+        if request is None and consumer != "native":
+            raise ValueError("native repository use requires an explicit consumer")
+        binding = plan.payload.credentialBindings.get(slot) if plan is not None else None
+        if binding is not None and getattr(binding, "consumer", "agent") == "native" and consumer != "native":
+            raise ValueError("native repository authority cannot be consumed by an agent")
         access = (
             plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
             if plan is not None
@@ -168,8 +180,14 @@ class OmnigentGithubCredentialService:
             raise ValueError(
                 "repository operation requires its admitted access snapshot"
             )
-        body = await self._artifacts.read_repository_access_snapshot(
-            access["artifactRef"], request=request
+        # Native plan consumers use the gateway's explicit principal ACL;
+        # agent consumers retain their linked Step Execution authority.
+        body = (
+            await self._artifacts.read_repository_access_snapshot(
+                access["artifactRef"], request=request
+            )
+            if request is not None
+            else await self._artifacts.read_bytes(access["artifactRef"])
         )
         if (
             "repository-access-snapshot:sha256:" + hashlib.sha256(body).hexdigest()
@@ -180,6 +198,12 @@ class OmnigentGithubCredentialService:
         snapshot = SelectionSnapshot.model_validate(payload["selection"])
         identity = RepositoryIdentity.model_validate(payload["repositoryIdentity"])
         if (
+            binding is not None
+            and getattr(binding, "consumer", "agent") == "native"
+            and not set(snapshot.operations).issubset({"read", "review_request"})
+        ):
+            raise ValueError("native repository authority has unsupported operations")
+        if (
             normalize_endpoint(identity.endpoint)
             != normalize_endpoint(snapshot.endpoint)
             or identity.route_id() != snapshot.route_id
@@ -189,14 +213,22 @@ class OmnigentGithubCredentialService:
         clone_source = github_clone_source_from_identity(identity)
         # A durable schedule plan can serve several fresh execution owners.
         # Bind to the admitted plan rather than its authoring subject.
-        requested_plan_ref = request.parameters.get("executionPlanRef")
-        if request.step_execution and request.step_execution.omnigent_execution_plan:
+        requested_plan_ref = (
+            request.parameters.get("executionPlanRef") if request is not None else None
+        )
+        if (
+            request is not None
+            and request.step_execution
+            and request.step_execution.omnigent_execution_plan
+        ):
             requested_plan_ref = request.step_execution.omnigent_execution_plan.plan_ref
         if requested_plan_ref and requested_plan_ref != plan.planRef:
             raise ValueError(
                 "repository consumer conflicts with admitted execution plan"
             )
-        requested_repository = repository or github_repository_from_request(request)
+        requested_repository = repository or (
+            github_repository_from_request(request) if request is not None else ""
+        )
         direct_name = str(requested_repository or "").strip().rstrip("/")
         direct_name = direct_name.removesuffix(".git")
         if _REPOSITORY_NAME.fullmatch(direct_name):
@@ -226,10 +258,11 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None = None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> RepositoryIdentity:
         """Resolve the snapshot's target without acquiring or exposing a token."""
         _slot, _access, _payload, _snapshot, identity = (
@@ -239,6 +272,7 @@ class OmnigentGithubCredentialService:
                 role=role,
                 operation=operation,
                 repository=repository,
+                consumer=consumer,
             )
         )
         return identity
@@ -247,12 +281,13 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None = None,
         execution_owner: str | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> AcquiredCredential | None:
         """Consume the compiler's immutable selection, never current defaults."""
         from api_service.services.repository_connections import (
@@ -268,6 +303,11 @@ class OmnigentGithubCredentialService:
             revision_reader_for,
         )
 
+        if request is None and (not repository or not execution_owner):
+            raise ValueError(
+                "native repository use requires an explicit target and owner"
+            )
+        use_owner = execution_owner or request.idempotency_key
         slot, access, payload, snapshot, identity = (
             await self._verified_repository_access(
                 plan=plan,
@@ -275,6 +315,7 @@ class OmnigentGithubCredentialService:
                 role=role,
                 operation=operation,
                 repository=repository,
+                consumer=consumer,
             )
         )
         binding = plan.payload.credentialBindings.get(slot)
@@ -347,8 +388,8 @@ class OmnigentGithubCredentialService:
         acquired = await acquirer.acquire(
             AcquisitionRequest(
                 snapshot=snapshot,
-                execution_owner=execution_owner or request.idempotency_key,
-                operation_id=f"{execution_owner or request.idempotency_key}:{slot}:{operation}",
+                execution_owner=use_owner,
+                operation_id=f"{use_owner}:{slot}:{operation}",
             )
         )
         try:

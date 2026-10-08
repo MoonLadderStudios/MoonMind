@@ -1560,7 +1560,26 @@ def _build_runtime_planner():
             instructions = None
 
         if not instructions:
-            if selected_skill_name:
+            explicit_steps = task_payload.get("steps")
+            native_target_step = (
+                explicit_steps[0]
+                if isinstance(explicit_steps, list)
+                and len(explicit_steps) == 1
+                and isinstance(explicit_steps[0], Mapping)
+                else {}
+            )
+            native_target_tool = _coerce_mapping(native_target_step.get("tool"))
+            if (
+                native_target_step.get("type") == "tool"
+                and native_target_tool.get("id") == "github.resolve_pull_request_target"
+            ):
+                # The shipped native-only preset owns its instructions on the
+                # explicit tool step; no top-level agent request is needed.
+                instructions = (
+                    native_target_step.get("instructions")
+                    or "Resolve the declared pull request."
+                )
+            elif selected_skill_name:
                 instructions = f"Execute skill '{selected_skill_name}'"
                 if selected_skill_inputs:
                     instructions += " with inputs:\n" + json.dumps(
@@ -2098,6 +2117,11 @@ def _build_runtime_planner():
                     }
                     if not has_explicit_step_skill:
                         _drop_inherited_skill_context(step_node_inputs)
+                        # Drop inherited Skill arguments, but keep this Step's
+                        # own data for dependency resolution and AgentRun.
+                        authored_inputs = step_entry.get("inputs")
+                        if isinstance(authored_inputs, Mapping):
+                            step_node_inputs["inputs"] = dict(authored_inputs)
                     step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
                         step_node_inputs["runtime"] = merge_runtime_selection(

@@ -273,3 +273,177 @@ async def test_janitor_skips_live_owner_and_reconciles_closed_binding_once():
     assert summary["reconciled"] == 1
     assert summary["conflicts"] == 1
     assert summary["failures"] == []
+
+
+@pytest.mark.asyncio
+async def test_failed_save_retains_workspace_without_holding_capacity():
+    """A persistently failing save cannot pin credentials, host, or capacity.
+
+    Cleanup stops the writer, records one durable unsaved decision for the
+    retained workspace, and still releases credentials and provider capacity.
+    A later finalization retries only the save, from the retained workspace,
+    then lifts the decision; compute is never rerun.
+    """
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="cleanup-failed-save")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "4" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase(
+        "workspace", {"workspaceSpec": {"workspaceLocator": {"workspaceId": "ws-1"}}}
+    )
+    await sink.record_phase("compute", {"summary": "confirmed compute"})
+    binding = sink.binding
+    order: list[str] = []
+    calls = {
+        "session_drain": 0,
+        "save": 0,
+        "prepared": 0,
+        "authorities": 0,
+        "credentials": 0,
+        "provider": 0,
+    }
+    realizer = _cleanup_realizer(store, order=order, calls=calls)
+    retained: list[str] = []
+    released: list[int] = []
+    marker = {
+        "version": "unsaved-v1",
+        "availability": "locally_retained_but_unsaved",
+        "reasonCode": "WORKSPACE_SAVE_UNAVAILABLE",
+        "recordedAt": "2026-10-07T00:00:00+00:00",
+        "retainUntil": "2026-11-06T00:00:00+00:00",
+    }
+    saved = {"checkpointRef": "artifact://late-save", "archiveRef": "artifact://a"}
+    save_attempts = []
+
+    async def save_request_workspace(_request):
+        save_attempts.append(1)
+        if len(save_attempts) == 1:
+            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+            raise HarnessPlatformError(
+                "artifact storage unavailable", code="WORKSPACE_SAVE_UNAVAILABLE"
+            )
+        return saved
+
+    async def retain_unsaved_request_workspace(_request, *, reason_code):
+        retained.append(reason_code)
+        order.append("retain")
+        return marker
+
+    async def release_unsaved_request_workspace(_request):
+        released.append(1)
+
+    realizer._workspace_publisher = SimpleNamespace(
+        save_request_workspace=save_request_workspace,
+        retain_unsaved_request_workspace=retain_unsaved_request_workspace,
+        release_unsaved_request_workspace=release_unsaved_request_workspace,
+    )
+
+    cleaned, _ = await realizer._cleanup(
+        request=request,
+        binding=binding,
+        host_lease=None,
+        host_context=None,
+        prepared=None,
+        credential_handles=("credential-handle-1",),
+        acquired=("lease-a",),
+    )
+
+    assert cleaned.state is RuntimeBindingState.cleaned
+    phases = (await store.get(binding.bindingId)).phaseResults or {}
+    assert "saved" not in phases
+    assert phases["saveDeferred"] == marker
+    assert retained == ["WORKSPACE_SAVE_UNAVAILABLE"]
+    assert calls["credentials"] == 1 and calls["provider"] == 1
+    assert order.index("retain") < order.index("credentials")
+
+    # Finalization resumes only the unfinished save; nothing reruns compute.
+    published = []
+
+    async def publish(_bound, result):
+        published.append(result.summary)
+        return result
+
+    realizer._publish_repository = publish
+    realizer._interrupted_admission_result = lambda *_args: _none()
+    result = await realizer._reconcile_owned_finalization(
+        request.model_copy(
+            update={
+                "workspace_spec": {
+                    "workspaceLocator": {"kind": "sandbox", "workspaceId": "ws-1"}
+                }
+            }
+        ),
+        await store.get(binding.bindingId),
+    )
+    phases = (await store.get(binding.bindingId)).phaseResults or {}
+    assert phases["saved"] == saved
+    assert result.metadata["savedWorkspaceCheckpoint"] == saved
+    assert len(save_attempts) == 2
+    assert released == [1]
+    assert published == ["confirmed compute"]
+
+
+async def _none():
+    return None
+
+
+@pytest.mark.asyncio
+async def test_save_committed_with_lost_acknowledgement_releases_unsaved_marker():
+    """A save that committed before its acknowledgement failed is durable.
+
+    The failure path records an unsaved decision before it can observe the
+    committed ``saved`` phase. Once it does, the marker must be lifted so
+    the already-durable workspace returns to ordinary retention instead of
+    being held for the full unsaved window.
+    """
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _request(idempotency_key="lost-save-ack")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "5" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase(
+        "workspace", {"workspaceSpec": {"workspaceLocator": {"workspaceId": "ws-1"}}}
+    )
+    binding = sink.binding
+    realizer = _cleanup_realizer(store, order=[], calls={"save": 0})
+    saved = {"checkpointRef": "artifact://committed-save"}
+    retained: list[str] = []
+    released: list[int] = []
+
+    async def save_request_workspace(_request):
+        # The save commits, then its acknowledgement is lost.
+        await RuntimeBindingSessionAuthoritySink(
+            store, await store.get(binding.bindingId)
+        ).record_phase("saved", saved)
+        raise ConnectionError("acknowledgement lost")
+
+    async def retain_unsaved_request_workspace(_request, *, reason_code):
+        retained.append(reason_code)
+        return {"availability": "locally_retained_but_unsaved"}
+
+    async def release_unsaved_request_workspace(_request):
+        released.append(1)
+
+    realizer._workspace_publisher = SimpleNamespace(
+        save_request_workspace=save_request_workspace,
+        retain_unsaved_request_workspace=retain_unsaved_request_workspace,
+        release_unsaved_request_workspace=release_unsaved_request_workspace,
+    )
+
+    result = await realizer._save_or_retain(request, binding)
+
+    phases = result.phaseResults or {}
+    assert phases["saved"] == saved
+    assert "saveDeferred" not in phases
+    assert retained == ["ConnectionError"]
+    assert released == [1]

@@ -12,6 +12,7 @@ composition root (:mod:`moonmind.omnigent.production`).
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -392,8 +393,48 @@ class GenericOmnigentHostRuntime:
             "hostLaunchSpec": spec.model_dump(by_alias=True, mode="json"),
             "hostCleanupRef": launch["hostCleanupRef"],
             "stateCleanupRef": launch["stateCleanupRef"],
+            **(
+                {
+                    # Capabilities are minted for the launch timeout, but the
+                    # session can run until its activity deadline. Persist
+                    # what renewal needs so a resumed host renews the same
+                    # scope without re-resolving current host defaults.
+                    "capabilityRenewal": {
+                        "lifetimeSeconds": int(launch_policy.limits["timeoutSeconds"]),
+                        "workspaceAccessMode": prepared.workspace_attachment.get(
+                            "accessMode"
+                        ),
+                    }
+                }
+                if runtime_environment and launch.get("controlVolumeRef")
+                else {}
+            ),
             **attestations,
         }
+
+    async def renew_runtime_capabilities(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        host_context: Mapping[str, Any],
+    ) -> tuple[str, ...]:
+        """Re-mint a live host's capabilities and replace its capability files."""
+
+        renewal = host_context["capabilityRenewal"]
+        environment = self._runtime_environment.mint(
+            request=request,
+            plan=plan,
+            host_lease_ref=host_lease_ref,
+            capability_lifetime_seconds=int(renewal["lifetimeSeconds"]),
+            workspace_attachment={"accessMode": renewal["workspaceAccessMode"]},
+        )
+        return await self._launcher.renew_capability_files(
+            container_name=str(host_context["containerName"]),
+            control_volume=str(host_context["controlVolumeRef"]),
+            runtime_environment=environment,
+        )
 
     async def cleanup(
         self,

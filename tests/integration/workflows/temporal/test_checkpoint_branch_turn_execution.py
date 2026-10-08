@@ -103,6 +103,7 @@ WORKFLOW_BOUNDARY_RELEASE: asyncio.Event | None = None
 WORKFLOW_FAILURE_BOUNDARY: tuple[str, str] | None = None
 DURABLE_CHECKPOINT_REF: str | None = None
 CHECKPOINT_PAYLOADS: list[dict] = []
+TERMINAL_PAYLOADS: list[dict] = []
 REAL_AGENT_REQUESTS: dict[str, AgentExecutionRequest] = {}
 
 
@@ -285,6 +286,7 @@ async def _durable_mark_running(payload: dict) -> None:
 
 @activity.defn(name="workspace.capture_checkpoint")
 async def _capture_workspace(payload: dict) -> dict:
+    await _pause_workflow_boundary("parent_capture", "before")
     CALLS.append(("capture", payload["idempotencyKey"]))
     _record_effect_and_inject("capture", payload["idempotencyKey"])
     return {
@@ -329,6 +331,7 @@ async def _durable_create_checkpoint(payload: dict) -> dict:
 
 @activity.defn(name="checkpoint_branch.turn.persist_terminal")
 async def _persist_terminal(payload: dict) -> dict:
+    TERMINAL_PAYLOADS.append(copy.deepcopy(payload))
     CALLS.append(("terminal", payload["outcome"]))
     _record_effect_and_inject(
         "terminal",
@@ -538,6 +541,7 @@ async def _run(
     TRANSIENT_FAILURES.update(transient_failures or {})
     EFFECT_IDENTITIES.clear()
     CHECKPOINT_PAYLOADS.clear()
+    TERMINAL_PAYLOADS.clear()
     REAL_AGENT_REQUESTS.clear()
     queue = f"checkpoint-branch-turn-{uuid4()}"
     try:
@@ -1764,6 +1768,54 @@ async def test_checkpoint_branch_turn_cancellation_persists_terminal_handoff() -
     ).replay_workflow(history)
 
 
+async def test_cancel_after_successful_child_keeps_actual_result_canceled() -> None:
+    """Cancellation during parent capture keeps the real child candidate.
+
+    The child already computed, so its outputs and evidence are preserved
+    for the finalization owner, but the turn stays canceled: preservation
+    never upgrades the outcome.
+    """
+
+    global WORKFLOW_BOUNDARY
+    global WORKFLOW_BOUNDARY_REACHED
+    global WORKFLOW_BOUNDARY_RELEASE
+
+    CALLS.clear()
+    WORKFLOW_BOUNDARY = ("parent_capture", "before")
+    WORKFLOW_BOUNDARY_REACHED = asyncio.Event()
+    WORKFLOW_BOUNDARY_RELEASE = asyncio.Event()
+    try:
+        result, history = await _run(
+            "success", cancel=True, cancel_ready=WORKFLOW_BOUNDARY_REACHED
+        )
+    finally:
+        WORKFLOW_BOUNDARY_RELEASE.set()
+        WORKFLOW_BOUNDARY = None
+        WORKFLOW_BOUNDARY_REACHED = None
+        WORKFLOW_BOUNDARY_RELEASE = None
+
+    assert result is None
+    terminal = TERMINAL_PAYLOADS[-1]
+    assert terminal["outcome"] == "canceled"
+    agent_result = terminal["agentResult"]
+    assert agent_result["failureClass"] == "canceled"
+    assert agent_result["outputRefs"] == ["artifact://output/branch-result"]
+    assert agent_result["diagnosticsRef"] == "artifact://diagnostics/runtime"
+    assert agent_result["metadata"]["omnigentCheckpointCapture"]["terminalRef"] == (
+        "artifact://terminal/fresh-session"
+    )
+    assert terminal["saveCommit"] == {
+        "status": "incomplete",
+        "reason": "canceled-before-save",
+        "orphanAction": "reconcile-with-finalization-owner",
+    }
+    assert "checkpoint" not in [name for name, _value in CALLS]
+    await Replayer(
+        workflows=[MoonMindCheckpointBranchTurnWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
 async def _terminal_activity_database(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/terminal.db")
     async with engine.begin() as connection:
@@ -2340,6 +2392,191 @@ async def test_terminal_activity_persists_successful_verification_handoff(
         assert branch is not None
         assert branch.current_head_checkpoint_ref == refs["checkpoint"]
         assert branch.current_head_version == 1
+    await engine.dispose()
+
+
+async def test_terminal_activity_keeps_child_saved_candidate_on_parent_capture_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child's own saved checkpoint survives a failed parent capture.
+
+    The turn terminalizes failed with save-incomplete evidence, and the
+    retained agent result still references the child's verified saved
+    candidate so the finalization owner can restore it without a rerun.
+    """
+
+    engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
+    saved = {
+        "kind": "worktree_archive",
+        "baseCommit": "def456",
+        "archiveRef": refs["workspace"],
+        "archiveDigest": "sha256:" + "1" * 64,
+        "manifestRef": refs["head"],
+        "manifestDigest": "sha256:" + "2" * 64,
+        "checkpointRef": refs["checkpoint"],
+        "recoveryEvidence": {"reasonCode": "repository_unavailable"},
+    }
+    payload = {
+        "workflowId": "source-workflow",
+        "branchId": "branch-1",
+        "branchTurnId": "turn-1",
+        "principal": "service:test",
+        "sourceNamespace": "default",
+        "sourceRunId": "source-run",
+        "outcome": "failed",
+        "agentResult": {
+            "outputRefs": [refs["output"]],
+            "diagnosticsRef": refs["diagnostics"],
+            "summary": "child computed before the parent capture failed",
+            "metadata": {
+                "savedWorkspaceCheckpoint": saved,
+                "workPreserved": True,
+            },
+        },
+        "checkpoint": {},
+        "saveCommit": {
+            "status": "incomplete",
+            "reason": "workspace-capture-failed",
+            "orphanAction": "reconcile-with-finalization-owner",
+        },
+    }
+
+    result = await persist_checkpoint_branch_turn_terminal(payload)
+
+    assert result["status"] == "failed"
+    assert result["checkpointRef"] is None
+    assert result["saveCommit"]["status"] == "incomplete"
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        _artifact, body = await artifacts.read(
+            artifact_id=result["agentResultRef"].removeprefix("artifact://"),
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        stored = json.loads(body)
+        assert "failureClass" not in stored
+        candidate = stored["metadata"]["savedWorkspaceCheckpoint"]
+        assert stored["metadata"]["workPreserved"] is True
+        assert candidate == {
+            key: saved[key]
+            for key in (
+                "kind",
+                "baseCommit",
+                "archiveRef",
+                "archiveDigest",
+                "manifestRef",
+                "manifestDigest",
+                "checkpointRef",
+            )
+        }
+        branch = await session.get(WorkflowCheckpointBranch, "branch-1")
+        assert branch is not None
+        assert branch.current_head_checkpoint_ref == "artifact://source/checkpoint"
+    await engine.dispose()
+
+
+async def test_terminal_activity_retains_saved_manifest_dependencies(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restoring a saved candidate needs the artifacts its manifest names.
+
+    The saved manifest embeds the Git history bundle and staged index
+    patch. Both must be retained with the candidate and projected beside
+    it, so they cannot expire while the top-level refs stay pinned.
+    """
+
+    engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session), store=store
+        )
+
+        async def _seed(body: bytes, content_type: str) -> str:
+            artifact, _upload = await artifacts.create(
+                principal="service:test",
+                content_type=content_type,
+                size_bytes=len(body),
+                sha256=None,
+                retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
+                metadata_json={"kind": "seed.saved-dependency"},
+            )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="service:test",
+                payload=body,
+                content_type=content_type,
+            )
+            return f"artifact://{artifact.artifact_id}"
+
+        history_ref = await _seed(b"bundle", "application/x-git-bundle")
+        index_ref = await _seed(
+            b"index", "application/vnd.moonmind.git-index-patch"
+        )
+        manifest_ref = await _seed(
+            json.dumps(
+                {
+                    "schemaVersion": "v1",
+                    "kind": "worktree_archive",
+                    "archiveRef": refs["workspace"],
+                    "gitHistory": {"ref": history_ref, "headCommit": "def456"},
+                    "git": {"indexPatch": {"ref": index_ref, "paths": ["a.py"]}},
+                }
+            ).encode(),
+            "application/json",
+        )
+        await session.commit()
+
+    saved = {
+        "kind": "worktree_archive",
+        "baseCommit": "def456",
+        "archiveRef": refs["workspace"],
+        "manifestRef": manifest_ref,
+        "checkpointRef": refs["checkpoint"],
+    }
+    result = await persist_checkpoint_branch_turn_terminal(
+        {
+            "workflowId": "source-workflow",
+            "branchId": "branch-1",
+            "branchTurnId": "turn-1",
+            "principal": "service:test",
+            "sourceNamespace": "default",
+            "sourceRunId": "source-run",
+            "outcome": "failed",
+            "agentResult": {
+                "summary": "child saved before the parent capture failed",
+                "metadata": {"savedWorkspaceCheckpoint": saved},
+            },
+            "checkpoint": {},
+            "saveCommit": {
+                "status": "incomplete",
+                "reason": "workspace-capture-failed",
+                "orphanAction": "reconcile-with-finalization-owner",
+            },
+        }
+    )
+
+    async with sessions() as session:
+        artifacts = TemporalArtifactService(
+            get_temporal_artifact_repository(session), store=store
+        )
+        _artifact, body = await artifacts.read(
+            artifact_id=result["agentResultRef"].removeprefix("artifact://"),
+            principal="service:checkpoint-branch-turn",
+            allow_restricted_raw=True,
+        )
+        candidate = json.loads(body)["metadata"]["savedWorkspaceCheckpoint"]
+        assert candidate["dependencyRefs"] == [history_ref, index_ref]
+        for ref in (manifest_ref, history_ref, index_ref):
+            _metadata, _links, pinned, _policy = await artifacts.get_metadata(
+                artifact_id=ref.removeprefix("artifact://"),
+                principal="service:checkpoint-branch-turn",
+            )
+            assert pinned, ref
     await engine.dispose()
 
 
