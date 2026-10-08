@@ -1411,12 +1411,50 @@ class RecurringWorkflowsService:
             ).runtime_id
             == "omnigent"
         )
+        selects_omnigent = (
+            "omnigent" in authored_profile.runtime_ids or defaults_to_omnigent
+        )
+        retained_snapshot = None
+        if (
+            selects_omnigent
+            and agent_profile_selection is None
+            and initial_parameters.get("agentProfileSnapshot")
+            and not initial_parameters.get("omnigentExecutionPlan")
+        ):
+            supplied_snapshot = initial_parameters["agentProfileSnapshot"]
+            usage = await self._session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_type == "schedule",
+                    OmnigentAgentProfileUsage.consumer_id == str(definition_id),
+                )
+            )
+            if (
+                not isinstance(supplied_snapshot, Mapping)
+                or usage is None
+                or usage.profile_id != supplied_snapshot.get("profileId")
+                or usage.version != supplied_snapshot.get("version")
+                or usage.digest != supplied_snapshot.get("digest")
+                or usage.effective_snapshot != supplied_snapshot
+            ):
+                raise RecurringWorkflowValidationError(
+                    "an unverified Agent Profile snapshot without an execution "
+                    "plan cannot authorize a schedule; submit an agentProfile "
+                    "selection for new launch authority"
+                )
+            # A retained definition already owns this exact frozen authority.
+            # Derive its missing plan without reselecting present-day defaults
+            # or accepting authored changes to the server-owned snapshot.
+            retained_snapshot = copy.deepcopy(dict(usage.effective_snapshot))
         needs_profile_snapshot = (
-            ("omnigent" in authored_profile.runtime_ids or defaults_to_omnigent)
+            selects_omnigent
             and not initial_parameters.get("agentProfileSnapshot")
             and not initial_parameters.get("omnigentExecutionPlan")
         )
-        if agent_profile_selection is None and not needs_profile_snapshot:
+        if (
+            agent_profile_selection is None
+            and not needs_profile_snapshot
+            and retained_snapshot is None
+        ):
             return None
         if require_actor and actor is None:
             raise RecurringWorkflowValidationError(
@@ -1427,6 +1465,8 @@ class RecurringWorkflowsService:
                 self._session, selection=agent_profile_selection,
                 consumer_type="schedule", consumer_id=str(definition_id), user=actor,
             )
+        elif retained_snapshot is not None:
+            snapshot = retained_snapshot
         else:
             snapshot = await resolve_default_agent_profile_snapshot(
                 self._session,
