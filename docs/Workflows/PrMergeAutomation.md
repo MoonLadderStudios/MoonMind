@@ -302,13 +302,27 @@ evidence and refreshes the full comment inventory after observing completion,
 then revalidates the remote head. Merge operations require that verified head
 to still match. When a request has multiple provider response comments, the
 latest authoritative response takes precedence over an earlier failure or clean result.
+
+A provider comment refusing the request on its unchanged head (for Codex, a
+usage-limit notice such as `You have reached your Codex usage limits for code
+reviews.`) is an authoritative response but not completion. The gate and the
+portable Skill read provider replies through the same
+`pr_resolver_core.review_providers` helper: a reply is either the registered
+clean result or a refusal whose opening line carries one of the provider's
+registered failure markers. Status tables, task replies, and findings stay
+non-authoritative. When the latest authoritative response is a refusal and no
+submitted review or clean reaction completes the request, the gate blocks with
+non-retryable `automated_review_request_failed`. The Skill's snapshot reports
+`requestFailed` and `requestFailure` instead of `requestPending`, and it
+classifies `automated_review_request_failed` as `manual_review`, ahead of
+remediation, rather than waiting. A newer request supersedes the refusal.
 Once that head has a completed review, review-only finishes even with findings.
 Merge and fix-only also require no remaining blockers before finishing according
 to their finishMode. Completion does not request another review for the same head.
 
 ### 11.3.5 No-progress and termination rules
 
-The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
+The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable or provider-refused review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
 
 A no-op fix pass is successful only when the latest required review covers the current head and no actionable comments remain. Merge finish continues until merged/already-merged plus required tracker effects. Fix-only finishes at verified review-clean without merge. Neither changes its finish mode at runtime to make a gate green.
 

@@ -1,19 +1,26 @@
 """Automated review provider identities shared by every resolver host.
 
 This table is the single canonical mapping from a provider-neutral review
-provider name to the exact request command and the reviewer identities whose
-results count as that provider's answer.  The portable Skill uses it to decide
-whether a fresh review exists for the current head; MoonMind uses it so a child
-run can only ever ask for a *configured* provider and never for arbitrary
-comment text.
+provider name to the exact request command, the reviewer identities whose
+results count as that provider's answer, and how that answer's text is read.
+The portable Skill uses it to decide whether a fresh review exists for the
+current head; MoonMind uses it so a child run can only ever ask for a
+*configured* provider and never for arbitrary comment text. Both hosts read a
+provider's reply to a request through :func:`latest_review_reply`.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
+from typing import Any
+
+# ``failure_class`` values share the canonical provider-failure class names so a
+# host can report them through its existing provider-failure envelope.
+REVIEW_FAILURE_RATE_LIMIT = "rate_limit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +32,9 @@ class AutomatedReviewProvider:
     reviewer_logins: tuple[str, ...]
     clean_review_reactions: tuple[str, ...] = ("+1",)
     clean_review_comments: tuple[str, ...] = ()
+    # ``(failure_class, markers)`` pairs recognizing the provider's notice that
+    # it refused or could not perform a requested review.
+    failure_reply_markers: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
@@ -34,6 +44,11 @@ AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
             command="@codex review",
             reviewer_logins=("chatgpt-codex-connector",),
             clean_review_comments=("Codex Review: Didn't find any major issues. 🚀",),
+            # "You have reached your Codex usage limits for code reviews." and
+            # "Codex usage limits have been reached for code reviews."
+            failure_reply_markers=(
+                (REVIEW_FAILURE_RATE_LIMIT, ("usage limit", "rate limit")),
+            ),
         ),
     }
 )
@@ -154,36 +169,54 @@ def is_automated_review_provider_login(provider: object, login: object) -> bool:
     return normalize_reviewer_login(login) in record.reviewer_logins
 
 
-def is_clean_review_comment(
+@dataclass(frozen=True, slots=True)
+class ReviewReply:
+    """The provider's authoritative answer to a review request.
+
+    ``failure_class`` is empty for a clean result and names the provider
+    failure (for example ``rate_limit``) when the provider refused the request.
+    """
+
+    comment: Mapping[str, Any]
+    created_at: datetime
+    failure_class: str = ""
+
+
+def _request_reply_time(
     provider: AutomatedReviewProvider,
-    comment: dict,
+    comment: Mapping[str, Any],
     *,
     requested_at: datetime | None,
     head_sha: str,
-) -> bool:
-    """Recognize a provider's clean response within an unchanged-head request.
+) -> datetime | None:
+    """Return when *comment* answered the request, or ``None`` if it cannot."""
 
-    A bare phrase inside arbitrary prose, a quoted response, or an edited old
-    comment is not completion evidence. Callers own verifying the current head.
-    """
     user = comment.get("user")
-    login = user.get("login") if isinstance(user, dict) else user
+    login = user.get("login") if isinstance(user, Mapping) else user
     if normalize_reviewer_login(login) not in provider.reviewer_logins:
-        return False
+        return None
     if requested_at is None or not head_sha:
-        return False
+        return None
     try:
         created_at = datetime.fromisoformat(
             str(comment.get("created_at") or "").replace("Z", "+00:00")
         )
     except ValueError:
-        return False
+        return None
     if created_at.tzinfo is None or created_at <= requested_at:
-        return False
+        return None
     commit = str(comment.get("commit_id") or "").strip()
     if commit and commit != head_sha:
-        return False
-    body = str(comment.get("body") or "").strip()
+        return None
+    return created_at
+
+
+def _is_clean_review_body(provider: AutomatedReviewProvider, body: str) -> bool:
+    """Recognize the provider's exact clean result.
+
+    A bare phrase inside arbitrary prose or a quoted response is not
+    completion evidence.
+    """
     # Provider boilerplate is outside the result. Keep any other text so a
     # mixed clean/findings response cannot be mistaken for a clean result.
     body = re.split(
@@ -207,3 +240,72 @@ def is_clean_review_comment(
             if remainder and is_low_severity_only_finding(remainder):
                 return True
     return False
+
+
+def _failure_class(provider: AutomatedReviewProvider, body: str) -> str:
+    # Provider failure notices lead with the failure. Reading only the opening
+    # line keeps a status table or task summary that merely mentions limits
+    # from being mistaken for a refused request.
+    opening = next((line for line in body.splitlines() if line.strip()), "")
+    opening = opening.strip().lower()
+    for failure_class, markers in provider.failure_reply_markers:
+        if any(marker in opening for marker in markers):
+            return failure_class
+    return ""
+
+
+def classify_review_reply(
+    provider: AutomatedReviewProvider,
+    comment: Mapping[str, Any],
+    *,
+    requested_at: datetime | None,
+    head_sha: str,
+) -> ReviewReply | None:
+    """Classify one provider comment as a clean result or a refused request.
+
+    Only the provider identity's comments after the request on its unchanged
+    head can answer it. Other provider comments (status tables, task replies,
+    findings) return ``None``. Callers own verifying the current head.
+    """
+
+    created_at = _request_reply_time(
+        provider, comment, requested_at=requested_at, head_sha=head_sha
+    )
+    if created_at is None:
+        return None
+    body = str(comment.get("body") or "").strip()
+    if _is_clean_review_body(provider, body):
+        return ReviewReply(comment=comment, created_at=created_at)
+    failure_class = _failure_class(provider, body)
+    if failure_class:
+        return ReviewReply(
+            comment=comment, created_at=created_at, failure_class=failure_class
+        )
+    return None
+
+
+def latest_review_reply(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    requested_at: datetime | None,
+    head_sha: str,
+) -> ReviewReply | None:
+    """Return the latest authoritative reply to a request on its unchanged head.
+
+    A later clean result supersedes an earlier refusal and vice versa, so the
+    request is judged by the provider's most recent answer.
+    """
+
+    latest: ReviewReply | None = None
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        reply = classify_review_reply(
+            provider, comment, requested_at=requested_at, head_sha=head_sha
+        )
+        if reply is not None and (
+            latest is None or reply.created_at >= latest.created_at
+        ):
+            latest = reply
+    return latest

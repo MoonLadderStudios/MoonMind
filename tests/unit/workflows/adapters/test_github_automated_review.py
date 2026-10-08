@@ -757,6 +757,57 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        # The provider's status comment: short SHAs and timestamps are not
+        # HTTP status codes.
+        "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+        "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+        "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |",
+        # A task reply that merely discusses failures it fixed.
+        "### Summary\n* Return 403 Forbidden when the token is unauthorized and "
+        "retry later on the API rate limit.",
+    ],
+)
+async def test_requested_review_ignores_provider_chatter(monkeypatch, body):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": body,
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+        ]
+    )
+
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is False
+    assert "automated_review_request_failed" not in [
+        blocker["kind"] for blocker in result.blockers
+    ]
+
+
+@pytest.mark.asyncio
 async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     mock_client = _client(
