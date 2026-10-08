@@ -159,16 +159,40 @@ def validate_evidence(root, *, source_commit, host_image_ref, host_image_id):
     return row
 
 
+def _junit_failure(root):
+    """Return the failing row's own message and traceback tail, if recorded."""
+    try:
+        cases = ET.parse(root / JUNIT).getroot().findall(".//testcase")
+    except (OSError, ET.ParseError):
+        return ""
+    for case in cases:
+        for kind in ("failure", "error"):
+            found = case.find(kind)
+            if found is not None:
+                message = found.get("message", "").strip()
+                trace = (found.text or "").strip()[-2000:]
+                return "\n".join(part for part in (message, trace) if part)
+    return ""
+
+
 def run_test(command, root, **identity):
     # A previous run, including a previously green receipt, cannot satisfy this
     # invocation if prerequisites fail or pytest reports a skip with exit zero.
     for name in (RECEIPT, JUNIT):
         (root / name).unlink(missing_ok=True)
     result = subprocess.run(command, check=False, timeout=600)
-    _require(
-        result.returncode == 0, f"recovery pytest failed (exit {result.returncode})"
-    )
+    if result.returncode:
+        failure = _junit_failure(root)
+        raise RecoveryError(
+            f"recovery pytest failed (exit {result.returncode})"
+            + (f": {failure}" if failure else "")
+        )
     return validate_evidence(root, **identity)
+
+
+def _annotation(text):
+    """Escape a GitHub Actions workflow-command message."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
 def compose_document(source, repo_root, server_image):
@@ -513,6 +537,14 @@ def main(argv=None):
             + "\n"
         )
         print(f"credential-free recovery {phase} failed: {detail}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # The check-run annotation keeps the cause readable where the
+            # Actions log and uploaded evidence are not.
+            print(
+                f"::error title=Credential-free recovery {phase} failed::"
+                + _annotation(detail),
+                flush=True,
+            )
         return 1
     finally:
         if shutil.which("docker"):
