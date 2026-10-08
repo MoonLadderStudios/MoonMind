@@ -336,6 +336,7 @@ async def _register_search_attributes(env: WorkflowEnvironment) -> None:
                 "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
                 "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
                 "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+                "mm_provider_profile": IndexedValueType.INDEXED_VALUE_TYPE_TEXT,
             },
         )
     )
