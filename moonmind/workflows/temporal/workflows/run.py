@@ -22007,6 +22007,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "branch": accepted_head[0],
                     "headSha": accepted_head[1],
                 }
+                # The base recorded with the head lets a later step extend its
+                # own candidate instead of publishing a PR stacked on it.
+                accepted_base = self._accepted_published_base_branch()
+                if accepted_base and accepted_base != accepted_head[0]:
+                    parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )

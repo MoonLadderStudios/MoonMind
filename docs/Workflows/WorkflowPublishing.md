@@ -175,7 +175,7 @@ For managed PR work the planner creates or obtains one stable work/head branch f
 
 The title prefix is lowercased, non-alphanumeric characters become `-`, and it is truncated to 40 characters. With no useful prefix, the UUID fragment alone is allowed. The selected head is persisted and reused on retries; a retry does not generate another branch or PR.
 
-A previous publishing step may establish a verified cumulative candidate. A later step starts from that candidate when the plan calls for it but still compares against the original authored base. The candidate branch must never become its own publication base. Candidate-only clones and restored checkpoints refresh the exact remote base through the admitted publication authority before measuring commits. Unavailable base evidence blocks publication.
+A previous publishing step may establish a verified cumulative candidate. A later step starts from that candidate when the plan calls for it but still compares against the original authored base. The candidate branch must never become its own publication base. The run-owned accepted head carries the authored base it was published over; a later PR step whose workspace is on that candidate fast-forwards the candidate itself (exact-tip lease, no overwrite of another actor's update) and reports the authored base, rather than creating a new branch stacked on the candidate. Candidate-only clones and restored checkpoints refresh the exact remote base through the admitted publication authority before measuring commits. Unavailable base evidence blocks publication.
 
 An unchanged saved checkout can be behind an authored base that advanced during
 execution. A zero-change result may prove the saved revision is still reachable

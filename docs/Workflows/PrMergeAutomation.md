@@ -399,6 +399,10 @@ reinterpret a failed child as successful or launch another unchanged attempt.
 
 Both `request_review` and `reenter_gate` consume the existing review loop's
 `maxConsecutiveNoProgressCycles` budget when their progress signature repeats.
+`reenter_gate` consumes it even when the review loop is disabled, using the
+same default budget, so a resolver that keeps reporting the same blocker (for
+example `ci_signal_degraded` on a PR whose base CI never runs for) stops
+instead of launching identical agent runs indefinitely.
 Historical handoffs without a signature use their head and reason to bound
 repetition. Changed work resets the counter; elapsed waits do not establish
 progress. Budget exhaustion preserves resolver evidence and reports an actionable
