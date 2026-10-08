@@ -60,6 +60,9 @@ class _BeforeFailureSettlement(MoonMindMergeAutomationWorkflow):
     def _review_failure_settlement_enabled(self, observation):
         return False
 
+    def _review_refusal_settlement_enabled(self, observation_key):
+        return False
+
     @workflow.run
     async def run(self, payload):
         return await super().run(payload)
