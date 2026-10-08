@@ -117,7 +117,7 @@ async def test_recovery_cannot_move_backward_after_restart(tmp_path, phase):
 async def test_stale_projection_attempt_cannot_replace_recovery_evidence(
     tmp_path, phase
 ):
-    async with recovery_owner(tmp_path) as (store, request, lease, sessions):
+    async with recovery_owner(tmp_path) as (store, request, lease, _sessions):
         older = await store.reserve_github_projection(
             request=request, host_lease_ref=lease.lease_id
         )
@@ -154,7 +154,7 @@ async def test_stale_projection_attempt_cannot_replace_recovery_evidence(
 async def test_current_stopped_retry_retains_recreated_progress_while_saving_new_bytes(
     tmp_path,
 ):
-    async with recovery_owner(tmp_path) as (store, request, lease, sessions):
+    async with recovery_owner(tmp_path) as (store, request, lease, _sessions):
         old = await store.reserve_github_projection(
             request=request, host_lease_ref=lease.lease_id
         )
@@ -244,14 +244,14 @@ async def test_replacement_binding_and_terminal_save_use_current_reservation(tmp
         assert after["githubCredentialRecovery"]["phase"] == "recreated"
         assert after["githubCredentialRecovery"]["checkpoint"] == checkpoint("b")
         assert after["githubCredentialRecovery"]["replacementEgressPending"] is False
-        args = dict(
-            request=request,
-            host_lease_ref=lease.lease_id,
-            phase="completed",
-            checkpoint=checkpoint("c"),
-            terminal_ref="artifact:current-terminal",
-            expected_projection_reservation=new,
-        )
+        args = {
+            "request": request,
+            "host_lease_ref": lease.lease_id,
+            "phase": "completed",
+            "checkpoint": checkpoint("c"),
+            "terminal_ref": "artifact:current-terminal",
+            "expected_projection_reservation": new,
+        }
         completed = await store.record_host_credential_recovery(**args)
         # A committed response lost at transport is reconciled by the same
         # immutable checkpoint/terminal receipt, never a second effect.
@@ -267,8 +267,9 @@ async def test_replacement_binding_and_terminal_save_use_current_reservation(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("newer_phase", ["saved", "recreated"])
 async def test_delayed_preserver_does_not_stop_after_newer_progress(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, newer_phase
 ):
     from moonmind.omnigent.host_failures import OmnigentOAuthHostError
     from tests.helpers.github_projection import projection_reservation
@@ -293,7 +294,7 @@ async def test_delayed_preserver_does_not_stop_after_newer_progress(
             fixture.row.metadata_["githubProjectionReservation"] = new
             fixture.row.metadata_["githubCredentialRecovery"] = {
                 **fixture.row.metadata_["githubCredentialRecovery"],
-                "phase": "recreated",
+                "phase": newer_phase,
                 "checkpoint": checkpoint("b"),
                 "replacementEgressPending": False,
             }
@@ -304,7 +305,7 @@ async def test_delayed_preserver_does_not_stop_after_newer_progress(
         await runtime._launch_on_demand(**fixture.args)
     assert fixture.state["running"]
     assert ("docker", "stop") not in fixture.state["events"]
-    assert fixture.row.metadata_["githubCredentialRecovery"]["phase"] == "recreated"
+    assert fixture.row.metadata_["githubCredentialRecovery"]["phase"] == newer_phase
     assert fixture.row.metadata_["githubCredentialRecovery"][
         "checkpoint"
     ] == checkpoint("b")

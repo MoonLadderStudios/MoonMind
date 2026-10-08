@@ -1567,3 +1567,57 @@ async def test_restart_after_recreation_before_binding_uses_new_attachment_autho
     # The one additional docker run is the credential writer, never a host.
     assert fixture.state["events"].count(("docker", "run")) == launches_before_retry + 1
     assert not any(call.args[:3] == ("docker", "run", "-d") for call in runtime._run.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_preserved_workspace_check_follows_custom_admitted_locator(
+    tmp_path, monkeypatch
+):
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    runtime = fixture.new_runtime()
+    await runtime._launch_on_demand(**fixture.args)
+    locator = fixture.request.workspace_spec["workspaceLocator"]
+    records = SandboxWorkspaceRecordStore(tmp_path)
+    records._record_path(locator["workspaceId"]).unlink()
+    records.ensure(
+        SandboxWorkspaceRecord(
+            locator["workspaceId"],
+            "workflow-1",
+            "workflow-1:run-1:implement:execution:1",
+            "custom",
+        )
+    )
+    custom = fixture.workspace.parent / "custom"
+    fixture.workspace.rename(custom)
+    request = fixture.request.model_copy(
+        update={
+            "workspace_spec": {
+                **fixture.request.workspace_spec,
+                "workspaceLocator": {**locator, "relativePath": "custom"},
+            }
+        }
+    )
+    restore_owner = AsyncMock()
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService,
+        "restore_saved_request_workspace",
+        restore_owner,
+    )
+
+    await runtime._restore_preserved_workspace_if_missing(
+        request=request,
+        store=fixture.store,
+        artifact_gateway=fixture.artifacts,
+        host_lease=fixture.lease,
+    )
+
+    restore_owner.assert_not_awaited()
+    assert (custom / "untracked.txt").read_text() == "new saved work\n"

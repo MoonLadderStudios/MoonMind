@@ -1437,11 +1437,12 @@ class OmnigentBridgeSessionStore:
     ) -> None:
         """Fence recovery writes by the already-reserved credential delivery."""
         current = metadata.get("githubProjectionReservation")
-        if current is not None or expected is not None:
-            if not isinstance(expected, Mapping) or dict(expected) != current:
-                raise OmnigentIdempotencyError(
-                    "credential recovery reservation owner changed"
-                )
+        if (current is not None or expected is not None) and (
+            not isinstance(expected, Mapping) or dict(expected) != current
+        ):
+            raise OmnigentIdempotencyError(
+                "credential recovery reservation owner changed"
+            )
 
     async def record_host_credential_recovery(
         self,

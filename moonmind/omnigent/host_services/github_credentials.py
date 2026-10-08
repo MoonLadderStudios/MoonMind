@@ -302,6 +302,12 @@ class OmnigentGithubCredentialService:
         binding = plan.payload.credentialBindings.get(slot) if plan is not None else None
         if binding is not None and getattr(binding, "consumer", "agent") == "native" and consumer != "native":
             raise ValueError("native repository authority cannot be consumed by an agent")
+        if request is not None:
+            from moonmind.omnigent.workspace_intent import authored_repository_source
+
+            # Every consumer of this credential must name one repository.
+            # Reject alias disagreement before any snapshot read or projection.
+            authored_repository_source(request)
         access = (
             plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
             if plan is not None
