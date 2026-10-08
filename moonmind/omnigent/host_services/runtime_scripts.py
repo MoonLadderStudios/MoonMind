@@ -367,7 +367,11 @@ class OmnigentRuntimeScriptService:
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '
-            "export OMNIGENT_API_TOKEN; fi; "
+            # The host CLI reads API_TOKEN for HTTP, while its existing tunnel
+            # factory consumes INITIAL_AUTH_TOKEN. Both use this selected
+            # host/runner bearer; neither is stored in the runtime projection.
+            'OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN="$OMNIGENT_API_TOKEN"; '
+            "export OMNIGENT_API_TOKEN OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN; fi; "
             'exec omnigent host --server "$1" --non-interactive'
         )
         return script, environment
