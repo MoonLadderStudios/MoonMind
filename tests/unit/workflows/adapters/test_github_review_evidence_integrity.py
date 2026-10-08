@@ -352,3 +352,34 @@ async def test_changed_terminal_reply_requires_a_fresh_observation(
         settled, _ = await observe(comments=refreshed)
         assert settled.automated_review_complete is (True if was_refusal else None)
         assert settled.ready is was_refusal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retained_at", ["2026-08-24T22:14:00Z", "2026-08-24T22:18:00Z"]
+)
+@pytest.mark.parametrize("reply", [CLEAN, REFUSAL])
+async def test_known_request_timestamp_conflict_is_not_self_corroborated(
+    retained_at, reply
+):
+    result, seen = await observe(
+        comments=[COMMAND, reply], active={**REQUEST, "requestedAt": retained_at}
+    )
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert result.automated_review_request_comment_id is None
+    assert result.automated_review_requested_at is None
+    assert result.blockers[0]["kind"] == "external_state_unavailable"
+    assert result.blockers[0]["retryable"] is False
+    assert "timestamp" in result.blockers[0]["summary"]
+    assert not any(path.endswith("/reactions") for path in seen)
+
+
+@pytest.mark.asyncio
+async def test_equivalent_known_request_timestamps_can_complete():
+    result, _ = await observe(
+        comments=[COMMAND, CLEAN],
+        active={**REQUEST, "requestedAt": "2026-08-24T22:15:00+00:00"},
+    )
+    assert result.automated_review_complete is True
+    assert result.automated_review_requested_at == WHEN

@@ -2915,15 +2915,11 @@ class GitHubService:
             record, [active_request], head_sha=requested_head_sha
         )
         comment_id = str(request_comment_id or "").strip()
-        if (
-            anchor is None
-            and comment_id.isascii()
-            and comment_id.isdecimal()
-            and int(comment_id) > 0
-        ):
-            # Recover only the exact recorded comment. Never open a historical
-            # search window when retained request timestamps are unavailable.
-            anchor = latest_review_request(
+        observed_anchor = None
+        if comment_id.isascii() and comment_id.isdecimal() and int(comment_id) > 0:
+            # The fetched exact comment corroborates a retained identity; a
+            # synthetic request must never corroborate its own known timestamp.
+            observed_anchor = latest_review_request(
                 record,
                 (
                     comment
@@ -2932,6 +2928,22 @@ class GitHubService:
                 ),
                 head_sha=requested_head_sha,
             )
+        if observed_anchor is not None:
+            if anchor is not None and anchor.created_at != observed_anchor.created_at:
+                return {
+                    **pending,
+                    "complete": None,
+                    "blockers": [
+                        {
+                            "kind": "external_state_unavailable",
+                            "summary": "The active review request timestamp conflicts with its exact comment.",
+                            "retryable": False,
+                            "source": "github",
+                        }
+                    ],
+                }
+            # Recover missing time or use the actual comment for equal instants.
+            anchor = observed_anchor
         if anchor is None:
             return {
                 **pending,

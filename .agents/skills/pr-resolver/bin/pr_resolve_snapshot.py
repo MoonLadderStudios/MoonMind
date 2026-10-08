@@ -1713,9 +1713,12 @@ def main():
         head_sha=head_sha,
         comments=comments,
     )
-    if automated_review.get("freshReviewForHead") is True:
-        # Recollect after completion and reclassify that inventory. A newer
-        # request/completion gets its own refresh; changing evidence is bounded
+    if (
+        automated_review.get("freshReviewForHead") is True
+        or automated_review.get("requestFailed") is True
+    ):
+        # Recollect after a terminal response and reclassify that inventory. A
+        # newer request/response gets its own refresh; changing evidence is bounded
         # instead of authorizing a stale clean snapshot.
         completion_keys = (
             "requestCommentId",
@@ -1723,6 +1726,8 @@ def main():
             "completionKind",
             "completionId",
             "completedAt",
+            "requestFailed",
+            "requestFailure",
         )
         for _refresh_attempt in range(3):
             previous_completion = tuple(
@@ -1759,7 +1764,10 @@ def main():
                 comments=comments,
             )
             if (
-                not automated_review.get("freshReviewForHead")
+                not (
+                    automated_review.get("freshReviewForHead")
+                    or automated_review.get("requestFailed")
+                )
                 or tuple(automated_review.get(key) for key in completion_keys)
                 == previous_completion
             ):
@@ -1771,7 +1779,7 @@ def main():
             )
             sys.exit(1)
         # Comments/reactions have no reviewed commit. Revalidate the remote
-        # head after completion and inventory collection before publishing them.
+        # head after terminal-response inventory collection before publishing them.
         completed_pr, _, _ = fetch_pr_data(args.pr)
         if (
             not head_sha

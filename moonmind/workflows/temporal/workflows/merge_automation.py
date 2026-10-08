@@ -133,6 +133,9 @@ MERGE_AUTOMATION_REVIEW_ADOPTION_GUARD_PATCH_PREFIX = (
 MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH = (
     "merge-automation-restored-review-identity-v1"
 )
+MERGE_AUTOMATION_REVIEW_REFUSAL_SETTLEMENT_PATCH_PREFIX = (
+    "merge-automation-review-refusal-settlement-v1:"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1890,6 +1893,13 @@ class MoonMindMergeAutomationWorkflow:
         )
         self._active_review_request = selected
 
+    def _review_refusal_settlement_enabled(self, observation_key: str) -> bool:
+        # A previously recorded refusal must retain its terminal artifact
+        # payload. Only a new observation may settle the retained cycle.
+        return workflow.patched(
+            MERGE_AUTOMATION_REVIEW_REFUSAL_SETTLEMENT_PATCH_PREFIX + observation_key
+        )
+
     def _settle_active_review_request(
         self, evaluation: Any
     ) -> ReadinessBlockerModel | None:
@@ -1932,6 +1942,35 @@ class MoonMindMergeAutomationWorkflow:
                 cycle["completionId"] = evaluation.get("automatedReviewCompletionId")
                 cycle["completedAt"] = evaluation.get("automatedReviewCompletedAt")
                 cycle["status"] = "completed"
+            self._active_review_request = None
+            return
+        observation = evaluation.get("readinessObservationId")
+        selected_at = _parse_review_timestamp(
+            evaluation.get("automatedReviewRequestedAt")
+        )
+        if (
+            isinstance(observation, str)
+            and observation.strip()
+            and cycle is not None
+            and self._active_review_cycle_matches()
+            and evaluation.get("headSha") == self._active_review_request.get("headSha")
+            and evaluation.get("automatedReviewRequestCommentId")
+            == self._active_review_request.get("requestCommentId")
+            and selected_at is not None
+            and selected_at
+            == _parse_review_timestamp(self._active_review_request.get("requestedAt"))
+            and evaluation.get("automatedReviewRequestStale") is not True
+            and any(
+                isinstance(blocker, Mapping)
+                and blocker.get("kind") == "automated_review_request_failed"
+                and blocker.get("source") == self._active_review_request.get("provider")
+                for blocker in (evaluation.get("blockers") or [])
+            )
+            and self._review_refusal_settlement_enabled(
+                hashlib.sha256(observation.encode("utf-8")).hexdigest()
+            )
+        ):
+            cycle["status"] = "failed"
             self._active_review_request = None
             return
         if evaluation.get("automatedReviewRequestStale") is True:
