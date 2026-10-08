@@ -16,8 +16,6 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -43,214 +41,6 @@ DERIVED_PORT_RANGE = 100
 TARGET_NETWORK_SETTING = "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK"
 TARGET_NETWORK_KEY = "deployment-controller-network"
 CONTROLLER_ALIAS = "moonmind-controller"
-JOURNAL_TRANSITION_CAPABILITY = "active-journal-transition"
-
-
-def controller_capabilities(url: str, secret: str) -> set[str]:
-    request = urllib.request.Request(
-        url.rstrip("/") + "/v1/healthz",
-        headers={"Authorization": f"Bearer {secret}"},
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        body = json.load(response)
-    return set(body.get("capabilities") or ())
-
-
-def _checked_capture(command: list[str]) -> str:
-    result = _run_capture(command)
-    if result.returncode:
-        raise RuntimeError(
-            f"Controller prerequisite {command[1]} failed (exit {result.returncode})."
-        )
-    return result.stdout or ""
-
-
-def _application_controller_image(target_project: str, requested: str) -> str:
-    """Use an observed installed source on rollback, else the staged target.
-
-    The application already publishes these immutable image contents. No
-    separate controller publication or release-version equality is needed.
-    The probe runs with no network, credentials, host mounts, or Docker socket.
-    """
-    ids = _checked_capture(
-        [
-            "docker",
-            "ps",
-            "-aq",
-            "--filter",
-            f"label=com.docker.compose.project={target_project}",
-        ]
-    ).split()
-    candidates = []
-    if ids:
-        containers = json.loads(_checked_capture(["docker", "inspect", *ids]))
-        for container in containers:
-            service = ((container.get("Config") or {}).get("Labels") or {}).get(
-                "com.docker.compose.service"
-            )
-            if service in {
-                "api",
-                "temporal-worker-agent-runtime",
-                "temporal-worker-deployment-control",
-            }:
-                image = container.get("Image")
-                if image and image not in candidates:
-                    candidates.append(image)
-    probe = (
-        "import pathlib,sys; p=pathlib.Path('/app/deploy/controller'); "
-        "sys.exit(10) if not (p/'server.py').is_file() else None; "
-        "sys.path.insert(0,str(p)); import server; "
-        f"sys.exit(0 if {JOURNAL_TRANSITION_CAPABILITY!r} in "
-        "getattr(server,'CONTROLLER_CAPABILITIES',()) else 10)"
-    )
-    for image in [*candidates, None]:
-        if image is None:
-            _checked_capture(["docker", "pull", requested])
-            image = _checked_capture(
-                [
-                    "docker",
-                    "image",
-                    "inspect",
-                    "--format",
-                    "{{.Id}}",
-                    requested,
-                ]
-            ).strip()
-        result = _run_capture(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--network=none",
-                "--entrypoint",
-                "python",
-                image,
-                "-c",
-                probe,
-            ]
-        )
-        if result.returncode == 0:
-            return image
-        if result.returncode != 10:
-            raise RuntimeError(
-                f"Controller prerequisite image probe failed (exit {result.returncode})."
-            )
-    raise RuntimeError(
-        "Neither the installed source nor requested image supplies journal transition support."
-    )
-
-
-def cmd_ensure(args, env) -> int:
-    """Refresh an old controller before submission, outside its operation.
-
-    Host and the already-privileged deployment-control submitter use the
-    same lifecycle owner. Reuse its generated Compose file so daemon host
-    paths, networks, identity and authority never change in an app container.
-    """
-    _ensure_outside_controller(env)
-    state_dir = Path(args.state_dir).resolve()
-    identity = load_identity(state_dir)
-    compose_file = state_dir / "controller-compose.yaml"
-    if not identity or not compose_file.is_file():
-        raise RuntimeError(
-            "The controller prerequisite requires its existing installation."
-        )
-    secret = _secret_path(state_dir).read_text(encoding="utf-8").strip()
-    url = args.controller_url or f"http://127.0.0.1:{identity['port']}"
-
-    def supported():
-        try:
-            return JOURNAL_TRANSITION_CAPABILITY in controller_capabilities(url, secret)
-        except urllib.error.HTTPError:
-            raise
-        except OSError:
-            # An interrupted recreation may have stopped the old process.
-            # Durable operation state and the kernel lock still decide
-            # whether host-owned repair may proceed; never create a writer.
-            return False
-
-    if supported():
-        return 0
-    if _open_operations(state_dir, args.stack):
-        raise ActiveOperationError(
-            "Controller prerequisite waits for the current deployment operation to finish."
-        )
-    with lock_mod.StackLock(state_dir, args.stack).acquire():
-        # Recheck after exclusion: another submission can record intent while
-        # bootstrap waits for the same lock. Never replace its live owner.
-        if _open_operations(state_dir, args.stack):
-            raise ActiveOperationError(
-                "Controller prerequisite waits for the current deployment operation to finish."
-            )
-        if supported():
-            return 0
-        image = _application_controller_image(
-            str(identity.get("targetProject") or args.target_project),
-            args.image,
-        )
-        lines = compose_file.read_text(encoding="utf-8").splitlines()
-        image_lines = [
-            index for index, line in enumerate(lines) if line.startswith("    image:")
-        ]
-        if len(image_lines) != 1:
-            raise RuntimeError(
-                "Controller Compose project has no unique controller image."
-            )
-        lines = [line for line in lines if not line.startswith("    entrypoint:")]
-        index = next(
-            index for index, line in enumerate(lines) if line.startswith("    image:")
-        )
-        replacement = [
-            f"    image: {image}",
-            '    entrypoint: ["python", "/app/deploy/controller/server.py"]',
-        ]
-        if not any(line.startswith("    user:") for line in lines):
-            # The standalone image defaults to root; the application image
-            # defaults to app. Preserve the installed process identity rather
-            # than losing secret/socket access or expanding a custom identity.
-            previous_image = lines[index].partition(":")[2].strip().strip("\"'")
-            previous_user = json.loads(_checked_capture([
-                "docker", "image", "inspect", "--format", "{{json .Config.User}}",
-                previous_image,
-            ]))
-            if not isinstance(previous_user, str):
-                raise RuntimeError("Installed controller process identity is unavailable")
-            replacement.append(f"    user: {json.dumps(previous_user or '0:0')}")
-        lines[index : index + 1] = replacement
-        temporary = compose_file.with_suffix(".tmp")
-        temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.replace(temporary, compose_file)
-        record_controller_image(state_dir, requested=args.image, pinned=image)
-        code = _compose(
-            state_dir,
-            identity["project"],
-            "up",
-            "-d",
-            "--pull",
-            "never",
-            "--wait",
-            CONTROLLER_SERVICE,
-        )
-        if code:
-            raise RuntimeError(
-                f"Controller prerequisite recreation failed (exit {code})."
-            )
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                if JOURNAL_TRANSITION_CAPABILITY in controller_capabilities(
-                    url, secret
-                ):
-                    return 0
-            except OSError:
-                # The recreated controller may not accept connections yet;
-                # keep polling within the existing readiness deadline.
-                pass
-            if time.monotonic() >= deadline:
-                raise RuntimeError(
-                    "Controller prerequisite did not expose journal transition support."
-                )
-            time.sleep(1)
 
 
 class InsideControllerError(RuntimeError):
@@ -862,13 +652,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state-dir", required=False, help="Controller state directory.")
-    for name in ("install", "start", "update", "restore", "status", "ensure"):
+    for name in ("install", "start", "update", "restore", "status"):
         child = sub.add_parser(name, parents=[common])
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
         child.add_argument("--stack", default="moonmind", help="Target stack.")
         child.add_argument("--image", default=DEFAULT_IMAGE, help="Controller image.")
         child.add_argument("--port", type=int, default=DEFAULT_PORT)
-        child.add_argument("--controller-url", default=None)
         child.add_argument(
             "--target-network",
             default=None,
@@ -911,7 +700,6 @@ def main(argv=None, env=None) -> int:
         "update": cmd_update,
         "restore": cmd_restore,
         "status": cmd_status,
-        "ensure": cmd_ensure,
     }
     return commands[args.command](args, marker)
 

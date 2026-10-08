@@ -28,15 +28,11 @@ from logging import getLogger
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import delete, func, inspect, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import load_only
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
-from moonmind.omnigent.bridge_events import (
-    _first_artifact_ref,
-    bounded_deduplication_key,
-)
+from moonmind.omnigent.bridge_events import bounded_deduplication_key
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
 from moonmind.omnigent.control_plane.identities import (
     EGRESS_CLEANUP_AUTHORITY_KEY,
@@ -51,11 +47,8 @@ from moonmind.utils.logging import redact_sensitive_payload
 BRIDGE_STORE_TRACEABILITY_ISSUES = ("MM-1152", "MM-1156", "MM-1140")
 
 logger = getLogger(__name__)
-# ``<kind>.<count>`` names one accumulated journal prefix; ``<kind>.<start>.<count>``
-# names a prefix of the chunk that begins at normalized event ``start``.
 _ACTIVE_JOURNAL_NAME = re.compile(
-    r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./]"
-    r"(?:(\d+)\.)?(\d+)\.jsonl"
+    r"runtime\.omnigent\.(?:embedded\.)?sse\.(raw|normalized)[./](\d+)\.jsonl"
 )
 
 
@@ -64,21 +57,13 @@ def _journal_artifact_id(ref: str | None) -> str | None:
     return value if value.startswith("art_") else None
 
 
-def _journal_prefix(
-    artifact: Any,
-) -> tuple[tuple[str, int | None, str], int] | None:
-    """Return a live journal's (kind, chunk, correlation) family and length.
-
-    Versions within one family are successive prefixes of the same journal
-    chunk, so a longer version supersedes a shorter one.
-    """
+def _journal_prefix(artifact: Any) -> tuple[str, int, str] | None:
     metadata = artifact.metadata_json or {}
     match = _ACTIVE_JOURNAL_NAME.fullmatch(str(metadata.get("name", "")))
     correlation = str(metadata.get("correlation_id", ""))
     if match is None or not correlation:
         return None
-    chunk = int(match[2]) if match[2] is not None else None
-    return (match[1], chunk, correlation), int(match[3])
+    return match[1], int(match[2]), correlation
 
 
 def _journal_artifact_service(session: AsyncSession) -> Any:
@@ -111,9 +96,6 @@ FIRST_MESSAGE_ITEM_FRONTIER_KEY = "first_message_pre_dispatch_item_ids"
 # §8.2 step 6, §10.3) is recorded here before the bridge attempts any
 # first-message prepare/post.
 BRIDGE_EVENT_JOURNAL_KEY = "bridge_event_journal"
-# Completed live journal chunks, oldest first, as ``{"raw", "normalized"}`` ref
-# pairs. The durable journal is this history followed by the row's current refs.
-SEALED_JOURNAL_CHUNKS_KEY = "sealedJournalChunks"
 SESSION_CREATED_EVENT_TYPE = "session.created"
 RESOURCE_HARVEST_COMPLETED_KEY = "resource_harvest_completed_at"
 PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
@@ -1078,7 +1060,6 @@ class OmnigentBridgeSessionStore:
                     prior_attempts.append(prior_attempt)
                     reset_metadata["unpostedAttemptHistory"] = prior_attempts[-10:]
                     reset_metadata.pop("initialRetrieval", None)
-                    reset_metadata.pop(SEALED_JOURNAL_CHUNKS_KEY, None)
                     row.metadata_ = reset_metadata
                     row.status = STATUS_DECLARED
                     row.first_message_state = FIRST_MESSAGE_NOT_PREPARED
@@ -2994,8 +2975,6 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
-            terminal_normalized_ref = None
-            replaced_normalized_refs: set[str] = set()
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if row.omnigent_endpoint_ref == "embedded":
@@ -3013,34 +2992,8 @@ class OmnigentBridgeSessionStore:
                 # Keep the first-class evidence ref columns in sync with the
                 # capture bundle instead of leaving them NULL for post-migration
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
-                canonical_refs = _canonical_ref_columns(safe_terminal_refs)
-                terminal_normalized_ref = canonical_refs.get("normalized_events_ref")
-                if terminal_normalized_ref:
-                    replaced_normalized_refs = {
-                        ref
-                        for ref in (
-                            row.normalized_events_ref,
-                            *(
-                                chunk.get("normalized")
-                                for chunk in (row.metadata_ or {}).get(
-                                    SEALED_JOURNAL_CHUNKS_KEY, []
-                                )
-                            ),
-                        )
-                        if ref
-                    }
-                    for ref in tuple(replaced_normalized_refs):
-                        if artifact_id := _journal_artifact_id(ref):
-                            replaced_normalized_refs.update(
-                                (artifact_id, f"artifact:{artifact_id}")
-                            )
-                for column, value in canonical_refs.items():
+                for column, value in _canonical_ref_columns(safe_terminal_refs).items():
                     setattr(row, column, value)
-                if {"raw_events_ref", "normalized_events_ref"} <= set(canonical_refs):
-                    # The capture bundle's journals hold the complete history.
-                    row_metadata = dict(row.metadata_ or {})
-                    if row_metadata.pop(SEALED_JOURNAL_CHUNKS_KEY, None) is not None:
-                        row.metadata_ = row_metadata
             if events:
                 # Replace only provider events. Lifecycle rows are independent
                 # terminal evidence and must survive provider stream indexing.
@@ -3062,32 +3015,11 @@ class OmnigentBridgeSessionStore:
                 for index, event in enumerate(events, start=1):
                     prepared = dict(event)
                     prepared["sequence"] = offset + index
-                    if terminal_normalized_ref:
-                        # The final journal contains every provider event. Its
-                        # locator must commit with terminal status, before old
-                        # chunks lose their active recovery protection.
-                        prepared["artifactRef"] = terminal_normalized_ref
                     provider_events.append(prepared)
                 for event_row in _build_event_rows(
                     row.bridge_session_id, provider_events
                 ):
                     session.add(event_row)
-            elif terminal_normalized_ref:
-                # Profile-bound cleanup publishes the same final journals
-                # without rebuilding the provider index. Only this attempt's
-                # journal rows move; retained prior-attempt evidence stays put.
-                await session.execute(
-                    update(OmnigentBridgeSessionEvent)
-                    .where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == row.bridge_session_id,
-                        OmnigentBridgeSessionEvent.direction != "moonmind_system",
-                        OmnigentBridgeSessionEvent.artifact_ref.in_(
-                            replaced_normalized_refs
-                        ),
-                    )
-                    .values(artifact_ref=terminal_normalized_ref)
-                )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -3235,7 +3167,10 @@ class OmnigentBridgeSessionStore:
                 }
                 current = artifacts.get(current_id)
                 current_prefix = _journal_prefix(current) if current else None
-                if current_prefix and current.status is TemporalArtifactStatus.COMPLETE:
+                if (
+                    current_prefix
+                    and current.status is TemporalArtifactStatus.COMPLETE
+                ):
                     for event in prepared_events:
                         previous = artifacts.get(
                             _journal_artifact_id(event.get("artifactRef"))
@@ -3243,7 +3178,8 @@ class OmnigentBridgeSessionStore:
                         prefix = _journal_prefix(previous) if previous else None
                         if (
                             prefix
-                            and prefix[0] == current_prefix[0]
+                            and (prefix[0], prefix[2])
+                            == (current_prefix[0], current_prefix[2])
                             and prefix[1] < current_prefix[1]
                         ):
                             event["artifactRef"] = row.normalized_events_ref
@@ -3311,370 +3247,10 @@ class OmnigentBridgeSessionStore:
                 session.expunge(event_row)
             return rows
 
-    async def compact_active_journals(self) -> dict[str, int]:
-        """Publish legacy-readable prefixes while deployment consumers are stopped.
-
-        The deployment owner fences producers and retention workers. This store
-        remains the only journal owner: complete replacement bytes precede one
-        compare-and-set transaction for refs and index locators. No lifecycle,
-        dispatch identity, provider state, or saved progress is terminalized.
-        """
-        receipt = {"scanned": 0, "compacted": 0, "events": 0}
-        async with self._session_factory() as session:
-            connection = await session.connection()
-            if not await connection.run_sync(
-                lambda sync: inspect(sync).has_table("omnigent_bridge_sessions")
-            ):
-                # Preparation precedes init-db on a first installation. An
-                # absent bridge schema cannot contain chunked bridge journals;
-                # connection/inspection failures still propagate to the owner.
-                return receipt
-        cursor = ""
-        while True:
-            async with self._session_factory() as session:
-                rows = list(
-                    await session.scalars(
-                        select(OmnigentBridgeSession.bridge_session_id)
-                        .where(
-                            or_(
-                                OmnigentBridgeSession.status.not_in(_TERMINAL_STATUSES),
-                                OmnigentBridgeSession.metadata_[
-                                    SEALED_JOURNAL_CHUNKS_KEY
-                                ]
-                                .as_string()
-                                .is_not(None),
-                            ),
-                            OmnigentBridgeSession.normalized_events_ref.is_not(None),
-                            OmnigentBridgeSession.bridge_session_id > cursor,
-                        )
-                        .order_by(OmnigentBridgeSession.bridge_session_id)
-                        .limit(100)
-                    )
-                )
-            if not rows:
-                return receipt
-            for bridge_session_id in rows:
-                receipt["scanned"] += 1
-                count = await self._compact_active_journal(bridge_session_id)
-                if count is not None:
-                    receipt["compacted"] += 1
-                    receipt["events"] += count
-            cursor = rows[-1]
-
-    async def _compact_active_journal(self, bridge_session_id: str) -> int | None:
-        from api_service.db.models import TemporalArtifact, TemporalArtifactStatus
-        from moonmind.workflows.temporal.artifacts import ExecutionRef
-
-        columns = load_only(
-            OmnigentBridgeSession.bridge_session_id,
-            OmnigentBridgeSession.status,
-            OmnigentBridgeSession.moonmind_workflow_id,
-            OmnigentBridgeSession.raw_events_ref,
-            OmnigentBridgeSession.normalized_events_ref,
-            OmnigentBridgeSession.metadata_,
-        )
-        async with self._session_factory() as session:
-            row = await session.get(
-                OmnigentBridgeSession, bridge_session_id, options=(columns,)
-            )
-            if row is None:
-                return None
-            source_status = row.status
-            sealed = copy.deepcopy(
-                (row.metadata_ or {}).get(SEALED_JOURNAL_CHUNKS_KEY) or []
-            )
-            if not sealed:
-                current_id = _journal_artifact_id(row.normalized_events_ref)
-                if current_id is None:
-                    return None
-                # Only original artifact columns are needed before init-db.
-                # First chunks also need their serialized locators repaired.
-                metadata = await session.scalar(
-                    select(TemporalArtifact.metadata_json).where(
-                        TemporalArtifact.artifact_id == current_id
-                    )
-                )
-                if not isinstance(metadata, dict):
-                    raise OmnigentIdempotencyError(
-                        "Current journal artifact is unavailable"
-                    )
-                name = _ACTIVE_JOURNAL_NAME.fullmatch(str(metadata.get("name", "")))
-                if name is None or name[2] is None:
-                    return None
-            current = {
-                "raw": row.raw_events_ref,
-                "normalized": row.normalized_events_ref,
-            }
-            sources = [*sealed, current]
-            artifacts = _journal_artifact_service(session)
-            source_key = hashlib.sha256(
-                json.dumps([bridge_session_id, sources], sort_keys=True).encode()
-            ).hexdigest()
-            payloads: dict[str, list[bytes]] = {"raw": [], "normalized": []}
-            templates: dict[str, Any] = {}
-            count = 0
-            for source in sources:
-                chunk_count = None
-                for kind in ("raw", "normalized"):
-                    artifact_id = _journal_artifact_id(source.get(kind))
-                    if artifact_id is None:
-                        raise OmnigentIdempotencyError(
-                            "Journal compaction is missing a chunk pair"
-                        )
-                    artifact = await artifacts._repository.get_artifact(artifact_id)
-                    prefix = _journal_prefix(artifact)
-                    if (
-                        prefix is None
-                        or prefix[0][0] != kind
-                        or (prefix[0][1] or 0) != count
-                        or (chunk_count is not None and prefix[1] != chunk_count)
-                    ):
-                        raise OmnigentIdempotencyError(
-                            "Journal compaction cannot prove contiguous history"
-                        )
-                    chunk_count = prefix[1]
-                    links = await artifacts._repository.list_links(artifact_id)
-                    authority = (
-                        artifact.created_by_principal,
-                        artifacts._owner_principal(artifact),
-                        artifact.redaction_level,
-                        artifact.encryption,
-                        frozenset(
-                            (
-                                link.namespace,
-                                link.workflow_id,
-                                link.run_id,
-                                link.link_type,
-                            )
-                            for link in links
-                        ),
-                        prefix[0][2],
-                    )
-                    if kind in templates and templates[kind]["authority"] != authority:
-                        raise OmnigentIdempotencyError(
-                            "Journal compaction cannot combine different evidence authorities"
-                        )
-                    templates[kind] = {
-                        "authority": authority,
-                        "principal": artifact.created_by_principal,
-                        "retention_class": artifact.retention_class,
-                        "redaction_level": artifact.redaction_level,
-                        "encryption": artifact.encryption,
-                        "metadata_json": dict(artifact.metadata_json or {}),
-                        "links": [
-                            ExecutionRef(
-                                namespace=link.namespace,
-                                workflow_id=link.workflow_id,
-                                run_id=link.run_id,
-                                link_type=link.link_type,
-                                label=link.label,
-                                created_by_activity_type=link.created_by_activity_type,
-                                created_by_worker=link.created_by_worker,
-                            )
-                            for link in links
-                        ],
-                    }
-                    _, payload = await artifacts.read(
-                        artifact_id=artifact_id,
-                        principal=artifact.created_by_principal,
-                        admitted_principal=f"workflow:{row.moonmind_workflow_id}",
-                    )
-                    try:
-                        entries = [
-                            json.loads(line)
-                            for line in payload.splitlines()
-                            if line.strip()
-                        ]
-                    except (ValueError, UnicodeDecodeError) as exc:
-                        raise OmnigentIdempotencyError(
-                            "Journal compaction found unreadable history"
-                        ) from exc
-                    if any(not isinstance(entry, dict) for entry in entries) or (
-                        kind == "normalized" and len(entries) != chunk_count
-                    ):
-                        raise OmnigentIdempotencyError(
-                            "Journal compaction would discard recorded events"
-                        )
-                    if kind == "normalized":
-                        for entry in entries:
-                            provider_refs = entry.get("artifactRefs")
-                            if isinstance(provider_refs, dict):
-                                # Old readers leave serialized artifactRef
-                                # untouched. Restore its original provider
-                                # projection instead of reviving transient
-                                # locators from reclaimed chunk versions.
-                                original = _first_artifact_ref(provider_refs)
-                                if original:
-                                    entry["artifactRef"] = original
-                                else:
-                                    entry.pop("artifactRef", None)
-                        payload = "".join(
-                            json.dumps(entry, sort_keys=True) + "\n"
-                            for entry in entries
-                        ).encode()
-                    payloads[kind].append(
-                        payload
-                        + (b"\n" if payload and not payload.endswith(b"\n") else b"")
-                    )
-                count += chunk_count or 0
-
-        replacements = {}
-        for kind in ("raw", "normalized"):
-            replacements[kind] = await self._publish_compacted_journal(
-                template=templates[kind],
-                kind=kind,
-                count=count,
-                source_key=source_key,
-                payload=b"".join(payloads[kind]),
-            )
-        async with self._session_factory() as session:
-            row = await session.scalar(
-                select(OmnigentBridgeSession)
-                .options(columns)
-                .where(OmnigentBridgeSession.bridge_session_id == bridge_session_id)
-                .with_for_update()
-            )
-            if (
-                row is None
-                or row.status != source_status
-                or row.raw_events_ref != current["raw"]
-                or row.normalized_events_ref != current["normalized"]
-                or ((row.metadata_ or {}).get(SEALED_JOURNAL_CHUNKS_KEY) or [])
-                != sealed
-            ):
-                raise OmnigentIdempotencyError(
-                    "Journal changed during deployment compaction"
-                )
-            artifacts = _journal_artifact_service(session)
-            for ref in replacements.values():
-                artifact = await artifacts._repository.get_artifact_for_update(
-                    _journal_artifact_id(ref)
-                )
-                if artifact.status is not TemporalArtifactStatus.COMPLETE:
-                    raise OmnigentIdempotencyError(
-                        "Compacted journal replacement must be complete"
-                    )
-            normalized_aliases = {
-                alias
-                for source in sources
-                for alias in (
-                    source["normalized"],
-                    _journal_artifact_id(source["normalized"]),
-                )
-            }
-            await session.execute(
-                update(OmnigentBridgeSessionEvent)
-                .where(
-                    OmnigentBridgeSessionEvent.bridge_session_id == bridge_session_id,
-                    OmnigentBridgeSessionEvent.direction != "moonmind_system",
-                    OmnigentBridgeSessionEvent.artifact_ref.in_(normalized_aliases),
-                )
-                .values(artifact_ref=replacements["normalized"])
-            )
-            row.raw_events_ref = replacements["raw"]
-            row.normalized_events_ref = replacements["normalized"]
-            metadata = dict(row.metadata_ or {})
-            metadata.pop(SEALED_JOURNAL_CHUNKS_KEY, None)
-            row.metadata_ = metadata
-            await session.commit()
-        return count
-
-    async def _publish_compacted_journal(
-        self,
-        *,
-        template: dict[str, Any],
-        kind: str,
-        count: int,
-        source_key: str,
-        payload: bytes,
-    ) -> str:
-        from api_service.db.models import TemporalArtifact, TemporalArtifactStatus
-
-        key = f"{source_key}:{kind}"
-        digest = hashlib.sha256(payload).hexdigest()
-        async with self._session_factory() as session:
-            artifacts = _journal_artifact_service(session)
-            # Reconcile a complete/pending upload left by a lost command or
-            # failed row commit before publishing another copy of the prefix.
-            artifact = await session.scalar(
-                select(TemporalArtifact)
-                .where(
-                    TemporalArtifact.metadata_json["journalCompactionKey"].as_string()
-                    == key,
-                    TemporalArtifact.sha256 == digest,
-                    TemporalArtifact.created_by_principal == template["principal"],
-                    TemporalArtifact.status.in_(
-                        (
-                            TemporalArtifactStatus.PENDING_UPLOAD,
-                            TemporalArtifactStatus.COMPLETE,
-                        )
-                    ),
-                )
-                .order_by(TemporalArtifact.created_at.desc())
-                .limit(1)
-            )
-            if artifact is None:
-                artifact, _ = await artifacts.create(
-                    principal=template["principal"],
-                    content_type="application/x-ndjson",
-                    size_bytes=len(payload),
-                    sha256=digest,
-                    retention_class=template["retention_class"],
-                    redaction_level=template["redaction_level"],
-                    encryption=template["encryption"],
-                    metadata_json={
-                        **template["metadata_json"],
-                        "name": f"runtime.omnigent.sse.{kind}.{count:08d}.jsonl",
-                        "journalCompactionKey": key,
-                    },
-                )
-            present_links = {
-                (link.namespace, link.workflow_id, link.run_id, link.link_type)
-                for link in await artifacts._repository.list_links(artifact.artifact_id)
-            }
-            for link in template["links"]:
-                if (
-                    link.namespace,
-                    link.workflow_id,
-                    link.run_id,
-                    link.link_type,
-                ) not in present_links:
-                    await artifacts._repository.add_link(
-                        artifact_id=artifact.artifact_id, execution=link
-                    )
-            await artifacts._repository.commit()
-            if artifact.status is TemporalArtifactStatus.COMPLETE:
-                _, existing = await artifacts.read(
-                    artifact_id=artifact.artifact_id, principal=template["principal"]
-                )
-                if existing != payload:
-                    raise OmnigentIdempotencyError(
-                        "Compacted journal bytes differ from recorded history"
-                    )
-            else:
-                await artifacts.write_payload_complete(
-                    artifact_id=artifact.artifact_id,
-                    principal=template["principal"],
-                    payload=payload,
-                    content_type="application/x-ndjson",
-                )
-            return f"artifact:{artifact.artifact_id}"
-
     async def attach_active_journal_refs(
-        self,
-        bridge_session_id: str,
-        *,
-        raw_ref: str,
-        normalized_ref: str,
-        new_chunk: bool = False,
+        self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
     ) -> None:
-        """Commit a complete journal pair before reclaiming superseded prefixes.
-
-        By default the pair is a longer version of the current journal chunk and
-        supersedes it. ``new_chunk`` starts the next chunk instead: the current
-        pair is retained, unchanged, as the newest entry of the row's chunk
-        history.
-        """
+        """Commit a complete journal pair before reclaiming superseded prefixes."""
         from api_service.db.models import TemporalArtifactStatus
         from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
 
@@ -3688,13 +3264,9 @@ class OmnigentBridgeSessionStore:
             previous = (row.raw_events_ref, row.normalized_events_ref)
             replacements = (raw_ref, normalized_ref)
             repository = TemporalArtifactRepository(session)
-            journal_versions: list[
-                tuple[str | None, str, Any | None, Any]
-            ] = []
             for old_ref, replacement_ref in zip(previous, replacements):
                 replacement_id = _journal_artifact_id(replacement_ref)
                 if replacement_id is None:
-                    journal_versions.append((old_ref, replacement_ref, None, None))
                     continue
                 artifact = await repository.get_artifact_for_update(replacement_id)
                 if artifact.status is not TemporalArtifactStatus.COMPLETE:
@@ -3702,73 +3274,38 @@ class OmnigentBridgeSessionStore:
                         "Journal replacement must be complete"
                     )
                 old_id = _journal_artifact_id(old_ref)
-                old_artifact = (
-                    await repository.get_artifact(old_id) if old_id is not None else None
-                )
-                journal_versions.append(
-                    (old_ref, replacement_ref, old_artifact, artifact)
-                )
-
-            same_chunk_retry = new_chunk and len(journal_versions) == 2 and all(
-                old_artifact is not None
-                and replacement_artifact is not None
-                and _journal_prefix(old_artifact)
-                == _journal_prefix(replacement_artifact)
-                for _, _, old_artifact, replacement_artifact in journal_versions
-            )
-            starts_new_chunk = new_chunk and not same_chunk_retry
-            for old_ref, replacement_ref, old_artifact, artifact in journal_versions:
-                old_id = _journal_artifact_id(old_ref)
-                if (
-                    starts_new_chunk
-                    or old_id is None
-                    or old_artifact is None
-                    or artifact is None
-                ):
+                if old_id is None:
                     continue
+                old_artifact = await repository.get_artifact(old_id)
                 old_prefix, new_prefix = _journal_prefix(old_artifact), _journal_prefix(
                     artifact
                 )
-                if not old_prefix or not new_prefix:
+                if (
+                    not old_prefix
+                    or not new_prefix
+                    or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
+                ):
                     continue
-                if old_prefix[0] != new_prefix[0]:
-                    if old_prefix[0][1] is None and new_prefix[0][1] is None:
-                        continue
-                    # Replacing a different chunk would drop it from the journal.
-                    raise OmnigentIdempotencyError(
-                        "Journal replacement would discard verified progress"
-                    )
                 if new_prefix[1] < old_prefix[1]:
                     raise OmnigentIdempotencyError(
                         "Journal replacement would discard verified progress"
                     )
-                if new_prefix[1] >= old_prefix[1] and old_ref != replacement_ref:
-                    # Index rows locate event bodies within the chunk prefix.
-                    # Advance them in the same commit as the pair, even if a
-                    # pin/claim preserves the original snapshot.
+                if new_prefix[1] > old_prefix[1]:
+                    # Index rows locate event bodies within the accumulated
+                    # prefix. Advance them in the same commit as the pair,
+                    # even if a pin/claim preserves the original snapshot.
                     await session.execute(
                         update(OmnigentBridgeSessionEvent)
                         .where(
-                            OmnigentBridgeSessionEvent.bridge_session_id
-                            == bridge_session_id,
                             OmnigentBridgeSessionEvent.artifact_ref.in_(
                                 (old_ref, old_id, f"artifact:{old_id}")
-                            ),
+                            )
                         )
                         .values(artifact_ref=replacement_ref)
                     )
-            if starts_new_chunk and any(previous) and previous != replacements:
-                metadata = dict(row.metadata_ or {})
-                metadata[SEALED_JOURNAL_CHUNKS_KEY] = [
-                    *(metadata.get(SEALED_JOURNAL_CHUNKS_KEY) or []),
-                    {"raw": previous[0], "normalized": previous[1]},
-                ]
-                row.metadata_ = metadata
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
             await session.commit()
-        if starts_new_chunk:
-            return
         for old_ref, replacement_ref in zip(previous, replacements):
             if old_ref and old_ref != replacement_ref:
                 try:
@@ -3814,7 +3351,7 @@ class OmnigentBridgeSessionStore:
             if (
                 old_prefix is None
                 or new_prefix is None
-                or old_prefix[0] != new_prefix[0]
+                or (old_prefix[0], old_prefix[2]) != (new_prefix[0], new_prefix[2])
                 or old_prefix[1] >= new_prefix[1]
                 or replacement.status is not TemporalArtifactStatus.COMPLETE
                 or previous.retention_class is TemporalArtifactRetentionClass.PINNED
@@ -4072,7 +3609,6 @@ __all__ = [
     "OmnigentBridgeSessionStore",
     "OmnigentDigestMismatchError",
     "OmnigentIdempotencyError",
-    "SEALED_JOURNAL_CHUNKS_KEY",
     "bridge_failure_class",
     "coalesce_bridge_status",
 ]

@@ -1156,7 +1156,7 @@ class BoundCredentialAcquirer:
         effective_binding = binding
         if issuance.expires_at is not None:
             effective_binding = binding.model_copy(
-                update={"expires_at": issuance.expires_at.isoformat()}
+                update={"expiresAt": issuance.expires_at.isoformat()}
             )
         # Persist issuance evidence before exposing material: a crash after
         # return must leave an authoritative audit record.
@@ -1180,14 +1180,16 @@ class BoundCredentialAcquirer:
             entry.credential.clear()
             self._cache.invalidate(key)
             winner = await self._cache.get(key)
-            acquired = await self._reuse_cached(
-                key, winner, snapshot=snapshot, operation_id=binding.operation_id
-            )
-            if acquired is not None:
+            if winner is not None and not winner.credential.cleared:
                 await self._cache.settle_inflight(
                     key, owner_id=leader_id, entry=winner
                 )
-                return acquired
+                return AcquiredCredential(
+                    binding=winner.binding,
+                    credential=EphemeralCredential(
+                        winner.credential.use_now(bytes)
+                    ),
+                )
             raise BoundAccessError(
                 BOUND_ISSUER_FAILED, "lost generation fencing; retry"
             )
@@ -1263,71 +1265,6 @@ class BoundCredentialAcquirer:
         effective = expires - timedelta(seconds=self._margin + self._skew)
         return effective <= datetime.now(timezone.utc)
 
-    async def _read_active_revision(
-        self, snapshot: SelectionSnapshot
-    ) -> ActiveRevision:
-        # Authoritative ACTIVE-revision read (#4006 shape) before exposure.
-        active = await _await_if_needed(self._revision_reader(snapshot.connection_id))
-        if not isinstance(active, ActiveRevision):
-            raise BoundAccessError(BOUND_UNAVAILABLE, "revision authority unreadable")
-        if active.status == "revoked":
-            raise BoundAccessError(BOUND_REVOKED, "credential binding is revoked")
-        if active.status == "disabled":
-            raise BoundAccessError(BOUND_DISABLED, "connection is disabled")
-        if active.status != "active":
-            raise BoundAccessError(BOUND_UNAVAILABLE, "credential is unavailable")
-        if active.credential_revision != snapshot.credential_revision:
-            # Rotation requires an explicit new-attempt adoption policy, not
-            # unconstrained latest-secret resolution: the admitted snapshot's
-            # revision must match, otherwise the attempt is stale.
-            raise BoundAccessError(
-                BOUND_STALE_REVISION,
-                "admitted credential revision is stale; re-admit the attempt",
-            )
-        if active.connection_revision != snapshot.connection_policy_revision:
-            raise BoundAccessError(
-                BOUND_STALE_REVISION,
-                "connection revision changed; re-admit the attempt",
-            )
-        if active.policy_revision != snapshot.policy_revision:
-            raise BoundAccessError(
-                BOUND_STALE_REVISION, "policy revision changed; re-admit the attempt"
-            )
-
-        return active
-
-    async def _reuse_cached(
-        self,
-        key: tuple[Any, ...],
-        entry: _CacheEntry | None,
-        *,
-        snapshot: SelectionSnapshot,
-        operation_id: str,
-    ) -> AcquiredCredential | None:
-        if entry is None:
-            return None
-        # A cache lookup or renewal wait may span a revocation/rotation. Read
-        # authority again, then check expiry immediately before copying bytes.
-        try:
-            active = await self._read_active_revision(snapshot)
-        except BoundAccessError:
-            self._cache.invalidate(key)
-            raise
-        if (
-            entry.credential.cleared
-            or entry.binding.credential_revision != active.credential_revision
-            or entry.binding.connection_revision != active.connection_revision
-            or entry.binding.policy_revision != active.policy_revision
-            or self._binding_expired(entry.binding)
-        ):
-            self._cache.invalidate(key)
-            return None
-        return AcquiredCredential(
-            binding=entry.binding.model_copy(update={"operation_id": operation_id}),
-            credential=EphemeralCredential(entry.credential.use_now(bytes)),
-            cache_hit=True,
-        )
-
     def _verify_issuance(
         self, *, issuance: Issuance, binding: BindingMetadata
     ) -> None:
@@ -1355,22 +1292,64 @@ class BoundCredentialAcquirer:
         owner = (request.execution_owner or "").strip()
         if not owner:
             raise BoundAccessError(BOUND_DENIED, "execution/use owner is required")
-        if not isinstance(request.operation_id, str) or not request.operation_id:
-            raise BoundAccessError(BOUND_DENIED, "operation identity is required")
         if snapshot.access_mode == AccessMode.ANONYMOUS:
             raise BoundAccessError(
                 BOUND_DENIED, "anonymous snapshots carry no credential to acquire"
             )
 
-        active = await self._read_active_revision(snapshot)
+        # Authoritative ACTIVE-revision read (#4006 shape) before exposure.
+        active = await _await_if_needed(self._revision_reader(snapshot.connection_id))
+        if not isinstance(active, ActiveRevision):
+            raise BoundAccessError(BOUND_UNAVAILABLE, "revision authority unreadable")
+        if active.status == "revoked":
+            raise BoundAccessError(BOUND_REVOKED, "credential binding is revoked")
+        if active.status == "disabled":
+            raise BoundAccessError(BOUND_DISABLED, "connection is disabled")
+        if active.status != "active":
+            raise BoundAccessError(BOUND_UNAVAILABLE, "credential is unavailable")
+        if active.credential_revision != snapshot.credential_revision:
+            # Rotation requires an explicit new-attempt adoption policy, not
+            # unconstrained latest-secret resolution: the admitted snapshot's
+            # revision must match, otherwise the attempt is stale.
+            raise BoundAccessError(
+                BOUND_STALE_REVISION,
+                "admitted credential revision is stale; re-admit the attempt",
+            )
+        if active.connection_revision != snapshot.connection_policy_revision:
+            raise BoundAccessError(
+                BOUND_STALE_REVISION, "connection revision changed; re-admit the attempt"
+            )
+        if active.policy_revision != snapshot.policy_revision:
+            raise BoundAccessError(
+                BOUND_STALE_REVISION, "policy revision changed; re-admit the attempt"
+            )
 
         key = self._renewal_key(snapshot, active=active, owner=owner)
         cached = await self._cache.get(key)
-        acquired = await self._reuse_cached(
-            key, cached, snapshot=snapshot, operation_id=request.operation_id
-        )
-        if acquired is not None:
-            return acquired
+        if cached is not None:
+            # Cached entries already passed post-issuance verification for the
+            # identical renewal identity; revalidate revisions and expiry.
+            if (
+                cached.binding.credential_revision != active.credential_revision
+                or cached.binding.connection_revision != active.connection_revision
+                or cached.binding.policy_revision != snapshot.policy_revision
+            ):
+                self._cache.invalidate(key)
+            elif self._binding_expired(cached.binding):
+                self._cache.invalidate(key)
+            else:
+                # Preserve the current operation identity: the cached binding
+                # carries the first request's operation_id, so re-attribute
+                # telemetry/client construction to this operation.
+                binding = cached.binding.model_copy(
+                    update={"operationId": request.operation_id}
+                )
+                credential = EphemeralCredential(
+                    cached.credential.use_now(bytes)
+                )
+                return AcquiredCredential(
+                    binding=binding, credential=credential, cache_hit=True
+                )
 
         # A default change cannot reroute an admitted attempt: the key above
         # pins endpoint/revisions/scope/owner, so a changed default simply
@@ -1388,14 +1367,19 @@ class BoundCredentialAcquirer:
                     # consumer's valid credential: the shield keeps the shared
                     # flight alive; this waiter alone stops waiting.
                     raise
-                acquired = await self._reuse_cached(
-                    key, entry, snapshot=snapshot, operation_id=request.operation_id
-                )
-                if acquired is None:
+                if entry is None or entry.credential.cleared:
                     raise BoundAccessError(
-                        BOUND_UNAVAILABLE, "shared renewal produced no valid credential"
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
                     )
-                return acquired
+                # Copy material per consumer so release_use() for one call
+                # never clears a credential still held by another call.
+                return AcquiredCredential(
+                    binding=entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(entry.credential.use_now(bytes)),
+                    cache_hit=True,
+                )
             # Cross-worker follower: a shared-store leader holds the lease.
             # Await its publication instead of stampeding a second issuance.
             # A released lease with no publication means the leader failed, so
@@ -1403,20 +1387,34 @@ class BoundCredentialAcquirer:
             shared_entry = await self._cache.await_shared_publication(
                 key, timeout_seconds=self._shared_wait
             )
-            acquired = await self._reuse_cached(
-                key, shared_entry, snapshot=snapshot, operation_id=request.operation_id
-            )
-            if acquired is not None:
-                return acquired
+            if shared_entry is not None:
+                if shared_entry.credential.cleared:
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
+                    )
+                return AcquiredCredential(
+                    binding=shared_entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(
+                        shared_entry.credential.use_now(bytes)
+                    ),
+                    cache_hit=True,
+                )
             # Recheck the local cache (leader may have published locally
             # between our claim attempt and the shared poll), otherwise
             # compete for leadership now that the lease is free.
             cached_retry = await self._cache.get(key)
-            acquired = await self._reuse_cached(
-                key, cached_retry, snapshot=snapshot, operation_id=request.operation_id
-            )
-            if acquired is not None:
-                return acquired
+            if cached_retry is not None:
+                return AcquiredCredential(
+                    binding=cached_retry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(
+                        cached_retry.credential.use_now(bytes)
+                    ),
+                    cache_hit=True,
+                )
             is_leader, waiter = await self._cache.join_or_lead(
                 key, owner_id=leader_id
             )
@@ -1429,44 +1427,21 @@ class BoundCredentialAcquirer:
                     entry = await asyncio.shield(waiter)
                 except asyncio.CancelledError:
                     raise
-                acquired = await self._reuse_cached(
-                    key, entry, snapshot=snapshot, operation_id=request.operation_id
-                )
-                if acquired is None:
+                if entry is None or entry.credential.cleared:
                     raise BoundAccessError(
-                        BOUND_UNAVAILABLE, "shared renewal produced no valid credential"
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
                     )
-                return acquired
+                return AcquiredCredential(
+                    binding=entry.binding.model_copy(
+                        update={"operationId": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(entry.credential.use_now(bytes)),
+                    cache_hit=True,
+                )
 
         # Leader path: no cache/database lock is held during network issuance;
         # only the in-flight placeholder plus a short-lived shared lease
         # timestamp coordinate waiters.
-        try:
-            # Another worker may have published and released its claim after
-            # our initial miss. Reuse that winner before issuing again, and
-            # settle our new flight so local waiters and shared claims clear.
-            cached = await self._cache.get(key)
-            acquired = await self._reuse_cached(
-                key, cached, snapshot=snapshot, operation_id=request.operation_id
-            )
-            if acquired is not None:
-                await self._cache.settle_inflight(key, owner_id=leader_id, entry=cached)
-                return acquired
-        except (asyncio.CancelledError, Exception) as exc:
-            await self._cache.settle_inflight(
-                key,
-                owner_id=leader_id,
-                entry=None,
-                error=(
-                    exc
-                    if isinstance(exc, BoundAccessError)
-                    else BoundAccessError(
-                        BOUND_UNAVAILABLE, "renewal cache recheck failed"
-                    )
-                ),
-            )
-            raise
-
         last_error: BoundAccessError | None = None
         for _attempt in range(self._max_attempts):
             generation = self._cache.next_generation(key)

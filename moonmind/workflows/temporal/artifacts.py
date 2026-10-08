@@ -1293,10 +1293,7 @@ class TemporalArtifactRepository:
 
     @staticmethod
     def _active_journal_reference_exists(artifact_id: Any) -> Any:
-        from moonmind.omnigent.bridge_store import (
-            _TERMINAL_STATUSES,
-            SEALED_JOURNAL_CHUNKS_KEY,
-        )
+        from moonmind.omnigent.bridge_store import _TERMINAL_STATUSES
 
         bridge = db_models.OmnigentBridgeSession
         return exists().where(
@@ -1306,10 +1303,6 @@ class TemporalArtifactRepository:
                 bridge.raw_events_ref == "artifact:" + artifact_id,
                 bridge.normalized_events_ref == artifact_id,
                 bridge.normalized_events_ref == "artifact:" + artifact_id,
-                # Completed chunks precede the current pair in the same journal.
-                bridge.metadata_[SEALED_JOURNAL_CHUNKS_KEY]
-                .as_string()
-                .contains(artifact_id + '"'),
             ),
         )
 

@@ -27,19 +27,13 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 from redact import redact_text, tail_text
 
 PULL_TIMEOUT_SECONDS = 600
 UP_TIMEOUT_SECONDS = 900
 MAX_COMMAND_TIMEOUT_SECONDS = 900
-SERVICE_OBSERVATION_FORMAT = (
-    '{"Service":{{json .Service}},"State":{{json .State}},'
-    '"ExitCode":{{json .ExitCode}},"Labels":{'
-    '"com.docker.compose.oneoff":{{json (.Label "com.docker.compose.oneoff")}}}}'
-)
 
 PULL_FLAGS = ("pull", "--policy", "always")
 UP_FLAGS = (
@@ -195,20 +189,6 @@ def apply_services(
     return {"recreated": list(services)}
 
 
-def ensure_journal_storage(runner: Runner, base: Sequence[str], services: Sequence[str]) -> None:
-    """Start selected journal storage without replacing an installed substrate."""
-    storage = tuple(service for service in ("postgres", "minio") if service in services)
-    if not storage:
-        return
-    result = run_command(runner, (
-        *base, "up", "-d", "--no-deps", "--no-recreate", "--pull", "never",
-        "--no-build", "--wait", *storage,
-    ), timeout_seconds=UP_TIMEOUT_SECONDS)
-    if int(result.get("exit", 0)) != 0:
-        raise ApplyError("journal-storage", int(result.get("exit", 1)),
-                         redact_text(tail_text(str(result.get("output", "")))))
-
-
 def apply(
     runner: Runner,
     *,
@@ -220,7 +200,6 @@ def apply(
     env_file: str | None = None,
     env_files: Sequence[str] | None = None,
     own_service: str | None = None,
-    before_compose: Callable[[], Any] | None = None,
 ) -> dict:
     """Stage all images, then apply. Never replaces the controller itself."""
     targets = [s for s in services if s]
@@ -239,8 +218,6 @@ def apply(
         env_files=selected_env or None,
     )
     staged = stage_images(runner, base, tuple(images), services=tuple(targets))
-    if before_compose is not None:
-        before_compose()
     applied = apply_services(runner, base, tuple(targets))
     return {"staged": staged["staged"], "recreated": applied["recreated"]}
 
@@ -269,10 +246,7 @@ def observe_services(
     targets = [s for s in services if s]
     if not targets:
         raise ValueError("Refusing a service observation with no services.")
-    # Verbose Compose JSON includes labels, commands, ports and paths. Even
-    # three services can exceed the runner's diagnostic tail and lose the
-    # first row. Select the complete readiness inputs before that boundary.
-    command = (*base, "ps", "--all", "--format", SERVICE_OBSERVATION_FORMAT, *targets)
+    command = (*base, "ps", "--all", "--format", "json", *targets)
     result = run_command(runner, command, timeout_seconds=timeout_seconds)
     if int(result.get("exit", 0)) != 0:
         raise CommandError(

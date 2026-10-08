@@ -196,7 +196,7 @@ class WorkerSpec:
     immutable_release_identity: bool
 
     def readiness_payload(self) -> dict[str, Any]:
-        payload = {
+        return {
             "ready": True,
             "fleet": self.fleet,
             "buildId": self.build_id,
@@ -220,12 +220,6 @@ class WorkerSpec:
                 "digest": RESOLVER_CORE_DIGEST,
             },
         }
-        if self.fleet == DEPLOYMENT_FLEET and "mm.tool.execute" in self.activity_types:
-            # This executable deployment adapter invokes the existing host
-            # bootstrap before submission. Older pinned workers advertise no
-            # such method, even when their generic tool activity is healthy.
-            payload["controllerBootstrapCapabilities"] = ["active-journal-transition"]
-        return payload
 
 
 def _workflow_type(workflow_class: type[Any]) -> str:

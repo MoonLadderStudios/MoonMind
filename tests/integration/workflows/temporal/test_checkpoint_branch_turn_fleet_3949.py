@@ -340,18 +340,6 @@ async def _run_fleet3949(
                     assert any(
                         name == "mark_running" for name, *_rest in FLEET3949_CALLS
                     )
-                    if FLEET3949_HOLD_MARK_RUNNING is None:
-                        # Cancel the parent after its real persistence handoff.
-                        # Racing the test server's
-                        # activity completion can reject the cancel command
-                        # with ACTIVITY_UNKNOWN. The saturated-slot journey
-                        # retains cancellation while the handoff is pending.
-                        for _attempt in range(100):
-                            state = await handle.query("checkpoint_branch.turn.state")
-                            if state["phase"] == "running":
-                                break
-                            await asyncio.sleep(0.01)
-                        assert state["phase"] == "running", state
                     await handle.cancel()
                     with pytest.raises(WorkflowFailureError):
                         await handle.result()

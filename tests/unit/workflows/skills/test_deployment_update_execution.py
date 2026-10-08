@@ -666,34 +666,6 @@ async def test_before_compose_hook_does_not_run_for_an_unverified_image() -> Non
 
 
 @pytest.mark.asyncio
-async def test_partial_compose_failure_quiesces_under_existing_lock() -> None:
-    from dataclasses import replace
-
-    events = []
-    manager = DeploymentUpdateLockManager()
-    executor, _store, evidence, _runner, _ = _executor(
-        runner=FailingUpRunner(events), events=events, lock_manager=manager
-    )
-
-    async def prepared():
-        return {"status": "prepared"}
-
-    async def quiesce():
-        # The failure handler must still own the same deployment lock.
-        with pytest.raises(ToolFailure):
-            await manager.acquire("moonmind", wait_seconds=0)
-        events.append("journal:quiesced")
-        return {"status": "quiesced"}
-
-    executor = replace(executor, before_compose=prepared, on_compose_failure=quiesce)
-    with pytest.raises(ToolFailure):
-        await executor.execute(_inputs())
-    assert events.index("runner:up") < events.index("journal:quiesced")
-    logs = next(payload for kind, payload in evidence.records if kind == "command-log")
-    assert logs["journalQuiescence"] == {"status": "quiesced"}
-
-
-@pytest.mark.asyncio
 async def test_lifecycle_persists_pulled_digest_for_mutable_tag() -> None:
     events: list[str] = []
     runner = RecordingRunner(

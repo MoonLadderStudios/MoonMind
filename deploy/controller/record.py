@@ -347,14 +347,6 @@ class OperationStore:
         operation["omnigentSelection"] = dict(selection)
         return self._write(operation)
 
-    def record_journal_transition(self, operation_id: str, values: Mapping[str, Any]) -> dict:
-        """Preserve the installed helper image across partial recreation."""
-        operation = self.load(operation_id)
-        operation["journalTransition"] = {
-            **(operation.get("journalTransition") or {}), **dict(values)
-        }
-        return self._write(operation)
-
     def confirm_installed(self, operation_id: str, *, image: str) -> dict:
         """Record a confirmed installation. Append-only: nothing clears it."""
         operation = self.load(operation_id)
