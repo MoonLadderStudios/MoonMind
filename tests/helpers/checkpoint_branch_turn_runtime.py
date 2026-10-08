@@ -559,7 +559,9 @@ async def execute_checkpoint_branch_request(
     async def resolve_policy(_policy_ref: str) -> dict[str, Any]:
         return policy
 
-    async def resolve_repository_credential(_request: AgentExecutionRequest) -> str:
+    async def resolve_repository_credential(
+        _request: AgentExecutionRequest, *, for_publication: bool = False
+    ) -> str:
         return "checkpoint-branch-test-credential"
 
     coordinator._profile_authority.resolve = resolve_profile

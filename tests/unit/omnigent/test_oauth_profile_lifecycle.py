@@ -4511,6 +4511,7 @@ async def _drive_authority_chain_coordinator(
     request_parameters: dict | None = None,
     session_interruption: bool = True,
     credential_resolver=None,
+    resolve_source_credential: bool = False,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -4578,6 +4579,9 @@ async def _drive_authority_chain_coordinator(
         async def get_host_lease(self, _lease_id):
             return self.lease
 
+        async def heartbeat_host_lease(self, _lease_id, **_kwargs):
+            return self.lease
+
         async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
             self.lease = self.lease.model_copy(update={"status": "draining"})
             return self.lease
@@ -4600,6 +4604,8 @@ async def _drive_authority_chain_coordinator(
 
     class Runtime:
         async def prepare_host(self, **_kwargs):
+            if resolve_source_credential:
+                await _kwargs["github_token_resolver"]()
             return {
                 "hostId": "host-1",
                 "workspacePath": "/workspaces/run",
@@ -5752,6 +5758,7 @@ async def _run_coordinator_failure_case(
     request: AgentExecutionRequest | None = None,
     injected_error: BaseException | None = None,
     injected_result: AgentRunResult | None = None,
+    setup=None,
 ):
     events: list[tuple[str, dict]] = []
     actions: list[str] = []
@@ -6087,6 +6094,8 @@ async def _run_coordinator_failure_case(
             )
         )
 
+    if setup is not None:
+        await setup(runtime, coordinator)
     if isinstance(error, asyncio.CancelledError):
         with pytest.raises(asyncio.CancelledError):
             await coordinator.execute(request)
@@ -7587,6 +7596,7 @@ def _record_default_connection(monkeypatch, *, secret_ref: str, read):
     provider, _, key = secret_ref.partition("://")
     connection = SimpleNamespace(
         id="repository-connection:git-default",
+        allowed_operations=("read", "write", "branch_write", "review_request"),
         credential=SimpleNamespace(
             source="secret_ref",
             credential_ref=SimpleNamespace(provider=provider, key=key),
@@ -7698,7 +7708,9 @@ async def test_github_token_checks_canonical_workspace_repository(monkeypatch):
         workspaceSpec={"repository": "org/from-workspace"},
     )
     assert await OmnigentProfileBoundExecutionCoordinator._github_token(request)
-    resolve.assert_awaited_once_with(repo="org/from-workspace")
+    resolve.assert_awaited_once_with(
+        repo="org/from-workspace", required_operations=("read",)
+    )
 
 
 @pytest.mark.asyncio
@@ -7715,6 +7727,135 @@ async def test_coordinator_defers_git_only_source_auth_until_materialization():
     )
     assert result[-1].summary == "saved work continued"
     resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publish_mode", ["branch", "pr"])
+@pytest.mark.parametrize("destination_only", [False, True])
+async def test_prepared_workspace_publication_checks_assignment_without_early_source_read(
+    tmp_path, monkeypatch, publish_mode, destination_only
+):
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT"),
+        assignments=[
+            github_repository_assignment(
+                DEFAULT_GIT_CONNECTION_REF,
+                "owner/repo",
+                operations=(
+                    ("write", "branch_write", "review_request")
+                    if destination_only
+                    else ("read",)
+                ),
+            )
+        ],
+    )
+    read_secret = AsyncMock(return_value="must-not-deliver-for-publication")
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref", read_secret
+    )
+    calls = []
+
+    async def execute(_request, **_kwargs):
+        calls.append("prepared_workspace_execution")
+        read_secret.assert_not_awaited()
+        return AgentRunResult(
+            summary="saved work continued",
+            metadata={"omnigentSessionId": "saved-session"},
+        )
+
+    async def credential(request, **kwargs):
+        calls.append("publication_credential")
+        return await OmnigentProfileBoundExecutionCoordinator._github_token(
+            request, **kwargs
+        )
+
+    try:
+        *_, result = await _drive_authority_chain_coordinator(
+            execute,
+            request_parameters={
+                "requiredCapabilities": ["git"],
+                "publishMode": publish_mode,
+            },
+            credential_resolver=credential,
+        )
+        assert calls == ["prepared_workspace_execution", "publication_credential"]
+        if destination_only:
+            assert result.failure_class is None
+            read_secret.assert_awaited_once()
+        else:
+            assert result.provider_error_code == "github_auth_unavailable"
+            read_secret.assert_not_awaited()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cached_source_credential_cannot_bypass_later_publication_assignment(
+    tmp_path, monkeypatch
+):
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT"),
+        assignments=[
+            github_repository_assignment(
+                DEFAULT_GIT_CONNECTION_REF, "owner/repo", operations=("read",)
+            )
+        ],
+    )
+    read_secret = AsyncMock(return_value="read-only-source-credential")
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref", read_secret
+    )
+    calls = []
+
+    async def credential(request, **kwargs):
+        calls.append("publication" if kwargs.get("for_publication") else "source")
+        return await OmnigentProfileBoundExecutionCoordinator._github_token(
+            request, **kwargs
+        )
+
+    async def execute(_request, **_kwargs):
+        calls.append("execution")
+        return AgentRunResult(
+            summary="source read finished", metadata={"omnigentSessionId": "session"}
+        )
+
+    try:
+        *_, result = await _drive_authority_chain_coordinator(
+            execute,
+            request_parameters={
+                "requiredCapabilities": ["git"],
+                "publishMode": "branch",
+            },
+            credential_resolver=credential,
+            resolve_source_credential=True,
+        )
+        assert calls == ["source", "execution", "publication"]
+        assert result.provider_error_code == "github_auth_unavailable"
+        read_secret.assert_awaited_once()
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -7796,7 +7937,7 @@ async def test_github_token_resolves_clone_credential_without_gh_capability(
     token = await OmnigentProfileBoundExecutionCoordinator._github_token(request)
 
     assert token == "clone-token"
-    resolve.assert_awaited_once_with(repo="org/repo")
+    resolve.assert_awaited_once_with(repo="org/repo", required_operations=("read",))
 
 
 @pytest.mark.asyncio
@@ -8234,3 +8375,260 @@ async def test_static_host_probe_rejects_invalid_mount_verdict(code, output):
         )
     assert caught.value.code == HostPreflightFailure.BINDING_MISMATCH.value
     assert runtime._run.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority(
+    tmp_path, monkeypatch
+):
+    """A real failed atomic writer must not tear down an already assigned host."""
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_hosts_writer_script,
+    )
+    from tests.unit.omnigent.test_gh_config_migration_suppression import (
+        _static_host_github_block,
+    )
+
+    gh = shutil.which("gh")
+    if gh is None:
+        pytest.skip("requires GitHub CLI for its offline Git credential protocol")
+    home = tmp_path / "home"
+    config_home = home / ".cache/moonmind-xdg"
+    hosts_file = config_home / "gh/hosts.yml"
+    environment = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(config_home),
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": "XDG_CONFIG_HOME,GH_PROMPT_DISABLED",
+        "PATH": os.environ["PATH"],
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GH_PROMPT_DISABLED": "1",
+    }
+    await asyncio.to_thread(
+        subprocess.run,
+        [
+            "/bin/sh",
+            "-ceu",
+            github_hosts_writer_script(str(config_home / "gh")),
+            "--",
+            str(os.getuid()),
+            str(os.getgid()),
+            "github.com",
+        ],
+        input=b"initialSelectedTokenA",
+        check=True,
+    )
+    block = (
+        _static_host_github_block()
+        .replace("/home/app", str(home))
+        .replace("/opt/moonmind-tools/bin/gh", gh)
+    )
+    await asyncio.to_thread(
+        subprocess.run, ["/bin/sh", "-c", block], env=environment, check=True
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    saved = workspace / "saved-result.txt"
+    saved.write_text("saved work")
+    session = tmp_path / "saved-session"
+    session.write_text("same active session")
+    before = hosts_file.read_bytes()
+    # Fail the production writer at its final atomic rename, leaving the old
+    # live file intact and exercising its temporary-file cleanup trap.
+    tools_dir = tmp_path / "failing-tools"
+    tools_dir.mkdir()
+    mv = tools_dir / "mv"
+    mv.write_text("#!/bin/sh\nexit 73\n")
+    mv.chmod(0o755)
+    failure_code = "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+    retained = {}
+    failing = True
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="idem-refresh-retry",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": _sandbox_id(),
+            }
+        },
+        parameters={
+            "requiredCapabilities": ["gh"],
+            "omnigent": {
+                "launchPolicyRef": "codex-on-demand@1",
+                "session": {"workspace": "https://example.com/repo.git"},
+            },
+        },
+    )
+
+    async def setup(runtime, coordinator):
+        retained.update(runtime=runtime, coordinator=coordinator)
+        coordinator._hosts.lease = coordinator._hosts.lease.model_copy(
+            update={
+                "status": "assigned",
+                "container_name": "container-1",
+                "omnigent_host_id": "host-1",
+            }
+        )
+        retained["lease"] = coordinator._hosts.lease
+        coordinator._github_token = AsyncMock(return_value="selectedTokenB")
+        coordinator._execute = AsyncMock()
+        coordinator._run_store.bind_profile_authorization = AsyncMock(
+            wraps=coordinator._run_store.bind_profile_authorization
+        )
+        runtime.publish_workspace = AsyncMock()
+        runtime.stop_host = AsyncMock()
+        runtime._prepare_workspace = AsyncMock(return_value=workspace)
+        runtime.container_exists = AsyncMock(return_value=True)
+
+        async def run(*args, **kwargs):
+            if args[:2] == ("docker", "inspect"):
+                if "moonmind.host_lease_id" in args[3]:
+                    return 0, retained["lease"].lease_id, ""
+                assert args[3] == "{{json .Mounts}}"
+                return (
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "Type": "volume",
+                                "Name": "container-1-cache",
+                                "Destination": "/home/app/.cache",
+                                "RW": True,
+                            }
+                        ]
+                    ),
+                    "",
+                )
+            if kwargs.get("input_bytes"):
+                assert args[:4] == ("docker", "run", "--rm", "-i")
+                script = args[args.index("-ceu") + 1].replace("/home/app", str(home))
+                writer_env = dict(environment)
+                if failing:
+                    writer_env["PATH"] = f"{tools_dir}:{writer_env['PATH']}"
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "/bin/sh",
+                        "-ceu",
+                        script,
+                        "--",
+                        str(os.getuid()),
+                        str(os.getgid()),
+                        "github.com",
+                    ],
+                    input=kwargs["input_bytes"],
+                    env=writer_env,
+                    capture_output=True,
+                    check=False,
+                )
+                if result.returncode:
+                    raise OmnigentOAuthHostError(
+                        "atomic GitHub projection command failed (exit 73)",
+                        code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                    )
+            else:
+                assert args[:3] == ("docker", "exec", "container-1")
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    [arg.replace("/home/app", str(home)) for arg in args[3:]],
+                    env=environment,
+                    capture_output=True,
+                    check=False,
+                )
+            return result.returncode, result.stdout.decode(), result.stderr.decode()
+
+        runtime._run = AsyncMock(side_effect=run)
+
+        async def real_launch(**kwargs):
+            try:
+                await OmnigentOAuthHostRuntime._launch_on_demand(runtime, **kwargs)
+            except OmnigentOAuthHostError as exc:
+                retained["error"] = exc
+                raise
+
+        runtime._launch_on_demand = real_launch
+
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="container_start",
+        code=failure_code,
+        request=request,
+        setup=setup,
+    )
+    runtime = retained["runtime"]
+    coordinator = retained["coordinator"]
+    assert hosts_file.read_bytes() == before
+    assert list(hosts_file.parent.glob(".hosts.yml.*")) == []
+    assert saved.read_text() == "saved work"
+    assert session.read_text() == "same active session"
+    assert coordinator._hosts.lease == retained["lease"]
+    coordinator._execute.assert_not_awaited()
+    runtime.publish_workspace.assert_not_awaited()
+    runtime.stop_host.assert_not_awaited()
+    assert "provider_released" not in actions
+    assert not {"host_remove", "host_stop"}.intersection(owner_calls)
+    assert classify_launch_failure_evidence(retained["error"]) == (
+        failure_code,
+        "integration_error",
+        "retry_transient_upstream",
+    )
+    cleanup = next(payload for kind, payload in events if kind == "host_cleanup")
+    assert cleanup["status"] == "waiting"
+    assert cleanup["code"] == failure_code
+    assert cleanup["remediation_action"] == "retry_or_reconcile_stale_host"
+    assert cleanup["metadata"]["cleanupCompleted"] is False
+    assert cleanup["metadata"]["janitorRequired"] is True
+    authority = next(
+        payload["metadata"]["authorityChain"]
+        for kind, payload in events
+        if kind == "authority_chain"
+    )
+    assert authority["terminal"]["cleanupMode"] == "retry_or_janitor_reconciliation"
+
+    # A subsequent Activity delivery keeps the same host lease and bridge. Stop
+    # at the existing active-session handoff after proving refresh completed.
+    failing = False
+    coordinator._execute.side_effect = OmnigentSessionStillRunningError(
+        "the saved session remains active"
+    )
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await coordinator.execute(request)
+    assert coordinator._hosts.lease == retained["lease"]
+    runtime.stop_host.assert_not_awaited()
+    runtime.publish_workspace.assert_not_awaited()
+    assert "provider_released" not in actions
+    assert saved.read_text() == "saved work"
+    assert session.read_text() == "same active session"
+    bound = coordinator._run_store.bind_profile_authorization.await_args_list
+    assert len(bound) >= 2
+    assert {call.kwargs["host_lease_ref"] for call in bound} == {
+        retained["lease"].lease_id
+    }
+    assert {call.kwargs["provider_lease_id"] for call in bound} == {"provider-lease-1"}
+    assert {call.kwargs["request"].idempotency_key for call in bound} == {
+        request.idempotency_key
+    }
+    executed = coordinator._execute.await_args.args[0]
+    assert executed.parameters["omnigent"]["session"]["hostId"] == "host-1"
+    token = await asyncio.to_thread(
+        subprocess.run,
+        [gh, "auth", "token", "--hostname", "github.com"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    credential = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "credential", "fill"],
+        env=environment,
+        input="protocol=https\nhost=github.com\n\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert token.stdout.strip() == "selectedTokenB"
+    assert "password=selectedTokenB" in credential.stdout

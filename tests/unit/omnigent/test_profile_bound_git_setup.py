@@ -1,6 +1,8 @@
 """Git setup for the profile-bound Omnigent path used by PR resolver #2767."""
 
+import asyncio
 import io
+import json
 import os
 import shutil
 import stat
@@ -14,6 +16,7 @@ import pytest
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from tests.helpers.git_transport import basic_authorization, start_synthetic_github
 from tests.unit.omnigent.test_gh_config_migration_suppression import (
@@ -528,3 +531,223 @@ async def test_profile_bound_launch_projects_selected_gh_credential_off_metadata
     )
     assert f"password={SELECTED_TOKEN}" in credential.stdout
     assert AMBIENT_TOKEN not in credential.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cpu_millis", [1000, 0])
+async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
+    tmp_path, monkeypatch, cpu_millis
+) -> None:
+    """Run the real writer and consumers across a modeled running host retry."""
+    gh = shutil.which("gh")
+    if gh is None:
+        pytest.skip("requires GitHub CLI for its offline Git credential protocol")
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
+    for name in ("OMNIGENT_HOST_IMAGE_REF", "OMNIGENT_SHARED_HOST_IMAGE_REF"):
+        monkeypatch.setenv(name, "example.test/host@sha256:" + "2" * 64)
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    runtime.container_exists = AsyncMock(return_value=True)
+    lease = _host_lease()
+    container_name = "mm-host-lease-1"
+    container_owner = lease.lease_id
+    home = tmp_path / "host-home"
+    config_home = home / ".cache/moonmind-xdg"
+    environment = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(config_home),
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": "XDG_CONFIG_HOME,GH_PROMPT_DISABLED",
+        "PATH": os.environ["PATH"],
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GH_PROMPT_DISABLED": "1",
+    }
+    mounts = [
+        {
+            "Type": "volume",
+            "Name": f"{container_name}-cache",
+            "Destination": "/home/app/.cache",
+            "RW": True,
+        }
+    ]
+    inspection_fails = False
+
+    async def run(*args, **kwargs):
+        if args[:2] == ("docker", "inspect"):
+            if "moonmind.host_lease_id" in args[3]:
+                return 0, container_owner, ""
+            assert args[3] == "{{json .Mounts}}"
+            if inspection_fails:
+                raise RuntimeError("inspection transport unavailable")
+            return 0, json.dumps(mounts), ""
+        if kwargs.get("input_bytes"):
+            assert args[:4] == ("docker", "run", "--rm", "-i")
+            script = args[args.index("-ceu") + 1].replace("/home/app", str(home))
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "/bin/sh",
+                    "-ceu",
+                    script,
+                    "--",
+                    str(os.getuid()),
+                    str(os.getgid()),
+                    "github.com",
+                ],
+                input=kwargs["input_bytes"],
+                capture_output=True,
+                check=True,
+            )
+        else:
+            # Docker itself is modeled; the read-only probe executes unchanged
+            # against the same cache and environment as both real consumers.
+            assert args[:3] == ("docker", "exec", container_name)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [argument.replace("/home/app", str(home)) for argument in args[3:]],
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+        return result.returncode, result.stdout.decode(), result.stderr.decode()
+
+    runtime._run = AsyncMock(side_effect=run)
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    launch["limits"]["cpuMillis"] = cpu_millis
+    initial_token = "initialSelectedTokenA"
+    await runtime._project_github_credential(
+        initial_token,
+        cache_volume=f"{container_name}-cache",
+        host_image_ref=launch["hostImageRef"],
+        runtime_uid=launch["runtimeUid"],
+        runtime_gid=launch["runtimeGid"],
+    )
+    block = (
+        _static_host_github_block()
+        .replace("/home/app", str(home))
+        .replace("/opt/moonmind-tools/bin/gh", gh)
+    )
+    await asyncio.to_thread(
+        subprocess.run, ["/bin/sh", "-c", block], env=environment, check=True
+    )
+    hosts = config_home / "gh/hosts.yml"
+    preserved = [tmp_path / name for name in ("workspace", "session", "artifacts")]
+    preserved.extend([config_home / "git/config", config_home / "gh/config.yml"])
+    for path in preserved[:3]:
+        path.write_text(f"saved {path.name}\n")
+    before = {path: path.read_bytes() for path in preserved}
+
+    def assert_consumers_read(expected):
+        token = subprocess.run(
+            [gh, "auth", "token", "--hostname", "github.com"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        credential = subprocess.run(
+            ["git", "credential", "fill"],
+            env=environment,
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert token.stdout.strip() == expected
+        assert f"password={expected}" in credential.stdout
+
+    assert_consumers_read(initial_token)
+    runtime._run.reset_mock()
+    arguments = {
+        "binding": _binding(),
+        "host_lease": lease,
+        "container_name": container_name,
+        "workspace_source": tmp_path,
+        "skill_projection": tmp_path / "skills",
+        "runtime_scripts": tmp_path,
+        "current_step_execution_id": "step-1",
+        "github_token": SELECTED_TOKEN,
+        "effective_launch": launch,
+        "egress_attestation": _egress_attestation(),
+    }
+    for _ in range(2):
+        # An open reader retains the complete old document during replacement.
+        with hosts.open() as prior:
+            previous = prior.read()
+            await runtime._launch_on_demand(**arguments)
+            assert_consumers_read(SELECTED_TOKEN)
+            prior.seek(0)
+            assert prior.read() == previous
+        assert stat.S_IMODE(hosts.stat().st_mode) == 0o600
+        assert {path: path.read_bytes() for path in preserved} == before
+        assert list(hosts.parent.glob(".hosts.yml.*")) == []
+    writers = [
+        call for call in runtime._run.await_args_list if call.kwargs.get("input_bytes")
+    ]
+    assert len(writers) == 2
+    assert all(
+        call.kwargs["input_bytes"] == SELECTED_TOKEN.encode() for call in writers
+    )
+    assert all(
+        SELECTED_TOKEN not in str(call.args) for call in runtime._run.await_args_list
+    )
+
+    async def assert_refresh_deferred():
+        previous = hosts.read_bytes()
+        runtime._run.reset_mock()
+        await runtime._launch_on_demand(**arguments)
+        assert hosts.read_bytes() == previous
+        assert not any(
+            call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
+        )
+        assert {path: path.read_bytes() for path in preserved} == before
+
+    # Broader legacy recovery remains deferred, without mutation or an exception
+    # that could cause the coordinator to clean up an active host.
+    for key, value in (
+        ("GH_TOKEN", "legacyToken"),
+        ("GITHUB_TOKEN", "legacyToken"),
+        ("GH_CONFIG_DIR", str(tmp_path / "other-gh")),
+        ("XDG_CONFIG_HOME", str(tmp_path / "other-xdg")),
+        ("OMNIGENT_RUNNER_ENV_PASSTHROUGH", "GH_PROMPT_DISABLED"),
+    ):
+        original = dict(environment)
+        environment[key] = value
+        await assert_refresh_deferred()
+        environment.clear()
+        environment.update(original)
+    mounts[0]["Name"] = "foreign-cache"
+    await assert_refresh_deferred()
+    mounts[0]["Name"] = f"{container_name}-cache"
+    mounts[0]["RW"] = False
+    await assert_refresh_deferred()
+    mounts[0]["RW"] = True
+    mounts.append({"Destination": "/home/app/.cache/moonmind-xdg"})
+    await assert_refresh_deferred()
+    mounts.pop()
+    inspection_fails = True
+    await assert_refresh_deferred()
+    inspection_fails = False
+    saved_hosts = hosts.with_suffix(".saved")
+    hosts.rename(saved_hosts)
+    runtime._run.reset_mock()
+    await runtime._launch_on_demand(**arguments)
+    assert not hosts.exists()
+    assert not any(
+        call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
+    )
+    saved_hosts.rename(hosts)
+
+    # A deterministic name never authorizes replacing a foreign lease's file.
+    container_owner = "foreign-lease"
+    runtime._run.reset_mock()
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(**arguments)
+    assert raised.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
+    assert runtime._run.await_count == 1
+    assert_consumers_read(SELECTED_TOKEN)

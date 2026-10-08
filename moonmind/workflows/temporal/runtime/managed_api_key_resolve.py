@@ -307,7 +307,7 @@ async def resolve_selected_github_credential_for_launch(
 
 
 async def resolve_default_github_connection_credential(
-    *, repo: str | None = None
+    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
 ) -> Any:
     """Resolve the deployment's default GitHub connection and nothing else.
 
@@ -317,6 +317,8 @@ async def resolve_default_github_connection_credential(
     applies. An unreadable record or a failed selected source yields an
     unresolved result instead of another credential. When ``repo`` is named,
     its assignment must admit the connection before the credential is read.
+    Explicitly required operations must also survive that assignment's
+    narrowing; a broader provider token cannot replace local authorization.
     """
 
     from moonmind.auth.github_credentials import (
@@ -366,6 +368,22 @@ async def resolve_default_github_connection_credential(
         )
     if connection is None:
         return await resolve_deployment_github_credential(repo=repo)
+    missing_operations = tuple(
+        operation
+        for operation in required_operations
+        if operation not in connection.allowed_operations
+    )
+    if missing_operations:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=DEFAULT_GIT_CONNECTION_REF,
+            repo=repo,
+            diagnostic=(
+                f"{DEFAULT_GIT_CONNECTION_REF} does not allow required operations "
+                f"{', '.join(missing_operations)} for this repository; "
+                "MoonMind does not read or substitute a credential for denied use."
+            ),
+        )
     return await resolve_connection_github_credential(connection, repo=repo)
 
 

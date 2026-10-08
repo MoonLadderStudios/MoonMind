@@ -2379,6 +2379,32 @@ class OmnigentOAuthHostRuntime:
             await self.assert_container_owned(
                 container_name=container_name, lease_id=host_lease.lease_id
             )
+            if github_token:
+                if await self._existing_github_projection_is_compatible(container_name):
+                    try:
+                        await self._project_github_credential(
+                            github_token,
+                            cache_volume=f"{container_name}-cache",
+                            host_image_ref=str(effective_launch["hostImageRef"]),
+                            runtime_uid=int(effective_launch["runtimeUid"]),
+                            runtime_gid=int(effective_launch["runtimeGid"]),
+                        )
+                    except Exception as exc:
+                        # Stop this attempt before gh can use the old issuance,
+                        # retaining the live host for the existing retry owner.
+                        raise OmnigentOAuthHostError(
+                            "existing host GitHub projection refresh failed; "
+                            "retain the host for retry",
+                            code="OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED",
+                        ) from exc
+                else:
+                    # Legacy environment-token hosts need a separate recovery
+                    # contract. Do not retrofit or reject their active lease:
+                    # coordinator failure cleanup could destroy saved work.
+                    logger.warning(
+                        "Existing host GitHub refresh deferred: compatible "
+                        "credential projection could not be confirmed"
+                    )
             return
         cpu_millis = int(effective_launch["limits"]["cpuMillis"])
         if cpu_millis < 1:
@@ -2655,6 +2681,68 @@ class OmnigentOAuthHostRuntime:
         except BaseException:
             await self._run("docker", "rm", "-f", container_name, check=False)
             raise
+
+    async def _existing_github_projection_is_compatible(
+        self, container_name: str
+    ) -> bool:
+        """Confirm the existing consumer wiring without reading any token."""
+
+        try:
+            code, output, _error = await self._run(
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Mounts}}",
+                container_name,
+                check=False,
+            )
+            if code != 0:
+                return False
+            mounts = json.loads(output)
+            if not isinstance(mounts, list):
+                return False
+            cache_mounted = False
+            for mount in mounts:
+                if not isinstance(mount, Mapping):
+                    return False
+                target = str(mount.get("Destination") or "").rstrip("/")
+                if target == "/home/app/.cache":
+                    cache_mounted = (
+                        mount.get("Type") == "volume"
+                        and mount.get("Name") == f"{container_name}-cache"
+                        and mount.get("RW") is True
+                    )
+                    if not cache_mounted:
+                        return False
+                elif target.startswith("/home/app/.cache/"):
+                    # A nested mount could hide the volume-backed projection
+                    # from the running host while the writer updates the volume.
+                    return False
+            if not cache_mounted:
+                return False
+            code, _output, _error = await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "/bin/sh",
+                "-ceu",
+                f'test "${{XDG_CONFIG_HOME:-}}" = "{_GITHUB_CONFIG_HOME}"; '
+                f'test "${{GH_CONFIG_DIR:-{_GITHUB_CONFIG_HOME}/gh}}" '
+                f'= "{_GITHUB_CONFIG_HOME}/gh"; '
+                'test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}'
+                '${GH_ENTERPRISE_TOKEN:-}${GITHUB_ENTERPRISE_TOKEN:-}"; '
+                'case ",${OMNIGENT_RUNNER_ENV_PASSTHROUGH:-}," in '
+                "*,XDG_CONFIG_HOME,*) ;; *) exit 1 ;; esac; "
+                f'test ! -L "{_GITHUB_CONFIG_HOME}"; '
+                f'test ! -L "{_GITHUB_CONFIG_HOME}/gh"; '
+                f'test -f "{_GITHUB_CONFIG_HOME}/gh/hosts.yml"',
+                check=False,
+            )
+            return code == 0
+        except Exception:  # noqa: BLE001 - unknown probes cannot authorize mutation
+            # An unavailable probe is not permission to mutate or tear down an
+            # existing host. Preserve the preexisting recovery path unchanged.
+            return False
 
     async def _project_github_credential(
         self,
