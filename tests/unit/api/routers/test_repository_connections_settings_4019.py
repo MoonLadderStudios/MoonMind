@@ -354,13 +354,13 @@ async def test_observe_repository_reads_with_the_connection_token(harness, monke
             principal_scope=("system", None),
         )
 
-    async def _resolve(ref: str) -> str:
+    async def _resolve(ref: str) -> tuple[str, str]:
         assert ref == "db://repository-connection/personal-github/credential-1"
-        return TOKEN_A
+        return TOKEN_A, f"{ref}:credential:1:policy:1"
 
     monkeypatch.setenv("GITHUB_TOKEN", "global-token-must-not-be-used")
     monkeypatch.setattr(
-        "moonmind.auth.github_credentials._resolve_secret_ref", _resolve
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision", _resolve
     )
     requests: list[httpx.Request] = []
 
