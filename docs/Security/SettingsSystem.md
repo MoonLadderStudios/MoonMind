@@ -1825,7 +1825,7 @@ The SecretRef is accepted by the same resolver as `GITHUB_TOKEN`, `GH_TOKEN`,
 For a fine-grained PAT, the token must target the repository resource owner and
 include the selected repository. Minimum permission profiles are:
 
-- Repository indexing: `Contents: Read`.
+- Repository reads: `Contents: Read`.
 - Branch/PR publishing: `Contents: Read and write` and
   `Pull requests: Read and write`.
 - PR readiness: `Pull requests: Read`, `Commit statuses: Read`,
@@ -1833,9 +1833,10 @@ include the selected repository. Minimum permission profiles are:
 - Workflow file edits: add `Workflows: Write` when agents may modify
   `.github/workflows/*`.
 
-The GitHub token probe validates the exact selected repository rather than
-classic OAuth scopes. It reports repository, branch, and pull-request endpoint
-access plus a mode-specific permission checklist without exposing the token.
+The connection test reads the exact selected repository with only the selected
+repository connection rather than inspecting classic OAuth scopes. It reports
+repository, branch, and pull-request read access plus a mode-specific checklist
+without exposing the token, and never tests or claims write access.
 Fine-grained PATs that are pending organization approval, created for the wrong
 resource owner, excluded from the selected repository, or used for
 multi-organization/outside-collaborator automation can still fail; long-lived

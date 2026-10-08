@@ -187,6 +187,15 @@ or an unavailable backend fail closed before workload start. Reconciliation
 and cleanup remain label/ownership scoped; they never remove an unowned
 network, gateway, container, or volume. Diagnostics contain bounded redacted
 destination metadata, never credentials, request bodies, or packet payloads.
+An owned, retained on-demand Omnigent host is verified against its immutable
+launch attestation and durable cleanup authority. Every reuse also independently
+attests the current live gateway and requires the same admitted profile, config,
+enforcer, backend, network, and gateway authority. Replacing only the gateway
+image can change its derived applied-rule digest without invalidating that host's
+original launch labels. Reuse preserves the original evidence reference and
+digests; workload labels, image, network/endpoint identity, and ownership remain
+strictly checked. Changed security authority or missing durable evidence rejects
+reuse. A new or recreated host uses the fresh gateway attestation.
 A completed Container Job retains its daemon-recorded network membership, launch
 labels, exact image, architecture, and start/finish times even after Docker
 retires its endpoint and address. A command that finishes before the launch

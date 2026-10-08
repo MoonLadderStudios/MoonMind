@@ -1,8 +1,8 @@
 # Workflows List Page
 
-Status: Living product contract; Provider Profile presentation is adopted desired state, not an implementation claim  
+Status: Living product contract; Provider Profile presentation is implemented (MoonLadderStudios/MoonMind#4640)  
 Owners: MoonMind Engineering  
-Last updated: 2026-10-01
+Last updated: 2026-10-07
 Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, Google Sheets-like list filtering behavior, Provider Profile presentation, and Progress column sort/filter semantics
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
@@ -17,7 +17,7 @@ The page helps operators inspect Temporal-backed MoonMind Workflow Executions in
 
 The column filtering model is intentionally similar to Google Sheets filters: each filterable column owns a filter control where users can stage changes, search or enter values, include or exclude values when appropriate, include or exclude blanks when meaningful, clear a column filter, cancel staged edits, and apply the filter.
 
-The adopted agent-selection design replaces the ordinary Runtime column and mobile field with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. This requires a recorded-profile data projection and corresponding query controls, not a heading-only rename.
+The ordinary Runtime column and mobile field are replaced with **Provider Profile**, optionally showing **Harness** as secondary text in the same cell. **Backend** identifies Omnigent and belongs in execution details, not another ordinary list column. Rows, filters, counts, and facets read one recorded-profile projection (section 7.3), not a relabeled runtime field.
 
 ---
 
@@ -342,6 +342,21 @@ An authored profile can be displayed before launch without claiming successful a
 Extend the existing list projection and typed response for this compact summary. Reuse existing persistence/batching rather than adding a profile-history service. The browser must not request per-row profiles, execution details, step ledgers, or Temporal histories. No credentials, OAuth paths, raw provider payloads, or infrastructure handles enter the ordinary list payload.
 
 Keep one replacement column. Do not add ordinary Harness, Provider, Backend, Container, and Host columns alongside Provider Profile. Long names wrap or truncate accessibly within the current layout rather than overflowing mobile cards. Equal names are disambiguated by a compact stable ID where needed.
+
+### 7.3 Recorded Provider Profile projection
+
+Admission (`TemporalExecutionService.create_execution` and recurring schedule action writes) records the projection once for each user workflow from the admitted parameters only: the agent-profile snapshot's `providerProfileRef` (or the top-level Provider Profile `profileId` admission sets to the same ID) plus explicit or resolved step `providerProfileRef` values. Execution-configuration `profileId`, runtime, model, and current defaults never establish an association. Recurring schedule creation, updates, and recreation use the same projection builder and batched label snapshot. The existing schedule reconciler repairs missing action projections for future occurrences; already-started historical executions remain unchanged.
+
+When admission records `pending` because selection resolves at launch, the workflow updates the same projection once a managed agent launch is granted a Provider Profile: `MoonMind.AgentRun` reports the granted `providerProfileId` (with its display-name snapshot) in its result metadata, and `MoonMind.UserWorkflow` folds it into both stores, turning `pending` into `recorded`. A launch on a different profile than one already recorded adds that association; a profile already recorded is not counted again. Workflows without an admission projection are never back-filled this way.
+
+| Store | Contents | Used for |
+| --- | --- | --- |
+| Memo `providerProfile` | `selectionState`, one small `{id, label, harness}` entry per distinct recorded association, `profileCount`. The row serializer exposes only the first eight entries. `label` is the display name captured at admission or launch grant; ID-only entries omit it. | Bounded list row summary and complete facet identities/labels. |
+| `mm_provider_profile` (Text Search Attribute) | Space-separated opaque tokens: one state token plus one hashed token per recorded ID, including IDs beyond the display bound. | Filters, counts, and facet counts before pagination. |
+
+Provider Profile facet pagination retains an intra-workflow-page offset, the Visibility cursor, and compact stable-ID tokens already emitted on earlier pages, so an overflowing page cannot drop values or emit duplicate profile options. Incomplete historical coverage remains marked across continuation pages. Keep the same `pageSize` while following its opaque `nextPageToken`. Earlier memo projections with a count greater than their retained associations report `truncated=true`, even when there is no remaining cursor; hashes cannot restore the lost historical IDs or names.
+
+Temporal SQL Visibility allows three `KeywordList` attributes and all three are in use, so membership is a `Text` attribute whose tokens are single lowercase alphanumeric terms that every Visibility store matches exactly. Records admitted before the projection have neither store and report `not_recorded`; the same absence is what `providerProfileStateIn=not_recorded` and the blank shortcut match. That state means no association is recorded in the projection, not that no profile was used. When the namespace has not registered `mm_provider_profile`, Provider Profile filters return a degraded empty list with an unknown count, the facet reports `current_page_fallback`, and the browser says so; a row without a parsed summary shows **Unavailable**, never an absence state.
 
 ---
 
@@ -729,14 +744,14 @@ Target server-authoritative rule:
 
 ### 12.1 Canonical filter encoding
 
-The API and URL should support multi-value include and exclude filters where meaningful. Provider Profile parameters below are the target extension of the existing query owner, not a claim that the current API accepts them. Implement and document the server and generated/client contract together.
+The API and URL should support multi-value include and exclude filters where meaningful. The Provider Profile parameters below are implemented by the shared executions query builder for list, metrics, and facets, and by the generated/client contract. The browser retains both include and exclude branches for Provider Profile; its mode selector chooses which branch is being edited without clearing the other. It rejects only IDs or typed states present in both branches, and rewrites a `providerProfileBlank` link to the equivalent explicit state list.
 
 Representative URL shapes with illustrative stable profile IDs:
 
 ```text
 /workflows?stateNotIn=canceled&providerProfileIn=profile-a,profile-b&limit=50
 /workflows?providerProfileStateIn=pending,not_recorded&providerProfileStateNotIn=not_applicable&limit=50
-/workflows?providerProfileIn=profile-a&providerProfileStateIn=pending&limit=50
+/workflows?providerProfileIdIn=profile-a&providerProfileStateIn=pending&limit=50
 /workflows?progressPctFrom=25&progressPctTo=75&progressSignalIn=has_failed_steps&sort=progressPct&sortDir=desc
 ```
 
@@ -745,7 +760,8 @@ Recommended parameters:
 | Parameter | Meaning |
 | --- | --- |
 | `stateIn` / `stateNotIn` | Canonical lifecycle state values. |
-| `providerProfileIn` / `providerProfileNotIn` | Recorded stable profile-ID membership, using section 9.3 semantics. |
+| `providerProfileIdIn` / `providerProfileIdNotIn` | Recorded stable profile-ID membership, using section 9.3 semantics. Repeat each parameter once per exact ID; commas and other ID characters are literal. |
+| `providerProfileIn` / `providerProfileNotIn` | Retained comma-separated ID lists for existing URLs and saved views. They union with the corresponding exact-ID lists; new controls write the exact-ID parameters. |
 | `providerProfileStateIn` / `providerProfileStateNotIn` | Include/exclude absence states: `pending`, `not_recorded`, `not_applicable`. Positive ID/state choices use OR within the Provider Profile column; exclusions reject any matching ID or state. |
 | `providerProfileBlank` | Boolean aggregate shortcut: `true` includes all three absence states; `false` includes `recorded` rows. Omitted applies no blank constraint. Do not combine this shortcut with other Provider Profile parameters; use explicit state lists for mixed selections. |
 | `targetRuntimeIn` / `targetRuntimeNotIn` | Legacy runtime identifiers only while their actual consumers remain supported; never a Provider Profile alias. |
@@ -770,13 +786,13 @@ Recommended parameters:
 Rules:
 
 1. Values in comma-separated lists must be URL-encoded.
-2. If a value can contain commas in the future, the client and API must support repeated parameters as an equivalent representation.
+2. Provider Profile uses repeated exact-ID parameters for comma-containing values; its legacy CSV aliases keep their original delimiter semantics.
 3. The API must reject contradictory include and exclude filters on the same field with a clear validation error. For Provider Profile, an ID or state cannot be both included and excluded. Reject unknown state tokens and combinations of `providerProfileBlank` with any other Provider Profile filter; do not silently ignore or broaden them.
 4. The browser must normalize empty lists away rather than sending no-op filters.
 5. Filter changes reset `nextPageToken` and the previous-page cursor stack.
 6. Sort changes reset `nextPageToken` and the previous-page cursor stack when sort is server-authoritative.
 7. When sort is current-page-only, sort changes do not modify URL state.
-8. Provider Profile IDs and absence states round-trip as distinct typed values in URLs, saved views, active chips, and desktop/mobile staged selections. An empty state list imposes no state constraint. State filters run before pagination with the same count semantics as ID filters.
+8. Provider Profile IDs and absence states round-trip as distinct typed values in URLs, saved views, active chips, and desktop/mobile staged selections. Exact-ID parameters never split their decoded values on commas. Retain CSV aliases for shared URLs and saved views until those consumers and the API aliases are retired together. An empty state list imposes no state constraint. State filters run before pagination with the same count semantics as ID filters.
 
 ### 12.2 Backward compatibility
 
@@ -796,7 +812,7 @@ Existing URLs must continue to fail safe:
 | `entry=run` | Historical alias for the default Workflow-run view. |
 | `entry=manifest` | Show a recoverable retired-product message (MoonLadderStudios/MoonMind#4192); the Manifests page is removed, so never redirect to it. |
 | `repo=<value>` | Repository text filter. |
-| legacy Runtime query/filter | Preserve its runtime semantics with a clearly labeled legacy constraint while supported, or explain unsupported filtering before changing the query. Never relabel as Provider Profile or silently broaden results. |
+| legacy Runtime query/filter | Preserved unchanged as a **Legacy runtime** chip and drawer note that can be removed but not newly authored. Never relabeled as Provider Profile or silently broadened. Exit: remove with the `targetRuntime*` API parameters. |
 | legacy `sort` / `sortDir` while frontend sort is current-page-only | Dropped or ignored so old links do not imply global order. |
 | legacy `sort=progress` | Normalize to `sort=progressPct` only after server-authoritative Progress sort exists; otherwise drop or ignore with current-page-only behavior. |
 
@@ -845,7 +861,7 @@ Rules:
 
 The UI needs facet data so a filter popover can show values and counts beyond the current page.
 
-Target Provider Profile extension to the existing endpoint, not an already-shipped API claim:
+Implemented Provider Profile facet on the existing endpoint:
 
 ```text
 GET /api/executions/facets?source=temporal&facet=providerProfile&<current filters except Provider Profile IDs, states, and blank shortcut>
@@ -882,11 +898,11 @@ Rules:
 6. Progress current-step title should not be exposed as a full value facet because it is high-cardinality and transient.
 7. Facet counts must reflect the current query context. A workflow appears at most once in each profile count. Multi-profile workflows may contribute to more than one profile value, so the sum of those counts is not necessarily the total workflow count.
 8. If exact counts are expensive, the response may set `countMode` to an estimated or unknown mode; the UI must label those counts accordingly or omit counts.
-9. Large facets may be paginated and searched server-side.
+9. Large facets may be paginated and searched server-side. Provider Profile exposes an explicit **Load more** control that fetches one continuation page per action and merges options by stable ID. Do not automatically enumerate every page. Failed continuation requests preserve loaded options and staged selections and remain retryable. Closing the Provider Profile editor or changing its filter scope cancels old requests; stale reopening refreshes only the first page, preserving the selected filter intent.
 10. Facet failure must not break the table; the UI can fall back to values in the currently loaded page with a visible `current page values only` notice. Preserve selected IDs even when a failed or partial facet response omits them.
 11. Facet results must not include system-only workflow values or counts on the normal Workflows List page.
 12. `stateItems` exposes all three absence tokens from section 7.2, including zero-count entries. Their counts use the same authorization, other-column filters, and count mode as `items`. Each absent workflow contributes to exactly one state count; `blankCount` is their sum when counts are exact. Unavailable projection coverage cannot contribute to an absence count and must be reported truthfully.
-13. Provider Profile facet requests omit all of `providerProfileIn`, `providerProfileNotIn`, `providerProfileStateIn`, `providerProfileStateNotIn`, and `providerProfileBlank` unless deliberately querying the selected subset. State entries remain available when profile-ID items are paginated or searched; state values are typed separately from profile IDs. Partial or failed responses preserve selected state tokens as well as IDs.
+13. Provider Profile facet requests omit all of `providerProfileIdIn`, `providerProfileIdNotIn`, `providerProfileIn`, `providerProfileNotIn`, `providerProfileStateIn`, `providerProfileStateNotIn`, and `providerProfileBlank` unless deliberately querying the selected subset. State entries remain available when profile-ID items are paginated or searched; state values are typed separately from profile IDs. Partial or failed responses preserve selected state tokens as well as IDs.
 
 ### 13.3 Progress data materialization
 

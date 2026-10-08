@@ -96,6 +96,30 @@ describe('WorkflowRowActionsMenu', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('keeps the menu open on window blur but closes when focus moves outside it', async () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability();
+    const menu = screen.getByRole('menu', { name: 'More actions' });
+    const cancel = within(menu).getByRole('menuitem', { name: 'Cancel' });
+    cancel.focus();
+
+    // Firefox emits a null-relatedTarget blur when the browser window loses
+    // focus, while the document's active element remains the menu item.
+    fireEvent.blur(cancel, { relatedTarget: null });
+    expect(document.activeElement).toBe(cancel);
+    expect(screen.getByRole('menu', { name: 'More actions' })).toBe(menu);
+
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    try {
+      outside.focus();
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    } finally {
+      outside.remove();
+    }
+  });
+
   // The row detail endpoint runs a Temporal sync, so displaying a page must
   // not fan out one detail request per row.
   it('does not fetch row capabilities until the operator reaches for the row', async () => {

@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from datetime import UTC, timedelta
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from temporalio import activity, workflow
@@ -50,6 +50,12 @@ SCHEMA_VERSION = "checkpoint-branch-turn-execution/v1"
 CHECKPOINT_BRANCH_ARTIFACT_FLEET_PATCH = "checkpoint-branch-artifact-fleet-v1"
 CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH = (
     "checkpoint-branch-cancellation-terminal-v1"
+)
+# Cancellation after successful child compute persists that child's actual
+# result (marked canceled) instead of a synthetic one, so its saved candidate
+# reaches the finalization owner without another model run.
+CHECKPOINT_BRANCH_PRESERVED_CANCELLATION_PATCH = (
+    "checkpoint-branch-preserved-cancellation-v1"
 )
 
 _RETRY = RetryPolicy(
@@ -308,6 +314,56 @@ def _safe_capture_evidence(capture: Mapping[str, Any]) -> dict[str, Any]:
                 capture[key], path=f"capture.{key}"
             )
     return safe
+
+
+_SAVED_CANDIDATE_REF_KEYS = ("archiveRef", "manifestRef", "checkpointRef")
+_SAVED_CANDIDATE_VALUE_KEYS = (
+    "kind",
+    "baseCommit",
+    "archiveDigest",
+    "manifestDigest",
+)
+
+
+def _safe_saved_candidate(saved: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the child's own verified save onto durable refs and digests.
+
+    The child finalization owner already captured and verified these bytes;
+    retaining the projection keeps that candidate restorable when the parent's
+    own capture or reporting fails. Auxiliary recovery observations stay with
+    their owner.
+    """
+
+    safe: dict[str, Any] = {
+        key: str(saved[key]) for key in _SAVED_CANDIDATE_VALUE_KEYS if saved.get(key)
+    }
+    for key in _SAVED_CANDIDATE_REF_KEYS:
+        if saved.get(key):
+            safe[key] = _require_durable_artifact_ref(
+                saved[key], path=f"savedWorkspaceCheckpoint.{key}"
+            )
+    return safe
+
+
+def _saved_manifest_dependency_refs(
+    manifest_bytes: bytes | None, *, known: Sequence[str]
+) -> list[str]:
+    """Return artifacts a saved manifest needs for restore beyond ``known``.
+
+    The manifest embeds its Git history bundle and staged index patch by ref;
+    they must be retained with the candidate or restore fails once they
+    expire. A manifest that is not a JSON object names no dependencies.
+    """
+
+    if not manifest_bytes:
+        return []
+    try:
+        manifest = json.loads(manifest_bytes)
+    except ValueError:
+        return []
+    if not isinstance(manifest, Mapping):
+        return []
+    return [ref for ref in _artifact_refs_in(manifest) if ref not in known]
 
 
 def _artifact_refs_in(value: Any) -> list[str]:
@@ -981,6 +1037,9 @@ async def persist_checkpoint_branch_turn_terminal(
 
         capture = _mapping(result.metadata.get("omnigentCheckpointCapture"))
         safe_capture = _safe_capture_evidence(capture)
+        safe_saved_candidate = _safe_saved_candidate(
+            _mapping(result.metadata.get("savedWorkspaceCheckpoint"))
+        )
         provider_session_id = (
             str(capture.get("omnigentSessionId") or "").strip() or None
         )
@@ -1016,6 +1075,7 @@ async def persist_checkpoint_branch_turn_terminal(
             *_artifact_refs_in(result.metrics),
             *_artifact_refs_in(safe_capture),
             *_artifact_refs_in(safe_authority),
+            *_artifact_refs_in(safe_saved_candidate),
         ]
         if checkpoint_model is not None:
             refs_to_resolve.extend(
@@ -1026,8 +1086,9 @@ async def persist_checkpoint_branch_turn_terminal(
                 )
             )
         replacements: dict[str, str] = {}
+        saved_manifest_bytes: bytes | None = None
         for index, ref in enumerate(dict.fromkeys(refs_to_resolve)):
-            retained_ref, _data = await _retain_artifact(
+            retained_ref, data = await _retain_artifact(
                 ref=ref,
                 path=f"retainedRefs[{index}]",
                 source_namespace=source_namespace,
@@ -1035,8 +1096,26 @@ async def persist_checkpoint_branch_turn_terminal(
                 source_run_id=source_run_id,
                 branch_turn_id=branch_turn_id,
             )
+            if ref == safe_saved_candidate.get("manifestRef"):
+                saved_manifest_bytes = data
             if retained_ref != ref:
                 replacements[ref] = retained_ref
+        saved_dependency_refs = _saved_manifest_dependency_refs(
+            saved_manifest_bytes, known=refs_to_resolve
+        )
+        for index, ref in enumerate(saved_dependency_refs):
+            retained_ref, _data = await _retain_artifact(
+                ref=ref,
+                path=f"savedWorkspaceCheckpoint.dependencyRefs[{index}]",
+                source_namespace=source_namespace,
+                source_workflow_id=workflow_id,
+                source_run_id=source_run_id,
+                branch_turn_id=branch_turn_id,
+            )
+            if retained_ref != ref:
+                replacements[ref] = retained_ref
+        if saved_dependency_refs:
+            safe_saved_candidate["dependencyRefs"] = saved_dependency_refs
 
         safe_output_refs = list(
             _replace_artifact_refs(safe_output_refs, replacements)
@@ -1055,6 +1134,9 @@ async def persist_checkpoint_branch_turn_terminal(
         )
         safe_authority = _mapping(
             _replace_artifact_refs(safe_authority, replacements)
+        )
+        safe_saved_candidate = _mapping(
+            _replace_artifact_refs(safe_saved_candidate, replacements)
         )
         terminal_ref = safe_capture.get("terminalRef")
         if checkpoint_model is not None and checkpoint_bytes is not None:
@@ -1115,6 +1197,20 @@ async def persist_checkpoint_branch_turn_terminal(
             "metadata": {
                 "omnigentCheckpointCapture": safe_capture,
                 "authorityEvidence": safe_authority,
+                **(
+                    {
+                        "savedWorkspaceCheckpoint": safe_saved_candidate,
+                        "workPreserved": True,
+                    }
+                    if safe_saved_candidate.get("checkpointRef")
+                    or safe_saved_candidate.get("archiveRef")
+                    else {}
+                ),
+                **(
+                    {"unfinishedPhase": str(result.metadata["unfinishedPhase"])}
+                    if result.metadata.get("unfinishedPhase")
+                    else {}
+                ),
             },
         }
         result_payload = {
@@ -1447,7 +1543,9 @@ class MoonMindCheckpointBranchTurnWorkflow:
             )
 
     async def _persist_cancellation_terminal(
-        self, payload: Mapping[str, Any]
+        self,
+        payload: Mapping[str, Any],
+        preserved_child_result: AgentRunResult | None = None,
     ) -> None:
         """Persist cancellation even when it arrives at the first Activity."""
 
@@ -1456,11 +1554,26 @@ class MoonMindCheckpointBranchTurnWorkflow:
             summary="Checkpoint Branch turn was canceled.",
             failureClass="canceled",
         )
+        save_commit: dict[str, Any] | None = None
+        if preserved_child_result is not None and workflow.patched(
+            CHECKPOINT_BRANCH_PRESERVED_CANCELLATION_PATCH
+        ):
+            # Keep the child's real outputs and saved-candidate evidence, but
+            # never let preservation upgrade the canceled outcome.
+            canceled_result = preserved_child_result.model_copy(
+                update={"failure_class": "canceled"}
+            )
+            save_commit = {
+                "status": "incomplete",
+                "reason": "canceled-before-save",
+                "orphanAction": "reconcile-with-finalization-owner",
+            }
         if not workflow.patched(CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH):
             self._result = await self._persist_terminal(
                 payload,
                 result=canceled_result,
                 outcome="canceled",
+                save_commit=save_commit,
             )
             return
         terminal_task = asyncio.create_task(
@@ -1468,6 +1581,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 payload,
                 result=canceled_result,
                 outcome="canceled",
+                save_commit=save_commit,
                 cancellation_type=ActivityCancellationType.ABANDON,
             )
         )
@@ -1687,11 +1801,15 @@ class MoonMindCheckpointBranchTurnWorkflow:
             )
             return self._result
         except (CancelledError, asyncio.CancelledError):
-            await self._persist_cancellation_terminal(payload)
+            await self._persist_cancellation_terminal(
+                payload, preserved_child_result
+            )
             raise
         except Exception as exc:
             if _is_cancellation_failure(exc):
-                await self._persist_cancellation_terminal(payload)
+                await self._persist_cancellation_terminal(
+                    payload, preserved_child_result
+                )
                 raise CancelledError(
                     "Checkpoint Branch AgentRun lifecycle was canceled"
                 ) from exc
@@ -1730,6 +1848,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
 
 __all__ = [
     "CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH",
+    "CHECKPOINT_BRANCH_PRESERVED_CANCELLATION_PATCH",
     "MoonMindCheckpointBranchTurnWorkflow",
     "WORKFLOW_NAME",
     "mark_checkpoint_branch_turn_running",
