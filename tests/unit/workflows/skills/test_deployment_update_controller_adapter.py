@@ -12,6 +12,7 @@ import asyncio
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -115,6 +116,37 @@ def test_tool_submits_and_observes_the_controller_operation(
     again = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert again.outputs["operationId"] == operation_id
     assert controller.applied == [operation_id]
+
+
+def test_old_controller_is_bootstrapped_before_the_durable_update_is_submitted(
+    controller_factory, monkeypatch
+):
+    controller = controller_factory()
+    request = controller_client._controller_request
+    bootstrapped = False
+
+    def old_health(endpoint, **kwargs):
+        if kwargs["path"] == "/v1/healthz" and not bootstrapped:
+            return 200, {"status": "ok"}
+        if kwargs["method"] == "POST":
+            assert bootstrapped
+        return request(endpoint, **kwargs)
+
+    def bootstrap(command, **kwargs):
+        nonlocal bootstrapped
+        assert "ensure" in command
+        assert "--state-dir" in command
+        assert IMAGE in command
+        assert controller.applied == []
+        bootstrapped = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(controller_client, "_controller_request", old_health)
+    monkeypatch.setattr(controller_client, "subprocess", SimpleNamespace(run=bootstrap))
+    result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
+    assert result.status == "COMPLETED"
+    assert bootstrapped
+    assert len(controller.applied) == 1
 
 
 def test_tool_waits_for_a_running_operation_after_a_lost_acknowledgment(

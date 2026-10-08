@@ -98,6 +98,21 @@ It asks the controller for its fresh bounded attempt and keeps prior errors. The
 
 Until a deployment installs a working controller, Settings Operations uses the transitional workflow updater, the same rule as the host entrypoint in section 11.2. That path is removed once the default install provides the controller.
 
+The updated submission clients refresh an installed older controller without
+active-journal transition support before submitting a new update. Settings Operations queues its
+existing durable deployment-control workflow for this prerequisite; that
+trusted submitter invokes the same host-owned bootstrap, then submits the
+requested target to the refreshed controller. The API keeps read-only state
+access. An unavailable endpoint is still reported as unavailable, and no
+application component takes over the controller's stack operation.
+Before queuing this prerequisite, the API reads the deployment worker's
+existing readiness endpoint and verifies its bootstrap method, executable
+tool activity, and configured deployment queue. A pinned worker that lacks
+that method is refused before any workflow is queued; its image pin remains
+unchanged, and the host update command can refresh the controller independently.
+Once the controller supports the method, API updates need no worker readiness
+or version agreement.
+
 The workflow's deployment observer heartbeats while reading its registry,
 pulling the updater image, and awaiting the durable result. A 60-second
 heartbeat timeout detects a replaced observer independently of the longer
@@ -204,6 +219,45 @@ for the standalone controller to reconcile.
 
 Preserve dependency order and required `init-db`/schema migration gating before new dependent services start. Bring necessary infrastructure up in the existing Compose lifecycle. A failed migration preserves the original error and data rather than starting an incompatible application or attempting a destructive downgrade.
 
+Active Omnigent journal transitions run after image staging and before service
+recreation, under this same deployment owner and lock. The owner observes the
+selected project's actual `agent_runtime` writers and `artifacts` lifecycle
+sweepers, including Compose overrides and one-offs. It stops those consumers
+with a bounded Docker stop and inspects them again before changing journal
+references. Pausing API submissions or enumerating workflows alone does not
+prove quiescence. Durable Activities recover from their saved progress; a
+workflow need not finish before an update, and preparation never changes its
+intent or marks it terminal.
+
+The bridge store then replaces committed active chunks with complete,
+old-reader-compatible JSONL journals and atomically updates their canonical
+references and event locators. Original chunks remain recoverable until the
+reference transaction commits. The controller delegates this one operation
+through `deployment_release --omnigent-journal-prepare`, retaining observed
+installed consumer image identities in its existing operation record before
+any recreation. It can therefore use the source image's helper when rolling
+back to a target that predates the helper; a first forward install can use the
+staged target. This requires the DB and artifact store for journal access, but
+does not require a healthy API or worker. An unavailable artifact or unknown
+consumer state prevents recreation and keeps the saved work and original
+error available.
+
+Before preparation, the owner starts only `postgres`/`minio` services present
+in the selected Compose configuration, without dependencies or recreation of
+existing containers. This permits fresh or stopped storage to answer the
+journal inventory while preserving running infrastructure. An absent bridge
+schema is an empty inventory; a failed storage connection is not.
+
+A partial Compose failure stops journal consumers again. Restart/retry uses
+the recorded source helper and repeats observation and compaction, because a
+partially recreated writer might have committed additional chunks after the
+previous preparation. No full-journal receipt permits skipping that check.
+The transitional application-owned updater invokes the same preparation in
+its existing `before_compose` lock scope. This transition remains necessary
+while supported rollback targets can read only complete JSONL journals;
+there is no fleet registry, compatibility fingerprint, or separate journal
+migration owner.
+
 ### 10.7 Verify desired state
 
 Observe actual installed services and concrete images, required health, ordinary workflow dispatch, and the operator access path. A container running is not sufficient proof that work can execute or that the dashboard serves the intended release.
@@ -274,6 +328,30 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
+The portable host command checks the controller's advertised journal-transition
+method before submission. When needed, it extracts the existing stdlib
+bootstrap from an observed installed application image or the staged target,
+without requiring a healthy API or worker or changing the host checkout.
+Bootstrap uses the application image's packaged `deploy/controller` source;
+it does not depend on a separately published controller image. The recorded
+Compose project, mounts, network and credentials remain in place. Replacement
+holds the controller's stack lock, refuses any open operation, and verifies
+the supported method before submission continues. A rollback prefers the
+installed source image so an old target need not contain newer repair code.
+
+An already-installed old API/controller may reach the new target's
+`--omnigent-select` callback without running either updated submission client.
+The callback requires the owning controller's `active-journal-transition`
+method before accessing release state. An old owner is refused before
+selection or application mutation, with the recovery command
+`./tools/update-moonmind.sh` from the updated MoonMind checkout. That host
+entrypoint performs the existing bootstrap and then retries the release;
+the selected-image callback neither replaces its controller nor starts a
+second updater. The historical API binary cannot initiate this new prerequisite,
+so safe refusal does not automatically recover that first-forward API request.
+The automatic continuation requires the updated host entrypoint, or updated API
+and deployment-worker code that can invoke the existing bootstrap owner.
+
 The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity, and the API reaches the same port under the controller's alias on `deployment-controller-network`. That network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target (Settings Operations, the workflow adapter) uses the target the controller derives: the MoonMind Compose project bootstrap recorded in the controller identity (else `COMPOSE_PROJECT_NAME` from the deployment `.env`), `COMPOSE_FILE` from that `.env` (else `docker-compose.yaml` plus its override) in its read-only checkout mount, and the services that selection renders minus the Docker transport substrate. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs a working controller, the host entrypoint updates through the application-owned updater when no controller secret exists, or when bootstrap left a secret but no reachable endpoint, operation record, or Compose container. A controller with recorded work retains recovery authority, explicit controller selection is never bypassed, and `--legacy-direct` is refused once a controller owns the deployment. This fallback is removed once the entrypoint can install a published controller image itself.
 
 Before the transitional host path hands off a release, it verifies Docker
@@ -335,6 +413,19 @@ Missing credentials or unreachable client networks limit what can be verified; r
 Implementation verification uses focused default-path tests plus CI for broader integration. Cover interruption, lost acknowledgment, concurrent submission, required schema initialization, repair while application orchestration is unhealthy, access preservation, supported host paths, and retained work/history behavior. Use representative real-service journeys instead of multiplying every historical release-mode combination.
 
 CI can qualify a candidate implementation, while deployment observations identify the artifact actually installed. Neither a different candidate's green CI nor a helper returning a fabricated success proves the operator journey. Provider/hardware checks remain separately identified when unavailable. Do not require full CI or paid-provider qualification inside every update.
+
+The `controller-journey` CI job also runs
+`tests/integration/host_update/test_journal_transition.py` against its built
+candidate image. Disposable Compose writer/sweeper processes share real
+PostgreSQL and artifact bytes. The journal phase uses the production helper
+and lock, interrupts its controller process after partial recreation, resumes
+the recorded operation, and rolls back to a fixture image lacking the helper.
+Retained pre-chunk reader and sweeper contracts must recover the full history,
+event positions, provider artifact references and unchanged active intent.
+This qualifies the process/data transition; the existing controller journey
+separately qualifies the current API/dashboard submission and observation
+boundary. Neither journey proves automatic bootstrap through a historical API
+binary that predates the prerequisite.
 
 ### 12.3 Verification failure rule
 
