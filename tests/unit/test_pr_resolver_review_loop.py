@@ -395,6 +395,129 @@ def test_clean_comment_cannot_complete_an_unrelated_review(
     assert _evidence(snapshot_module, comments=comments)["freshReviewForHead"] is False
 
 
+# Real chatgpt-codex-connector clean replies, one per observed flair, with the
+# full SHA of the commit each one reviewed.
+CODEX_CLEAN_REPLIES = json.loads(
+    (REPO_ROOT / "tests/fixtures/pr_resolver/codex_clean_replies.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def _codex_reply_evidence(
+    snapshot_module,
+    reply: dict[str, Any],
+    *,
+    head_sha: str | None = None,
+    body: str | None = None,
+) -> dict[str, Any]:
+    comment = {
+        "id": reply["commentId"],
+        "type": "issue_comment",
+        "user": "chatgpt-codex-connector[bot]",
+        "body": reply["body"] if body is None else body,
+        "created_at": reply["createdAt"],
+    }
+    return _evidence(
+        snapshot_module,
+        comments=[_request_comment(), comment],
+        head_sha=head_sha or reply["headSha"],
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    CODEX_CLEAN_REPLIES,
+    ids=[reply["body"].splitlines()[0] for reply in CODEX_CLEAN_REPLIES],
+)
+def test_real_codex_clean_reply_completes_its_reviewed_head(
+    snapshot_module, reply
+) -> None:
+    evidence = _codex_reply_evidence(snapshot_module, reply)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionKind"] == "issue_comment"
+    assert evidence["completionId"] == reply["commentId"]
+
+
+def test_real_codex_clean_reply_for_another_commit_does_not_complete_the_head(
+    snapshot_module,
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    evidence = _codex_reply_evidence(
+        snapshot_module, reply, head_sha=CODEX_CLEAN_REPLIES[0]["headSha"]
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize(
+    ("change", "clean"),
+    [
+        ("low_severity_findings", True),
+        ("high_severity_findings", False),
+        ("high_severity_flair", False),
+        ("findings_after_footer", False),
+        ("unmarked_feedback", False),
+        ("unreadable_reviewed_commit", False),
+        ("quoted", False),
+        ("embedded", False),
+    ],
+)
+def test_real_codex_clean_reply_only_ends_the_loop_without_major_findings(
+    snapshot_module, change, clean
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    result, rest = reply["body"].split("\n\n", 1)
+    body = {
+        "low_severity_findings": f"{result}\n\n[P2] Rename the helper.\n\n{rest}",
+        "high_severity_findings": (
+            f"{result}\n\n[P1] Fix the authorization bug.\n\n{rest}"
+        ),
+        "high_severity_flair": f"{result} [P1] Fix the authorization bug.\n\n{rest}",
+        "findings_after_footer": f"{reply['body']}\n\n[P1] Fix the authorization bug.",
+        "unmarked_feedback": f"{result}\n\nAlso handle the empty list.\n\n{rest}",
+        "unreadable_reviewed_commit": reply["body"].replace(
+            reply["headSha"][:10], "HEAD"
+        ),
+        "quoted": "> " + reply["body"],
+        "embedded": "Earlier on another PR: " + reply["body"],
+    }[change]
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is clean
+
+
+@pytest.mark.parametrize("indent", ["    ", "\t", "  \t", "   \t"])
+@pytest.mark.parametrize("quoted_part", ["whole_reply", "result", "reviewed_commit"])
+def test_indented_codex_clean_reply_is_not_completion(
+    snapshot_module, indent, quoted_part
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    body = reply["body"]
+    if quoted_part == "whole_reply":
+        body = "\n".join(indent + line if line else line for line in body.splitlines())
+    elif quoted_part == "result":
+        opening, rest = body.split("\n", 1)
+        body = indent + opening + "\n" + rest
+    else:
+        body = body.replace("**Reviewed commit:**", indent + "**Reviewed commit:**")
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize("indent", ["", " ", "  ", "   "])
+def test_non_code_indent_preserves_real_codex_clean_reply(
+    snapshot_module, indent
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    body = "\n".join(
+        indent + line if line else line for line in reply["body"].splitlines()
+    )
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionId"] == reply["commentId"]
+
+
 @pytest.mark.parametrize("state", ["PENDING", "DISMISSED", "", "FUTURE_STATE"])
 def test_unsubmitted_or_unknown_review_is_not_completion(snapshot_module, state):
     evidence = _evidence(
@@ -1166,6 +1289,136 @@ def test_equal_timestamp_replies_use_ids_not_inventory_order(
         assert evidence["requestFailed"] is (not latest_clean)
 
 
+@pytest.mark.parametrize("initial_completion", ["reply", "reaction"])
+@pytest.mark.parametrize(
+    "refreshed_response",
+    ["pending_request", "refusal", "completed_request", "changing_completion"],
+)
+def test_snapshot_recomputes_review_after_completed_inventory_refresh(
+    snapshot_module, monkeypatch, tmp_path, initial_completion, refreshed_response
+):
+    main = snapshot_module["main"]
+    scope = main.__globals__
+    checks = [{"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    pr = {
+        **_snapshot()["pr"],
+        "url": "https://github.com/owner/repo/pull/350",
+        "statusCheckRollup": checks,
+    }
+    monkeypatch.setitem(scope, "fetch_pr_data", lambda _selector: (pr, "350", []))
+    monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
+    monkeypatch.setitem(scope, "_fetch_commit_statuses", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
+    monkeypatch.setitem(
+        scope, "_fetch_head_commit_timestamp", lambda **_kwargs: HEAD_COMMITTED_AT
+    )
+    monkeypatch.setitem(scope, "_fetch_pull_request_reviews", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_pr_reactions", lambda **_kwargs: [])
+    reaction_reads = []
+
+    def reactions(**_kwargs):
+        reaction_reads.append(True)
+        if initial_completion == "reaction" and len(reaction_reads) == 1:
+            return [
+                {
+                    "id": 88,
+                    "user": {"login": CODEX_LOGIN},
+                    "content": "+1",
+                    "created_at": "2026-08-24T22:19:00Z",
+                }
+            ]
+        return []
+
+    monkeypatch.setitem(scope, "_fetch_comment_reactions", reactions)
+    initial = [_request_comment()]
+    if initial_completion == "reply":
+        initial.append(_codex_reply("Codex Review: Didn't find any major issues."))
+    refreshed = list(initial)
+    if refreshed_response != "refusal":
+        refreshed.append({**_request_comment("2026-08-24T22:20:00Z"), "id": 98770})
+        if refreshed_response in {"completed_request", "changing_completion"}:
+            refreshed.append(
+                _codex_reply(
+                    "Codex Review: Didn't find any major issues.",
+                    created_at="2026-08-24T22:21:00Z",
+                    comment_id=98771,
+                )
+            )
+    else:
+        refreshed.append(
+            _codex_reply(
+                CODEX_USAGE_LIMIT_REPLY,
+                created_at="2026-08-24T22:21:00Z",
+                comment_id=98771,
+            )
+        )
+    inventories = []
+
+    def read_comments(*_args):
+        inventories.append(True)
+        if refreshed_response == "changing_completion" and len(inventories) > 2:
+            # Every refresh observes a newer request and its completion.
+            request_id = 98770 + 2 * len(inventories)
+            minute = 20 + 2 * len(inventories)
+            return {
+                "comments": [
+                    *refreshed,
+                    {
+                        **_request_comment(f"2026-08-24T22:{minute}:00Z"),
+                        "id": request_id,
+                    },
+                    _codex_reply(
+                        "Codex Review: Didn't find any major issues.",
+                        created_at=f"2026-08-24T22:{minute + 1}:00Z",
+                        comment_id=request_id + 1,
+                    ),
+                ]
+            }
+        return {"comments": initial if len(inventories) == 1 else refreshed}
+
+    monkeypatch.setitem(scope, "run_command", read_comments)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_snapshot.py",
+            "--pr",
+            "350",
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--snapshot-path",
+            str(path),
+        ],
+    )
+    if refreshed_response == "changing_completion":
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        assert len(inventories) == 4
+        assert not path.exists()
+        return
+    main()
+    captured = json.loads(path.read_text())
+    evidence = captured["automatedReview"]
+    assert len(inventories) >= 2
+    if refreshed_response == "completed_request":
+        assert len(inventories) == 3
+        assert evidence["freshReviewForHead"] is True
+        assert evidence["requestCommentId"] == 98770
+        assert evidence["completionId"] == 98771
+        return
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["completionId"] is None
+    assert evidence["requestPending"] is (refreshed_response == "pending_request")
+    assert evidence["requestFailed"] is (refreshed_response == "refusal")
+    assert evidence["requestCommentId"] == (
+        98770 if refreshed_response == "pending_request" else 98765
+    )
+
+
 def test_equal_timestamp_requests_use_ids_not_inventory_order(snapshot_module):
     first = {**_request_comment(), "id": 101}
     failure = _codex_reply(
@@ -1211,6 +1464,48 @@ def test_unrelated_request_does_not_supersede_a_refusal(snapshot_module, change)
     )
     assert evidence["requestCommentId"] == 98765
     assert evidence["requestFailed"] is True
+
+
+@pytest.mark.parametrize("latest_clean", [True, False])
+def test_latest_real_codex_reply_preserves_failure_supersession(
+    snapshot_module, latest_clean
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    clean = _codex_reply(
+        reply["body"],
+        created_at=("2026-10-08T08:00:02Z" if latest_clean else "2026-10-08T08:00:01Z"),
+        comment_id=103 if latest_clean else 102,
+    )
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY,
+        created_at=("2026-10-08T08:00:01Z" if latest_clean else "2026-10-08T08:00:02Z"),
+        comment_id=102 if latest_clean else 103,
+    )
+    clean_evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment(), clean],
+        head_sha=reply["headSha"],
+    )
+    assert clean_evidence["freshReviewForHead"] is True
+    for replies in ([clean, failure], [failure, clean]):
+        evidence = _evidence(
+            snapshot_module,
+            comments=[_request_comment(), *replies],
+            head_sha=reply["headSha"],
+        )
+        assert evidence["freshReviewForHead"] is latest_clean
+        assert evidence["requestFailed"] is (not latest_clean)
+        assert evidence["requestPending"] is False
+        if latest_clean:
+            assert evidence["completionId"] == clean["id"]
+        else:
+            assert evidence["completionId"] is None
+            assert evidence["requestFailure"]["id"] == failure["id"]
+            snapshot = normalize_portable_snapshot(_snapshot(automatedReview=evidence))
+            assert (
+                classify_snapshot(snapshot).reason_code
+                == "automated_review_request_failed"
+            )
 
 
 @pytest.mark.parametrize("prefix", ["    ", "\t", "\n    "])
