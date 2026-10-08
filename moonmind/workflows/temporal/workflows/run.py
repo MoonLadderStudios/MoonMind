@@ -133,6 +133,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        merge_resolved_provider_profile,
+    )
     from moonmind.workflows.executions.repository_contract import (
         repository_branch_from_value,
         repository_name_from_value,
@@ -1324,6 +1329,13 @@ class GateTransitionDecision:
 # memo command require a reset/versioning cutover; see
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
+# MoonLadderStudios/MoonMind#4640: fold the Provider Profile a managed launch
+# actually used into the admitted list projection. Histories recorded before
+# this patch never upserted it, so the new memo/Search Attribute commands are
+# gated for replay.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
+    "run-launch-provider-profile-projection-v1"
+)
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -1792,6 +1804,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Temporal's workflow start_time / execution_time, which fire as soon
         # as Temporal schedules the workflow even if it is awaiting a slot.
         self._started_at: datetime | None = None
+        # Admitted recorded Provider Profile projection (memo summary, Search
+        # Attribute value), seeded on first launch-resolved profile (#4640).
+        self._provider_profile_projection: tuple[Any, str | None] | None = None
 
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
@@ -23789,11 +23804,64 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if isinstance(metadata, Mapping):
             for key, value in metadata.items():
                 outputs.setdefault(key, value)
+            self._record_launch_provider_profile(metadata)
 
         return {
             "status": status,
             "outputs": outputs,
         }
+
+    def _record_launch_provider_profile(self, metadata: Mapping[str, Any]) -> None:
+        """Record the Provider Profile a managed launch actually used.
+
+        Admission records ``pending`` when selection resolves at launch; this
+        folds the granted profile into the same memo summary and
+        ``mm_provider_profile`` Search Attribute that list rows, filters, and
+        facets read (MoonLadderStudios/MoonMind#4640). Workflows without an
+        admitted projection are left unchanged rather than guessed.
+        """
+
+        profile_id = str(metadata.get("providerProfileId") or "").strip()
+        if not profile_id or not workflow.patched(
+            RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH
+        ):
+            return
+        if self._provider_profile_projection is None:
+            self._provider_profile_projection = (
+                workflow.memo_value(PROVIDER_PROFILE_MEMO_KEY, default=None),
+                workflow.info().typed_search_attributes.get(
+                    SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE)
+                ),
+            )
+        summary, search_value = self._provider_profile_projection
+        merged = merge_resolved_provider_profile(
+            summary,
+            search_value,
+            profile_id,
+            label=str(metadata.get("providerProfileLabel") or "") or None,
+            retain_all_profiles=workflow.patched(
+                "provider-profile-complete-associations-v1"
+            ),
+        )
+        if merged is None:
+            return
+        self._provider_profile_projection = merged
+        merged_summary, merged_value = merged
+        try:
+            workflow.upsert_memo({PROVIDER_PROFILE_MEMO_KEY: merged_summary})
+            workflow.upsert_search_attributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
+                        merged_value,
+                    )
+                ]
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to record launch-resolved Provider Profile",
+                extra={"error": str(exc)},
+            )
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
