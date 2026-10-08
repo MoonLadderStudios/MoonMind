@@ -3468,6 +3468,11 @@ async def _generic_publication_harness(
             return ()
 
     class HostRuntime:
+        async def validate_repository_intent(self, *, request, plan):
+            await OmnigentGithubCredentialService(None).validate_repository_intent(
+                request=request, plan=plan
+            )
+
         async def prepare(self, **kwargs):
             events.append("host-inputs-prepared")
             sink = kwargs["authority_sink"]

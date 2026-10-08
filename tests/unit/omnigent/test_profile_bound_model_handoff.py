@@ -12,6 +12,9 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     bind_runtime_request_authority,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+)
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
@@ -185,7 +188,11 @@ async def test_generic_model_drift_precedes_binding_readiness_and_command_effect
         provider_lease_coordinator=object(),
         credential_provisioning_service=object(),
         host_lease_repository=object(),
-        host_runtime=object(),
+        host_runtime=SimpleNamespace(
+            validate_repository_intent=(
+                OmnigentGithubCredentialService(None).validate_repository_intent
+            )
+        ),
         planned_host_resolver=object(),
         session_driver=object(),
         session_cleanup_service=object(),

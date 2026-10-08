@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 import yaml
 
 from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.github_credentials import github_projection_script
 from tools.ci import run_credential_free_host_recovery as driver
 
 SHA = "1" * 40
@@ -24,6 +28,70 @@ HARNESS_IDENTITY = {
         omnigent_version="1.2.3", omnigent_build_digest="sha256:" + "4" * 64,
     ).implementation.implementation_ref(),
 }
+
+
+async def project_with_runtime_backend(root, stamp, action, *, token=None):
+    """Execute the image's projection producer across its real redaction boundary."""
+    return await DockerCommandBackend().run(
+        [
+            "sh",
+            "-ceu",
+            github_projection_script(str(root), action=action),
+            "--",
+            str(os.getuid()),
+            str(os.getgid()),
+            "github.com",
+            json.dumps(stamp, sort_keys=True),
+        ],
+        input_bytes=token,
+        timeout_seconds=10,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["generic", "profile"])
+async def test_exact_projection_stamp_survives_runtime_redaction(tmp_path, lane):
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _exact_image_github_projection_owner,
+    )
+
+    run_ref = "credential-recovery-" + uuid4().hex[:12]
+    stamp = {
+        "ownerRef": _exact_image_github_projection_owner(run_ref, lane),
+        "revision": 1,
+        "reservationId": str(uuid4()),
+    }
+    token = b"synthetic-projection-value"
+    root = tmp_path / lane
+    for action in ("reserve", "publish", "inspect"):
+        code, output, error = await project_with_runtime_backend(
+            root, stamp, action, token=token if action == "publish" else None
+        )
+        assert code == 0
+        assert not error
+        assert token.decode() not in output + error
+        assert json.loads(output) == stamp
+    assert b"    oauth_token: " + token + b"\n" in (root / "hosts.yml").read_bytes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lane", ["generic", "profile"])
+async def test_credential_shaped_projection_owner_is_still_redacted(tmp_path, lane):
+    run_ref = "credential-recovery-" + uuid4().hex[:12]
+    stamp = {
+        "ownerRef": f"test:{run_ref}:{lane}",
+        "revision": 1,
+        "reservationId": str(uuid4()),
+    }
+    code, output, error = await project_with_runtime_backend(tmp_path, stamp, "reserve")
+    assert code == 0
+    assert not error
+    assert json.loads(output) == {
+        **stamp,
+        "ownerRef": f"test:{run_ref}=[REDACTED]",
+    }
+    state = json.loads((tmp_path / ".projection-reservation.json").read_text())
+    assert state["reservation"] == stamp
 
 
 def receipt():

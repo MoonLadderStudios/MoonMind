@@ -258,6 +258,22 @@ class OmnigentGithubCredentialService:
         self._sessions = session_factory
         self._artifacts = artifact_gateway
 
+    async def validate_repository_intent(
+        self, *, request: AgentExecutionRequest, plan: OmnigentExecutionPlanEnvelope
+    ) -> None:
+        """Validate canonical intent and live authority without acquiring values."""
+        from moonmind.omnigent.workspace_intent import authored_repository_source
+
+        authored_repository_source(request)
+        if plan.payload.resolvedTools.get("repositoryAccess", {}).get("collaboration"):
+            await self.admitted_repository_identity(
+                plan=plan,
+                request=request,
+                role="collaboration",
+                operation="read",
+                validate_current=True,
+            )
+
     async def _verified_repository_access(
         self,
         *,

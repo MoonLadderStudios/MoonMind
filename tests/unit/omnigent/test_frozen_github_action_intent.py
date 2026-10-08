@@ -479,9 +479,94 @@ async def test_profile_preflight_and_publisher_use_the_same_canonical_repository
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["prepare", "fresh", "resumed"])
+@pytest.mark.parametrize("repository_access", ["none", "source_only"])
+async def test_generic_repository_conflicts_without_collaboration_fail_before_effects(
+    boundary, repository_access
+):
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        create_execution_plan_envelope,
+    )
+    from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from tests.unit.omnigent.test_generic_platform_production_services import (
+        _PUSHED_PUBLICATION,
+        _exact_plan,
+        _generic_publication_harness,
+        _prime_attested_host_binding,
+    )
+
+    payload = _exact_plan("opencode-go/model").payload.model_dump(
+        mode="json", by_alias=True
+    )
+    payload["resolvedTools"]["repositoryAccess"] = (
+        {
+            "source": {
+                "snapshotRef": "repository-access-snapshot:sha256:" + "a" * 64,
+                "artifactRef": "artifact:source-access",
+            }
+        }
+        if repository_access == "source_only"
+        else {}
+    )
+    plan = create_execution_plan_envelope(payload)
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    if boundary == "resumed":
+        await _prime_attested_host_binding(harness, plan)
+    request = harness.publish_request.model_copy(
+        update={
+            "parameters": {
+                **harness.publish_request.parameters,
+                "repository": "owner/different-repository",
+            }
+        }
+    )
+    sessions = Mock(side_effect=AssertionError("conflict reached repository access"))
+    gateway = SimpleNamespace(read_repository_access_snapshot=AsyncMock())
+    runtime = object.__new__(GenericOmnigentHostRuntime)
+    runtime._github_credentials = OmnigentGithubCredentialService(
+        None, session_factory=sessions, artifact_gateway=gateway
+    )
+    workspace = AsyncMock(side_effect=AssertionError("conflict prepared workspace"))
+    runtime._workspace = SimpleNamespace(materialize=workspace)
+    runtime.cleanup = AsyncMock()
+    harness.realizer._host_runtime = runtime
+    claim = AsyncMock(side_effect=AssertionError("conflict claimed delivery"))
+    harness.realizer._turn_commands = SimpleNamespace(claim=claim)
+    provider = AsyncMock(side_effect=AssertionError("conflict acquired provider"))
+    harness.realizer._provider_leases.acquire_all = provider
+    driver = AsyncMock()
+    harness.realizer._session_driver = driver
+    binding_id = stable_binding_id(
+        execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
+    )
+    retained = await harness.runtime_store.get(binding_id)
+    with pytest.raises(WorkspaceIntentCompilationError, match="repository.*conflict"):
+        if boundary == "prepare":
+            await runtime.prepare(
+                request=request,
+                plan=plan,
+                host_class=object(),
+                launch_policy=object(),
+                repository_owner_ref=request.idempotency_key,
+            )
+        else:
+            await harness.realizer.execute(request, plan)
+    assert await harness.runtime_store.get(binding_id) == retained
+    sessions.assert_not_called()
+    gateway.read_repository_access_snapshot.assert_not_awaited()
+    workspace.assert_not_awaited()
+    claim.assert_not_awaited()
+    provider.assert_not_awaited()
+    driver.assert_not_awaited()
+    runtime.cleanup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_state", ["fresh", "resumed"])
 @pytest.mark.parametrize("rejection", ["widened_request", "revoked_assignment"])
-async def test_resumed_generic_host_rejects_action_widening_before_delivery_or_cleanup(
-    monkeypatch, tmp_path, rejection
+async def test_generic_host_rejects_action_widening_before_delivery_or_cleanup(
+    monkeypatch, tmp_path, rejection, host_state
 ):
     from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.omnigent.harness_platform.execution_plan import (
@@ -525,7 +610,8 @@ async def test_resumed_generic_host_rejects_action_widening_before_delivery_or_c
         payload["resolvedTools"] = compiled.envelope.payload.resolvedTools
         plan = create_execution_plan_envelope(payload)
         harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
-        await _prime_attested_host_binding(harness, plan)
+        if host_state == "resumed":
+            await _prime_attested_host_binding(harness, plan)
         if rejection == "revoked_assignment":
             async with sessions() as session:
                 await RepositoryConnectionService(session).set_assignment(
