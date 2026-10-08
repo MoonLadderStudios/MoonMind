@@ -17,9 +17,7 @@ from moonmind.workflows.skills.deployment_controller import (
     ControllerTransportError,
     DeploymentOperationError,
     controller_action_status,
-    controller_supports_journal_transition,
     list_controller_operations,
-    require_worker_controller_bootstrap,
     resolve_controller_endpoint,
     retry_controller_operation,
     submit_controller_update,
@@ -405,26 +403,11 @@ class DeploymentOperationsService:
                 policy=policy,
                 submission=submission,
             )
-        operation_id = f"ui-{uuid4().hex}"
-        if not await asyncio.to_thread(
-            controller_supports_journal_transition,
-            endpoint,
-            operation_id=operation_id,
-        ):
-            await asyncio.to_thread(require_worker_controller_bootstrap, self._environ)
-            # The API has read-only controller state. Its existing privileged
-            # submitter performs host-owned bootstrap before submitting to the
-            # controller; the API gains no new filesystem or Docker authority.
-            return await self._queue_legacy_workflow(
-                execution_service=execution_service,
-                policy=policy,
-                submission=submission,
-            )
         separator = "@" if submission.reference.startswith("sha256:") else ":"
         operation = await asyncio.to_thread(
             submit_controller_update,
             endpoint,
-            operation_id=operation_id,
+            operation_id=f"ui-{uuid4().hex}",
             stack=policy.stack,
             desired_image=f"{submission.repository}{separator}{submission.reference}",
             reason=submission.reason or "",

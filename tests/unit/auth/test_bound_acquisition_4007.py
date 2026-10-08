@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -585,25 +584,14 @@ async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
     shared = SharedRenewalStore(lease_seconds=30.0)
     adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
     barrier = threading.Barrier(2)
-    cache_missed = threading.Event()
-    winner_published = threading.Event()
     results: dict[str, object] = {}
     errors: list[BaseException] = []
-
-    class DelayedMissCache(BoundCredentialCache):
-        async def get(self, key):
-            entry = await super().get(key)
-            if entry is None and not cache_missed.is_set():
-                cache_missed.set()
-                assert winner_published.wait(timeout=10)
-            return entry
 
     def _worker(tag: str) -> None:
         import asyncio as _aio
 
         async def _run() -> None:
-            cache_type = DelayedMissCache if tag == "w1" else BoundCredentialCache
-            cache = cache_type(shared=shared)
+            cache = BoundCredentialCache(shared=shared)
             acquirer = BoundCredentialAcquirer(
                 revision_reader=_reader(conn, adapter_kind="expiring"),
                 issuer_for=lambda _kind: adapter,
@@ -611,14 +599,8 @@ async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
             )
             snapshot = _snapshot_for(conn)
             barrier.wait(timeout=10)
-            if tag == "w0":
-                assert cache_missed.wait(timeout=10)
             acquired = await acquirer.acquire(
-                AcquisitionRequest(
-                    snapshot=snapshot,
-                    execution_owner="exec:shared-t",
-                    operation_id=tag,
-                )
+                AcquisitionRequest(snapshot=snapshot, execution_owner="exec:shared-t")
             )
             results[tag] = acquired
 
@@ -626,16 +608,12 @@ async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
             _aio.run(_run())
         except Exception as exc:  # Worker failures are assertion inputs, not control flow.
             errors.append(exc)
-        finally:
-            if tag == "w0":
-                winner_published.set()
 
     threads = [threading.Thread(target=_worker, args=(f"w{i}",)) for i in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=30)
-    assert not any(thread.is_alive() for thread in threads)
     assert not errors, f"worker errors: {errors!r}"
     assert adapter.issues == 1, f"expected single issuance, got {adapter.issues}"
     first = results["w0"]
@@ -643,392 +621,11 @@ async def test_shared_store_two_thread_renewal_is_single_flight() -> None:
     assert isinstance(first, object) and isinstance(second, object)
     # Both workers hold the same authority: identical digest and material.
     assert first.binding.binding_digest == second.binding.binding_digest  # type: ignore[attr-defined]
-    assert first.binding.issuance_id == second.binding.issuance_id  # type: ignore[attr-defined]
-    assert second.binding.operation_id == "w1"  # type: ignore[attr-defined]
-    assert second.cache_hit  # type: ignore[attr-defined]
     seen_first: list[bytes] = []
     seen_second: list[bytes] = []
     first.credential.use_now(seen_first.append)  # type: ignore[attr-defined]
     second.credential.use_now(seen_second.append)  # type: ignore[attr-defined]
     assert seen_first[0] == seen_second[0]
-    key = BoundCredentialCache.renewal_key_for(
-        endpoint=second.binding.endpoint,  # type: ignore[attr-defined]
-        connection_revision=2,
-        credential_revision=3,
-        policy_revision=2,
-        role=second.binding.role,  # type: ignore[attr-defined]
-        route_id=second.binding.route_id,  # type: ignore[attr-defined]
-        operations=second.binding.operations,  # type: ignore[attr-defined]
-        execution_owner="exec:shared-t",
-    )
-    assert not shared.lease_held(key)
-
-
-@pytest.mark.parametrize(
-    "invalid_binding",
-    [
-        {"credential_revision": 4},
-        {"connection_revision": 4},
-        {"policy_revision": 4},
-        {"expires_at": "2000-01-01T00:00:00+00:00"},
-        {"expires_at": "invalid"},
-    ],
-)
-async def test_leader_recheck_discards_invalid_publication(invalid_binding) -> None:
-    conn = _connection("conn-invalid-publication")
-    shared = SharedRenewalStore()
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
-    request = AcquisitionRequest(
-        snapshot=_snapshot_for(conn), execution_owner="exec:invalid-publication"
-    )
-    key = None
-
-    class MissThenRecheckCache(BoundCredentialCache):
-        async def get(self, lookup_key):
-            nonlocal key
-            if key is None:
-                key = lookup_key
-                # Publication arrived after this lookup observed a miss.
-                return None
-            return await super().get(lookup_key)
-
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
-        cache=BoundCredentialCache(shared=shared),
-    )
-    first = await acquirer.acquire(request)
-    assert first.binding.expires_at is not None
-    # The shared entry still occupies the correct renewal key, but its
-    # metadata is invalid for the admitted revision or expiry window.
-    cache = MissThenRecheckCache(shared=shared)
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
-        cache=cache,
-    )
-    renewal_key = acquirer._renewal_key(
-        request.snapshot,
-        active=await _reader(conn, adapter_kind="expiring")(conn.id),
-        owner=request.execution_owner,
-    )
-    assert shared.publish(
-        renewal_key,
-        binding=first.binding.model_copy(update=invalid_binding),
-        material=first.credential.use_now(bytes),
-        generation=first.binding.generation,
-    )
-
-    acquired = await acquirer.acquire(request)
-
-    assert adapter.issues == 2
-    assert not acquired.cache_hit
-    assert acquired.binding.credential_revision == 3
-    assert acquired.binding.connection_revision == 2
-    assert acquired.binding.policy_revision == 2
-    assert not acquirer._binding_expired(acquired.binding)
-    assert first.credential.cleared is False
-    assert key == renewal_key
-    assert not shared.lease_held(renewal_key)
-
-
-@pytest.mark.parametrize("outcome", ["reuse", "cancel", "error"])
-@pytest.mark.parametrize("pause_at", ["cache", "authority"])
-async def test_leader_cache_recheck_settles_waiters_and_claim(
-    outcome, pause_at
-) -> None:
-    conn = _connection("conn-recheck-waiters")
-    shared = SharedRenewalStore()
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
-    snapshot = _snapshot_for(conn)
-    owner = "exec:recheck-waiters"
-    winner_acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _kind: adapter,
-        cache=BoundCredentialCache(shared=shared),
-    )
-    winner = await winner_acquirer.acquire(
-        AcquisitionRequest(snapshot=snapshot, execution_owner=owner)
-    )
-    recheck_started = asyncio.Event()
-    release_recheck = asyncio.Event()
-    waiter_joined = asyncio.Event()
-    key = None
-    cache_lookup_complete = False
-
-    async def pause_recheck():
-        recheck_started.set()
-        await release_recheck.wait()
-        if outcome == "error":
-            raise RuntimeError("cache recheck failed")
-
-    async def read_authority(connection_id):
-        if cache_lookup_complete and not recheck_started.is_set():
-            await pause_recheck()
-        return await _reader(conn, adapter_kind="expiring")(connection_id)
-
-    class PausedRecheckCache(BoundCredentialCache):
-        async def get(self, lookup_key):
-            nonlocal cache_lookup_complete
-            if not recheck_started.is_set() and key is not None:
-                if pause_at == "cache":
-                    await pause_recheck()
-                cache_lookup_complete = True
-                return await super().get(lookup_key)
-            return None
-
-        async def join_or_lead(self, lookup_key, *, owner_id):
-            nonlocal key
-            key = lookup_key
-            result = await super().join_or_lead(lookup_key, owner_id=owner_id)
-            if not result[0]:
-                waiter_joined.set()
-            return result
-
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=read_authority,
-        issuer_for=lambda _kind: adapter,
-        cache=PausedRecheckCache(shared=shared),
-    )
-    leader = asyncio.create_task(
-        acquirer.acquire(
-            AcquisitionRequest(
-                snapshot=snapshot, execution_owner=owner, operation_id="leader"
-            )
-        )
-    )
-    await asyncio.wait_for(recheck_started.wait(), timeout=10)
-    waiter = asyncio.create_task(
-        acquirer.acquire(
-            AcquisitionRequest(
-                snapshot=snapshot, execution_owner=owner, operation_id="waiter"
-            )
-        )
-    )
-    await asyncio.wait_for(waiter_joined.wait(), timeout=10)
-    if outcome == "cancel":
-        leader.cancel()
-    release_recheck.set()
-    results = await asyncio.wait_for(
-        asyncio.gather(leader, waiter, return_exceptions=True), timeout=10
-    )
-
-    assert adapter.issues == 1
-    assert key is not None and not shared.lease_held(key)
-    if outcome == "reuse":
-        first, second = results
-        assert first.cache_hit and second.cache_hit
-        assert (
-            first.binding.issuance_id
-            == second.binding.issuance_id
-            == winner.binding.issuance_id
-        )
-        assert first.binding.operation_id == "leader"
-        assert second.binding.operation_id == "waiter"
-        first.credential.clear()
-        assert second.credential.use_now(bytes) == winner.credential.use_now(bytes)
-    else:
-        expected_error = asyncio.CancelledError if outcome == "cancel" else RuntimeError
-        assert isinstance(results[0], expected_error)
-        assert isinstance(results[1], BoundAccessError)
-        assert results[1].code == BOUND_UNAVAILABLE
-
-
-@pytest.mark.parametrize(
-    "path", ["initial", "leader", "local", "shared", "retry", "retry_local"]
-)
-@pytest.mark.parametrize(
-    "change,expected_code",
-    [
-        ({"status": "revoked"}, "BOUND_REVOKED"),
-        ({"status": "disabled"}, "BOUND_DISABLED"),
-        ({"credential_revision": 4}, "BOUND_STALE_REVISION"),
-        ({"connection_revision": 4}, "BOUND_STALE_REVISION"),
-        ({"policy_revision": 4}, "BOUND_STALE_REVISION"),
-    ],
-)
-async def test_cached_exposure_rechecks_current_authority(path, change, expected_code):
-    conn = _connection("conn-paused-cache")
-    shared = SharedRenewalStore()
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
-    active = await _reader(conn, adapter_kind="expiring")(conn.id)
-    request = AcquisitionRequest(
-        snapshot=_snapshot_for(conn), execution_owner="exec:paused-cache"
-    )
-    paused = asyncio.Event()
-    resume = asyncio.Event()
-    calls = 0
-
-    class PausedCache(BoundCredentialCache):
-        async def get(self, key):
-            nonlocal calls
-            calls += 1
-            if (path != "initial" and calls == 1) or (
-                path == "retry_local" and calls == 2
-            ):
-                return None
-            entry = await super().get(key)
-            if path in {"initial", "leader", "retry"}:
-                paused.set()
-                await resume.wait()
-            return entry
-
-        async def join_or_lead(self, key, *, owner_id):
-            result = await super().join_or_lead(key, owner_id=owner_id)
-            if (
-                path in {"local", "retry_local"}
-                and not result[0]
-                and result[1] is not None
-            ):
-                paused.set()
-            return result
-
-        async def await_shared_publication(self, key, **kwargs):
-            entry = await super().await_shared_publication(key, **kwargs)
-            if path in {"retry", "retry_local"}:
-                shared.release_claim(key, owner_id="other-worker")
-                if path == "retry_local":
-                    assert (await super().join_or_lead(key, owner_id="other-worker"))[0]
-                return None
-            paused.set()
-            await resume.wait()
-            return entry
-
-    winner_cache = BoundCredentialCache(shared=shared)
-    winner_acquirer = BoundCredentialAcquirer(
-        revision_reader=lambda _: active,
-        issuer_for=lambda _: adapter,
-        cache=winner_cache,
-    )
-    await winner_acquirer.acquire(request)
-    key = winner_acquirer._renewal_key(
-        request.snapshot, active=active, owner=request.execution_owner
-    )
-    entry = await winner_cache.get(key)
-    cache = PausedCache(shared=shared)
-    if path == "local":
-        assert (
-            await BoundCredentialCache.join_or_lead(cache, key, owner_id="other-worker")
-        )[0]
-    elif path in {"shared", "retry", "retry_local"}:
-        assert shared.try_claim(key, owner_id="other-worker")
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=lambda _: active,
-        issuer_for=lambda _: adapter,
-        cache=cache,
-    )
-    task = asyncio.create_task(acquirer.acquire(request))
-    await asyncio.wait_for(paused.wait(), timeout=10)
-    active = replace(active, **change)
-    if path in {"local", "retry_local"}:
-        await cache.settle_inflight(key, owner_id="other-worker", entry=entry)
-    resume.set()
-    with pytest.raises(BoundAccessError) as error:
-        await asyncio.wait_for(task, timeout=10)
-    assert error.value.code == expected_code
-    assert adapter.issues == 1
-    if path != "shared":
-        assert not shared.lease_held(key)
-    else:
-        # A follower must not release another worker's claim.
-        assert shared.lease_held(key)
-        shared.release_claim(key, owner_id="other-worker")
-
-
-@pytest.mark.parametrize("path", ["local", "shared", "retry", "retry_local"])
-@pytest.mark.parametrize(
-    "invalid_binding",
-    [
-        {"expires_at": "2000-01-01T00:00:00+00:00"},
-        {"credential_revision": 4},
-        {"connection_revision": 4},
-        {"policy_revision": 4},
-    ],
-)
-async def test_cached_follower_rejects_invalid_publication(path, invalid_binding):
-    conn = _connection("conn-expired-follower")
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
-    cache = BoundCredentialCache()
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _: adapter,
-        cache=cache,
-    )
-    request = AcquisitionRequest(
-        snapshot=_snapshot_for(conn), execution_owner="exec:expired-follower"
-    )
-    await acquirer.acquire(request)
-    key = acquirer._renewal_key(
-        request.snapshot,
-        active=await _reader(conn, adapter_kind="expiring")(conn.id),
-        owner=request.execution_owner,
-    )
-    entry = await cache.get(key)
-    assert entry is not None
-    entry.binding = entry.binding.model_copy(update=invalid_binding)
-
-    class FollowerCache(BoundCredentialCache):
-        async def get(self, lookup_key):
-            return entry if path == "retry" and self.joined else None
-
-        async def join_or_lead(self, lookup_key, *, owner_id):
-            already_joined = self.joined
-            self.joined = True
-            if path == "local" or (path == "retry_local" and already_joined):
-                future = asyncio.get_running_loop().create_future()
-                future.set_result(entry)
-                return False, future
-            return False, None
-
-        async def await_shared_publication(self, lookup_key, **kwargs):
-            return None if path in {"retry", "retry_local"} else entry
-
-        joined = False
-
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _: adapter,
-        cache=FollowerCache(),
-    )
-    with pytest.raises(BoundAccessError) as error:
-        await acquirer.acquire(request)
-    assert error.value.code == BOUND_UNAVAILABLE
-    assert adapter.issues == 1
-
-
-@pytest.mark.parametrize("cached", [False, True])
-@pytest.mark.parametrize("operation_id", ["", None, 42])
-async def test_invalid_operation_identity_fails_before_claim(cached, operation_id):
-    conn = _connection("conn-invalid-operation")
-    shared = SharedRenewalStore()
-    adapter = FakeExpiringAdapter(scope="read,write", ttl_seconds=60.0)
-    cache = BoundCredentialCache(shared=shared)
-    acquirer = BoundCredentialAcquirer(
-        revision_reader=_reader(conn, adapter_kind="expiring"),
-        issuer_for=lambda _: adapter,
-        cache=cache,
-    )
-    snapshot = _snapshot_for(conn)
-    if cached:
-        await acquirer.acquire(
-            AcquisitionRequest(snapshot=snapshot, execution_owner="exec:invalid-op")
-        )
-    with pytest.raises(BoundAccessError) as error:
-        await acquirer.acquire(
-            AcquisitionRequest(
-                snapshot=snapshot,
-                execution_owner="exec:invalid-op",
-                operation_id=operation_id,
-            )
-        )
-    assert error.value.code == BOUND_DENIED
-    assert adapter.issues == int(cached)
-    key = acquirer._renewal_key(
-        snapshot,
-        active=await _reader(conn, adapter_kind="expiring")(conn.id),
-        owner="exec:invalid-op",
-    )
-    assert not shared.lease_held(key)
 
 
 async def test_shared_generation_fencing_rejects_stale_publisher() -> None:

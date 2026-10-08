@@ -11,50 +11,6 @@ CLI_TOOLING_INSTALLER_PATH = (
     REPO_ROOT / "api_service" / "docker" / "install_cli_tooling.sh"
 )
 
-
-def test_application_image_packages_an_independently_executable_controller(tmp_path):
-    import shlex
-    import shutil
-    import subprocess
-    import sys
-
-    # Materialize the relevant image-owned COPY rather than importing the
-    # checkout's controller by accident. Run without application dependencies.
-    for line in DOCKERFILE_PATH.read_text().splitlines():
-        if not line.startswith("COPY "):
-            continue
-        words = shlex.split(line)
-        if (
-            len(words) == 3
-            and words[0] == "COPY"
-            and words[2].rstrip("/") == "/app/deploy/controller"
-        ):
-            shutil.copytree(REPO_ROOT / words[1], tmp_path / "app/deploy/controller")
-    controller = tmp_path / "app/deploy/controller"
-    for script in ("bootstrap.py", "server.py"):
-        result = subprocess.run(
-            [sys.executable, "-S", str(controller / script), "--help"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-S",
-            "-c",
-            "import server; assert 'active-journal-transition' in server.CONTROLLER_CAPABILITIES",
-        ],
-        cwd=controller,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def _load_workflow() -> dict:
     assert WORKFLOW_PATH.exists(), f"Missing workflow: {WORKFLOW_PATH}"
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))

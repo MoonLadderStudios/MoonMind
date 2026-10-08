@@ -14,14 +14,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlencode
 
 
 class DeploymentOperationError(ValueError):
@@ -360,127 +358,6 @@ def submit_controller_update(
                 return observed
         raise _controller_refusal(status, parsed, operation_id=operation_id)
     raise unavailable_controller_error(last_error, operation_id=operation_id)
-
-
-def controller_supports_journal_transition(
-    endpoint: ControllerEndpoint,
-    *,
-    operation_id: str | None = None,
-) -> bool:
-    """An unavailable owner is an error, never permission to fork an updater."""
-    _require_controller_secret(endpoint)
-    try:
-        status, result = _controller_request(
-            endpoint,
-            method="GET",
-            path="/v1/healthz",
-            timeout=CONTROLLER_STATUS_TIMEOUT_SECONDS,
-        )
-    except ControllerTransportError as exc:
-        raise unavailable_controller_error(
-            str(exc), operation_id=operation_id
-        ) from None
-    if status != 200:
-        raise _controller_refusal(status, result, operation_id=operation_id)
-    return "active-journal-transition" in (result.get("capabilities") or ())
-
-
-def require_worker_controller_bootstrap(environ: dict[str, str] | None = None) -> None:
-    """Observe the actual privileged submitter before queueing its prerequisite.
-
-    Keep explicit worker images untouched. An old pinned worker cannot be
-    asked to execute a method it does not implement, and its generic update
-    activity must never silently bypass the required controller bootstrap.
-    """
-    from moonmind.workflows.temporal.worker_code_identity import (
-        probe_worker_readiness,
-        readiness_urls_from_env,
-    )
-
-    env = os.environ if environ is None else environ
-    urls = [
-        url
-        for name, url in readiness_urls_from_env(env)
-        if name
-        in {
-            "deployment",
-            "temporal-worker-deployment-control",
-        }
-    ]
-    if not urls:
-        port = str(env.get("WORKER_HEALTHCHECK_PORT") or "8080")
-        if not port.isdigit():
-            port = "8080"
-        urls = [f"http://temporal-worker-deployment-control:{port}/readyz"]
-    queue = (
-        env.get("TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE") or "mm.activity.deployment"
-    )
-    for url in urls:
-        payload = probe_worker_readiness(url) or {}
-        if not (
-            payload.get("ready") is True
-            and payload.get("fleet") == "deployment"
-            and queue in (payload.get("taskQueues") or ())
-            and "mm.tool.execute" in (payload.get("activityTypes") or ())
-            and "active-journal-transition"
-            in (payload.get("controllerBootstrapCapabilities") or ())
-        ):
-            raise DeploymentOperationError(
-                "deployment_controller_prerequisite_unavailable",
-                "The controller needs journal-transition support, but the configured "
-                "deployment worker has not demonstrated its bootstrap method on the "
-                "deployment queue. No update was queued. Use the host update command; "
-                "it refreshes the controller independently and preserves the worker image pin.",
-                status_code=503,
-            )
-
-
-def ensure_controller_journal_transition(
-    endpoint: ControllerEndpoint,
-    *,
-    stack: str,
-    desired_image: str,
-) -> None:
-    """Trusted deployment-control submission prerequisite, before ownership.
-
-    The API only queues this existing privileged worker when necessary. The
-    worker invokes the host lifecycle code; it never applies the stack or
-    replaces a controller that owns an open deployment operation.
-    """
-    if controller_supports_journal_transition(endpoint):
-        return
-    bootstrap = (
-        Path(__file__).resolve().parents[3] / "deploy" / "controller" / "bootstrap.py"
-    )
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(bootstrap),
-            "ensure",
-            "--state-dir",
-            str(controller_state_dir()),
-            "--repo",
-            os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
-            or "/workspace/host_project",
-            "--stack",
-            stack,
-            "--image",
-            desired_image,
-            "--controller-url",
-            endpoint.base_url,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-    if result.returncode or not controller_supports_journal_transition(endpoint):
-        raise DeploymentOperationError(
-            "deployment_controller_prerequisite_failed",
-            "The deployment controller prerequisite could not finish. Its existing "
-            "operation and deployment state are preserved; retry from the host update command.",
-            status_code=503,
-        )
 
 
 def retry_controller_operation(

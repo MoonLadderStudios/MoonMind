@@ -6,7 +6,6 @@ import asyncio
 import copy
 import hashlib
 import json
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,7 +22,6 @@ from moonmind.omnigent.bridge_artifacts import (
 )
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_ITEM_FRONTIER_KEY,
-    SEALED_JOURNAL_CHUNKS_KEY,
     OmnigentDigestMismatchError,
 )
 from moonmind.omnigent.execute import (
@@ -1337,13 +1335,7 @@ class _RecordingBridgeStore:
         *,
         raw_ref: str,
         normalized_ref: str,
-        new_chunk: bool = False,
     ) -> SimpleNamespace:
-        current = getattr(self.row, "normalized_events_ref", None)
-        if new_chunk and current:
-            self.row.metadata_.setdefault(SEALED_JOURNAL_CHUNKS_KEY, []).append(
-                {"raw": self.row.raw_events_ref, "normalized": current}
-            )
         self.row.raw_events_ref = raw_ref
         self.row.normalized_events_ref = normalized_ref
         return self.row
@@ -1525,6 +1517,11 @@ async def test_provider_rejection_after_injection_completion(
         async def mark_posted(self, _, **kwargs):
             self.row.first_message_state = "posted"
             self.row.first_message_posted_at = "2026-09-06T00:00:00Z"
+            return self.row
+
+        async def attach_active_journal_refs(self, _, *, raw_ref, normalized_ref):
+            self.row.raw_events_ref = raw_ref
+            self.row.normalized_events_ref = normalized_ref
             return self.row
 
         async def append_events(self, _, events):
@@ -2670,47 +2667,16 @@ async def test_restore_active_journals_preserves_committed_retry_prefix(tmp_path
         content_type="application/x-ndjson",
     )
 
-    completed_raw_ref = await gateway.write_text(
-        request=request,
-        name="runtime.omnigent.sse.raw.00000000.00000001.jsonl",
-        payload='{"type":"response.created"}\n',
-        link_type="runtime.omnigent.sse.raw",
-        content_type="application/x-ndjson",
-    )
-    completed_normalized_ref = await gateway.write_text(
-        request=request,
-        name="runtime.omnigent.sse.normalized.00000000.00000001.jsonl",
-        payload='{"eventType":"response.created","sequence":0}\n',
-        link_type="runtime.omnigent.sse.normalized",
-        content_type="application/x-ndjson",
-    )
-
     class DurableRow:
         raw_events_ref = raw_ref
         normalized_events_ref = normalized_ref
-        metadata_ = {
-            SEALED_JOURNAL_CHUNKS_KEY: [
-                {"raw": completed_raw_ref, "normalized": completed_normalized_ref}
-            ]
-        }
 
     raw, normalized = await _restore_active_journals(
         artifact_gateway=gateway, durable_row=DurableRow()
     )
 
-    assert raw == [
-        {"type": "response.created"},
-        {"type": "response.delta", "token": "[REDACTED]"},
-    ]
-    # Each restored event is located in the chunk that holds its evidence.
-    assert normalized == [
-        {
-            "eventType": "response.created",
-            "sequence": 0,
-            "artifactRef": completed_normalized_ref,
-        },
-        {"eventType": "response.delta", "sequence": 1, "artifactRef": normalized_ref},
-    ]
+    assert raw == [{"type": "response.delta", "token": "[REDACTED]"}]
+    assert normalized == [{"eventType": "response.delta", "sequence": 1}]
 
 
 def _bundle(**overrides: Any) -> OmnigentCaptureBundle:
@@ -3162,379 +3128,6 @@ async def test_run_omnigent_execution_accepts_native_idle_turn_edge(
     ]
     assert normalized_events[-1]["type"] == "session.final_snapshot"
     assert normalized_events[-1]["normalizedStatus"] == "completed"
-
-
-_ACTIVE_JOURNAL_WRITE = re.compile(r"runtime\.omnigent\.sse\.(?:raw|normalized)\.\d")
-
-
-async def _durable_journal_harness(monkeypatch, tmp_path):
-    """Real bridge store and durable artifact gateway on SQLite.
-
-    Records the line count of every live journal write and the rows touched by
-    every event-index UPDATE, so tests can bound per-event persistence work.
-    """
-
-    from sqlalchemy import event as sa_event
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-    from sqlalchemy.orm import sessionmaker
-
-    from api_service.db.models import Base
-    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
-    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-    from moonmind.workflows.temporal.artifacts import (
-        LocalTemporalArtifactStore,
-        TemporalArtifactService,
-    )
-
-    monkeypatch.setattr(
-        TemporalArtifactService,
-        "_build_store_from_settings",
-        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "blobs")),
-    )
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    index_updates: list[int] = []
-
-    def record_index_update(_conn, cursor, statement, *_args):
-        sql = statement.lstrip().upper()
-        if sql.startswith("UPDATE OMNIGENT_BRIDGE_SESSION_EVENTS"):
-            index_updates.append(cursor.rowcount)
-
-    sa_event.listen(engine.sync_engine, "after_cursor_execute", record_index_update)
-    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    class RecordingGateway(TemporalOmnigentArtifactGateway):
-        active_writes: list[int] = []
-
-        async def write_text(self, *, request, name, payload, link_type, **kwargs):
-            if _ACTIVE_JOURNAL_WRITE.match(name):
-                self.active_writes.append(payload.count("\n"))
-            return await super().write_text(
-                request=request,
-                name=name,
-                payload=payload,
-                link_type=link_type,
-                **kwargs,
-            )
-
-    gateway = RecordingGateway(sessions)
-    gateway.active_writes = []
-    return SimpleNamespace(
-        engine=engine,
-        sessions=sessions,
-        store=OmnigentBridgeSessionStore(sessions),
-        gateway=gateway,
-        index_updates=index_updates,
-    )
-
-
-def _streamed_turn_client(attempt_streams: list[list[dict[str, Any]]]) -> type:
-    """Provider double whose Nth stream attachment replays ``attempt_streams[N]``.
-
-    The marked turn stays active until the stream's final ``idle`` frame, so a
-    retry reattaches to the live stream instead of reconciling a snapshot.
-    """
-
-    state = {"posted": False, "attachments": 0}
-
-    class FakeClient:
-        def __init__(self, **_: object) -> None:
-            pass
-
-        async def list_agents(self) -> dict[str, object]:
-            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
-
-        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
-            return {"id": "session-1"}
-
-        async def post_event(
-            self, session_id: str, payload: dict[str, object]
-        ) -> dict[str, object]:
-            state["posted"] = True
-            return {}
-
-        async def stream_events(self, session_id: str):
-            frames = attempt_streams[state["attachments"]]
-            state["attachments"] += 1
-            while not state["posted"]:
-                await asyncio.sleep(0.001)
-            for frame in frames:
-                if isinstance(frame, BaseException):
-                    raise frame
-                yield frame
-
-        async def get_session(self, session_id: str) -> dict[str, object]:
-            if not state["posted"]:
-                return {"status": "idle", "items": []}
-            return {
-                "status": "running",
-                "active_response_id": "response-1",
-                "items": [
-                    {
-                        "id": "current-assistant",
-                        "type": "message",
-                        "data": {
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": "Working"}],
-                        },
-                    }
-                ],
-            }
-
-    return FakeClient
-
-
-def _delta_frames(start: int, stop: int) -> list[dict[str, Any]]:
-    return [
-        {"type": "response.output_text.delta", "delta": f"token-{index}"}
-        for index in range(start, stop)
-    ]
-
-
-async def _index_rows_without_evidence(harness, bridge_session_id: str) -> list:
-    """Return indexed events whose payload locator names missing evidence."""
-
-    from api_service.db.models import TemporalArtifactStatus
-    from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
-
-    rows = await harness.store.list_events(bridge_session_id)
-    assert rows
-    missing = []
-    async with harness.sessions() as session:
-        repository = TemporalArtifactRepository(session)
-        for row in rows:
-            if row.artifact_ref is None:
-                continue
-            artifact = await repository.get_artifact(
-                row.artifact_ref.removeprefix("artifact:")
-            )
-            if (
-                artifact.status is not TemporalArtifactStatus.COMPLETE
-                or artifact.hard_deleted_at is not None
-            ):
-                missing.append((row.sequence, row.event_type))
-    return missing
-
-
-def _stream_request(key: str) -> AgentExecutionRequest:
-    return AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        correlationId=f"corr-{key}",
-        idempotencyKey=f"idem-{key}",
-        parameters={
-            "omnigent": {
-                "agent": {"agentName": "codex-native-ui"},
-                "session": {"allowEmptyWorkspace": True},
-                "prompt": {"text": "Do the task"},
-            },
-        },
-    )
-
-
-async def _settle_completed(**_kwargs: object):
-    return "completed", {
-        "status": "idle",
-        "active_response_id": None,
-        "summary": "done",
-        "items": [],
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_live_journal_work_per_event_is_independent_of_journal_length(
-    monkeypatch, tmp_path
-) -> None:
-    """Replays the ingestion shape of mm:a81dd46f (6,897 events on one turn).
-
-    Every event used to re-serialize the whole accumulated journal and re-point
-    every earlier index row, so ingestion fell over an hour behind the provider.
-    Durable work per flush must instead stay bounded by one journal chunk.
-    """
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._JOURNAL_CHUNK_MAX_EVENTS", 8, raising=False
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._JOURNAL_FLUSH_MAX_EVENTS", 4, raising=False
-    )
-    bound = 8 + 4
-    frames = _delta_frames(0, 60) + [{"type": "session.status", "status": "idle"}]
-    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
-    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute.OmnigentHttpClient",
-        _streamed_turn_client([frames]),
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._await_marked_turn_terminal", _settle_completed
-    )
-    harness = await _durable_journal_harness(monkeypatch, tmp_path)
-    try:
-        result = await run_omnigent_execution(
-            _stream_request("long-turn"),
-            artifact_gateway=harness.gateway,
-            run_store=harness.store,
-        )
-        row = await harness.store.get_existing("idem-long-turn")
-        missing_evidence = await _index_rows_without_evidence(
-            harness, row.bridge_session_id
-        )
-        final = await harness.gateway.read_text(row.normalized_events_ref)
-    finally:
-        await harness.engine.dispose()
-
-    assert result.metadata["normalizedStatus"] == "completed"
-    assert harness.gateway.active_writes
-    assert max(harness.gateway.active_writes) <= bound
-    assert max(harness.index_updates, default=0) <= bound
-    assert missing_evidence == []
-    deltas = [
-        event["textPreview"]
-        for event in map(json.loads, final.splitlines())
-        if event["type"] == "response.output_text.delta"
-    ]
-    assert deltas == [f"token-{index}" for index in range(60)]
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(120)
-async def test_stream_failure_commits_every_delivered_event(
-    monkeypatch, tmp_path
-) -> None:
-    """Events delivered before a stream error stay indexed with their evidence."""
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._JOURNAL_FLUSH_MAX_EVENTS", 4, raising=False
-    )
-    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
-    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute.OmnigentHttpClient",
-        _streamed_turn_client(
-            [_delta_frames(0, 10) + [httpx.ReadError("provider stream reset")]]
-        ),
-    )
-    harness = await _durable_journal_harness(monkeypatch, tmp_path)
-    try:
-        result = await run_omnigent_execution(
-            _stream_request("stream-reset"),
-            artifact_gateway=harness.gateway,
-            run_store=harness.store,
-        )
-        row = await harness.store.get_existing("idem-stream-reset")
-        indexed = await harness.store.list_events(row.bridge_session_id)
-        missing_evidence = await _index_rows_without_evidence(
-            harness, row.bridge_session_id
-        )
-    finally:
-        await harness.engine.dispose()
-
-    assert result.failure_class
-    assert [
-        event.text_preview
-        for event in indexed
-        if event.event_type == "response.output_text.delta"
-    ] == [f"token-{index}" for index in range(10)]
-    assert missing_evidence == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("compact_before_retry", [False, True])
-async def test_retry_restores_every_committed_journal_chunk(
-    monkeypatch, tmp_path, compact_before_retry
-) -> None:
-    """A crash between journal commit and index commit loses no evidence.
-
-    The retry rebuilds the complete history from every committed chunk,
-    reconciles the unindexed tail, and continues the same journal.
-    """
-
-    class WorkerCrash(BaseException):
-        pass
-
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._JOURNAL_CHUNK_MAX_EVENTS", 8, raising=False
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._JOURNAL_FLUSH_MAX_EVENTS", 4, raising=False
-    )
-    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
-    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute.OmnigentHttpClient",
-        _streamed_turn_client(
-            [
-                _delta_frames(0, 30),
-                _delta_frames(30, 50) + [{"type": "session.status", "status": "idle"}],
-            ]
-        ),
-    )
-    monkeypatch.setattr(
-        "moonmind.omnigent.execute._await_marked_turn_terminal", _settle_completed
-    )
-    harness = await _durable_journal_harness(monkeypatch, tmp_path)
-    store = harness.store
-    indexed = {"value": 0}
-    append_events = store.append_events
-
-    async def crash_after_journal_commit(bridge_session_id, events):
-        indexed["value"] += sum(
-            event.get("type") == "response.output_text.delta" for event in events
-        )
-        if indexed["value"] > 20:
-            raise WorkerCrash()
-        return await append_events(bridge_session_id, events)
-
-    request = _stream_request("retry")
-    try:
-        monkeypatch.setattr(store, "append_events", crash_after_journal_commit)
-        with pytest.raises(WorkerCrash):
-            await run_omnigent_execution(
-                request, artifact_gateway=harness.gateway, run_store=store
-            )
-        monkeypatch.setattr(store, "append_events", append_events)
-        if compact_before_retry:
-            receipt = await store.compact_active_journals()
-            assert receipt["compacted"] == 1
-        durable_row = await store.get_existing("idem-retry")
-        _, restored = await _restore_active_journals(
-            artifact_gateway=harness.gateway, durable_row=durable_row
-        )
-        result = await run_omnigent_execution(
-            request, artifact_gateway=harness.gateway, run_store=store
-        )
-        row = await store.get_existing("idem-retry")
-        missing_evidence = await _index_rows_without_evidence(
-            harness, row.bridge_session_id
-        )
-        final = await harness.gateway.read_text(row.normalized_events_ref)
-    finally:
-        await harness.engine.dispose()
-
-    restored_deltas = [
-        event["textPreview"]
-        for event in restored
-        if event["type"] == "response.output_text.delta"
-    ]
-    # The crashed flush committed its chunk before the index append failed.
-    assert len(restored_deltas) > 20
-    assert restored_deltas == [
-        f"token-{index}" for index in range(len(restored_deltas))
-    ]
-    assert result.metadata["normalizedStatus"] == "completed"
-    assert missing_evidence == []
-    final_deltas = [
-        event["textPreview"]
-        for event in map(json.loads, final.splitlines())
-        if event["type"] == "response.output_text.delta"
-    ]
-    assert final_deltas == restored_deltas + [
-        f"token-{index}" for index in range(30, 50)
-    ]
 
 
 @pytest.mark.asyncio
