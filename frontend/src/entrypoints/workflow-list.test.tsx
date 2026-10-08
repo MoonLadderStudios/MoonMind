@@ -22,7 +22,7 @@ describe('Workflows Entrypoint', () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
-    fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+    fetchSpy = vi.spyOn(window, 'fetch').mockReset().mockResolvedValue({
       ok: true,
       json: async () => ({
         items: [
