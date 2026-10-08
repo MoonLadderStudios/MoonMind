@@ -31,6 +31,7 @@ from pr_resolver_core.code_hosts import (  # noqa: E402
 )
 from pr_resolver_core.review_providers import (  # noqa: E402
     is_low_severity_only_finding,
+    is_review_request_comment,
     latest_review_reply,
     latest_review_request,
     resolve_automated_review_provider,
@@ -828,8 +829,12 @@ def build_automated_review_evidence(
             pr_repo=pr_repo, head_sha=normalized_head
         )
 
-    request = latest_review_request(
-        record, comments, head_sha=normalized_head, not_before=head_committed_at
+    request = (
+        latest_review_request(
+            record, comments, head_sha=normalized_head, not_before=head_committed_at
+        )
+        if head_committed_at is not None
+        else None
     )
     request_comment = request.comment if request is not None else None
     request_at = request.created_at if request is not None else None
@@ -882,6 +887,15 @@ def build_automated_review_evidence(
         completion_kind = "review"
         completion_id = fresh_review.get("id")
         completed_at = str(fresh_review.get("submitted_at") or "").strip() or None
+
+    if head_committed_at is None and any(
+        is_review_request_comment(record, comment)
+        and str(comment.get("commit_id") or "").strip() in {"", normalized_head}
+        for comment in comments
+    ):
+        raise RuntimeError(
+            "Current head commit timestamp is unavailable; comment/reaction evidence cannot be bound to this head"
+        )
 
     reply = None
     if fresh_review is None and request_comment is not None:
@@ -1699,22 +1713,46 @@ def main():
         head_sha=head_sha,
         comments=comments,
     )
-    if automated_review.get("freshReviewForHead") is True:
-        # GitHub publishes the review summary and inline findings separately.
-        # Fetch the full inventory after observing completion, so a snapshot
-        # collected while the review was running cannot authorize a clean exit.
-        for _ in range(2):
-            previous_review = automated_review
+    if str(pr_data.get("state") or "").upper() not in {"CLOSED", "MERGED"} and (
+        automated_review.get("freshReviewForHead") or automated_review.get("requestFailed")
+    ):
+        # Both terminal outcomes need a stable request/result inventory. A
+        # superseding request or reply gets the same bounded reclassification.
+        result_keys = (
+            "requestCommentId",
+            "requestedAt",
+            "completionKind",
+            "completionId",
+            "completedAt",
+            "requestFailed",
+            "requestFailure",
+        )
+        for _refresh_attempt in range(3):
+            previous_result = tuple(
+                automated_review.get(key) for key in result_keys
+            )
             comments_data = run_command(
-                comments_cmd, "Failed to retrieve completed review comments."
+                comments_cmd, "Failed to retrieve terminal review comments."
             )
             comments = (
-                comments_data.get("comments", [])
+                comments_data.get("comments")
                 if isinstance(comments_data, dict)
-                else []
+                else None
             )
             if not isinstance(comments, list):
                 comments = []
+                automated_review = {
+                    **automated_review,
+                    "freshReviewForHead": False,
+                    "requestPending": False,
+                    "requestFailed": False,
+                    "requestFailure": None,
+                    "completionKind": None,
+                    "completionId": None,
+                    "completedAt": None,
+                    "reason": "review_inventory_unavailable",
+                }
+                break
             automated_review = build_automated_review_evidence(
                 provider=args.review_provider,
                 require_fresh_review=bool(args.require_fresh_review),
@@ -1724,28 +1762,28 @@ def main():
                 comments=comments,
             )
             if (
-                not isinstance(comments_data, dict)
-                or not isinstance(comments_data.get("comments"), list)
-                or automated_review.get("freshReviewForHead") is not True
-                or automated_review == previous_review
+                not (automated_review.get("freshReviewForHead") or automated_review.get("requestFailed"))
+                or tuple(automated_review.get(key) for key in result_keys)
+                == previous_result
             ):
                 break
         else:
             print(
-                "Review evidence changed during completed inventory collection; "
-                "refresh the snapshot.",
+                "Review evidence changed repeatedly during collection; refresh the snapshot.",
                 file=sys.stderr,
             )
             sys.exit(1)
         # Comments/reactions have no reviewed commit. Revalidate the remote
-        # head after completion and inventory collection before publishing them.
+        # head and open state after either outcome before publishing it.
         completed_pr, _, _ = fetch_pr_data(args.pr)
         if (
             not head_sha
+            or not isinstance(completed_pr, dict)
             or str(completed_pr.get("headRefOid") or "").strip() != head_sha
+            or str(completed_pr.get("state") or "").upper() != "OPEN"
         ):
             print(
-                "PR head changed during review collection; refresh the snapshot.",
+                "PR head or open state changed during review collection; refresh the snapshot.",
                 file=sys.stderr,
             )
             sys.exit(1)

@@ -27,6 +27,9 @@ from moonmind.workflows.temporal.workflows.merge_automation import (
 
 @workflow.defn(name="MoonMind.MergeAutomation")
 class _BeforeRequestReconciliation(MoonMindMergeAutomationWorkflow):
+    def _review_adoption_blocker(self, evaluation: Any):
+        return None
+
     def _reconcile_selected_review_request(self, evaluation: Any) -> None:
         # Capture the old consumer, including a rolling upgrade where the
         # Activity already emits the selected request fields.
@@ -38,13 +41,18 @@ class _BeforeRequestReconciliation(MoonMindMergeAutomationWorkflow):
 
 
 @workflow.defn(name="MoonMind.MergeAutomation")
-class _BeforeSelectedRequestCycleBudget(MoonMindMergeAutomationWorkflow):
+class _BeforeAdoptionBudget(MoonMindMergeAutomationWorkflow):
     def _selected_review_request_cycle_budget_enabled(
         self, observation_key: str
     ) -> bool:
-        # Capture the deployed consumer that already records the selection
-        # patch, but has not yet bounded externally posted requests.
         return False
+
+    def _multiple_review_requests_enabled(self, observation_key: str) -> bool:
+        # Published workers predate request receipts.
+        return False
+
+    def _review_adoption_blocker(self, evaluation: Any):
+        return None
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -76,9 +84,21 @@ class _CleanFixtureResolver:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_producer", [True, False])
-@pytest.mark.parametrize("multiple_requests", [False, True])
+@pytest.mark.parametrize(
+    "max_cycles,old_adopted,outcome,multiple_requests",
+    [
+        *(
+            (max_cycles, old_adopted, outcome, False)
+            for max_cycles in (1, 2)
+            for old_adopted in (False, True)
+            for outcome in ("complete", "refusal")
+        ),
+        # Requests superseded between polls each consume a cycle.
+        (5, False, "complete", True),
+    ],
+)
 async def test_selected_request_survives_worker_upgrade_and_replay(
-    monkeypatch, legacy_producer, tmp_path, multiple_requests
+    monkeypatch, legacy_producer, max_cycles, old_adopted, outcome, multiple_requests
 ):
     repo = "MoonLadderStudios/MoonMind"
     state = {"upgraded": False, "complete": False}
@@ -155,7 +175,11 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 body.append(
                     {
                         "id": 105 if multiple_requests else 103,
-                        "body": "Codex Review: Didn't find any major issues. 🚀",
+                        "body": (
+                            "Codex Review: Didn't find any major issues. 🚀"
+                            if outcome == "complete"
+                            else "You have reached your Codex usage limits for code reviews."
+                        ),
                         "created_at": (
                             "2026-08-24T22:05:00Z"
                             if multiple_requests
@@ -216,7 +240,7 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         "mergeAutomationConfig": {
             "finishMode": "fix_only",
             "timeouts": {"fallbackPollSeconds": 2},
-            "reviewLoop": {"enabled": True},
+            "reviewLoop": {"enabled": True, "maxCycles": max_cycles},
         },
         "activeReviewRequest": first,
         "reviewCycles": [{"cycle": 1, **first, "status": "requested"}],
@@ -224,8 +248,12 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
     payload = MergeAutomationStartInput.model_validate(payload).model_dump(
         by_alias=True, mode="json"
     )
-    parent_queue = f"review-request-upgrade-{legacy_producer}"
+    parent_queue = (
+        f"review-request-upgrade-{legacy_producer}-{max_cycles}-{old_adopted}"
+        f"-{outcome}-{multiple_requests}"
+    )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
+    old_worker = _BeforeAdoptionBudget if old_adopted else _BeforeRequestReconciliation
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await env.client.operator_service.add_search_attributes(
             AddSearchAttributesRequest(
@@ -242,13 +270,16 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 },
             )
         )
-        async with Worker(
-            env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[evaluate]
-        ), Worker(
-            env.client,
-            task_queue=child_queue,
-            workflows=[_CleanFixtureResolver],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[evaluate]
+            ),
+            Worker(
+                env.client,
+                task_queue=child_queue,
+                workflows=[_CleanFixtureResolver],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
         ):
 
             async def wait_for_timer(count):
@@ -269,21 +300,18 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
-                workflows=[_BeforeRequestReconciliation],
+                workflows=[old_worker],
                 workflow_runner=UnsandboxedWorkflowRunner(),
                 max_cached_workflows=0,
             ):
                 handle = await env.client.start_workflow(
-                    _BeforeRequestReconciliation.run,
+                    old_worker.run,
                     payload,
                     id=parent_queue,
                     task_queue=parent_queue,
                     execution_timeout=timedelta(minutes=5),
                 )
                 old_history = await wait_for_timer(1)
-                (tmp_path / "before-selection-history.json").write_text(
-                    old_history.to_json()
-                )
             await Replayer(
                 workflows=[MoonMindMergeAutomationWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
@@ -297,11 +325,31 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 max_cached_workflows=0,
             ):
                 await env.sleep(timedelta(seconds=3))
+                if max_cycles == 1 and not (old_adopted and not legacy_producer):
+                    result = await asyncio.wait_for(handle.result(), timeout=30)
+                    history = await handle.fetch_history()
+                    assert result["status"] == "blocked"
+                    assert any(
+                        item["kind"] == "review_cycle_budget_exhausted"
+                        for item in result["blockers"]
+                    )
+                    cycles = result["reviewLoop"]["cycleRecords"]
+                    assert len(cycles) == (
+                        2 if old_adopted and not legacy_producer else 1
+                    )
+                    assert all(item.get("completionId") is None for item in cycles)
+                    assert result["resolverChildWorkflowIds"] == []
+                    assert (
+                        result["reviewLoop"]["activeRequest"]["requestCommentId"]
+                        == cycles[-1]["requestCommentId"]
+                    )
+                    await Replayer(
+                        workflows=[MoonMindMergeAutomationWorkflow],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                    ).replay_workflow(history)
+                    return
                 pending_history = await wait_for_timer(2)
                 pending = await handle.query(MoonMindMergeAutomationWorkflow.summary)
-                (tmp_path / "adopted-request-history.json").write_text(
-                    pending_history.to_json()
-                )
             assert (
                 pending["reviewLoop"]["activeRequest"]["requestCommentId"]
                 == second["requestCommentId"]
@@ -344,10 +392,8 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 await env.sleep(timedelta(seconds=3))
                 result = await asyncio.wait_for(handle.result(), timeout=30)
                 history = await handle.fetch_history()
-                (tmp_path / "completed-request-history.json").write_text(
-                    history.to_json()
-                )
-    assert result["status"] == "review_clean"
+    assert result["status"] == ("review_clean" if outcome == "complete" else "blocked")
+    assert result["reviewLoop"]["activeRequest"] is None
     first_cycle, *_, second_cycle = result["reviewLoop"]["cycleRecords"]
     assert (
         first_cycle["status"] == "superseded"
@@ -356,10 +402,15 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
     assert first_cycle["requestCommentId"] == 100
     assert second_cycle["requestCommentId"] == second["requestCommentId"]
     assert second_cycle["requestedAt"] == second["requestedAt"]
-    assert (
-        second_cycle["completionId"] == (105 if multiple_requests else 103)
-        and second_cycle["status"] == "completed"
+    assert second_cycle["status"] == (
+        "completed" if outcome == "complete" else "failed"
     )
+    assert second_cycle.get("completionId") == (
+        (105 if multiple_requests else 103) if outcome == "complete" else None
+    )
+    if outcome == "refusal":
+        assert result["resolverChildWorkflowIds"] == []
+        assert result["blockers"][0]["kind"] == "automated_review_request_failed"
     assert (
         requests[-1]["activeReviewRequest"]["requestCommentId"]
         == second["requestCommentId"]
@@ -377,6 +428,20 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _BeforeSelectedRequestCycleBudget(MoonMindMergeAutomationWorkflow):
+    def _selected_review_request_cycle_budget_enabled(
+        self, observation_key: str
+    ) -> bool:
+        # Capture the deployed consumer that already records the selection
+        # patch, but has not yet bounded externally posted requests.
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
 
 
 @pytest.mark.asyncio
@@ -509,13 +574,16 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
                 },
             )
         )
-        async with Worker(
-            env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[evaluate]
-        ), Worker(
-            env.client,
-            task_queue=child_queue,
-            workflows=[_CleanFixtureResolver],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[evaluate]
+            ),
+            Worker(
+                env.client,
+                task_queue=child_queue,
+                workflows=[_CleanFixtureResolver],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
         ):
             async with Worker(
                 env.client,
@@ -630,3 +698,147 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _PublishedRefusalSettlement(MoonMindMergeAutomationWorkflow):
+    def _review_failure_settlement_enabled(self, observation):
+        # Published 227c12a8 workers had only the earlier refusal marker.
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _BeforeRefusalSettlement(_PublishedRefusalSettlement):
+    def _review_refusal_settlement_enabled(self, observation_key: str) -> bool:
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
+@pytest.mark.asyncio
+async def test_refusal_settlement_preserves_completed_history(monkeypatch, tmp_path):
+    first = {
+        "provider": "codex",
+        "headSha": "abcdef1",
+        "requestKey": "original-request",
+        "requestCommentId": 100,
+        "requestedAt": "2026-08-24T22:00:00Z",
+    }
+    payload = {
+        "workflowType": "MoonMind.MergeAutomation",
+        "parentWorkflowId": "parent",
+        "publishContextRef": "artifact://publish-context",
+        "pullRequest": {
+            "repo": "MoonLadderStudios/MoonMind",
+            "number": 350,
+            "url": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+            "headSha": "abcdef1",
+            "headBranch": "feature",
+            "baseBranch": "main",
+        },
+        "mergeAutomationConfig": {
+            "finishMode": "fix_only",
+            "reviewLoop": {"enabled": True},
+        },
+        "activeReviewRequest": first,
+        "reviewCycles": [{"cycle": 1, **first, "status": "requested"}],
+    }
+
+    @activity.defn(name="merge_automation.evaluate_readiness")
+    async def evaluate(_payload):
+        result = {
+            "headSha": "abcdef1",
+            "pullRequestOpen": True,
+            "ready": False,
+            "automatedReviewComplete": None,
+            "automatedReviewRequestCommentId": 100,
+            "automatedReviewRequestedAt": first["requestedAt"],
+            "readinessObservationId": activity.info().activity_id,
+            "blockers": [
+                {
+                    "kind": "automated_review_request_failed",
+                    "summary": "Provider refused review.",
+                    "retryable": False,
+                    "source": "codex",
+                }
+            ],
+        }
+
+        if label == "current":
+            result["automatedReviewRequestFailure"] = {
+                "kind": "issue_comment",
+                "id": 101,
+                "failedAt": "2026-08-24T22:01:00Z",
+                "providerErrorClass": "rate_limit",
+            }
+            result["blockers"][0]["providerFailure"] = {
+                "providerErrorClass": "rate_limit"
+            }
+        return result
+
+    async def no_artifact(self, *, name, payload):
+        return None
+
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_write_json_artifact", no_artifact
+    )
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[evaluate]
+        ):
+            results = []
+            for label, worker_type in [
+                ("before", _BeforeRefusalSettlement),
+                ("published", _PublishedRefusalSettlement),
+                ("current", MoonMindMergeAutomationWorkflow),
+                ("missing", MoonMindMergeAutomationWorkflow),
+            ]:
+                queue = f"refusal-terminal-{label}"
+                async with Worker(
+                    env.client,
+                    task_queue=queue,
+                    workflows=[worker_type],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    max_cached_workflows=0,
+                ):
+                    handle = await env.client.start_workflow(
+                        worker_type.run,
+                        payload,
+                        id=queue,
+                        task_queue=queue,
+                        execution_timeout=timedelta(minutes=2),
+                    )
+                    result = await asyncio.wait_for(handle.result(), timeout=30)
+                    history = await handle.fetch_history()
+                (tmp_path / f"{label}-refusal-history.json").write_text(
+                    history.to_json()
+                )
+                await Replayer(
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(history)
+                results.append(result)
+    before, published, current, missing = results
+    assert before["status"] == current["status"] == "blocked"
+    assert before["reviewLoop"]["activeRequest"]["requestCommentId"] == 100
+    assert before["reviewLoop"]["cycleRecords"][-1]["status"] == "requested"
+    assert current["reviewLoop"]["activeRequest"] is None
+    assert current["reviewLoop"]["cycleRecords"][-1]["status"] == "failed"
+    assert current["resolverChildWorkflowIds"] == []
+    assert published["status"] == missing["status"] == "blocked"
+    assert published["reviewLoop"]["activeRequest"] is None
+    assert published["reviewLoop"]["cycleRecords"][-1]["status"] == "failed"
+    assert published["reviewLoop"]["cycleRecords"][-1].get("requestFailure") is None
+    assert current["reviewLoop"]["cycleRecords"][-1]["requestFailure"]["id"] == 101
+    assert missing["reviewLoop"]["activeRequest"]["requestCommentId"] == 100
+    assert missing["reviewLoop"]["cycleRecords"][-1]["status"] == "requested"
+    assert "receipt" in missing["blockers"][0]["summary"]

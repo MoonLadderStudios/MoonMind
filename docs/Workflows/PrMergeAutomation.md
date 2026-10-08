@@ -281,11 +281,6 @@ The Activity claims that key and original attempt window, rereads the PR to veri
 
 Without an active request, merge and fix-only may allow the first resolver to decide whether review is needed; review-only always requests fresh review. With an active request, only that request's result opens it: same current head, trusted provider identity, completion after requestedAt, matching review commit where supplied, and reaction on the exact request comment or the qualified unchanged-head after-request fallback. Historical results are not fallback evidence.
 
-A restored active request without a valid requestedAt must recover that time
-from its exact request comment before selecting any superseding request. An
-absent or invalid exact comment leaves the evidence unavailable; an older
-request or clean reply cannot supply freshness for the current head.
-
 A changed head invalidates the pending request. Merge and fix-only use the governed head-update/re-entry path; review-only blocks with stale_revision and preserves its pinned head. Record per-cycle provider/head, request key/comment/time, completion identity/kind/time, and outcome. Never reuse another cycle's evidence merely because it is recent.
 
 An active request owns the unchanged head until review completion. CI failures,
@@ -319,19 +314,18 @@ portable Skill read provider replies through the same
 `pr_resolver_core.review_providers` helper: a reply is either the registered
 clean result or a refusal whose opening line carries one of the provider's
 registered failure markers. Status tables, task replies, and findings stay
-non-authoritative. When the latest authoritative response is a refusal, reaction
-collection is available, and no submitted review or clean reaction completes
-the request, the gate blocks with
+non-authoritative. When the latest authoritative response is a refusal and no
+submitted review or clean reaction completes the request, the gate blocks with
 non-retryable `automated_review_request_failed`. The Skill's snapshot reports
 `requestFailed` and `requestFailure` instead of `requestPending`, and it
 classifies `automated_review_request_failed` as `manual_review`, ahead of
-remediation, rather than waiting. A newer request supersedes the refusal.
-Unavailable reaction pages take precedence over a refusal when no qualified
-alternative completion exists. Permission denial keeps its policy diagnostic;
-rate limits and transport/server outages remain retryable evidence failures.
-Malformed or incomplete pages never establish an empty reaction inventory.
-If either unavailable reaction endpoint can recover, polling remains retryable
-and retains the other endpoint's diagnostic.
+remediation, rather than waiting. A newer request supersedes the refusal. Its adoption consumes the same configured review-cycle budget before either the retained request or cycle is changed. A newer external request cannot bypass an exhausted budget. A request already durably admitted by an older worker may finish or repair its missing metadata after an upgrade without consuming another cycle; any newly selected request still checks the bound. Superseded records remain visible, and restored active request/cycle identities must agree on provider, head, key, comment, and known creation time. Missing times can be recovered only from the exact recorded comment and repaired on that same cycle; contradictory known times fail closed, including disagreement between a retained receipt and its exact GitHub comment. A retained synthetic record cannot override the observed comment's creation time.
+
+Unavailable completion evidence is distinct from absence. Review and reaction collections are paginated, malformed or failed reads remain observable, and a refusal becomes terminal only when no qualified completion exists and every relevant completion route was read successfully. A known qualified completion can satisfy an unavailable alternative route. Retryable GitHub quota, service, and transport failures retain a wait; confirmed access denial retains the existing policy blocker. Complete request comments are always required to select the latest request. Missing observed head data never substitutes tracked state as completion proof, and both completion and refusal are rechecked against the current open PR and a refreshed complete request inventory. A superseding request or changed issue-comment reply leaves the gate pending for a fresh observation; it cannot settle the earlier result. Canonical provider-failure class and cooldown metadata remain compact and sanitized through readiness models, continuation state, gate snapshots, and terminal artifacts.
+
+The portable snapshot reclassifies the refreshed comment inventory after observing completion or refusal, refreshing again when the selected request or terminal result changes. Repeated change fails closed after three refreshes. For an initially open PR, both outcomes require the final head to remain current and the PR to remain open; already merged or closed PRs retain their existing terminal classifications. When the current head's commit timestamp is unavailable, unbound request/comment/reaction history cannot establish freshness; a standalone submitted review explicitly naming the head remains valid only when no unbound request must be reconciled. With no request history to bind, an unavailable optional commit timestamp does not prevent requesting the first fresh review.
+A proven refusal settles only the selected, admitted cycle as `failed` and clears its active request. The cycle's compact `requestFailure` records the issue-comment ID, failure time, and canonical class separately from completion fields, and survives continuation and artifact persistence. Failed reads, policy denial, malformed receipts, and mismatched request identity do not masquerade as a provider refusal. Only a requested cycle can receive a new refusal. Failed, superseded, and stale cycles cannot be reopened by a fresh observation, while supported historical completed-plus-active reconciliation remains valid. Observation-scoped settlement preserves old worker histories during replay, including the published receipt-less refusal marker. Fresh observations require the stronger refusal receipt and never synthesize one from an older blocker.
+
 Once that head has a completed review, review-only finishes even with findings.
 Merge and fix-only also require no remaining blockers before finishing according
 to their finishMode. Completion does not request another review for the same head.
@@ -339,13 +333,6 @@ to their finishMode. Completion does not request another review for the same hea
 ### 11.3.5 No-progress and termination rules
 
 The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable or provider-refused review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
-
-Externally posted superseding requests consume the same maxCycles budget as
-gate-posted requests. Exhaustion blocks before adopting the new request or
-attributing its completion to the previous cycle. Retained workflow histories
-keep their recorded interpretation through an observation-scoped Temporal
-patch. A previously adopted request may finish after upgrade without consuming
-another cycle; a fresh superseding request still checks the existing bound.
 
 Readiness carries the ordered, deduplicated explicit request receipts from the
 retained active request through the selected latest request. Each unseen receipt

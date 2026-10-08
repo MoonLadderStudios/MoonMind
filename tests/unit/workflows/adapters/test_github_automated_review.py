@@ -186,9 +186,7 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch, expires
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
-async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(
-    monkeypatch, expires_at
-):
+async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch, expires_at):
     """A lost response is recovered by adopting the comment it created."""
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -358,11 +356,9 @@ async def test_request_adopts_previously_recorded_comment(monkeypatch, expires_a
 async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
     current = _review_clock(
         monkeypatch,
-        (
-            "2026-08-24T22:17:00+00:00"
-            if expiry_case == "already_expired"
-            else "2026-08-24T22:15:00+00:00"
-        ),
+        "2026-08-24T22:17:00+00:00"
+        if expiry_case == "already_expired"
+        else "2026-08-24T22:15:00+00:00",
     )
     responses = [
         _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -381,13 +377,9 @@ async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
 
     client.get.side_effect = get
     request = {
-        "repo": _REPO,
-        "pr_number": 350,
-        "expected_head_sha": _HEAD,
-        "provider": "codex",
-        "attempt_started_at": "2026-08-24T22:14:00Z",
-        "github_token": "selected-token",
-        "expires_at": "2026-08-24T22:16:00Z",
+        "repo": _REPO, "pr_number": 350, "expected_head_sha": _HEAD,
+        "provider": "codex", "attempt_started_at": "2026-08-24T22:14:00Z",
+        "github_token": "selected-token", "expires_at": "2026-08-24T22:16:00Z",
     }
     with _patch_client(client):
         service = GitHubService()
@@ -406,12 +398,8 @@ async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
 async def test_request_rejects_invalid_deadline_without_posting(expires_at):
     with pytest.raises(ValueError, match="expires_at must be an ISO timestamp"):
         await GitHubService().request_automated_review(
-            repo=_REPO,
-            pr_number=350,
-            expected_head_sha=_HEAD,
-            provider="codex",
-            attempt_started_at="2026-08-24T22:14:00Z",
-            expires_at=expires_at,
+            repo=_REPO, pr_number=350, expected_head_sha=_HEAD, provider="codex",
+            attempt_started_at="2026-08-24T22:14:00Z", expires_at=expires_at,
         )
 
 
@@ -505,6 +493,20 @@ async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
             ),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -658,6 +660,9 @@ async def test_requested_review_accepts_review_for_requested_commit(monkeypatch)
                 ],
             ),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -716,6 +721,9 @@ async def test_requested_review_follows_pagination_for_requested_commit(monkeypa
                 ],
             ),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -818,6 +826,26 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
             ),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            first_page,
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": (
+                            "You have reached your Codex usage limits for code "
+                            "reviews."
+                        ),
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {
+                            "login": "chatgpt-codex-connector[bot]",
+                            "type": "Bot",
+                        },
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -921,6 +949,9 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
                     }
                 ],
             ),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -1119,6 +1150,10 @@ async def test_requested_review_uses_latest_comment_across_pages(
             _get(200, [last]),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(200, [last]),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -1131,6 +1166,9 @@ async def test_requested_review_uses_latest_comment_across_pages(
         )
     assert (result.automated_review_complete is True) is latest_clean
     assert result.ready is latest_clean
+    assert [b["kind"] for b in result.blockers] == (
+        [] if latest_clean else ["automated_review_request_failed"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1158,23 +1196,22 @@ async def test_requested_review_real_codex_clean_reply_completes_only_its_head(
             "mergeable_state": "clean",
         },
     )
+    reply_comment = {
+        "id": reply["commentId"],
+        "body": reply["body"],
+        "created_at": reply["createdAt"],
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
     mock_client = _client(
         get_responses=[
             *prefix,
             _get(200, []),
-            _get(
-                200,
-                [
-                    {
-                        "id": reply["commentId"],
-                        "body": reply["body"],
-                        "created_at": reply["createdAt"],
-                        "user": {"login": "chatgpt-codex-connector[bot]"},
-                    }
-                ],
-            ),
+            _get(200, [reply_comment]),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [reply_comment]),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": head}}),
         ]
     )
     with _patch_client(mock_client):
@@ -1312,6 +1349,19 @@ async def test_requested_review_fresh_clean_comment_completes_despite_reaction_d
             ),
             _get(403, {"message": "Resource not accessible by integration"}),
             _get(403, {"message": "Resource not accessible by integration"}),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -1343,7 +1393,7 @@ async def test_requested_review_fresh_clean_comment_completes_despite_reaction_d
         (503, {}, "Service unavailable"),
     ],
 )
-async def test_requested_review_nonpermission_reaction_errors_are_unavailable(
+async def test_requested_review_nonpermission_reaction_errors_remain_observable(
     monkeypatch, status, headers, message
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -1368,7 +1418,7 @@ async def test_requested_review_nonpermission_reaction_errors_are_unavailable(
     assert result.ready is False
     assert result.automated_review_complete is None
     assert [blocker["kind"] for blocker in result.blockers] == [
-        "external_state_unavailable"
+        "policy_denied" if status == 401 else "external_state_unavailable"
     ]
     assert result.blockers[0]["retryable"] is (status != 401)
     mock_client.post.assert_not_awaited()
@@ -1560,9 +1610,7 @@ async def test_same_second_runtime_reply_keeps_identity_head_and_body_guards(cha
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "problem", ["malformed", "http_error", "partial_page", "denied"]
-)
+@pytest.mark.parametrize("problem", ["malformed", "http_error", "partial_page", "denied"])
 async def test_unavailable_request_inventory_cannot_accept_an_older_review(problem):
     reviews = [
         {
@@ -1602,11 +1650,11 @@ async def test_unavailable_request_inventory_cannot_accept_an_older_review(probl
         )
     assert result.automated_review_complete is None
     assert result.ready is False
-    assert [b["kind"] for b in result.blockers] == ["external_state_unavailable"]
+    assert [b["kind"] for b in result.blockers] == [
+        "policy_denied" if problem == "denied" else "external_state_unavailable"
+    ]
 
-    assert result.blockers[0]["retryable"] is (
-        problem in {"http_error", "partial_page"}
-    )
+    assert result.blockers[0]["retryable"] is (problem in {"http_error", "partial_page"})
 
 
 @pytest.mark.asyncio
@@ -1650,7 +1698,11 @@ async def test_request_inventory_preserves_quota_retry_and_permission_denial(
     assert result.ready is False
     assert result.automated_review_complete is None
     blocker = result.blockers[0]
-    assert blocker["kind"] == "external_state_unavailable"
+    assert blocker["kind"] == (
+        "policy_denied"
+        if status in {401, 403} and not limited
+        else "external_state_unavailable"
+    )
     assert blocker["retryable"] is retryable
     assert bool(blocker.get("providerFailure")) is limited
     if limited:

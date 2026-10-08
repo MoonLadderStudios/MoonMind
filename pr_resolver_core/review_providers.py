@@ -208,12 +208,13 @@ def _comment_id(value: object) -> int | None:
     return int(text) if text.isascii() and text.isdecimal() and int(text) > 0 else None
 
 
-def _comment_is_after(
+def review_comment_is_after(
     created_at: datetime,
     comment_id: object,
     earlier_at: datetime,
     earlier_id: object,
 ) -> bool:
+    """Compare comment times, using numeric IDs for equal-second causality."""
     if created_at != earlier_at:
         return created_at > earlier_at
     later = _comment_id(comment_id)
@@ -227,6 +228,23 @@ class ReviewRequest:
 
     comment: Mapping[str, Any]
     created_at: datetime
+
+
+def is_review_request_comment(provider: AutomatedReviewProvider, comment: Any) -> bool:
+    """Recognize only the provider's explicit issue-comment command."""
+    if (
+        not isinstance(comment, Mapping)
+        or comment.get("type", "issue_comment") != "issue_comment"
+    ):
+        return False
+    raw_body = str(comment.get("body") or "")
+    opening = next((line for line in raw_body.splitlines() if line.strip()), "")
+    if opening.startswith(("    ", "\t")):
+        return False
+    return (
+        " ".join(raw_body.split()).rstrip(".").strip().lower()
+        == provider.command.lower()
+    )
 
 
 def _review_requests(
@@ -246,16 +264,7 @@ def _review_requests(
     if not head_sha:
         return
     for comment in comments:
-        if not isinstance(comment, Mapping):
-            continue
-        if comment.get("type", "issue_comment") != "issue_comment":
-            continue
-        raw_body = str(comment.get("body") or "")
-        opening = next((line for line in raw_body.splitlines() if line.strip()), "")
-        if opening.startswith(("    ", "\t")):
-            continue
-        body = " ".join(raw_body.split()).rstrip(".").strip()
-        if body.lower() != provider.command.lower():
+        if not is_review_request_comment(provider, comment):
             continue
         created_at = _comment_time(comment)
         if created_at is None or (not_before is not None and created_at < not_before):
@@ -278,7 +287,7 @@ def latest_review_request(
     for request in _review_requests(
         provider, comments, head_sha=head_sha, not_before=not_before
     ):
-        if latest is None or _comment_is_after(
+        if latest is None or review_comment_is_after(
             request.created_at,
             request.comment.get("id"),
             latest.created_at,
@@ -310,7 +319,7 @@ def review_requests_after(
                 raise ValueError(
                     "The active review request timestamp is contradictory."
                 )
-        elif not _comment_is_after(
+        elif not review_comment_is_after(
             request.created_at, identifier, requested_at, anchor_id
         ):
             continue
@@ -344,7 +353,7 @@ def _request_reply_time(
     if requested_at is None or not head_sha:
         return None
     created_at = _comment_time(comment)
-    if created_at is None or not _comment_is_after(
+    if created_at is None or not review_comment_is_after(
         created_at, comment.get("id"), requested_at, request_comment_id
     ):
         return None
@@ -446,8 +455,11 @@ def classify_review_reply(
     )
     if created_at is None:
         return None
-    body = str(comment.get("body") or "")
-    if _is_clean_review_body(provider, body, head_sha=head_sha):
+    raw_body = str(comment.get("body") or "")
+    opening = next((line for line in raw_body.splitlines() if line.strip()), "")
+    if opening.startswith(("    ", "\t")):
+        return None
+    if _is_clean_review_body(provider, raw_body, head_sha=head_sha):
         return ReviewReply(comment=comment, created_at=created_at)
     failure_class = _failure_class(provider, str(comment.get("body") or ""))
     if failure_class:
@@ -484,7 +496,7 @@ def latest_review_reply(
         )
         if reply is not None and (
             latest is None
-            or _comment_is_after(
+            or review_comment_is_after(
                 reply.created_at,
                 reply.comment.get("id"),
                 latest.created_at,
