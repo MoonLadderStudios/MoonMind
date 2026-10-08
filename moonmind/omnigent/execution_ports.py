@@ -19,7 +19,7 @@ symbol, or provider-native payload crosses it. Adapters live in
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -95,6 +95,7 @@ class OmnigentHostPreparationPort(Protocol):
         required_capabilities: tuple[str, ...] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
         github_token: str | None = None,
+        github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
         repository_source: str = "",

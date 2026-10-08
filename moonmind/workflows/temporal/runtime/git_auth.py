@@ -90,7 +90,9 @@ def build_isolated_git_environment(
     (``GIT_CONFIG_PARAMETERS``/``GIT_CONFIG_COUNT``), global/system config
     helpers and ``http.extraHeader``, and ``~/.netrc`` cannot reach Git. Without
     a token the process is anonymous. The caller's own ``HOME`` is untouched;
-    only this Git process reads an empty one.
+    only this Git process reads an empty one. Known Git LFS filters are added
+    explicitly so isolation still materializes LFS files without trusting
+    arbitrary ambient filter commands.
     """
 
     source = base_env or {}
@@ -105,7 +107,16 @@ def build_isolated_git_environment(
             "GIT_TERMINAL_PROMPT": "0",
         }
     )
-    entries = [("credential.helper", ""), ("http.extraHeader", "")]
+    entries = [
+        ("credential.helper", ""),
+        ("http.extraHeader", ""),
+        # System/global isolation also removes the normal Git LFS install.
+        # Restore only the fixed trusted driver, never inherited filter config.
+        ("filter.lfs.clean", "git-lfs clean -- %f"),
+        ("filter.lfs.smudge", "git-lfs smudge -- %f"),
+        ("filter.lfs.process", "git-lfs filter-process"),
+        ("filter.lfs.required", "true"),
+    ]
     normalized_token = str(token or "").strip()
     if normalized_token:
         normalized_host = str(host or "").strip().lower() or "github.com"

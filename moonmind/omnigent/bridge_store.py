@@ -1918,6 +1918,7 @@ class OmnigentBridgeSessionStore:
                         "janitorRequired",
                         "retryAttempts",
                         "credentialMountPath",
+                        "githubCredentialExposure",
                         "sessionInterrupted",
                         "hostCleanupMode",
                         "stateResourcesCleaned",
