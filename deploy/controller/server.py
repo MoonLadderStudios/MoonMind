@@ -35,6 +35,18 @@ LEGACY_PROBE_TIMEOUT_SECONDS = 30
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 CONTROLLER_CAPABILITIES = ("active-journal-transition",)
+# Full Docker inspection includes mounts, network state, and environment
+# secrets. Project only journal ownership before the runner keeps its bounded
+# diagnostic tail; otherwise even a few containers produce truncated JSON.
+JOURNAL_CONSUMER_INSPECT_FORMAT = (
+    '{{$fleet := ""}}{{range .Config.Env}}'
+    '{{if or (eq . "TEMPORAL_WORKER_FLEET=agent_runtime") '
+    '(eq . "TEMPORAL_WORKER_FLEET=artifacts")}}{{$fleet = .}}{{end}}{{end}}'
+    '{"Image":{{json .Image}},"Config":{"Labels":{'
+    '"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},'
+    '"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}}},'
+    '"Env":[{{json $fleet}}]}}'
+)
 # The deployment checkout bootstrap mounts read-only at its host path.
 TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
 # The MoonMind Compose project bootstrap recorded in the controller identity
@@ -1084,11 +1096,14 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
         identifiers = str(listed.get("output") or "").split()
         rows = []
         if identifiers:
-            inspected = engine.run_command(runner, ("docker", "inspect", *identifiers), timeout_seconds=30)
+            inspected = engine.run_command(runner, (
+                "docker", "inspect", "--format", JOURNAL_CONSUMER_INSPECT_FORMAT,
+                *identifiers,
+            ), timeout_seconds=30)
             if int(inspected.get("exit", 0)) != 0:
                 raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumer images unavailable")
-            rows = json.loads(str(inspected.get("output") or ""))
-            if not isinstance(rows, list) or len(rows) != len(identifiers):
+            rows = [json.loads(line) for line in str(inspected.get("output") or "").splitlines()]
+            if len(rows) != len(identifiers) or any(not isinstance(row, dict) for row in rows):
                 raise ValueError("Journal consumer inventory is incomplete")
         selected = set(target.get("services") or ())
         standard = {"temporal-worker-agent-runtime", "temporal-worker-artifacts"}
