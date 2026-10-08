@@ -8011,7 +8011,9 @@ def _no_commit_publication_realizer(
     sentinels; the publisher and the realizer publish decision are real.
     """
 
-    async def _unused_resolver(_plan: object) -> tuple[object, object]:
+    async def _unused_resolver(
+        _plan: object, **_kwargs: object
+    ) -> tuple[object, object]:
         raise AssertionError("host resolution is outside the publication boundary")
 
     async def _unused_session_driver(

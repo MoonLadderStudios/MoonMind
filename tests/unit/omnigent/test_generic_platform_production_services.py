@@ -10,6 +10,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -913,6 +914,281 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
     assert host.runtime["uid"] == 1000
     assert policy.ref == policy_ref
     assert policy.limits["timeoutSeconds"] == 5400
+
+
+INSTALLED_SERVER_IMAGE = "ghcr.io/example/omnigent-server@sha256:" + "5" * 64
+
+
+def exact_launch_resolver(
+    image_ref: str, *, build_digest: str
+) -> tuple[Any, OmnigentPlannedHostResolver]:
+    """Return an admitted OpenCode plan pinning ``image_ref`` and its real resolver.
+
+    The resolver is the production ``OmnigentPlannedHostResolver`` over the
+    plan's verified launch artifact; its Host Class selector reads the
+    deployment's installed image state from the process environment and the
+    bootstrap resolved-images store, exactly as a worker does.
+    """
+
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "3" * 64,
+        }
+    )
+    harness = HarnessRecord.model_validate(
+        {
+            "id": "opencode-native",
+            "label": "OpenCode",
+            "implementation": implementation.model_dump(mode="json", by_alias=True),
+            "capabilities": {
+                "integrationMode": "native-server",
+                "authModel": "own-auth",
+            },
+        }
+    )
+    launch = {
+        "schemaVersion": 3,
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "harness": "opencode-native",
+        "hostImageRef": image_ref,
+        "hostMode": "on_demand_docker",
+        "architectures": ["amd64"],
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "readOnlyRoot": True,
+        "enforcedEgress": True,
+        "egressProfileRef": "moonmind-omnigent-egress@1",
+        "limits": {
+            "cpuMillis": 2000,
+            "memoryMiB": 4096,
+            "processes": 256,
+            "timeoutSeconds": 5400,
+            "temporaryStorageMiB": 256,
+        },
+        "capture": {"required": True},
+        "cleanup": {"mode": "remove", "janitor": True},
+        "controlCapabilities": ["interrupt", "terminate"],
+    }
+    canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
+    launch["snapshotRef"] = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+    raw = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
+    payload = _plan("opencode-go/model").payload.model_dump(mode="json", by_alias=True)
+    payload.update(
+        {
+            "harnessImplementationRef": implementation.implementation_ref(),
+            "hostImageRef": image_ref,
+            "omnigentHostBuildDigest": build_digest,
+            "hostArchitecture": "linux/amd64",
+            "policySnapshotRef": "artifact:policy",
+            "policySnapshotDigest": "sha256:" + "d" * 64,
+            "effectiveLaunchSnapshotRef": "artifact:launch-exact",
+            "effectiveLaunchSnapshotDigest": (
+                "sha256:" + hashlib.sha256(raw).hexdigest()
+            ),
+        }
+    )
+    plan = create_execution_plan_envelope(payload)
+
+    class Catalogs:
+        async def load(self, ref: str):
+            assert ref == plan.payload.harnessCatalogRef
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(
+                    harnesses=(harness,),
+                    omnigentVersion="1.0.0",
+                    omnigentBuildDigest="sha256:" + "b" * 64,
+                )
+            )
+
+    class Artifacts:
+        async def read_bytes(self, ref: str) -> bytes:
+            assert ref == "artifact:launch-exact"
+            return raw
+
+    return plan, OmnigentPlannedHostResolver(
+        catalog_repository=Catalogs(), artifact_gateway=Artifacts()
+    )
+
+
+def installed_deployment_state(
+    image_ref: str, *, build_digest: str, version: str = "1.0.4"
+) -> ResolvedOmnigentDeploymentState:
+    """The resolved-images record an update writes for its installed host image."""
+
+    return ResolvedOmnigentDeploymentState(
+        serverImageRef=INSTALLED_SERVER_IMAGE,
+        opencodeHostImageRef=image_ref,
+        details={
+            "opencodeHostCompatibility": {
+                "status": "ready",
+                "serverImageRef": INSTALLED_SERVER_IMAGE,
+                "hostImageRef": image_ref,
+                "hostBuildDigest": build_digest,
+                "hostVersion": version,
+            },
+            "hostImageProvenance": {
+                image_ref: {"version": version, "buildDigest": build_digest},
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_interrupted_successor_host_moves_to_installed_image(
+    tmp_path, monkeypatch
+) -> None:
+    """A successor of an interrupted attempt launches on the installed runtime.
+
+    The workflow's admitted plan still pins the pre-update image. Only an
+    explicit installed-runtime request (made for a ``runtime_recovered``
+    successor) selects the deployment's installed same-repository image and
+    its observed build; the plan, its launch policy and every other attempt
+    keep the recorded image.
+    """
+
+    old_image = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    new_image = "ghcr.io/example/opencode@sha256:" + "e" * 64
+    new_build = "sha256:" + "f" * 64
+    plan, resolver = exact_launch_resolver(old_image, build_digest="sha256:" + "1" * 64)
+    state_path = tmp_path / "resolved-images.json"
+    monkeypatch.setenv("MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(state_path))
+    for name in ("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "OMNIGENT_IMAGE_REF"):
+        monkeypatch.delenv(name, raising=False)
+
+    # No installed state is observable: the successor keeps the admitted image.
+    host, _policy = await resolver(plan, installed_runtime=True)
+    assert host.imageRef == old_image
+
+    store.save_resolved_state(
+        installed_deployment_state(new_image, build_digest=new_build)
+    )
+    host, policy = await resolver(plan)
+    assert (host.imageRef, host.omnigentBuildDigest) == (
+        old_image,
+        plan.payload.omnigentHostBuildDigest,
+    )
+
+    successor, successor_policy = await resolver(plan, installed_runtime=True)
+    assert successor.imageRef == new_image
+    assert successor.omnigentBuildDigest == new_build
+    assert successor.ref == host.ref == plan.payload.hostClassRef
+    assert successor.architectures == host.architectures == ("linux/amd64",)
+    assert successor.runtime == host.runtime
+    assert successor.features == host.features
+    assert successor_policy == policy
+    assert plan.payload.hostImageRef == old_image
+
+    # A different image family is never adopted as the same runtime.
+    store.save_resolved_state(
+        installed_deployment_state(
+            "ghcr.io/example/other@sha256:" + "e" * 64, build_digest=new_build
+        )
+    )
+    foreign, _ = await resolver(plan, installed_runtime=True)
+    assert foreign.imageRef == old_image
+
+
+class _CachedImages:
+    """Docker backend for image resolution: every listed image is still local."""
+
+    def __init__(self, *images: str) -> None:
+        self.images = set(images)
+
+    async def run(self, args, **_kwargs):
+        if list(args[:3]) == ["docker", "image", "inspect"]:
+            present = args[3] in self.images
+            return (0 if present else 1), ("sha256:id" if present else ""), ""
+        raise AssertionError(f"unexpected docker call: {args}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "explicit_host_class", "expected"),
+    [
+        ("initial_execution", False, "old"),
+        ("runtime_recovered", False, "installed"),
+        ("runtime_recovered", True, "old"),
+    ],
+)
+async def test_interrupted_successor_launches_on_installed_image_while_old_is_cached(
+    tmp_path, monkeypatch, reason, explicit_host_class, expected
+) -> None:
+    """The generic realizer launches a successor on the installed image (#4627).
+
+    The admitted plan pins the pre-update image, which a Compose pull leaves
+    cached. The real realizer, planned-host resolver and launcher image
+    resolution launch the ``runtime_recovered`` successor on the installed
+    image; the first attempt and an explicitly requested Host Class keep the
+    plan's recorded image.
+    """
+
+    old_image = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    new_image = "ghcr.io/example/opencode@sha256:" + "e" * 64
+    plan, resolver = exact_launch_resolver(old_image, build_digest="sha256:" + "1" * 64)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
+    )
+    for name in ("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "OMNIGENT_IMAGE_REF"):
+        monkeypatch.delenv(name, raising=False)
+    store.save_resolved_state(
+        installed_deployment_state(new_image, build_digest="sha256:" + "f" * 64)
+    )
+    launcher = DockerOmnigentHostLauncher(
+        backend=_CachedImages(old_image, new_image),
+        runtime_scripts=object(),
+        server_url="http://omnigent:8000",
+    )
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    harness.realizer._resolve_host = resolver
+    harness.realizer._turn_commands = None
+    launched: list[str] = []
+    realize = harness.realizer._host_runtime.realize
+
+    async def realize_through_launcher(**kwargs):
+        host_class = kwargs["host_class"]
+        launched.append(
+            await launcher._resolve_launch_image(host_class.imageRef, host_class)
+        )
+        return await realize(**kwargs)
+
+    harness.realizer._host_runtime.realize = realize_through_launcher
+    ordinal = 1 if reason == "initial_execution" else 2
+    parameters = dict(harness.publish_request.parameters)
+    if explicit_host_class:
+        parameters["omnigent"] = {"hostClassRef": "omnigent-opencode@1"}
+    request = harness.publish_request.model_copy(
+        update={
+            "parameters": parameters,
+            "step_execution": AgentExecutionRequest.model_validate(
+                {
+                    **_request().model_dump(by_alias=True, mode="json"),
+                    "stepExecution": {
+                        "workflowId": "workflow-1",
+                        "runId": "run-1",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": ordinal,
+                        "stepExecutionId": (
+                            f"workflow-1:run-1:implement:execution:{ordinal}"
+                        ),
+                        "runtimeContextPolicy": "fresh_agent_run",
+                        "reason": reason,
+                    },
+                }
+            ).step_execution,
+        }
+    )
+
+    result = await harness.realizer.execute(request, plan)
+
+    assert result.summary == "done"
+    assert launched == [new_image if expected == "installed" else old_image]
+    # The admitted plan itself is never rewritten.
+    assert plan.payload.hostImageRef == old_image
 
 
 @pytest.mark.asyncio
@@ -3199,7 +3475,7 @@ async def _generic_publication_harness(
         }
     )
 
-    async def resolve_host(_plan):
+    async def resolve_host(_plan, **_kwargs):
         return host_class, get_launch_policy("omnigent-on-demand@1")
 
     async def session_driver(request, *, session_authority_sink):
@@ -3899,7 +4175,7 @@ async def test_generic_realizer_reports_a_launch_that_never_became_ready() -> No
 
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
 
-    async def _unavailable_host(_plan_envelope):
+    async def _unavailable_host(_plan_envelope, **_kwargs):
         raise RuntimeError("host class is unavailable")
 
     harness.realizer._resolve_host = _unavailable_host

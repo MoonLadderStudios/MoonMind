@@ -168,12 +168,15 @@ When an update or recreation really stops an attempt's runtime, the workflow
 does not wait for that process. A new attempt of the same logical step takes
 over once the old attempt's stop is confirmed, either by its own cleanup or by
 the bounded reconciliation the workflow requests before starting the new one.
-It keeps the step's harness, Provider Profile, model and publication intent.
-A plan compiled for it selects the installed runtime, while an attempt that
-reuses its workflow's admitted plan keeps that plan's recorded image. A
-compatible same-repository image rebuild alone does not invalidate either. An
-explicitly requested Host Class or operator image pin remains authoritative. The old attempt's records keep the image and session
-it actually ran. Its process need not survive. [Step Executions and
+It reuses the workflow's admitted plan, so it keeps the step's harness, Provider
+Profile, model, account, policy and publication intent. It launches on the
+installed runtime: the planned-host resolver selects the deployment's installed
+Host Class image, as fresh admission does, even while the plan's older image is
+still cached. A compatible same-repository image rebuild does not invalidate the
+plan. A different image family is never adopted, so the attempt then keeps the
+plan's image. An explicitly requested Host Class keeps the plan's image, and an
+operator image pin is the installed image. The old attempt's records keep the
+image and session it actually ran. Its process need not survive. [Step Executions and
 Checkpointing](../Steps/StepExecutionsAndCheckpointing.md#162-interrupted-omnigent-attempts)
 owns the restore and publication rules.
 

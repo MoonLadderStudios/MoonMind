@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Awaitable, Callable
@@ -142,6 +143,25 @@ def carry_attempt_stop_evidence(
     }
 
 
+def launches_on_installed_runtime(request: AgentExecutionRequest) -> bool:
+    """Whether this attempt replaces an interrupted one on the installed runtime.
+
+    A ``runtime_recovered`` Step Execution succeeds an attempt whose runtime
+    really stopped, for example because an update replaced its host. It reuses
+    the workflow's admitted plan but launches on the deployment's installed
+    host image (#4627). An explicitly requested Host Class stays the selection
+    authority, so that attempt keeps the plan's recorded image.
+    """
+
+    step = request.step_execution
+    if step is None or step.reason != "runtime_recovered":
+        return False
+    omnigent = (request.parameters or {}).get("omnigent")
+    if not isinstance(omnigent, Mapping):
+        return True
+    return not str(omnigent.get("hostClassRef") or "").strip()
+
+
 class GenericOmnigentHostRealizer:
     ref = "generic-omnigent-host@1"
     authority_kinds = ("model", "repository")
@@ -154,9 +174,7 @@ class GenericOmnigentHostRealizer:
         credential_provisioning_service: Any,
         host_lease_repository: Any,
         host_runtime: Any,
-        planned_host_resolver: Callable[
-            [OmnigentExecutionPlanEnvelope], Awaitable[tuple[Any, Any]]
-        ],
+        planned_host_resolver: Callable[..., Awaitable[tuple[Any, Any]]],
         session_driver: Callable[..., Awaitable[AgentRunResult]],
         session_cleanup_service: Any,
         workspace_publisher: Any,
@@ -499,7 +517,9 @@ class GenericOmnigentHostRealizer:
                 )
 
             host_started_at = time.monotonic()
-            host_class, launch_policy = await self._resolve_host(plan)
+            host_class, launch_policy = await self._resolve_host(
+                plan, installed_runtime=launches_on_installed_runtime(request)
+            )
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,
@@ -1957,4 +1977,8 @@ class GenericOmnigentHostRealizer:
         )
 
 
-__all__ = ["GenericOmnigentHostRealizer", "carry_attempt_stop_evidence"]
+__all__ = [
+    "GenericOmnigentHostRealizer",
+    "carry_attempt_stop_evidence",
+    "launches_on_installed_runtime",
+]
