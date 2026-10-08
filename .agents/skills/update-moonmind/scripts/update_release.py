@@ -23,7 +23,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-
 _DEFAULT_CONTROLLER_URL = os.environ.get(
     "MOONMIND_CONTROLLER_URL", "http://127.0.0.1:8472"
 )
@@ -474,11 +473,16 @@ def _submit_release(
             if not _controller_never_started(repo):
                 if legacy_direct:
                     _refuse_legacy_direct()
-                raise
-            legacy_notice = (
-                "Standalone controller bootstrap did not start a service; "
-                "updating through the application-owned updater."
-            )
+                # Keep the same owner. Its host-owned prerequisite can
+                # reconcile a failed controller recreation under its lock.
+                return _submit_via_controller(
+                    record, repo, controller_url=controller_url, secret_file=secret_file,
+                )
+            else:
+                legacy_notice = (
+                    "Standalone controller bootstrap did not start a service; "
+                    "updating through the application-owned updater."
+                )
     if legacy_direct:
         if legacy_notice is None:
             _refuse_legacy_direct()
@@ -693,6 +697,121 @@ def _resolve_compose_files(repo):
     return compose_files
 
 
+def _ensure_controller_journal_transition(record, repo, controller_url, secret):
+    """Use the existing host lifecycle before an old controller owns work.
+
+    The portable script extracts only trusted, image-owned Python sources;
+    it does not depend on a checked-out release or a healthy API/worker.
+    Installed source comes first so a rollback can use current repair code.
+    """
+    try:
+        _, health = _controller_call(
+            controller_url, secret, "GET", "/v1/healthz", timeout=5
+        )
+    except ControllerUnreachableError:
+        health = {}
+    if "active-journal-transition" in (health.get("capabilities") or ()):
+        return
+    ids = run(
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            f"label=com.docker.compose.project={record['project']}",
+        ],
+        cwd=repo,
+    ).split()
+    candidates = []
+    if ids:
+        for container in json.loads(run(["docker", "inspect", *ids], cwd=repo)):
+            service = ((container.get("Config") or {}).get("Labels") or {}).get(
+                "com.docker.compose.service"
+            )
+            if service in {
+                "api",
+                "temporal-worker-agent-runtime",
+                "temporal-worker-deployment-control",
+            }:
+                image = container.get("Image")
+                if image and image not in candidates:
+                    candidates.append(image)
+    candidates.append(record["image"])
+    export = (
+        "import json,pathlib,sys; p=pathlib.Path('/app/deploy/controller'); "
+        "sys.path.insert(0,str(p)); "
+        "present=(p/'bootstrap.py').is_file(); "
+        "print('{}') if not present else None; "
+        "sys.exit(0) if not present else None; import bootstrap,server; "
+        "supported=callable(getattr(bootstrap,'cmd_ensure',None)) and "
+        "'active-journal-transition' in getattr(server,'CONTROLLER_CAPABILITIES',()); "
+        "print(json.dumps({f.name:f.read_text() for f in p.glob('*.py')} if supported else {}))"
+    )
+    for image in candidates:
+        bundle = json.loads(
+            run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network=none",
+                    "--entrypoint",
+                    "python",
+                    image,
+                    "-c",
+                    export,
+                ],
+                cwd=repo,
+            )
+        )
+        if not bundle:
+            continue
+        with tempfile.TemporaryDirectory(
+            prefix="moonmind-controller-bootstrap-"
+        ) as directory:
+            for name, source in bundle.items():
+                if (
+                    Path(name).name != name
+                    or not name.endswith(".py")
+                    or not isinstance(source, str)
+                ):
+                    raise RuntimeError(
+                        "Controller image returned an invalid source bundle."
+                    )
+                (Path(directory) / name).write_text(source, encoding="utf-8")
+            run(
+                [
+                    sys.executable,
+                    str(Path(directory) / "bootstrap.py"),
+                    "ensure",
+                    "--state-dir",
+                    str(repo / "deploy" / "state" / "controller"),
+                    "--repo",
+                    str(repo),
+                    "--stack",
+                    "moonmind",
+                    "--target-project",
+                    record["project"],
+                    "--image",
+                    record["image"],
+                    "--controller-url",
+                    controller_url,
+                ],
+                cwd=repo,
+            )
+        _, health = _controller_call(
+            controller_url, secret, "GET", "/v1/healthz", timeout=5
+        )
+        if "active-journal-transition" not in (health.get("capabilities") or ()):
+            raise RuntimeError(
+                "Controller prerequisite did not expose journal transition support."
+            )
+        return
+    raise RuntimeError(
+        "Neither installed source nor requested image supplies the controller prerequisite."
+    )
+
+
 def _submit_via_controller(record, repo, *, controller_url, secret_file):
     """Execute the recorded submission through the standalone controller.
 
@@ -708,6 +827,7 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             "`python3 deploy/controller/bootstrap.py install`."
         )
     secret = secret_path.read_text(encoding="utf-8").strip()
+    _ensure_controller_journal_transition(record, repo, controller_url, secret)
     rendered = json.loads(
         run(["docker", "compose", "config", "--format", "json"], cwd=repo)
     )

@@ -49,8 +49,8 @@ def test_pytest_split_is_a_test_extra_dependency() -> None:
     assert isinstance(entry, dict) and entry.get("optional") is True
     extras = pyproject["tool"]["poetry"]["extras"]
     assert "pytest-split" in extras["tests"]
-    # The tests extra stays exactly the documented test plugin set plus
-    # pytest-split: no second manager, no unrelated pins touched here.
+    # Keep the exact test dependency contract, including the JSON Schema
+    # validator used by the portable review-evidence contract tests.
     assert set(extras["tests"]) == {
         "pytest",
         "pytest-mock",
@@ -59,6 +59,7 @@ def test_pytest_split_is_a_test_extra_dependency() -> None:
         "pytest-timeout",
         "aiosqlite",
         "pytest-split",
+        "jsonschema",
     }
 
 

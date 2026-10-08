@@ -1059,6 +1059,7 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
     monkeypatch.setattr(release, "migrate_omnigent", migrate)
     payload = {
         "operationId": "controller-operation",
+        "controllerCapabilities": ["active-journal-transition"],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test-custom",
@@ -1116,6 +1117,7 @@ async def test_controller_omnigent_failure_preserves_selection_for_retry(
     monkeypatch.setattr(release, "migrate_omnigent", migrate)
     payload = {
         "operationId": "retry-omnigent",
+        "controllerCapabilities": ["active-journal-transition"],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test",
@@ -1185,6 +1187,7 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
     monkeypatch.setattr(release, "write_record", lose_receipt)
     payload = {
         "operationId": "lost-selection-receipt",
+        "controllerCapabilities": ["active-journal-transition"],
         "moonmindImage": "example/moonmind@sha256:selected",
         "target": {
             "project": "moonmind-test",
@@ -1198,3 +1201,23 @@ async def test_controller_omnigent_reconciles_selection_before_lost_receipt(
     assert recovered["revision"] == 1
     assert calls == ["controller:lost-selection-receipt"]
     assert await release.run_controller_omnigent_step("select", payload) == recovered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["select", "migrate"])
+async def test_old_controller_callback_refuses_before_release_state_access(monkeypatch, phase):
+    """An installed old caller has not run the new host/API bootstrap path."""
+    def mutable_release_store():
+        pytest.fail("An owner without journal transition support reached release state")
+
+    monkeypatch.setattr(release, "_omnigent_release_store", mutable_release_store)
+    old_request = {
+        "operationId": "installed-old-controller",
+        "moonmindImage": "example/moonmind@sha256:new",
+        "target": {"project": "moonmind-test", "projectDir": "/installed/repo",
+                   "composeFiles": ["docker-compose.yaml"]},
+    }
+    with pytest.raises(RuntimeError, match="updated MoonMind checkout") as failure:
+        await release.run_controller_omnigent_step(phase, old_request)
+    assert "./tools/update-moonmind.sh" in str(failure.value)
+    assert "active-journal-transition" in str(failure.value)
