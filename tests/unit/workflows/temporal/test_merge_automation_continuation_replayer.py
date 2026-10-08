@@ -107,6 +107,18 @@ class _PreActionableCIFailureGate(MoonMindMergeAutomationWorkflow):
         return await super().run(payload)
 
 
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _PreMissingCIWaitGate(MoonMindMergeAutomationWorkflow):
+    def _missing_ci_wait_enabled(self, evaluation: Any = None) -> bool:
+        # A pre-feature consumer keeps polling even when a newer readiness
+        # producer already reports the absence of head-bound CI explicitly.
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
 @workflow.defn(name="MoonMind.UserWorkflow")
 class _ReadinessFixtureResolver:
     @workflow.run
@@ -417,6 +429,267 @@ async def test_incomplete_ci_histories_replay_deterministically(
 
     # The current implementation must replay both histories without forcing
     # the new branch into an old history or changing its recorded wait timer.
+    await Replayer(
+        workflows=[MoonMindMergeAutomationWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("historical_producer", ["old", "new"])
+async def test_missing_ci_wait_is_bounded_after_fresh_producer_and_consumer_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+    historical_producer: str,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    producer_upgraded = historical_producer == "new"
+    readiness_requests: list[dict[str, Any]] = []
+    producer_results: list[dict[str, Any]] = []
+    readiness_activity_ids: list[str] = []
+    http_requests: list[str] = []
+    integration_activities = TemporalIntegrationActivities()
+
+    def github_response(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.github.com"
+        assert request.method == "GET"
+        path = request.url.path
+        http_requests.append(path)
+        if path.endswith("/pulls/1209"):
+            body = {
+                "number": 1209,
+                "state": "open",
+                "merged": False,
+                "head": {"sha": "abcdef1", "ref": "feature"},
+                "base": {"sha": "base123", "ref": "main"},
+            }
+        elif path.endswith("/status"):
+            body = {"state": "pending", "statuses": []}
+        elif path.endswith("/check-runs"):
+            body = {"check_runs": []}
+        elif path.endswith("/branches/main"):
+            body = {"protected": False}
+        elif path.endswith("/reviews"):
+            body = [
+                {
+                    "id": 123,
+                    "state": "APPROVED",
+                    "user": {"login": "reviewer"},
+                    "submitted_at": "2026-10-03T00:00:00Z",
+                    "commit_id": "abcdef1",
+                }
+            ]
+        elif path.endswith("/reactions"):
+            body = []
+        else:
+            raise AssertionError(f"Unexpected GitHub fixture request: {path}")
+        return httpx.Response(200, json=body)
+
+    transport = httpx.MockTransport(github_response)
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        GitHubService,
+        "resolve_github_token",
+        AsyncMock(return_value=("fixture-only", None)),
+    )
+
+    @activity.defn(name="merge_automation.evaluate_readiness")
+    async def evaluate_readiness(payload: dict[str, Any]) -> dict[str, Any]:
+        readiness_requests.append(payload)
+        readiness_activity_ids.append(activity.info().activity_id)
+        evidence = await integration_activities.merge_automation_evaluate_readiness(
+            payload
+        )
+        if not producer_upgraded:
+            # Keep the already-supported observation identity and CI-failure
+            # capability intact; only this new producer field is absent.
+            evidence.pop("checksReported", None)
+        producer_results.append(dict(evidence))
+        return evidence
+
+    async def skip_artifact(
+        self: MoonMindMergeAutomationWorkflow,
+        *,
+        name: str,
+        payload: dict[str, Any],
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_write_json_artifact", skip_artifact
+    )
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
+    )
+    payload = _payload("missing_ci")
+    # Omit reviewLoop and expiry: the supported defaults must bound this wait
+    # even when no review loop or overall expiration has been opted into.
+    payload["mergeAutomationConfig"] = {"timeouts": {"fallbackPollSeconds": 60}}
+    parent_queue = "mm-missing-ci-upgrade"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=INTEGRATIONS_TASK_QUEUE,
+            activities=[evaluate_readiness],
+        ):
+
+            async def wait_for_poll_timer(expected_count: int):
+                try:
+                    async with asyncio.timeout(10):
+                        while True:
+                            history = await handle.fetch_history()
+                            assert not any(
+                                event.HasField(
+                                    "start_child_workflow_execution_initiated_event_attributes"
+                                )
+                                or event.HasField(
+                                    "workflow_execution_completed_event_attributes"
+                                )
+                                for event in history.events
+                            ), "Unversioned observations must keep waiting without a resolver"
+                            timer_count = sum(
+                                event.HasField("timer_started_event_attributes")
+                                for event in history.events
+                            )
+                            if timer_count >= expected_count:
+                                assert timer_count == expected_count
+                                assert len(producer_results) == expected_count
+                                return history
+                            await asyncio.sleep(0.01)
+                except TimeoutError as exc:
+                    history = await handle.fetch_history()
+                    recent_events = [
+                        (event.event_id, EventType.Name(event.event_type))
+                        for event in history.events[-20:]
+                    ]
+                    raise AssertionError(
+                        f"Expected {expected_count} durable poll timers; "
+                        f"readiness calls={len(producer_results)}; "
+                        f"recent events={recent_events}"
+                    ) from exc
+
+            async with Worker(
+                env.client,
+                task_queue=parent_queue,
+                workflows=[_PreMissingCIWaitGate],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                max_cached_workflows=0,
+            ):
+                handle = await env.client.start_workflow(
+                    _PreMissingCIWaitGate.run,
+                    payload,
+                    id=f"mm-missing-ci-upgrade-{historical_producer}",
+                    task_queue=parent_queue,
+                    execution_timeout=timedelta(minutes=30),
+                )
+                old_history = await wait_for_poll_timer(1)
+
+            # A newly installed consumer must preserve the timer already
+            # recorded by an old consumer, including with a new producer.
+            await Replayer(
+                workflows=[MoonMindMergeAutomationWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ).replay_workflow(old_history)
+
+            async with Worker(
+                env.client,
+                task_queue=parent_queue,
+                workflows=[MoonMindMergeAutomationWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                max_cached_workflows=0,
+            ):
+                if historical_producer == "old":
+                    # Three fresh polls exceed the default budget if absent
+                    # checksReported were incorrectly treated as explicit False.
+                    for expected_count in range(2, 5):
+                        await env.sleep(timedelta(seconds=60))
+                        neutral_history = await wait_for_poll_timer(expected_count)
+                    await Replayer(
+                        workflows=[MoonMindMergeAutomationWorkflow],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                    ).replay_workflow(neutral_history)
+                legacy_observation_count = len(producer_results)
+                producer_upgraded = True
+                # Ordinary durable polling supplies new Activity IDs; no
+                # signal, expiry, or mutation of old history triggers recovery.
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                history = await handle.fetch_history()
+
+        observations = [
+            (
+                await env.client.data_converter.decode(
+                    event.activity_task_completed_event_attributes.result.payloads
+                )
+            )[0]
+            for event in history.events
+            if event.HasField("activity_task_completed_event_attributes")
+        ]
+
+    assert result["status"] == "blocked"
+    assert result["cycles"] == 0
+    assert result["resolverChildWorkflowIds"] == []
+    assert result["latestHeadSha"] == "abcdef1"
+    assert [blocker["kind"] for blocker in result["blockers"]] == [
+        "review_loop_no_progress"
+    ]
+    assert "CI" in result["summary"]
+    assert len(observations) == legacy_observation_count + 3
+    assert len(producer_results) == len(observations)
+    assert len(set(readiness_activity_ids)) == len(observations)
+    for observation, activity_id in zip(observations, readiness_activity_ids):
+        assert observation["readinessObservationId"] == activity_id
+        assert observation["headSha"] == "abcdef1"
+        assert observation["checksComplete"] is False
+        assert observation["checksPassing"] is False
+        assert {blocker["kind"] for blocker in observation["blockers"]} == {
+            "checks_running"
+        }
+    if historical_producer == "old":
+        assert legacy_observation_count == 4
+        assert all("checksReported" not in item for item in observations[:4])
+    else:
+        assert legacy_observation_count == 1
+        assert observations[0]["checksReported"] is False
+    assert all(
+        item["checksReported"] is False
+        for item in observations[legacy_observation_count:]
+    )
+    assert all(
+        request["pullRequest"] == payload["pullRequest"]
+        and request["mergeAutomationConfig"]
+        == readiness_requests[0]["mergeAutomationConfig"]
+        for request in readiness_requests
+    ), "Worker upgrades must preserve the admitted PR and continuation budgets"
+    effective_config = readiness_requests[0]["mergeAutomationConfig"]
+    assert effective_config["reviewLoop"]["enabled"] is False
+    assert effective_config["reviewLoop"]["maxConsecutiveNoProgressCycles"] == 2
+    assert effective_config["timeouts"].get("expireAfterSeconds") is None
+    assert (
+        sum(
+            event.HasField("timer_started_event_attributes") for event in history.events
+        )
+        == legacy_observation_count + 2
+    )
+    assert not any(
+        event.HasField("start_child_workflow_execution_initiated_event_attributes")
+        or event.HasField("workflow_execution_signaled_event_attributes")
+        for event in history.events
+    )
+    assert sum(path.endswith("/check-runs") for path in http_requests) == len(
+        observations
+    )
+    assert sum(path.endswith("/status") for path in http_requests) == len(observations)
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

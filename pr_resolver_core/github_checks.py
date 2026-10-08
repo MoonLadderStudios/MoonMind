@@ -66,3 +66,23 @@ def partition_commit_statuses(
             else advisory
         ).append(status)
     return gating, advisory
+
+
+def head_ci_reported(
+    check_runs: Sequence[Mapping[str, Any]],
+    gating_statuses: Sequence[Mapping[str, Any]],
+    advisory_statuses: Sequence[Mapping[str, Any]],
+    required_contexts: list[str] | None,
+) -> bool:
+    """Whether the exact head has reported any CI signal that can be judged.
+
+    Nothing reported means CI has not been queued yet, or never runs for this
+    base. Only an observed unprotected base that reported advisory status is a
+    clean signal without gating checks. The merge gate and the pr-resolver
+    Skill share this rule so one cannot reopen what the other calls degraded.
+    """
+    return (
+        bool(check_runs)
+        or bool(gating_statuses)
+        or (required_contexts == [] and bool(advisory_statuses))
+    )
