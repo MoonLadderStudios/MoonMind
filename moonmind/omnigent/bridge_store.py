@@ -3688,9 +3688,13 @@ class OmnigentBridgeSessionStore:
             previous = (row.raw_events_ref, row.normalized_events_ref)
             replacements = (raw_ref, normalized_ref)
             repository = TemporalArtifactRepository(session)
+            journal_versions: list[
+                tuple[str | None, str, Any | None, Any]
+            ] = []
             for old_ref, replacement_ref in zip(previous, replacements):
                 replacement_id = _journal_artifact_id(replacement_ref)
                 if replacement_id is None:
+                    journal_versions.append((old_ref, replacement_ref, None, None))
                     continue
                 artifact = await repository.get_artifact_for_update(replacement_id)
                 if artifact.status is not TemporalArtifactStatus.COMPLETE:
@@ -3698,9 +3702,30 @@ class OmnigentBridgeSessionStore:
                         "Journal replacement must be complete"
                     )
                 old_id = _journal_artifact_id(old_ref)
-                if new_chunk or old_id is None:
+                old_artifact = (
+                    await repository.get_artifact(old_id) if old_id is not None else None
+                )
+                journal_versions.append(
+                    (old_ref, replacement_ref, old_artifact, artifact)
+                )
+
+            same_chunk_retry = new_chunk and len(journal_versions) == 2 and all(
+                old_artifact is not None
+                and replacement_artifact is not None
+                and _journal_prefix(old_artifact)
+                == _journal_prefix(replacement_artifact)
+                for _, _, old_artifact, replacement_artifact in journal_versions
+            )
+            starts_new_chunk = new_chunk and not same_chunk_retry
+            for old_ref, replacement_ref, old_artifact, artifact in journal_versions:
+                old_id = _journal_artifact_id(old_ref)
+                if (
+                    starts_new_chunk
+                    or old_id is None
+                    or old_artifact is None
+                    or artifact is None
+                ):
                     continue
-                old_artifact = await repository.get_artifact(old_id)
                 old_prefix, new_prefix = _journal_prefix(old_artifact), _journal_prefix(
                     artifact
                 )
@@ -3717,7 +3742,7 @@ class OmnigentBridgeSessionStore:
                     raise OmnigentIdempotencyError(
                         "Journal replacement would discard verified progress"
                     )
-                if new_prefix[1] > old_prefix[1]:
+                if new_prefix[1] >= old_prefix[1] and old_ref != replacement_ref:
                     # Index rows locate event bodies within the chunk prefix.
                     # Advance them in the same commit as the pair, even if a
                     # pin/claim preserves the original snapshot.
@@ -3732,7 +3757,7 @@ class OmnigentBridgeSessionStore:
                         )
                         .values(artifact_ref=replacement_ref)
                     )
-            if new_chunk and any(previous) and previous != replacements:
+            if starts_new_chunk and any(previous) and previous != replacements:
                 metadata = dict(row.metadata_ or {})
                 metadata[SEALED_JOURNAL_CHUNKS_KEY] = [
                     *(metadata.get(SEALED_JOURNAL_CHUNKS_KEY) or []),
@@ -3742,7 +3767,7 @@ class OmnigentBridgeSessionStore:
             row.raw_events_ref = raw_ref
             row.normalized_events_ref = normalized_ref
             await session.commit()
-        if new_chunk:
+        if starts_new_chunk:
             return
         for old_ref, replacement_ref in zip(previous, replacements):
             if old_ref and old_ref != replacement_ref:

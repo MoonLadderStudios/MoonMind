@@ -491,6 +491,30 @@ async def test_next_chunk_retains_completed_chunk_in_journal_history(journals):
 
 
 @pytest.mark.asyncio
+async def test_retrying_committed_chunk_range_does_not_seal_duplicate(journals):
+    store, session_id, _sessions, _service, _blobs, publish = journals
+    committed = await publish(2, chunk=4)
+    retried = await publish(2, chunk=4)
+    await store.attach_active_journal_refs(
+        session_id,
+        raw_ref=committed[0],
+        normalized_ref=committed[1],
+        new_chunk=True,
+    )
+
+    await store.attach_active_journal_refs(
+        session_id,
+        raw_ref=retried[0],
+        normalized_ref=retried[1],
+        new_chunk=True,
+    )
+
+    row = await store.get_bridge_session(session_id)
+    assert (row.raw_events_ref, row.normalized_events_ref) == retried
+    assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY not in (row.metadata_ or {})
+
+
+@pytest.mark.asyncio
 async def test_replacing_a_different_chunk_requires_retaining_it(journals):
     store, session_id, _sessions, _service, _blobs, publish = journals
     current = await publish(4, chunk=0)
