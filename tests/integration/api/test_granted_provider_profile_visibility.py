@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -20,17 +22,24 @@ from api_service.api.routers.executions import (
     _detect_optional_temporal_search_attributes,
     _provider_profile_facet_response,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.omnigent_session_models import OmnigentSessionAdmissionDecision
 from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_MEMO_KEY,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    provider_profile_id_token,
     provider_profile_summary_from_memo,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.workflows.agent_run import (
     AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID,
+    AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID,
     MoonMindAgentRun,
 )
 from moonmind.workflows.temporal.workflows.run import (
     RUN_GRANTED_PROFILE_PROGRESS_PATCH,
     RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH,
+    RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH,
     RUN_PAUSED_AGENT_PROGRESS_PATCH,
     MoonMindUserWorkflow,
 )
@@ -433,7 +442,9 @@ async def test_paused_grant_visibility_resume_and_replay(
             await parent.execute_update("Resume")
             assert (await parent.query("get_status"))["state"] == "executing"
             assert (await parent.query("get_status"))["waiting_reason"] is None
-            assert (await (await parent.describe()).memo())["attention_required"] is False
+            assert (await (await parent.describe()).memo())[
+                "attention_required"
+            ] is False
             await child.signal("command", "success")
             await parent.result()
             history = await parent.fetch_history()
@@ -444,4 +455,332 @@ async def test_paused_grant_visibility_resume_and_replay(
             workflow_runner=UnsandboxedWorkflowRunner(),
         )
         await replayer.replay_workflow(history)
+        await replayer.replay_workflow(child_history)
+
+
+@workflow.defn(name="MoonMind.AgentRun", sandboxed=False)
+class _GenericHostAdmissionAgentRun(MoonMindAgentRun):
+    """Production admission/progress with controllable provider/host boundaries."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.host_ready = False
+        self.finish = False
+        self.execution_started = False
+
+    @workflow.signal
+    def control(self, command: str) -> None:
+        if command == "Pause":
+            self.pause()
+        elif command == "Resume":
+            self.resume()
+        elif command == "host":
+            self.host_ready = True
+        elif command == "finish":
+            self.finish = True
+
+    @workflow.query
+    def dispatched(self) -> bool:
+        return self.execution_started
+
+    async def _ensure_manager_and_signal(
+        self, _manager_id, _runtime_id, *, request_slot=True, **kwargs
+    ):
+        if request_slot:
+            self.slot_assigned({"profile_id": kwargs["execution_profile_ref"]})
+        return SimpleNamespace()
+
+    async def _sync_manager_profiles(self, **_kwargs) -> int:
+        return 1
+
+    async def _release_omnigent_provider_capacity(self, **_kwargs) -> None:
+        return None
+
+    async def _execute_routed_activity(self, name, payload=None, **kwargs):
+        if name == "omnigent.admit_generic_host_capacity":
+            return {"admitted": self.host_ready, "retryAfterSeconds": 1}
+        if name == "integration.omnigent.execute":
+            self.execution_started = True
+            await workflow.wait_condition(lambda: self.finish)
+            return {
+                "summary": "done",
+                "metadata": {"admittedProviderCapacityCleanupCompleted": True},
+            }
+        raise AssertionError(f"Unexpected activity {name}")
+
+    @workflow.run
+    async def run(self, _request: Any) -> dict[str, Any]:
+        request = AgentExecutionRequest(
+            agentKind="managed",
+            agentId="omnigent",
+            executionProfileRef="work",
+            correlationId="generic-grant",
+            idempotencyKey="generic-grant",
+            parameters={
+                "publishMode": "none",
+                "executionPlanRef": "omnigent-plan:sha256:" + "1" * 64,
+            },
+        )
+        self._init_progress_identity(request)
+        self._profile_snapshots = {"work": {"account_label": "Work"}}
+        admission = OmnigentSessionAdmissionDecision.model_validate(
+            {
+                "admitted": True,
+                "reasonCode": "enabled",
+                "admissionMode": "enabled",
+                "executionRealizerRef": "generic-omnigent-host@1",
+                "providerProfileRef": "work",
+                "providerRuntimeId": "opencode",
+                "capacityProfiles": [
+                    {
+                        "providerProfileRef": "work",
+                        "providerRuntimeId": "opencode",
+                        "credentialGeneration": 1,
+                    }
+                ],
+                "capacityAcquisitionOwner": "workflow",
+                "hostClassRef": "generic-host@1",
+            }
+        )
+        result, _ = await self._execute_omnigent_with_admitted_capacity(
+            act_name="integration.omnigent.execute",
+            request=request,
+            admission=admission,
+            parent_info=workflow.info().parent,
+            stc_seconds=600,
+            admit_capacity_before_activity=True,
+            execution_plan_admission=True,
+        )
+        return result
+
+
+@pytest.mark.parametrize("retained", [False, True])
+@pytest.mark.parametrize("paused", [False, True])
+async def test_generic_grant_waits_for_host_before_start_marker_and_replays(
+    controlled_stages: None,
+    monkeypatch: pytest.MonkeyPatch,
+    retained: bool,
+    paused: bool,
+) -> None:
+    original_patched = workflow.patched
+    if retained:
+        monkeypatch.setattr(
+            workflow,
+            "patched",
+            lambda name: (
+                False
+                if name == AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID
+                else original_patched(name)
+            ),
+        )
+
+    async def forward(self: MoonMindUserWorkflow, update: str) -> bool:
+        await workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        ).signal("control", update)
+        return True
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_forward_lifecycle_update_to_active_child", forward
+    )
+    async with await WorkflowEnvironment.start_local(
+        dev_server_existing_path=shutil.which("temporal")
+    ) as env:
+        await register_deployment_search_attributes(env)
+        client = env.client
+        usable = await _detect_optional_temporal_search_attributes(client)
+        owner = str(uuid4())
+        monkeypatch.setattr(
+            MoonMindUserWorkflow,
+            "_trusted_owner_metadata",
+            lambda self: ("user", owner),
+        )
+        workflow_id = f"mm:generic-grant-{uuid4().hex[:8]}"
+        parameters = {"targetRuntime": "opencode"}
+        await _start(
+            TemporalClientAdapter(client),
+            workflow_id=workflow_id,
+            owner_id=owner,
+            parameters=parameters,
+            task_queue=_QUEUE,
+            input_args={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": parameters,
+            },
+        )
+        parent = client.get_workflow_handle(workflow_id)
+        child = client.get_workflow_handle(f"{workflow_id}:agent")
+
+        def worker() -> Worker:
+            return Worker(
+                client,
+                task_queue=_QUEUE,
+                workflows=[MoonMindUserWorkflow, _GenericHostAdmissionAgentRun],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            )
+
+        async with worker():
+            _count, query = _production_query(
+                [("providerProfileIdIn", "work")],
+                owner_id=owner,
+                usable_search_attributes=usable,
+            )
+            async with asyncio.timeout(30):
+                while await _listed_ids(client, query) != [workflow_id]:
+                    await asyncio.sleep(0.1)
+            assert (await parent.query("get_status"))["state"] == "awaiting_slot"
+            assert await child.query("dispatched") is False
+            described = await parent.describe()
+            assert ("mm_started_at" in described.search_attributes) is retained
+            if paused:
+                await parent.execute_update("Pause")
+                assert (await parent.query("get_status"))["paused"] is True
+
+        async with worker():
+            if paused:
+                await parent.execute_update("Resume")
+            # Resume cannot turn the remembered provider-only grant into a
+            # launch while the generic host is still unavailable.
+            assert (await parent.query("get_status"))["state"] == "awaiting_slot"
+            assert (
+                "mm_started_at" in (await parent.describe()).search_attributes
+            ) is retained
+            await child.signal("control", "host")
+            async with asyncio.timeout(30):
+                while not await child.query("dispatched"):
+                    await asyncio.sleep(0.1)
+            assert (await parent.query("get_status"))["state"] == "executing"
+            assert "mm_started_at" in (await parent.describe()).search_attributes
+            await child.signal("control", "finish")
+            await parent.result()
+            parent_history = await parent.fetch_history()
+            child_history = await child.fetch_history()
+        monkeypatch.setattr(workflow, "patched", original_patched)
+        replayer = Replayer(
+            workflows=[MoonMindUserWorkflow, _GenericHostAdmissionAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        await replayer.replay_workflow(parent_history)
+        await replayer.replay_workflow(child_history)
+
+
+@pytest.mark.parametrize("failed_store", ["memo", "index"])
+@pytest.mark.parametrize("retained", [False, True])
+async def test_partial_profile_write_retries_survive_restart_and_replay(
+    controlled_stages: None,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_store: str,
+    retained: bool,
+) -> None:
+    original_patched = workflow.patched
+    if retained:
+        monkeypatch.setattr(
+            workflow,
+            "patched",
+            lambda name: (
+                False
+                if name == RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH
+                else original_patched(name)
+            ),
+        )
+    record_profile = MoonMindUserWorkflow._record_launch_provider_profile
+
+    def fail_one_profile_write(self: MoonMindUserWorkflow, metadata) -> None:
+        # Workflow-owned failure flag makes injection deterministic on worker
+        # restart and Replay, including old histories that cached a failed write.
+        if getattr(self, "_test_profile_write_failed", False):
+            record_profile(self, metadata)
+            return
+        method = "upsert_memo" if failed_store == "memo" else "upsert_search_attributes"
+        upsert = getattr(workflow, method)
+
+        def inject(value):
+            profile_write = (
+                PROVIDER_PROFILE_MEMO_KEY in value
+                if failed_store == "memo"
+                else any(
+                    pair.key.name == PROVIDER_PROFILE_SEARCH_ATTRIBUTE for pair in value
+                )
+            )
+            if profile_write:
+                self._test_profile_write_failed = True
+                raise RuntimeError("Injected profile projection command failure")
+            return upsert(value)
+
+        with patch.object(workflow, method, inject):
+            record_profile(self, metadata)
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_record_launch_provider_profile", fail_one_profile_write
+    )
+    async with await WorkflowEnvironment.start_local(
+        dev_server_existing_path=shutil.which("temporal")
+    ) as env:
+        await register_deployment_search_attributes(env)
+        client = env.client
+        owner = str(uuid4())
+        monkeypatch.setattr(
+            MoonMindUserWorkflow,
+            "_trusted_owner_metadata",
+            lambda self: ("user", owner),
+        )
+        workflow_id = f"mm:profile-write-{uuid4().hex[:8]}"
+        parameters = {"targetRuntime": "codex_cli"}
+        await _start(
+            TemporalClientAdapter(client),
+            workflow_id=workflow_id,
+            owner_id=owner,
+            parameters=parameters,
+            task_queue=_QUEUE,
+            input_args={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": parameters,
+            },
+        )
+        parent = client.get_workflow_handle(workflow_id)
+        child = client.get_workflow_handle(f"{workflow_id}:agent")
+
+        def worker() -> Worker:
+            return Worker(
+                client,
+                task_queue=_QUEUE,
+                workflows=[MoonMindUserWorkflow, _ControlledGrantedAgentRun],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            )
+
+        async def check_projection() -> None:
+            described = await parent.describe()
+            summary = provider_profile_summary_from_memo(await described.memo())
+            expected_state = (
+                "pending" if retained and failed_store == "memo" else "recorded"
+            )
+            assert summary["selectionState"] == expected_state
+            if expected_state == "recorded":
+                assert summary["profiles"][0]["label"] == "Frozen work"
+            indexed = provider_profile_id_token("work") in " ".join(
+                described.search_attributes.get(PROVIDER_PROFILE_SEARCH_ATTRIBUTE, [])
+            )
+            assert indexed is (not retained)
+
+        async with worker():
+            # The child's next accepted observation retries the same frozen ID
+            # after the injected grant write failure, before its result exists.
+            async with asyncio.timeout(30):
+                while (await parent.query("get_status"))[
+                    "waiting_reason"
+                ] != "callback":
+                    await asyncio.sleep(0.1)
+            await check_projection()
+        async with worker():
+            await child.signal("command", "success")
+            await parent.result()
+            await check_projection()
+            parent_history = await parent.fetch_history()
+            child_history = await child.fetch_history()
+        monkeypatch.setattr(workflow, "patched", original_patched)
+        replayer = Replayer(
+            workflows=[MoonMindUserWorkflow, _ControlledGrantedAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        await replayer.replay_workflow(parent_history)
         await replayer.replay_workflow(child_history)

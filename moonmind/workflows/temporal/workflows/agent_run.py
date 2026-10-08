@@ -361,6 +361,7 @@ MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 # New progress payload and grant-time command ordering must not alter retained histories.
 AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID = "agent-run-granted-profile-progress-v1"
+AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID = "agent-run-profile-grant-host-wait-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
@@ -1482,7 +1483,7 @@ class MoonMindAgentRun:
         )
 
     async def _signal_parent_granted_profile(
-        self, parent_info: Any, runtime_id: str
+        self, parent_info: Any, runtime_id: str, *, awaiting_host_capacity: bool = False
     ) -> None:
         """Freeze the granted identity before pause, launch, or cancellation.
 
@@ -1499,7 +1500,13 @@ class MoonMindAgentRun:
                 snapshot.get("account_label") or snapshot.get("provider_label") or ""
             ).strip()[:120] or None
         await self._signal_parent_child_state_changed(
-            parent_info, "launching", f"Slot acquired for {runtime_id}"
+            parent_info,
+            "awaiting_slot" if awaiting_host_capacity else "launching",
+            (
+                f"Provider Profile slot acquired for {runtime_id}; waiting for generic host capacity."
+                if awaiting_host_capacity
+                else f"Slot acquired for {runtime_id}"
+            ),
         )
 
     def _init_progress_identity(self, request: AgentExecutionRequest) -> None:
@@ -4854,6 +4861,10 @@ class MoonMindAgentRun:
                 "executionPlanRef": plan_ref,
                 "credentialGeneration": profiles[0].get("credentialGeneration"),
             },
+            awaiting_host_capacity=(
+                getattr(admission, "execution_realizer_ref", None)
+                != "codex-profile-bound@1"
+            ),
         )
         if (
             getattr(admission, "execution_realizer_ref", None)
@@ -5105,6 +5116,7 @@ class MoonMindAgentRun:
         parent_info: Any,
         lease_metadata: dict[str, Any] | None = None,
         lease_purpose: str = "execution_direct",
+        awaiting_host_capacity: bool = False,
     ) -> None:
         """Admit Provider Profile capacity before the long execution Activity.
 
@@ -5231,7 +5243,19 @@ class MoonMindAgentRun:
         self._omnigent_capacity_profile_id = profile_id
         self._omnigent_capacity_state = "granted"
         if self._workflow_patch_enabled(AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID):
-            await self._signal_parent_granted_profile(parent_info, runtime_id)
+            await self._signal_parent_granted_profile(
+                parent_info,
+                runtime_id,
+                # Preserve the launch observation already recorded by older
+                # generic admissions. New grants do not start product work
+                # until the required host capacity is also admitted.
+                awaiting_host_capacity=(
+                    awaiting_host_capacity
+                    and self._workflow_patch_enabled(
+                        AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID
+                    )
+                ),
+            )
 
     async def _execute_omnigent_with_admitted_capacity(
         self,

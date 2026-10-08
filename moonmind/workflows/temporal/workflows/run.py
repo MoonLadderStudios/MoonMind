@@ -1336,6 +1336,10 @@ RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
     "run-launch-provider-profile-projection-v1"
 )
+# Retained histories skipped repeat writes after a partial projection failure.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH = (
+    "run-launch-provider-profile-projection-retry-v1"
+)
 # Existing launch-result histories must retain their later upsert position.
 RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
 RUN_PAUSED_AGENT_PROGRESS_PATCH = "run-paused-agent-progress-v1"
@@ -1810,6 +1814,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Admitted recorded Provider Profile projection (memo summary, Search
         # Attribute value), seeded on first launch-resolved profile (#4640).
         self._provider_profile_projection: tuple[Any, str | None] | None = None
+        self._provider_profile_projection_dirty = False
 
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
@@ -23846,10 +23851,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "provider-profile-complete-associations-v1"
             ),
         )
-        if merged is None:
+        if merged is not None:
+            # Retain the desired union and frozen labels even if only one
+            # store accepts its write. Later grants merge into this snapshot.
+            self._provider_profile_projection = merged
+            self._provider_profile_projection_dirty = workflow.patched(
+                RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH
+            )
+        elif not self._provider_profile_projection_dirty:
             return
-        self._provider_profile_projection = merged
-        merged_summary, merged_value = merged
+        merged_summary, merged_value = self._provider_profile_projection
         try:
             workflow.upsert_memo({PROVIDER_PROFILE_MEMO_KEY: merged_summary})
             workflow.upsert_search_attributes(
@@ -23865,6 +23876,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "Failed to record launch-resolved Provider Profile",
                 extra={"error": str(exc)},
             )
+        else:
+            # A repeated profile is a no-op only after both stores accepted
+            # the projection; progress or terminal metadata can retry it.
+            self._provider_profile_projection_dirty = False
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
