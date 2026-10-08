@@ -388,7 +388,11 @@ Temporal dev server so cancellation racing with activity completion retains
 production server behavior; the time-skipping server can hang on this boundary
 ([temporalio/sdk-java#2391](https://github.com/temporalio/sdk-java/issues/2391)).
 The cancellation timing, durable-state assertions and history replay checks stay
-the same. One journey bounds the artifacts
+the same. The test image materializes both SDK-selected server binaries during
+construction through `api_service/docker/cache_temporal_test_server.py`, so these
+journeys require no binary download at runtime. Worker-fatal cleanup retains the
+original timeout failure and terminates only that worker's SDK server children.
+One journey bounds the artifacts
 worker's slots and holds one slot with an unfinished `mark_running`: the
 workflow worker still processes the cancellation, the canceled terminal
 persists through the free slot, and the late running handoff cannot reopen
