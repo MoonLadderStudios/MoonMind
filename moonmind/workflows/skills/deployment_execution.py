@@ -2629,32 +2629,26 @@ def build_env_stale_worker_checker(
 def _compose_service_for_worker(worker_name: str) -> str | None:
     """Map a readiness worker name to its Compose service, when known.
 
-    Workflow-group lane names look like ``"<group>/<lane>"``: they
-    restart through the group service Compose knows. A raw URL is never
-    a service name — unnamed readiness targets resolve their hostname
-    in ``readiness_urls_from_env``, and anything URL-shaped left over is
-    rejected here so recovery cannot hand a URL to ``docker compose
-    restart``. A bare ``temporal-worker-*`` hostname (from an unnamed
-    readiness URL) is already the Compose service name.
+    A raw URL is never a service name — unnamed readiness targets resolve
+    their hostname in ``readiness_urls_from_env``, and anything URL-shaped
+    left over is rejected here so recovery cannot hand a URL to ``docker
+    compose restart``. A bare ``temporal-worker-*`` hostname (from an
+    unnamed readiness URL) is already the Compose service name.
     """
 
     try:
         from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
     except Exception:
         return None
-    raw = str(worker_name or "").strip()
-    candidates = [raw]
-    if "/" in raw:
-        candidates.append(raw.split("/", 1)[0].strip())
-    for candidate in candidates:
-        if not candidate or "://" in candidate or "/" in candidate:
-            continue
-        normalized = candidate.lower()
-        for fleet, service in _FLEET_SERVICE_NAMES.items():
-            if normalized in {fleet, service}:
-                return service
-        if normalized.startswith("temporal-worker-"):
-            return candidate
+    candidate = str(worker_name or "").strip()
+    if not candidate or "://" in candidate or "/" in candidate:
+        return None
+    normalized = candidate.lower()
+    for fleet, service in _FLEET_SERVICE_NAMES.items():
+        if normalized in {fleet, service}:
+            return service
+    if normalized.startswith("temporal-worker-"):
+        return candidate
     return None
 
 

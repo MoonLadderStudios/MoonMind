@@ -26,13 +26,8 @@ async def _run(args: argparse.Namespace) -> int:
         raise RuntimeError("readiness does not advertise MoonMind.PRResolver")
     if args.task_queue not in task_queues:
         raise RuntimeError(f"readiness does not advertise task queue {args.task_queue}")
-    registry_fingerprint = str(
-        readiness.get("registryFingerprint")
-        or next(iter(readiness.get("registryFingerprints", [])), "")
-    )
-    build_id = str(
-        readiness.get("buildId") or next(iter(readiness.get("buildIds", [])), "")
-    )
+    registry_fingerprint = str(readiness.get("registryFingerprint") or "")
+    build_id = str(readiness.get("buildId") or "")
     if args.expected_registry_fingerprint and (
         registry_fingerprint != args.expected_registry_fingerprint
     ):

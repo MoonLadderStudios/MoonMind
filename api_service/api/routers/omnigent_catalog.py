@@ -959,23 +959,11 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             and settings.temporal.workflow_task_queue in task_queues
         )
         if workflow_ready:
-            children = payload.get("children")
-            if children is None:
-                workflow_types = {
-                    str(value) for value in payload.get("workflowTypes", [])
-                }
-            elif isinstance(children, list):
-                # The supervisor publishes a union at its top level. Require
-                # the workflow type and selected queue on the same ready child.
-                workflow_types = {
-                    str(workflow_type)
-                    for child in children
-                    if isinstance(child, dict)
-                    and child.get("ready") is True
-                    and settings.temporal.workflow_task_queue
-                    in child.get("taskQueues", [])
-                    for workflow_type in child.get("workflowTypes", [])
-                }
+            # One workflow process registers the same types on every queue it
+            # polls (MoonLadderStudios/MoonMind#3937).
+            workflow_types = {
+                str(value) for value in payload.get("workflowTypes", [])
+            }
     except (httpx.HTTPError, ValueError, TypeError, AttributeError):
         # Readiness is fail-closed; malformed or unavailable worker metadata must not advertise launch authority.
         pass

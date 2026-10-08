@@ -260,12 +260,23 @@ The activity catalog maps activity types onto the following fleets.
 
 | Fleet | Queue(s) | Primary capabilities | Primary privileges |
 |---|---|---|---|
-| `workflow` | `mm.workflow.user.v2`, `mm.workflow` | workflow execution, limited helper activities | Temporal only |
+| `workflow` | `mm.workflow.user.v2`, `mm.workflow`, `mm.workflow.merge_automation` | workflow execution, limited helper activities | Temporal only |
 | `artifacts` | `mm.activity.artifacts` | artifact lifecycle, provider-profile support, OAuth session support | artifact storage, DB-backed support services |
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
 | `integrations` | `mm.activity.integrations` | external provider APIs and repo operations | provider tokens, egress to provider APIs |
 | `agent_runtime` | `mm.activity.agent_runtime`, `mm.activity.agent_runtime.control` | managed runtime launch and supervision; isolated terminal authority handoffs | isolated runtime execution, auth volume mounts |
+
+Queues and processes are distinct (§4.1). One `temporal-worker-workflow`
+process runs one SDK Worker per workflow queue inside the shared
+`worker_lifecycle.serve_workers` group: one client, one signal owner and one
+`/readyz` on port 8080 that is ready only after every poller started. The
+start and replay Workers use `TEMPORAL_WORKFLOW_WORKER_CONCURRENCY`; the
+merge-automation Worker keeps its own workflow-task slots
+(`TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY`, default 2), so a
+saturated normal lane cannot starve it. Any Worker ending stops the whole
+group, which drains every member and exits for the Compose restart policy
+(MoonLadderStudios/MoonMind#3937).
 
 ## 5.1 Workflow fleet exception rule
 

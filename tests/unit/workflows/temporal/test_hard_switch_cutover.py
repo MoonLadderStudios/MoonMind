@@ -139,6 +139,7 @@ def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_l
     assert get_workflow_poll_task_queues(temporal_settings) == (
         "mm.workflow.user.v2",
         "mm.workflow",
+        "mm.workflow.merge_automation",
     )
 
 
@@ -147,18 +148,8 @@ def test_workflow_poll_task_queues_ignore_missing_replay_queue() -> None:
         update={"workflow_task_queue": None}
     )
 
-    assert get_workflow_poll_task_queues(temporal_settings) == ("mm.workflow.user.v2",)
-
-
-def test_merge_automation_workflow_fleet_does_not_poll_user_replay_queue() -> None:
-    temporal_settings = _renamed_contract_settings().model_copy(
-        update={
-            "user_workflow_v2_task_queue": "mm.workflow.merge_automation",
-            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation",
-        }
-    )
-
     assert get_workflow_poll_task_queues(temporal_settings) == (
+        "mm.workflow.user.v2",
         "mm.workflow.merge_automation",
     )
 
@@ -172,7 +163,7 @@ def test_worker_registration_serves_only_one_user_workflow_type() -> None:
     assert LEGACY_USER_WORKFLOW_TYPE not in renamed_types
 
 
-def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues() -> None:
+def test_renamed_contract_workflow_fleet_polls_start_replay_and_merge_queues() -> None:
     temporal_settings = _renamed_contract_settings()
     catalog = build_default_activity_catalog(temporal_settings)
     topology = describe_configured_worker(
@@ -182,7 +173,11 @@ def test_renamed_contract_workflow_fleet_polls_start_and_replay_queues() -> None
         catalog=catalog,
     )
 
-    assert topology.task_queues == ("mm.workflow.user.v2", "mm.workflow")
+    assert topology.task_queues == (
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    )
     assert (
         catalog.resolve_activity("integration.resolve_adapter_metadata").task_queue
         == "mm.workflow.user.v2"

@@ -58,7 +58,9 @@ def get_workflow_poll_task_queues(
     New workflow starts use the hard-switch start contract queue.  In-flight
     histories may still contain pre-patch child-workflow commands recorded on
     TEMPORAL_WORKFLOW_TASK_QUEUE, so the workflow fleet must keep polling that
-    queue until those histories have drained.
+    queue until those histories have drained.  Merge-automation starts route
+    to their own queue, which the same workflow process polls with its own
+    bounded Worker (MoonLadderStudios/MoonMind#3937).
     """
 
     cfg = temporal_settings or settings.temporal
@@ -69,9 +71,11 @@ def get_workflow_poll_task_queues(
         else ""
     )
     merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
-    if replay_queue and replay_queue != start_queue and start_queue != merge_queue:
-        return (start_queue, replay_queue)
-    return (start_queue,)
+    queues = [start_queue]
+    for queue in (replay_queue, merge_queue):
+        if queue and queue not in queues:
+            queues.append(queue)
+    return tuple(queues)
 
 
 class TemporalActivityCatalogError(ValueError):

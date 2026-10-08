@@ -283,7 +283,7 @@ def _names_a_pull_request(target: object) -> bool:
 
 
 def _merge_automation_selected(parameters: Mapping[str, Any]) -> bool:
-    """Return whether this submission needs the merge-automation worker group.
+    """Return whether this submission needs the merge-automation workflow lane.
 
     Merge automation is selected either by publishing a pull request with the
     gate enabled, or by targeting an existing pull request directly. A preset

@@ -485,7 +485,15 @@ def test_omnigent_trusted_origins_render_local_and_public_defaults():
     )
 
 
-def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
+def test_workflow_worker_service_hosts_every_lane_in_the_shared_worker_process():
+    """MoonLadderStudios/MoonMind#3937: no workflow-lane subprocess supervisor.
+
+    The workflow fleet starts through the same launcher as every other fleet;
+    ``worker_runtime`` polls the start, replay and merge-automation queues from
+    one process, so the service keeps one health port and its existing
+    network, volume and secret boundaries.
+    """
+
     compose = _load_compose()
     services = compose["services"]
 
@@ -494,9 +502,17 @@ def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
 
     workflow_worker = services["temporal-worker-workflow"]
     assert workflow_worker["entrypoint"] == [
-        "python",
-        "/app/services/temporal/scripts/start-workflow-worker-group.py",
+        "/bin/sh",
+        "/app/services/temporal/scripts/start-worker.sh",
     ]
+    assert not (
+        REPO_ROOT / "services" / "temporal" / "scripts" / "start-workflow-worker-group.py"
+    ).exists()
+    assert _network_names(workflow_worker) == {"control-plane-network"}
+    assert "group_add" not in workflow_worker
+    assert not any(
+        "docker.sock" in str(volume) for volume in workflow_worker.get("volumes", [])
+    )
 
     workflow_env = _env_map(workflow_worker["environment"])
     assert workflow_env["TEMPORAL_WORKFLOW_TASK_QUEUE"] == (

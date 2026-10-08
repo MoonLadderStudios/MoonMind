@@ -8,38 +8,23 @@ from moonmind.workflows.skills import deployment_release as release
 
 
 @pytest.mark.parametrize(
-    "children,expected",
+    "state,expected",
     [
+        ({"ready": True, "buildId": "candidate"}, True),
+        ({"ready": True, "buildId": "old"}, False),
+        ({"ready": False, "buildId": "candidate"}, False),
+        ({"ready": True}, False),
+        # An outgoing pre-#3937 workflow-group supervisor reports its lanes
+        # under ``children`` with no top-level build; it never qualifies the
+        # candidate, so qualification waits for the recreated worker.
         (
-            [
-                {"ready": True, "buildId": "candidate"},
-                {"ready": True, "buildId": "candidate"},
-            ],
-            True,
-        ),
-        (
-            [
-                {"ready": True, "buildId": "candidate"},
-                {"ready": True, "buildId": "old"},
-            ],
+            {"ready": True, "children": [{"ready": True, "buildId": "candidate"}]},
             False,
         ),
-        (
-            [
-                {"ready": True, "buildId": "candidate"},
-                {"ready": False, "buildId": "candidate"},
-            ],
-            False,
-        ),
-        ([{"ready": True}], False),
-        ([], False),
     ],
 )
-def test_release_qualification_validates_every_supervised_child(children, expected):
-    assert (
-        release.readiness_matches({"ready": True, "children": children}, "candidate")
-        is expected
-    )
+def test_release_qualification_requires_the_worker_build(state, expected):
+    assert release.readiness_matches(state, "candidate") is expected
 
 
 @pytest.mark.asyncio

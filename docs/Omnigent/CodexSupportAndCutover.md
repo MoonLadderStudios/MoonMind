@@ -130,7 +130,7 @@ the protected browser acceptance, exact-artifact, and live-health files; those
 signals remain visible in `admissionReadiness.capabilities` and
 `supportGateReasons`. Runtime registration, schema, WebSocket, worker/backend,
 janitor, profile, and policy checks still gate admission. The workflow
-supervisor reports readiness and registration for its child workers;
+worker reports readiness and registration for every workflow queue it polls;
 worker build identities are recorded independently and do not have to match for
 new admission. The canonical Compose path enables the bridge and internal
 endpoint by default, seeds an active portable `codex` agent profile, resolves
