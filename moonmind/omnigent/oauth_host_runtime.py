@@ -947,12 +947,13 @@ class OmnigentOAuthHostRuntime:
                         host_lease_ref=host_lease.lease_id
                     )
                 )
-            if (credential_recovery and credential_recovery.get("replacementEgressPending")
-                    and isinstance(existing_authority, Mapping)):
-                replacing_launch_ref = str(existing_authority["launchEvidenceRef"])
-                existing_authority = None
-                # A recreated host replaces the stopped legacy host's authority;
-                # it never retains that authority as a reused live host.
+            if credential_recovery and credential_recovery.get("replacementEgressPending"):
+                if isinstance(existing_authority, Mapping):
+                    replacing_launch_ref = str(existing_authority["launchEvidenceRef"])
+                    existing_authority = None
+                # A worker may lose the new container's first authority bind.
+                # It is still a replacement even when already running and the
+                # legacy host had no durable egress evidence to replace.
                 retained_host = False
             if isinstance(existing_authority, Mapping):
                 stored_launch = existing_authority.get("effectiveLaunch")
@@ -3044,7 +3045,7 @@ class OmnigentOAuthHostRuntime:
             row = await store.get_existing(request.idempotency_key)
             if row is None or row.host_lease_ref != host_lease.lease_id:
                 raise blocked("bridge/host ownership changed")
-            receipt = await store.record_host_credential_recovery(
+            await store.record_host_credential_recovery(
                 request=request, host_lease_ref=host_lease.lease_id, phase="waiting",
             )
             publisher = OmnigentWorkspacePublicationService(
@@ -3180,7 +3181,7 @@ class OmnigentOAuthHostRuntime:
                     # transcript quiet window, delayed-tool and slow-read rules.
                     # Never substitute two immediate equal snapshots for it.
                     class CurrentSession:
-                        async def get_session(_self, observed_session_id):
+                        async def get_session(self, observed_session_id):
                             if observed_session_id != session_id:
                                 raise blocked("current session observation authority changed")
                             return await current_snapshot()

@@ -154,7 +154,7 @@ def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials(
     assert agent["command"] == source["services"]["omnigent-agent-init"]["command"]
     server = document["services"]["omnigent"]
     assert server["image"] == agent["image"] == "test-server@" + IMAGE_ID
-    assert server["ports"] == ["127.0.0.1::8000"]
+    assert server["ports"] == []
     assert server["environment"]["OMNIGENT_AUTH_PROVIDER"] == "header"
     assert server["environment"]["OMNIGENT_AUTH_HEADER"] == "Authorization"
     assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == "Bearer "
@@ -245,3 +245,150 @@ def test_recovery_boundary_changes_select_the_real_artifact_owner(path):
     from tools.select_test_suites import is_exact_artifact_owned
 
     assert is_exact_artifact_owned(path)
+
+
+def test_readiness_uses_exact_candidate_inside_the_private_test_network():
+    command = driver.readiness_command(
+        image=IMAGE_ID,
+        network="moonmind-test-fixture_test",
+        token="ephemeral-fixture",
+    )
+    assert command[command.index("--network") + 1] == "moonmind-test-fixture_test"
+    assert command[command.index("--entrypoint") + 1] == "python"
+    assert IMAGE_ID in command
+    assert "--read-only" in command
+    assert not {"--publish", "-p", "--mount", "--privileged"}.intersection(command)
+    assert "OMNIGENT_API_TOKEN=ephemeral-fixture" in command
+    assert command[-1] == driver.READINESS_SCRIPT
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_actual_readiness_script_checks_authenticated_internal_http(
+    monkeypatch, tmp_path, ready
+):
+    import runpy
+    import time
+    import urllib.error
+    import urllib.request
+    from types import SimpleNamespace
+
+    requests = []
+    clock = [0.0]
+    monkeypatch.setenv("OMNIGENT_API_TOKEN", "ephemeral-fixture")
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + 90)
+    )
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def open_request(request, *, timeout):
+        requests.append(request)
+        assert timeout == 2
+        assert request.full_url == "http://omnigent:8000/v1/agents"
+        assert request.get_header("Authorization") == "Bearer ephemeral-fixture"
+        if ready and len(requests) > 1:
+            return Response()
+        raise urllib.error.URLError("still starting")
+
+    def opener(proxy_handler):
+        assert proxy_handler.proxies == {}
+        return SimpleNamespace(open=open_request)
+
+    monkeypatch.setattr(urllib.request, "build_opener", opener)
+    script = tmp_path / "readiness.py"
+    script.write_text(driver.READINESS_SCRIPT)
+    if ready:
+        runpy.run_path(str(script))
+        assert len(requests) == 2
+    else:
+        with pytest.raises(SystemExit, match="internal service did not become ready"):
+            runpy.run_path(str(script))
+        assert len(requests) == 2
+
+
+def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    pin = "f" * 40
+    server_ref = "127.0.0.1:5000/moonmind-test-server@" + IMAGE_ID
+    observed = []
+
+    def image(ref):
+        return {
+            "Id": IMAGE_ID,
+            "RepoDigests": [ref],
+            "Config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": (
+                        SHA if ref == IMAGE_ID else pin
+                    ),
+                    "moonmind.source.revision": SHA,
+                }
+            },
+        }
+
+    def command(args, **_kwargs):
+        output = ""
+        if args[0] == "git":
+            output = (
+                pin if "HEAD:omnigent" in args or args[2].endswith("/omnigent") else SHA
+            )
+        elif args[:2] == ["docker", "compose"]:
+            assert "port" not in args
+            if "ps" in args:
+                output = "server-container"
+        elif args[:2] == ["docker", "inspect"]:
+            assert args[-1] == "server-container"
+            observed.append("server-image")
+            output = json.dumps([{"Id": "server-container", "Image": IMAGE_ID}])
+        elif args[-1] == driver.READINESS_SCRIPT:
+            assert observed == ["server-image"]
+            assert IMAGE_ID in args
+            assert args[args.index("--network") + 1].startswith(
+                "moonmind-test-recovery-"
+            )
+            observed.append("readiness")
+        return SimpleNamespace(stdout=output, stderr="", returncode=0)
+
+    def run_test(args, _root, **_identity):
+        assert observed == ["server-image", "readiness"]
+        assert IMAGE_ID in args
+        assert args[args.index("--network") + 1].startswith("moonmind-test-recovery-")
+        observed.append("recovery")
+        return receipt()
+
+    monkeypatch.setattr(driver.shutil, "which", lambda _name: "/test/docker")
+    monkeypatch.setattr(driver, "_image", image)
+    monkeypatch.setattr(driver, "_command", command)
+    monkeypatch.setattr(driver, "run_test", run_test)
+    monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
+    assert (
+        driver.main(
+            [
+                "--moonmind-image",
+                IMAGE_ID,
+                "--server-image",
+                server_ref,
+                "--host-image",
+                HOST_REF,
+                "--pr-head",
+                SHA,
+                "--base-commit",
+                SHA,
+                "--dependencies",
+                str(tmp_path / "deps"),
+                "--output-dir",
+                str(tmp_path / "evidence"),
+            ]
+        )
+        == 0
+    )
+    assert observed == ["server-image", "readiness", "recovery"]
