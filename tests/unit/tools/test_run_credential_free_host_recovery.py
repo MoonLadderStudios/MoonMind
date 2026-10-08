@@ -392,3 +392,76 @@ def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypa
         == 0
     )
     assert observed == ["server-image", "readiness", "recovery"]
+
+
+def test_failed_recovery_row_reports_the_pytest_failure(tmp_path, monkeypatch):
+    def failing_test(command, **kwargs):
+        (tmp_path / driver.JUNIT).write_text(
+            f'<testsuites><testsuite><testcase name="{driver.TEST_NAME}">'
+            '<failure message="AssertionError: runner did not reconnect">'
+            "test_exact_docker_n_way_concurrency.py:1031: AssertionError"
+            "</failure></testcase></testsuite></testsuites>"
+        )
+        return type("Result", (), {"returncode": 1})()
+
+    monkeypatch.setattr(driver.subprocess, "run", failing_test)
+    with pytest.raises(driver.RecoveryError) as raised:
+        driver.run_test(
+            ["docker", "run"],
+            tmp_path,
+            source_commit=SHA,
+            host_image_ref=HOST_REF,
+            host_image_id=IMAGE_ID,
+        )
+    assert "exit 1" in str(raised.value)
+    assert "runner did not reconnect" in str(raised.value)
+    assert "concurrency.py:1031" in str(raised.value)
+
+
+def test_actions_failure_is_annotated_without_the_test_owner_token(
+    tmp_path, monkeypatch, capsys
+):
+    from types import SimpleNamespace
+
+    token = "moonmind-test-" + "f" * 32
+
+    def command(args, **_kwargs):
+        if args[:2] == ["docker", "info"]:
+            raise driver.RecoveryError(f"daemon refused {token}\n100% unavailable")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(driver.shutil, "which", lambda _name: "/test/docker")
+    monkeypatch.setattr(driver.uuid, "uuid4", lambda: SimpleNamespace(hex="f" * 32))
+    monkeypatch.setattr(driver, "_command", command)
+    monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
+    assert (
+        driver.main(
+            [
+                "--moonmind-image",
+                IMAGE_ID,
+                "--server-image",
+                HOST_REF,
+                "--host-image",
+                HOST_REF,
+                "--pr-head",
+                SHA,
+                "--base-commit",
+                SHA,
+                "--dependencies",
+                str(tmp_path / "deps"),
+                "--output-dir",
+                str(tmp_path / "evidence"),
+            ]
+        )
+        == 1
+    )
+    annotations = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("::error")
+    ]
+    assert annotations == [
+        "::error title=Credential-free recovery setup failed::"
+        "daemon refused [test-owner]%0A100%25 unavailable"
+    ]
