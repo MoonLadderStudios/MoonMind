@@ -1345,6 +1345,8 @@ async def test_new_request_supersedes_old_refusal_and_completion(same_second, re
         None if reply == "failure" else reply in {"clean", "review", "reaction"}
     )
     assert result.automated_review_complete is expected_complete
+    assert result.automated_review_request_comment_id == 98767
+    assert result.automated_review_requested_at == later_time
     assert result.ready is (expected_complete is True)
     if expected_complete is False:
         assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
@@ -1453,3 +1455,55 @@ async def test_unavailable_request_inventory_cannot_accept_an_older_review(probl
     assert [b["kind"] for b in result.blockers] == ["external_state_unavailable"]
 
     assert result.blockers[0]["retryable"] is (problem in {"http_error", "partial_page"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,headers,message,limited,retryable",
+    [
+        (429, {"retry-after": "90"}, "Too many requests", True, True),
+        (
+            403,
+            {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000000"},
+            "Forbidden",
+            True,
+            True,
+        ),
+        (403, {"retry-after": "30"}, "Secondary rate limit", True, True),
+        (403, {}, "API rate limit exceeded", True, True),
+        (403, {}, "Resource not accessible by integration", False, False),
+        (401, {}, "Bad credentials", False, False),
+        (503, {}, "Unavailable", False, True),
+    ],
+)
+async def test_request_inventory_preserves_quota_retry_and_permission_denial(
+    status, headers, message, limited, retryable
+):
+    client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(status, {"message": message}, headers=headers),
+        ]
+    )
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    blocker = result.blockers[0]
+    assert blocker["kind"] == "external_state_unavailable"
+    assert blocker["retryable"] is retryable
+    assert bool(blocker.get("providerFailure")) is limited
+    if limited:
+        assert blocker["providerFailure"]["providerErrorClass"] == "rate_limit"
+        if "retry-after" in headers:
+            assert blocker["providerFailure"]["retryAfterSeconds"] == float(
+                headers["retry-after"]
+            )

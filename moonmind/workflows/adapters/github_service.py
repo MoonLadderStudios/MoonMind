@@ -74,6 +74,12 @@ class PullRequestReadinessResult(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_request_comment_id: int | None = Field(
+        None, alias="automatedReviewRequestCommentId", gt=0
+    )
+    automated_review_requested_at: str | None = Field(
+        None, alias="automatedReviewRequestedAt"
+    )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"
     )
@@ -2186,6 +2192,8 @@ class GitHubService:
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
+        automated_review_request_comment_id: int | None = None
+        automated_review_requested_at: str | None = None
         automated_review_completion_kind: str | None = None
         automated_review_completion_id: int | None = None
         automated_review_completed_at: str | None = None
@@ -2306,6 +2314,12 @@ class GitHubService:
                             observed_head_sha=observed_head_sha,
                         )
                         automated_review_complete = review_evidence["complete"]
+                        automated_review_request_comment_id = review_evidence.get(
+                            "requestCommentId"
+                        )
+                        automated_review_requested_at = review_evidence.get(
+                            "requestedAt"
+                        )
                         automated_review_completion_kind = review_evidence.get(
                             "completionKind"
                         )
@@ -2342,6 +2356,8 @@ class GitHubService:
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
+            automatedReviewRequestCommentId=automated_review_request_comment_id,
+            automatedReviewRequestedAt=automated_review_requested_at,
             automatedReviewCompletionKind=automated_review_completion_kind,
             automatedReviewCompletionId=automated_review_completion_id,
             automatedReviewCompletedAt=automated_review_completed_at,
@@ -2699,6 +2715,11 @@ class GitHubService:
                 if isinstance(exc, httpx.HTTPStatusError)
                 else None
             )
+            rate_limit = (
+                self._github_rate_limit_event(exc.response)
+                if isinstance(exc, httpx.HTTPStatusError)
+                else None
+            )
             return {
                 **pending,
                 "complete": None,
@@ -2712,11 +2733,16 @@ class GitHubService:
                             else "GitHub review request comment inventory is unavailable or malformed."
                         ),
                         "retryable": (
-                            status >= 500
+                            (status >= 500 or rate_limit is not None)
                             if status is not None
                             else isinstance(exc, httpx.TransportError)
                         ),
                         "source": "github",
+                        **(
+                            {"providerFailure": rate_limit.to_metadata()}
+                            if rate_limit
+                            else {}
+                        ),
                     }
                 ],
             }
@@ -2738,6 +2764,16 @@ class GitHubService:
         if request is not None:
             requested_at = request.created_at
             request_comment_id = request.comment.get("id")
+
+        request_evidence = {
+            "requestCommentId": request_comment_id,
+            "requestedAt": (
+                request.comment.get("created_at")
+                if request is not None
+                else review_request.get("requestedAt")
+            ),
+        }
+        pending.update(request_evidence)
 
         for review in reviews:
             if not isinstance(review, dict):
@@ -2769,6 +2805,7 @@ class GitHubService:
             ):
                 continue
             return {
+                **request_evidence,
                 "complete": True,
                 "completionKind": "review",
                 "completionId": review.get("id"),
@@ -2790,6 +2827,7 @@ class GitHubService:
         )
         if reaction is not None:
             return {
+                **request_evidence,
                 "complete": True,
                 "completionKind": "reaction",
                 "completionId": reaction.get("id"),
@@ -2807,6 +2845,7 @@ class GitHubService:
         )
         if reply is not None and not reply.failure_class:
             return {
+                **request_evidence,
                 "complete": True,
                 "completionKind": "issue_comment",
                 "completionId": reply.comment.get("id"),
