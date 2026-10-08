@@ -1716,6 +1716,11 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
         "server_image_without_publisher",
         "pending_probe_failure",
         "pending_bind_failure",
+        "pending_commit_failure",
+        "pending_commit_readback_failure",
+        "pending_commit_readback_timeout",
+        "pending_commit_ref_mismatch",
+        "pending_commit_identity_mismatch",
         "recreated_host",
     ],
 )
@@ -1959,22 +1964,51 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             self.authority = None
             self.bind_calls: list[dict] = []
             self.fail_attested_bind = False
+            self.commit_failure = None
+            self.bind_failed = False
+            self.read_calls = []
+            self.persisted_after_failure = None
+            self.bind_error = OmnigentOAuthHostError(
+                "test durable bind response unavailable", code="test_bind_failure"
+            )
 
         async def get_egress_cleanup_authority(self, **_kwargs):
+            self.read_calls.append(_kwargs["host_lease_ref"])
+            if (
+                self.bind_failed
+                and self.commit_failure == "pending_commit_readback_failure"
+            ):
+                raise OmnigentOAuthHostError(
+                    "test readback unavailable", code="test_readback_failure"
+                )
+            if (
+                self.bind_failed
+                and self.commit_failure == "pending_commit_readback_timeout"
+            ):
+                await asyncio.Event().wait()
             return self.authority
 
         async def bind_egress_cleanup_authority(self, **kwargs):
             self.bind_calls.append(copy.deepcopy(kwargs))
             if self.fail_attested_bind and kwargs["phase"] == "attested":
-                raise OmnigentOAuthHostError(
-                    "test durable bind rejected", code="test_bind_failure"
-                )
+                self.bind_failed = True
+                raise self.bind_error
             self.authority = {
                 "effectiveLaunch": launch,
                 "egressEvidence": copy.deepcopy(kwargs["egress_evidence"]),
                 "launchEvidenceRef": kwargs["launch_evidence_ref"],
                 "phase": kwargs["phase"],
             }
+            if self.commit_failure and kwargs["phase"] == "attested":
+                self.bind_failed = True
+                if self.commit_failure == "pending_commit_ref_mismatch":
+                    self.authority["launchEvidenceRef"] = "artifact://other-launch"
+                elif self.commit_failure == "pending_commit_identity_mismatch":
+                    self.authority["egressEvidence"][
+                        "endpointIdentity"
+                    ] = "other-endpoint"
+                self.persisted_after_failure = copy.deepcopy(self.authority)
+                raise self.bind_error
 
     cleanup_authority_store = CleanupAuthorityStore()
     request = {
@@ -2029,6 +2063,11 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "pending_gateway_image",
         "pending_probe_failure",
         "pending_bind_failure",
+        "pending_commit_failure",
+        "pending_commit_readback_failure",
+        "pending_commit_readback_timeout",
+        "pending_commit_ref_mismatch",
+        "pending_commit_identity_mismatch",
     }:
         pending = cleanup_authority_store.bind_calls[0]
         cleanup_authority_store.authority = {
@@ -2041,6 +2080,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             runtime._exec_tools_check = AsyncMock(side_effect=OmnigentOAuthHostError("test post-attestation probe rejected", code="test_probe_failure"))  # type: ignore[method-assign]
         if mutation == "pending_bind_failure":
             cleanup_authority_store.fail_attested_bind = True
+        if mutation.startswith("pending_commit"):
+            cleanup_authority_store.commit_failure = mutation
     elif mutation == "recreated_host":
         state["running"] = False
     elif mutation != "gateway_image":
@@ -2055,41 +2096,38 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         assert state["manifest_checks"] == (
             2 if mutation == "pending_probe_failure" else 1
         )
-        if mutation == "pending_probe_failure":
+        if mutation in {"pending_probe_failure", "pending_commit_failure"}:
             retained_authority = cleanup_authority_store.authority
             assert retained_authority["phase"] == "attested"
-        expected_code = (
-            "test_probe_failure"
-            if mutation == "pending_probe_failure"
-            else (
-                "test_bind_failure"
-                if mutation == "pending_bind_failure"
-                else (
-                    "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
-                    if mutation
-                    in {
-                        "live_config",
-                        "config_during_prepare",
-                        "host_label",
-                        "host_image",
-                        "host_network",
-                    }
-                    else (
-                        "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID"
-                        if mutation
-                        in {
-                            "missing_authority",
-                            "missing_evidence_ref",
-                            "terminal_authority",
-                        }
-                        else "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH"
-                    )
-                )
-            )
-        )
+        if mutation == "pending_probe_failure":
+            expected_code = "test_probe_failure"
+        elif mutation == "pending_bind_failure" or mutation.startswith(
+            "pending_commit"
+        ):
+            expected_code = "test_bind_failure"
+            assert caught.value is cleanup_authority_store.bind_error
+        elif mutation in {
+            "live_config",
+            "config_during_prepare",
+            "host_label",
+            "host_image",
+            "host_network",
+        }:
+            expected_code = "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
+        elif mutation in {
+            "missing_authority",
+            "missing_evidence_ref",
+            "terminal_authority",
+        }:
+            expected_code = "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID"
+        else:
+            expected_code = "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH"
         assert caught.value.code == expected_code
         assert len(cleanup_authority_store.bind_calls) == (
-            3 if mutation in {"pending_probe_failure", "pending_bind_failure"} else 2
+            3
+            if mutation in {"pending_probe_failure", "pending_bind_failure"}
+            or mutation.startswith("pending_commit")
+            else 2
         )
         if mutation == "recreated_host":
             assert (
@@ -2097,7 +2135,13 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                 != original_authority["egressEvidence"]["appliedRuleDigest"]
             )
         if retained_authority is not None:
-            assert cleanup_authority_store.authority == retained_authority
+            if mutation.startswith("pending_commit"):
+                assert (
+                    cleanup_authority_store.authority
+                    == cleanup_authority_store.persisted_after_failure
+                )
+            else:
+                assert cleanup_authority_store.authority == retained_authority
             if mutation not in {
                 "live_config",
                 "missing_evidence_ref",
@@ -2112,6 +2156,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                     caught.value.prepared_host_evidence["egressEvidenceRef"]
                     == retained_authority["launchEvidenceRef"]
                 )
+        if mutation == "pending_bind_failure" or mutation.startswith("pending_commit"):
+            assert cleanup_authority_store.read_calls == [lease.lease_id] * 3
         return
     mount_source = state["mount_source"]
     assert isinstance(mount_source, str)
