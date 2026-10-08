@@ -2,14 +2,40 @@
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from tests import conftest
 
+
+@pytest.mark.parametrize("stream_kind", ["closed", "ascii"])
+def test_diagnostic_stream_failure_preserves_original_crash(
+    monkeypatch: pytest.MonkeyPatch, stream_kind: str
+) -> None:
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+    if stream_kind == "closed":
+        stream.close()
+    monkeypatch.setattr(sys, "__stderr__", stream)
+    report = SimpleNamespace(
+        node=SimpleNamespace(gateway=SimpleNamespace(id="gw0")),
+        outcome="failed",
+        longrepr="original worker crash",
+    )
+    original_report = vars(report).copy()
+    try:
+        conftest.pytest_handlecrashitem("test_worker.py::test_λ", report)
+        assert vars(report) == original_report
+    finally:
+        stream.close()
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("distributed", [True, False])
 def test_crash_identity_is_reported_without_changing_pytest_outcome(
     tmp_path: Path, distributed: bool
