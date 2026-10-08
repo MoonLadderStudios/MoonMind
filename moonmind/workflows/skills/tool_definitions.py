@@ -41,6 +41,72 @@ def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
     if name == DEPLOYMENT_OVERVIEW_TOOL_NAME:
         return build_deployment_overview_tool_definition_payload()
 
+    if name == "document.discover":
+        return {
+            "name": name,
+            "description": (
+                "Discover document paths in the available workspace or the "
+                "selected repository without launching an agent."
+            ),
+            "inputs": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "path": {"type": "string"},
+                        "extensions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    # Workspace/repository selection is resolved by the
+                    # existing handler. Either directory or path is accepted;
+                    # absent selection retains its truthful FAILED result.
+                    "additionalProperties": True,
+                }
+            },
+            "outputs": {
+                "schema": {
+                    "type": "object",
+                    "required": ["documentPaths"],
+                    "properties": {
+                        "documentPaths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "documentCount": {"type": "integer"},
+                        "directory": {"type": "string"},
+                        "source": {
+                            "type": "string",
+                            "enum": ["filesystem", "github"],
+                        },
+                        "extensions": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "repository": {"type": "string"},
+                        "ref": {"type": "string"},
+                        "truncated": {"type": "boolean"},
+                        "error": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["sandbox"]},
+            # Preserve the existing generic contract's execution policy.
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 3600,
+                    "schedule_to_close_seconds": 3900,
+                },
+                "retries": {"max_attempts": 1},
+            },
+        }
+
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
         return {
             "name": name,
