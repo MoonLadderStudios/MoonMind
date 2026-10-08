@@ -1340,10 +1340,28 @@ def _fetch_actions_run(*, pr_repo: str, run_id: int) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _fetch_base_branch(*, pr_repo: str | None, base_branch: str | None) -> dict | None:
+    """The branch API provides the base SHA even on gh versions that do not."""
+    from urllib.parse import quote
+
+    if not pr_repo or not base_branch:
+        return None
+    payload = run_command_optional(
+        ["gh", "api", f"repos/{pr_repo}/branches/{quote(base_branch, safe='')}"]
+    )
+    return payload if isinstance(payload, dict) else None
+
+
+def _base_commit_sha(branch: dict | None) -> str:
+    commit = branch.get("commit") if isinstance(branch, dict) else None
+    return str(commit.get("sha") or "").strip() if isinstance(commit, dict) else ""
+
+
 def _fetch_required_status_checks(
     *,
     pr_repo: str | None,
     base_branch: str | None,
+    branch_data: dict | None = None,
 ) -> list[str] | None:
     repo = str(pr_repo or "").strip()
     branch = str(base_branch or "").strip()
@@ -1357,7 +1375,8 @@ def _fetch_required_status_checks(
     from pr_resolver_core.github_checks import required_check_contexts
 
     branch = quote(branch, safe="")
-    branch_data = run_command_optional(["gh", "api", f"repos/{repo}/branches/{branch}"])
+    if branch_data is None:
+        branch_data = _fetch_base_branch(pr_repo=pr_repo, base_branch=base_branch)
     if isinstance(branch_data, dict) and branch_data.get("protected") is False:
         return required_check_contexts(branch_data, None, None)
     payload = run_command_optional(
@@ -1624,6 +1643,14 @@ def main():
         for check in rollup:
             if isinstance(check, dict):
                 rollup_checks.append(check)
+    base_branch_data = _fetch_base_branch(
+        pr_repo=pr_repo, base_branch=pr_data.get("baseRefName")
+    )
+    base_sha = _base_commit_sha(base_branch_data)
+    if not base_sha:
+        print("Unable to verify PR base commit; refresh the snapshot.", file=sys.stderr)
+        sys.exit(1)
+    pr_data = {**pr_data, "baseRefOid": base_sha}
     # Build one authoritative HEAD observation from both provider surfaces.
     # Check-runs remain gating even on an unprotected branch. Legacy statuses
     # gate when required, or when requirements could not be established.
@@ -1651,7 +1678,9 @@ def main():
             return
 
     required_checks = _fetch_required_status_checks(
-        pr_repo=pr_repo, base_branch=pr_data.get("baseRefName")
+        pr_repo=pr_repo,
+        base_branch=pr_data.get("baseRefName"),
+        branch_data=base_branch_data,
     )
     from pr_resolver_core.github_checks import (
         head_ci_reported,
@@ -1861,6 +1890,15 @@ def main():
     # Bind every full inventory to the current target, even with the review
     # loop disabled. A race cannot authorize fixes or a fix-only clean receipt.
     completed_pr, _, _ = fetch_pr_data(args.pr)
+    if isinstance(completed_pr, dict):
+        completed_pr = {
+            **completed_pr,
+            "baseRefOid": _base_commit_sha(
+                _fetch_base_branch(
+                    pr_repo=pr_repo, base_branch=completed_pr.get("baseRefName")
+                )
+            ),
+        }
     observed_fields = (
         "number", "url", "headRefOid", "headRefName", "baseRefName", "baseRefOid",
         "statusCheckRollup", "updatedAt", "isDraft", "state", "mergeable",

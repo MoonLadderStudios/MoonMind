@@ -174,7 +174,10 @@ metadata flag.
 2. Run the finalize gate checker. Before any remediation or completion it
    collects PR metadata, CI, the complete comment inventory, and automated-review
    evidence for the exact head SHA, then revalidates the target and head.
-   An unchanged `ci_running` retry reads only PR metadata and exact-head CI
+   The existing branch API supplies the base commit, including on older GitHub
+   CLI versions without a `baseRefOid` JSON field. Reuse that metadata for branch
+   requirements, and verify the base again after collecting the inventory.
+   An unchanged `ci_running` retry reads only PR/base metadata and exact-head CI
    observations (including Actions workflow/attempt evidence when needed).
    Its explicitly wait-only snapshot cannot authorize remediation, a clean
    receipt, or merge. A changed observation or review policy forces a full

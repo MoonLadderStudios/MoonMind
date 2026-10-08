@@ -480,6 +480,9 @@ def test_snapshot_collects_findings_after_review_completion(
         return observed, "350", []
 
     monkeypatch.setitem(scope, "fetch_pr_data", fetch_pr)
+    monkeypatch.setitem(
+        scope, "_fetch_base_branch", lambda **_kwargs: {"commit": {"sha": "base-head"}}
+    )
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
     monkeypatch.setitem(
