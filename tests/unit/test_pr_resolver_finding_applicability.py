@@ -17,7 +17,7 @@ from pr_resolver_core import (
 )
 from pr_resolver_core.review_providers import (
     automated_review_provider_or_raise,
-    is_clean_review_comment,
+    classify_review_reply,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -150,11 +150,14 @@ def test_existing_ledger_dispositions_apply_without_hiding_open_threads(
 def test_clean_phrase_cannot_hide_trailing_findings(snapshot_module, suffix):
     comment = _finding("issue_comment", CLEAN_BODY + suffix)
 
-    assert not is_clean_review_comment(
-        automated_review_provider_or_raise("codex"),
-        comment,
-        requested_at=datetime(2026, 8, 24, 22, 15, tzinfo=UTC),
-        head_sha=HEAD,
+    assert (
+        classify_review_reply(
+            automated_review_provider_or_raise("codex"),
+            comment,
+            requested_at=datetime(2026, 8, 24, 22, 15, tzinfo=UTC),
+            head_sha=HEAD,
+        )
+        is None
     )
     assert snapshot_module["summarize_comments"]([comment])["actionableCommentIds"] == [
         51
@@ -172,12 +175,15 @@ def test_clean_phrase_cannot_hide_trailing_findings(snapshot_module, suffix):
     ],
 )
 def test_exact_supported_clean_body_remains_completion_evidence(body):
-    assert is_clean_review_comment(
+    reply = classify_review_reply(
         automated_review_provider_or_raise("codex"),
         _finding("issue_comment", body),
         requested_at=datetime(2026, 8, 24, 22, 15, tzinfo=UTC),
         head_sha=HEAD,
     )
+
+    assert reply is not None
+    assert reply.failure_class == ""
 
 
 @pytest.mark.parametrize("transient_failure", [False, True])

@@ -201,6 +201,7 @@ def normalize_portable_snapshot(
         automated_review_provider=_text(automated_review.get("provider")),
         fresh_automated_review=automated_review.get("freshReviewForHead") is True,
         automated_review_requested=automated_review.get("requestPending") is True,
+        automated_review_request_failed=automated_review.get("requestFailed") is True,
         deferred_comments=_bool(comments_summary.get("hasDeferredComments")),
         progress_signature=_text(raw.get("progressSignature")),
         publish_available=raw.get("publishAvailable") is not False,

@@ -19,6 +19,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HEAD = "a" * 40
 OLD_HEAD = "b" * 40
 HEAD_COMMITTED_AT = datetime(2026, 8, 24, 22, 10, tzinfo=UTC)
+CODEX_LOGIN = "chatgpt-codex-connector[bot]"
+# Codex refusing a requested review, verbatim: MoonLadderStudios/Tactics#2788
+# (comment 6025386732, nine seconds after `@codex review` comment 6025384173)
+# and MoonLadderStudios/MoonMind#4648 (comment 5928614765).
+CODEX_USAGE_LIMIT_REPLY = (
+    "You have reached your Codex usage limits for code reviews. You can see your "
+    "limits in the [Codex usage dashboard]"
+    "(https://chatgpt.com/codex/cloud/settings/usage).\n"
+    "To continue using code reviews, add credits to your account and enable them "
+    "for code reviews in your "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
+CODEX_REPO_USAGE_LIMIT_REPLY = (
+    "Codex usage limits have been reached for code reviews. Please check with the "
+    "admins of this repo to increase the limits by adding credits.\n"
+    "Repo admins can enable using credits for code reviews in their "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
 
 
 def _load_module(script_path: Path) -> dict[str, Any]:
@@ -296,6 +314,23 @@ def test_pending_review_precedes_every_remediation(blocker) -> None:
     assert decision.reason_code == "automated_review_wait"
 
 
+@pytest.mark.parametrize("blocker", ["none", "comments", "ci", "conflict"])
+def test_failed_request_stops_instead_of_waiting_or_remediating(blocker) -> None:
+    snapshot = _snapshot()
+    snapshot["automatedReview"]["requestFailed"] = True
+    if blocker == "comments":
+        snapshot["commentsSummary"]["hasActionableComments"] = True
+    elif blocker == "ci":
+        snapshot["ci"]["hasFailures"] = True
+    elif blocker == "conflict":
+        snapshot["pr"]["mergeable"] = False
+
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+    assert decision.reason_code == "automated_review_request_failed"
+
+
 @pytest.mark.parametrize("kind", ["issue_comment", "pr_reaction"])
 def test_clean_response_finishes_without_requesting_another_review(
     snapshot_module, kind
@@ -406,6 +441,134 @@ def test_pr_reaction_requires_provider_clean_completion_after_request(
         snapshot_module, comments=[_request_comment()], reactions_for_pr=[reaction]
     )
     assert evidence["freshReviewForHead"] is False
+
+
+def _codex_reply(
+    body: str, *, created_at: str = "2026-08-24T22:20:00Z", comment_id: int = 77
+) -> dict[str, Any]:
+    return {
+        "id": comment_id,
+        "type": "issue_comment",
+        "user": CODEX_LOGIN,
+        "body": body,
+        "created_at": created_at,
+    }
+
+
+@pytest.mark.parametrize(
+    "body", [CODEX_USAGE_LIMIT_REPLY, CODEX_REPO_USAGE_LIMIT_REPLY]
+)
+def test_provider_usage_limit_reply_fails_the_request(snapshot_module, body) -> None:
+    request = _request_comment(created_at="2026-10-06T21:02:09Z")
+    request["id"] = 6025384173
+    reply = _codex_reply(
+        body, created_at="2026-10-06T21:02:18Z", comment_id=6025386732
+    )
+
+    evidence = _evidence(snapshot_module, comments=[request, reply])
+
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is False
+    assert evidence["requestFailed"] is True
+    assert evidence["requestFailure"] == {
+        "kind": "issue_comment",
+        "id": 6025386732,
+        "failedAt": "2026-10-06T21:02:18Z",
+        "providerErrorClass": "rate_limit",
+    }
+    decision = classify_snapshot(
+        normalize_portable_snapshot(_snapshot(automatedReview=evidence))
+    )
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+    assert decision.reason_code == "automated_review_request_failed"
+
+
+@pytest.mark.parametrize("latest", ["clean", "failure"])
+def test_latest_provider_reply_decides_the_request(snapshot_module, latest) -> None:
+    clean = _codex_reply(
+        "Codex Review: Didn't find any major issues. 🚀",
+        created_at=(
+            "2026-08-24T22:20:00Z" if latest == "clean" else "2026-08-24T22:19:00Z"
+        ),
+        comment_id=56,
+    )
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY,
+        created_at=(
+            "2026-08-24T22:20:00Z" if latest == "failure" else "2026-08-24T22:19:00Z"
+        ),
+        comment_id=55,
+    )
+
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), clean, failure])
+
+    assert evidence["freshReviewForHead"] is (latest == "clean")
+    assert evidence["requestFailed"] is (latest == "failure")
+    assert evidence["requestPending"] is False
+
+
+@pytest.mark.parametrize(
+    "change", ["before_request", "human", "old_head", "task_summary", "status_summary"]
+)
+def test_unrelated_reply_keeps_the_request_pending(snapshot_module, change) -> None:
+    reply = _codex_reply(CODEX_USAGE_LIMIT_REPLY)
+    if change == "before_request":
+        reply["created_at"] = "2026-08-24T22:14:00Z"
+    elif change == "human":
+        reply["user"] = "nsticco"
+    elif change == "old_head":
+        reply["commit_id"] = OLD_HEAD
+    elif change == "task_summary":
+        reply["body"] = (
+            "### Summary\n* Retried GitHub calls that hit the API rate limit and "
+            "surfaced usage limits in the dashboard."
+        )
+    else:
+        # The provider's own status comment carries short SHAs and timestamps;
+        # digits such as `4290` are not an HTTP status.
+        reply["body"] = (
+            "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+            "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+            "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |"
+        )
+
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), reply])
+
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+    assert evidence["requestFailure"] is None
+
+
+def test_clean_reaction_completes_despite_a_failure_reply(snapshot_module) -> None:
+    evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY)],
+        reactions_for_request=[
+            {
+                "id": 58,
+                "content": "+1",
+                "created_at": "2026-08-24T22:21:00Z",
+                "user": {"login": CODEX_LOGIN},
+            }
+        ],
+    )
+
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["requestFailed"] is False
+
+
+def test_new_request_after_a_failure_is_pending(snapshot_module) -> None:
+    retried = _request_comment(created_at="2026-08-24T23:00:00Z")
+    retried["id"] = 98766
+
+    evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY), retried],
+    )
+
+    assert evidence["requestCommentId"] == 98766
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
 
 
 @pytest.mark.parametrize(
@@ -553,7 +716,7 @@ def test_snapshot_collects_findings_after_review_completion(
     main()
     captured = json.loads(path.read_text())
     assert len(reads) == 2
-    assert captured["automatedReview"]["freshReviewForHead"] is True
+    assert captured["automatedReview"]["freshReviewForHead"] is inventory_available
     decision = classify_snapshot(normalize_portable_snapshot(captured))
     if inventory_available:
         assert captured["commentsSummary"]["actionableCommentIds"] == [51]
@@ -724,6 +887,71 @@ def test_finalize_writes_a_request_review_result(tmp_path, monkeypatch) -> None:
     assert payload["gatedContinuation"]["provider"] == "codex"
 
 
+def test_finalize_stops_on_a_refused_review_request(
+    tmp_path, monkeypatch, contract_module
+) -> None:
+    finalize_module = _load_module(
+        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_finalize.py"
+    )
+    main = finalize_module["main"]
+    snapshot = _snapshot()
+    snapshot["automatedReview"].update(
+        {
+            "requestFailed": True,
+            "requestFailure": {
+                "kind": "issue_comment",
+                "id": 6025386732,
+                "failedAt": "2026-10-06T21:02:18Z",
+                "providerErrorClass": "rate_limit",
+            },
+        }
+    )
+
+    def _write_snapshot(
+        _snapshot_script: Path, _pr: str | None, snapshot_path: Path, **_: Any
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    monkeypatch.setitem(main.__globals__, "_run_snapshot", _write_snapshot)
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "350",
+            "--snapshot-path",
+            str(tmp_path / "snapshot.json"),
+            "--result-path",
+            str(result_path),
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--strict-exit-codes",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == finalize_module["EXIT_CODE_BLOCKED"]
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["final_reason"] == "automated_review_request_failed"
+    assert payload["next_step"] == "manual_review"
+    assert payload["mergeAutomationDisposition"] == "manual_review"
+    assert "gatedContinuation" not in payload
+    assert "rate or usage limit" in payload["decision"]
+    # A standalone orchestrator stops instead of retrying finalize.
+    assert (
+        contract_module["classify_retry_action"](
+            payload["final_reason"], merge_not_ready_grace_remaining=5
+        )
+        == "stop"
+    )
+
+
 @pytest.mark.parametrize(
     "field,reason",
     [
@@ -873,3 +1101,353 @@ def test_review_collection_with_installed_gh():
     )
     assert completed.returncode == 0, completed.stderr
     assert '"freshReviewForHead": true' in completed.stdout
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "[P1] Preserve rate limit metadata",
+        "[P2] Handle usage limits in the dashboard",
+        "> You have reached your Codex usage limits for code reviews.",
+        '"Codex usage limits have been reached for code reviews."',
+        "Example: You have reached your Codex usage limits for code reviews.",
+        "```\nYou have reached your Codex usage limits for code reviews.\n```",
+    ],
+)
+def test_limit_mentions_are_not_refusal_openings(snapshot_module, body):
+    evidence = _evidence(
+        snapshot_module, comments=[_request_comment(), _codex_reply(body)]
+    )
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize(
+    "body", [CODEX_USAGE_LIMIT_REPLY, "Codex Review: Didn't find any major issues. 🚀"]
+)
+@pytest.mark.parametrize(
+    "reply_id,request_id,answers",
+    [
+        (102, 101, True),
+        ("102", "101", True),
+        (100, 101, False),
+        (101, 101, False),
+        (None, 101, False),
+        (102, None, False),
+        ("invalid", 101, False),
+        (True, 101, False),
+    ],
+)
+def test_same_second_reply_requires_later_comment_id(
+    snapshot_module, body, reply_id, request_id, answers
+):
+    request = _request_comment()
+    request["id"] = request_id
+    reply = _codex_reply(body, created_at=request["created_at"], comment_id=reply_id)
+    evidence = _evidence(snapshot_module, comments=[reply, request])
+    assert evidence["requestPending"] is (not answers)
+    assert evidence["requestFailed"] is (answers and body == CODEX_USAGE_LIMIT_REPLY)
+    assert evidence["freshReviewForHead"] is (
+        answers and body != CODEX_USAGE_LIMIT_REPLY
+    )
+
+
+@pytest.mark.parametrize("latest_clean", [True, False])
+def test_equal_timestamp_replies_use_ids_not_inventory_order(
+    snapshot_module, latest_clean
+):
+    clean = _codex_reply(
+        "Codex Review: Didn't find any major issues. 🚀",
+        comment_id=103 if latest_clean else 102,
+    )
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY, comment_id=102 if latest_clean else 103
+    )
+    for replies in ([clean, failure], [failure, clean]):
+        evidence = _evidence(snapshot_module, comments=[_request_comment(), *replies])
+        assert evidence["freshReviewForHead"] is latest_clean
+        assert evidence["requestFailed"] is (not latest_clean)
+
+
+def test_equal_timestamp_requests_use_ids_not_inventory_order(snapshot_module):
+    first = {**_request_comment(), "id": 101}
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY, created_at=first["created_at"], comment_id=102
+    )
+    latest = {**first, "id": 103}
+    for comments in ([latest, failure, first], [first, failure, latest]):
+        evidence = _evidence(snapshot_module, comments=comments)
+        assert evidence["requestCommentId"] == 103
+        assert evidence["requestPending"] is True
+        assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize("prefix", ["    ", "\t", "\n    "])
+def test_indented_refusal_example_is_not_a_provider_failure(snapshot_module, prefix):
+    reply = _codex_reply(prefix + CODEX_USAGE_LIMIT_REPLY)
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), reply])
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["quote", "embedded", "indented", "wrong_head", "review_comment", "invalid_time"],
+)
+def test_unrelated_request_does_not_supersede_a_refusal(snapshot_module, change):
+    retry = {**_request_comment("2026-08-24T23:00:00Z"), "id": 98766}
+    if change == "quote":
+        retry["body"] = "> @codex review"
+    elif change == "embedded":
+        retry["body"] = "Please run @codex review later"
+    elif change == "indented":
+        retry["body"] = "    @codex review"
+    elif change == "wrong_head":
+        retry["commit_id"] = OLD_HEAD
+    elif change == "review_comment":
+        retry["type"] = "review_comment"
+    else:
+        retry["created_at"] = "invalid"
+    evidence = _evidence(
+        snapshot_module,
+        comments=[retry, _request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY)],
+    )
+    assert evidence["requestCommentId"] == 98765
+    assert evidence["requestFailed"] is True
+
+
+@pytest.mark.parametrize("prefix", ["    ", "\t", "\n    "])
+def test_indented_clean_reply_is_not_completion(snapshot_module, prefix):
+    evidence = _evidence(
+        snapshot_module,
+        comments=[
+            _request_comment(),
+            _codex_reply(prefix + "Codex Review: Didn't find any major issues. 🚀"),
+        ],
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize("exact_review", [False, True])
+def test_missing_head_timestamp_cannot_bind_historical_comments(
+    snapshot_module, monkeypatch, exact_review
+):
+    build = snapshot_module["build_automated_review_evidence"]
+    monkeypatch.setitem(
+        build.__globals__, "_fetch_head_commit_timestamp", lambda **kwargs: None
+    )
+    kwargs = {
+        "head_committed_at": None,
+        "comments": [
+            _request_comment("2020-01-01T00:00:00Z"),
+            _codex_reply(
+                "Codex Review: Didn't find any major issues. 🚀",
+                created_at="2020-01-01T00:00:01Z",
+            ),
+        ],
+        "reviews": (
+            [
+                {
+                    "id": 50,
+                    "state": "COMMENTED",
+                    "commit_id": HEAD,
+                    "submitted_at": "2026-08-24T22:19:00Z",
+                    "user": {"login": CODEX_LOGIN},
+                }
+            ]
+            if exact_review
+            else []
+        ),
+    }
+    if exact_review:
+        with pytest.raises(RuntimeError, match="head.*timestamp"):
+            _evidence(snapshot_module, **kwargs)
+        kwargs["comments"] = []
+        evidence = _evidence(snapshot_module, **kwargs)
+        assert evidence["freshReviewForHead"] is True
+        assert evidence["requestCommentId"] is None
+    else:
+        with pytest.raises(RuntimeError, match="head.*timestamp"):
+            _evidence(snapshot_module, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "states",
+    [
+        ("OPEN", "OPEN"),
+        ("MERGED", "MERGED"),
+        ("CLOSED", "CLOSED"),
+        ("OPEN", "MERGED"),
+        ("OPEN", "CLOSED"),
+        ("OPEN", "MISSING"),
+        ("", "OPEN"),
+        ("UNKNOWN", "OPEN"),
+        ("", ""),
+        ("UNKNOWN", "UNKNOWN"),
+    ],
+)
+@pytest.mark.parametrize("initial_result", ["complete", "failure"])
+@pytest.mark.parametrize(
+    "new_result", ["pending", "failure", "complete", "unavailable", "churn"]
+)
+def test_refreshed_inventory_rebinds_review_evidence(
+    snapshot_module, monkeypatch, tmp_path, new_result, initial_result, states
+):
+    main = snapshot_module["main"]
+    scope = main.__globals__
+    first = {**_request_comment(), "id": 100}
+    second = {**_request_comment("2026-08-24T22:22:00Z"), "id": 102}
+    first_clean = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY
+        if initial_result == "failure"
+        else "Codex Review: Didn't find any major issues. 🚀",
+        comment_id=101,
+    )
+    second_reply = _codex_reply(
+        (
+            CODEX_USAGE_LIMIT_REPLY
+            if new_result == "failure"
+            else "Codex Review: Didn't find any major issues. 🚀"
+        ),
+        created_at="2026-08-24T22:23:00Z",
+        comment_id=103,
+    )
+    checks = [{"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    pr = {
+        **_snapshot()["pr"],
+        "url": "https://github.com/owner/repo/pull/350",
+        "statusCheckRollup": checks,
+    }
+    pr_reads = []
+
+    def fetch_pr(selector):
+        state = states[0] if not pr_reads else states[1]
+        pr_reads.append(state)
+        return (None if state == "MISSING" else {**pr, "state": state}, "350", [])
+
+    replacements = {
+        "fetch_pr_data": fetch_pr,
+        "_fetch_base_branch": lambda **kw: {"commit": {"sha": "base-head"}},
+        "_fetch_required_status_checks": lambda **kw: [],
+        "_fetch_commit_check_runs": lambda **kw: checks,
+        "_fetch_commit_statuses": lambda **kw: [],
+        "_fetch_previous_commit_sha": lambda **kw: None,
+        "_fetch_head_commit_timestamp": lambda **kw: HEAD_COMMITTED_AT,
+        "_fetch_pull_request_reviews": lambda **kw: [],
+        "_fetch_comment_reactions": lambda **kw: [],
+        "_fetch_pr_reactions": lambda **kw: [],
+    }
+    for key, value in replacements.items():
+        monkeypatch.setitem(scope, key, value)
+    reads = []
+
+    def read_comments(*args):
+        reads.append(True)
+        if len(reads) > 1 and new_result == "unavailable":
+            return {"comments": None, "thread_inventory_complete": False}
+        if len(reads) > 1 and new_result == "churn":
+            request_id = 100 + 2 * len(reads)
+            request_time = f"2026-08-24T22:{20 + len(reads)}:00Z"
+            return {
+                "comments": [
+                    first,
+                    first_clean,
+                    {**second, "id": request_id, "created_at": request_time},
+                    _codex_reply(
+                        CODEX_USAGE_LIMIT_REPLY,
+                        comment_id=request_id + 1,
+                        created_at=request_time.replace(":00Z", ":01Z"),
+                    ),
+                ],
+                "thread_inventory_complete": True,
+            }
+        comments = [first, first_clean]
+        if len(reads) > 1:
+            comments.append(second)
+            if new_result != "pending":
+                comments.append(second_reply)
+        if len(reads) > 2:
+            comments.append(
+                {
+                    "id": 104,
+                    "type": "review_comment",
+                    "user": CODEX_LOGIN,
+                    "body": "[P1] Preserve authorization",
+                    "created_at": "2026-08-24T22:23:01Z",
+                }
+            )
+        return {"comments": comments, "thread_inventory_complete": True}
+
+    monkeypatch.setitem(scope, "run_command", read_comments)
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "snapshot",
+            "--pr",
+            "350",
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--snapshot-path",
+            str(path),
+        ],
+    )
+    initially_terminal = states[0] in {"CLOSED", "MERGED"}
+    # Any observed PR field changing during collection, including its state,
+    # also requires a fresh snapshot.
+    if not initially_terminal and (
+        states[1] != "OPEN" or states[0] != states[1] or new_result == "churn"
+    ):
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        assert not path.exists()
+        if new_result == "churn":
+            assert len(reads) == 4
+        return
+    main()
+    result = json.loads(path.read_text())
+    if initially_terminal:
+        assert len(reads) == 1
+        decision = classify_snapshot(normalize_portable_snapshot(result))
+        assert decision.reason_code == (
+            "already_merged" if states[0] == "MERGED" else "pull_request_closed"
+        )
+        return
+    if new_result == "unavailable":
+        assert result["commentsFetch"]["succeeded"] is False
+        assert result["automatedReview"]["requestFailed"] is False
+        assert result["automatedReview"]["freshReviewForHead"] is False
+        assert (
+            classify_snapshot(normalize_portable_snapshot(result)).action
+            is ResolverAction.STOP_MANUAL_REVIEW
+        )
+        return
+    assert result["automatedReview"]["requestCommentId"] == 102
+    assert result["automatedReview"]["freshReviewForHead"] is (new_result == "complete")
+    assert result["automatedReview"]["requestPending"] is (new_result == "pending")
+    assert result["automatedReview"]["requestFailed"] is (new_result == "failure")
+    if new_result in {"complete", "failure"}:
+        assert len(reads) == 3
+        assert result["commentsSummary"]["actionableCommentIds"] == [104]
+
+
+
+@pytest.mark.parametrize("comments", [[], [{"body": "Unrelated discussion"}]])
+def test_first_request_does_not_require_optional_head_timestamp(
+    snapshot_module, monkeypatch, comments
+):
+    build = snapshot_module["build_automated_review_evidence"]
+    monkeypatch.setitem(build.__globals__, "_fetch_head_commit_timestamp", lambda **kw: None)
+    evidence = _evidence(snapshot_module, head_committed_at=None, comments=comments)
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is False
+    assert evidence["requestFailed"] is False
+    assert evidence["requestCommentId"] is None
+    assert evidence["completionId"] is None
+
+    decision = classify_snapshot(normalize_portable_snapshot(_snapshot(automatedReview=evidence)))
+    assert decision.action is ResolverAction.REQUEST_REVIEW
