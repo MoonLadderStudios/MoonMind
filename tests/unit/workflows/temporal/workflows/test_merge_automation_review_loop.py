@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 
 from moonmind.workflows.merge_automation_review import build_review_request_key
 from moonmind.workflows.temporal.workflows import (
@@ -234,7 +234,9 @@ class _Harness:
             merge_automation_module.workflow,
             "info",
             lambda: SimpleNamespace(
-                workflow_id=MERGE_AUTOMATION_WORKFLOW_ID, run_id=OWNER_RUN_ID
+                workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+                run_id=OWNER_RUN_ID,
+                parent=SimpleNamespace(workflow_id="wf-parent", run_id="run-parent"),
             ),
         )
         monkeypatch.setattr(
@@ -1173,6 +1175,80 @@ async def test_repeated_reenter_handoff_exhausts_shared_progress_budget(
     assert not harness.request_payloads
 
 
+def _degraded_reenter_result(child_id, attempt):
+    value = _request_review_result(child_workflow_id=child_id, head_sha=HEAD_1)
+    value["mergeAutomationDisposition"] = "reenter_gate"
+    value["gatedContinuation"].update(
+        schemaVersion="gated-continuation/v1",
+        action="reenter_gate",
+        reason="ci_signal_degraded",
+        retryAfterSeconds=60,
+        progressSignature=f"{HEAD_1}|4213269206|",
+    )
+    return value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_loop", [{}, {"enabled": False}])
+async def test_reenter_progress_budget_applies_without_review_loop(
+    monkeypatch, review_loop
+):
+    """A resolver that keeps returning the same work cannot loop forever.
+
+    PR #4743 targeted a branch CI never runs for: 30 identical
+    ``ci_signal_degraded`` handoffs each launched another agent run.
+    """
+
+    def result(child_id, attempt):
+        # Bound the fixture so an unbounded gate fails instead of hanging.
+        if attempt > 10:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = review_loop
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1)],
+        child_results=result,
+    )
+
+    outcome = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert outcome["status"] == "blocked"
+    assert outcome["blockers"][0]["kind"] == "review_loop_no_progress"
+    assert "ci_signal_degraded" in outcome["summary"]
+    # The first handoff establishes the signature; two repeats exhaust the
+    # default budget.
+    assert len(harness.child_workflow_ids) == 3
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
+async def test_reenter_budget_without_review_loop_preserves_pre_patch_history(
+    monkeypatch,
+):
+    def result(child_id, attempt):
+        if attempt == 5:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = {}
+    harness = _Harness(monkeypatch, readiness=[_ready(HEAD_1)], child_results=result)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: name
+        not in {
+            merge_automation_module.MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH,
+            merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
+        },
+    )
+    assert (await MoonMindMergeAutomationWorkflow().run(payload))["status"] == "merged"
+    assert len(harness.child_workflow_ids) == 5
+
+
 @pytest.mark.asyncio
 async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
     def result(child_id, attempt):
@@ -1202,3 +1278,748 @@ async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
         "status"
     ] == "merged"
     assert len(harness.child_workflow_ids) == 5
+
+
+def _review_only_parent_execution_plan() -> dict[str, str]:
+    return {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art-parent-plan",
+        "taskInputSnapshotRef": "art-parent-task",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+
+def _review_only_payload() -> dict[str, Any]:
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = "review_only"
+    payload["principal"] = "fixture-review-owner"
+    payload["parentExecutionPlan"] = _review_only_parent_execution_plan()
+    # Exercise the actual child-plan preparation boundary if a regression tries
+    # to start a resolver, rather than silently taking a legacy runtime path.
+    payload["resolverTemplate"] = {"targetRuntime": "omnigent"}
+    return payload
+
+
+def _review_only_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    readiness: list[dict[str, Any]],
+    request_results: list[Any] | None = None,
+) -> _Harness:
+    harness = _Harness(
+        monkeypatch,
+        readiness=readiness,
+        child_results=[],
+        request_results=request_results,
+    )
+    harness.typed_activity_names = []
+    original_activity = merge_automation_module.workflow.execute_activity
+
+    async def bounded_activity(name, payload, **kwargs):
+        if name == "merge_automation.evaluate_readiness":
+            assert harness.readiness, "review-only exhausted its scripted observations"
+        return await original_activity(name, payload, **kwargs)
+
+    async def artifact_only_typed_activity(name, _payload, **_kwargs):
+        harness.typed_activity_names.append(name)
+        assert name == "artifact.write_complete", f"unauthorized typed activity: {name}"
+        return None
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow, "execute_activity", bounded_activity
+    )
+    monkeypatch.setattr(
+        merge_automation_module, "execute_typed_activity", artifact_only_typed_activity
+    )
+    return harness
+
+
+def _assert_review_only_has_no_resolver(harness: _Harness, result) -> None:
+    assert harness.child_payloads == []
+    assert result["resolverChildWorkflowIds"] == []
+    assert result.get("remediationChildWorkflowIds", []) == []
+    assert all(name == "artifact.write_complete" for name in harness.typed_activity_names)
+    assert not any("resolver" in name for name in harness.artifact_names)
+    # Unexpected plain activities (including child-plan preparation and
+    # post-merge GitHub/Jira effects) already fail in the existing harness.
+
+
+def _review_only_completed(head_sha: str) -> dict[str, Any]:
+    return _awaiting_review(
+        head_sha,
+        checksComplete=False,
+        checksPassing=False,
+        automatedReviewComplete=True,
+        automatedReviewCompletionKind="review",
+        automatedReviewCompletionId=45678,
+        automatedReviewCompletedAt="2026-08-24T22:19:00Z",
+        blockers=[
+            {"kind": "checks_running", "summary": "Required CI remains pending."}
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ci_state", ["queued", "failure", "unavailable"])
+async def test_review_only_requests_and_waits_for_findings_without_resolver(
+    monkeypatch, ci_state
+):
+    """A request-bound CHANGES_REQUESTED review completes only this objective."""
+    import httpx
+
+    from moonmind.workflows.temporal import activity_runtime
+    from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
+    from moonmind.auth.bound_acquisition import (
+        AcquiredCredential,
+        BindingMetadata,
+        EphemeralCredential,
+    )
+
+    harness = _review_only_harness(
+        monkeypatch, readiness=[], request_results=[_posted(HEAD_1)]
+    )
+    active_polls = []
+    polls = []
+    check_reads = []
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity,
+        "info",
+        lambda: SimpleNamespace(activity_id="review-only-readiness"),
+    )
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    async def selected_repository_credential(payload, *, repository, operation):
+        assert repository == "MoonLadderStudios/MoonMind"
+        assert operation == "read"
+        assert payload["parentExecutionPlan"] == _review_only_parent_execution_plan()
+        assert payload["principal"] == "fixture-review-owner"
+        return AcquiredCredential(
+            binding=BindingMetadata(
+                bindingDigest="fixture-binding",
+                connectionId="fixture-selected-connection",
+                endpoint="github.com/MoonLadderStudios/MoonMind",
+                routeId="fixture-selected-route",
+                role="collaboration",
+                operations=("read",),
+                policyRevision=1,
+                connectionRevision=1,
+                credentialRevision=1,
+                principalRef="fixture-review-owner",
+                scopeType="system",
+                operationId="fixture-read",
+                issuanceId="fixture-issuance",
+                generation=1,
+                adapterKind="fixture",
+            ),
+            credential=EphemeralCredential(b"fixture-selected-token"),
+        )
+
+    activities = TemporalIntegrationActivities()
+    monkeypatch.setattr(
+        activity_runtime,
+        "_merge_automation_repository_credential",
+        selected_repository_credential,
+    )
+
+    def github_response(request):
+        assert request.headers["authorization"] == "Bearer fixture-selected-token"
+        path = request.url.path
+        if path.endswith("/pulls/350"):
+            data = {"state": "open", "head": {"sha": HEAD_1}, "mergeable": True}
+        elif path.endswith("/status"):
+            check_reads.append(path)
+            if ci_state == "unavailable":
+                return httpx.Response(403, json={"message": "Resource not accessible by integration"})
+            data = {"state": "pending", "statuses": []}
+        elif path.endswith("/check-runs"):
+            data = {
+                "check_runs": [
+                    {
+                        "name": "Required CI",
+                        "status": "queued" if ci_state == "queued" else "completed",
+                        "conclusion": None if ci_state == "queued" else "failure",
+                    }
+                ]
+            }
+        elif path.endswith("/reviews"):
+            data = (
+                [
+                    {
+                        "id": 45678,
+                        "state": "CHANGES_REQUESTED",
+                        "body": "The review identified a bug requiring a separate fix.",
+                        "commit_id": HEAD_1,
+                        "submitted_at": "2026-08-24T22:19:00Z",
+                        "user": {"login": "chatgpt-codex-connector"},
+                    }
+                ]
+                if len(active_polls) > 1
+                else []
+            )
+        elif path.endswith("/comments") or path.endswith("/reactions"):
+            data = []
+        else:
+            raise AssertionError(f"unexpected GitHub read: {path}")
+        return httpx.Response(200, json=data)
+
+    transport = httpx.MockTransport(github_response)
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    original_activity = merge_automation_module.workflow.execute_activity
+
+    async def activity(name, payload, **kwargs):
+        if name == "merge_automation.evaluate_readiness":
+            polls.append(payload)
+            harness.readiness_payloads.append(payload)
+            assert len(polls) <= 4, "review-only never settled matching completion"
+            if payload.get("activeReviewRequest"):
+                active_polls.append(payload)
+            return await activities.merge_automation_evaluate_readiness(payload)
+        return await original_activity(name, payload, **kwargs)
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["gate"]["jira"]["status"] = "required"
+
+    async def unexpected_jira_read(_issue_key):
+        raise AssertionError("review-only must not depend on unrelated Jira readiness")
+
+    monkeypatch.setattr(
+        activities, "_merge_gate_jira_status_allowed", unexpected_jira_read
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert check_reads == []
+    assert result["latestHeadSha"] == HEAD_1
+    assert harness.wait_calls >= 1
+    assert len(harness.request_payloads) == 1
+    request = harness.request_payloads[0]
+    assert request["parentWorkflowId"] == MERGE_AUTOMATION_WORKFLOW_ID
+    assert request["expectedHeadSha"] == HEAD_1
+    assert request["provider"] == "codex"
+    assert request["requestKey"] == build_review_request_key(
+        parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+        repository="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha=HEAD_1,
+        provider="codex",
+    )
+    assert "command" not in request and "body" not in request
+    assert active_polls[0]["activeReviewRequest"]["requestCommentId"] == 98765
+    cycle = result["reviewLoop"]["cycleRecords"][0]
+    assert cycle["headSha"] == HEAD_1
+    assert cycle["completionKind"] == "review"
+    assert cycle["completionId"] == 45678
+    assert cycle["completedAt"] == "2026-08-24T22:19:00Z"
+    assert cycle["status"] == "completed"
+    assert result["reviewLoop"]["activeRequest"] is None
+    assert "no actionable comments" not in str(result.get("summary") or "").lower()
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_restored_request_waits_without_reposting(monkeypatch):
+    payload = _review_only_payload()
+    request_key = build_review_request_key(
+        parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+        repository="MoonLadderStudios/MoonMind",
+        pr_number=350,
+        head_sha=HEAD_1,
+        provider="codex",
+    )
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": request_key,
+        "requestCommentId": 98765,
+        "requestedAt": "2026-08-24T22:15:00Z",
+    }
+    payload["activeReviewRequest"] = active
+    payload["reviewCycles"] = [{"cycle": 1, **active, "status": "requested"}]
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert harness.request_payloads == []
+    assert harness.wait_calls == 1
+    restored = harness.readiness_payloads[0]["activeReviewRequest"]
+    assert {key: restored[key] for key in active} == active
+    assert result["reviewLoop"]["cycles"] == 1
+    assert result["reviewLoop"]["cycleRecords"][0]["requestKey"] == request_key
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_outcome", ["stale_head", "wrong_posted_head"])
+async def test_review_only_rejects_request_for_a_different_head(
+    monkeypatch, request_outcome
+):
+    outcome = (
+        {"status": "stale_head", "observedHeadSha": HEAD_2}
+        if request_outcome == "stale_head"
+        else _posted(HEAD_2)
+    )
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1)],
+        request_results=[outcome],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+
+    assert result["status"] in {"blocked", "failed"}
+    assert result["latestHeadSha"] == HEAD_1
+    assert len(harness.request_payloads) == 1
+    assert harness.request_payloads[0]["expectedHeadSha"] == HEAD_1
+    assert harness.wait_calls == 0
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_head_change_during_wait_blocks_without_retargeting(monkeypatch):
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[
+            _awaiting_review(HEAD_1),
+            _awaiting_review(HEAD_2, automatedReviewRequestStale=True),
+        ],
+        request_results=[_posted(HEAD_1)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+
+    assert result["status"] == "blocked"
+    assert result["latestHeadSha"] == HEAD_1
+    assert [request["expectedHeadSha"] for request in harness.request_payloads] == [HEAD_1]
+    assert any(blocker["kind"] == "stale_revision" for blocker in result["blockers"])
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_wrong_head_completion_cannot_finish_request(monkeypatch):
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_2)],
+        request_results=[_posted(HEAD_1)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+
+    assert result["status"] == "blocked"
+    assert result["latestHeadSha"] == HEAD_1
+    assert len(harness.request_payloads) == 1
+    assert not any(
+        cycle["status"] == "completed" for cycle in result["reviewLoop"]["cycleRecords"]
+    )
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_historical_evidence_does_not_replace_fresh_request(monkeypatch):
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+        request_results=[_posted(HEAD_1)],
+    )
+    original_activity = merge_automation_module.workflow.execute_activity
+
+    async def activity(name, payload, **kwargs):
+        if name == "merge_automation.evaluate_readiness" and not payload.get(
+            "activeReviewRequest"
+        ):
+            harness.readiness_payloads.append(payload)
+            assert len(harness.readiness_payloads) <= 3, "historical review caused a loop"
+            return _ready(
+                HEAD_1,
+                automatedReviewCompletionKind="review",
+                automatedReviewCompletionId=123,
+                automatedReviewCompletedAt="2026-08-24T22:10:00Z",
+            )
+        return await original_activity(name, payload, **kwargs)
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    result = await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+
+    assert result["status"] == "review_complete"
+    assert len(harness.request_payloads) == 1
+    assert result["reviewLoop"]["cycleRecords"][0]["completionId"] == 45678
+    assert harness.wait_calls >= 1
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_field", ["automatedReviewCompletionId", "automatedReviewCompletedAt"]
+)
+async def test_review_only_incomplete_completion_evidence_expires(monkeypatch, missing_field):
+    """A true completion flag cannot replace identifiable, dated evidence."""
+    completion = _review_only_completed(HEAD_1)
+    completion.pop(missing_field)
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), completion, dict(completion)],
+        request_results=[_posted(HEAD_1)],
+    )
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 120
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert len(harness.request_payloads) == 1
+    assert not any(
+        cycle["status"] == "completed" for cycle in result["reviewLoop"]["cycleRecords"]
+    )
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_binding", ["provider", "requestKey"])
+async def test_review_only_restored_request_binding_mismatch_blocks(
+    monkeypatch, invalid_binding
+):
+    payload = _review_only_payload()
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": build_review_request_key(
+            parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            repository="MoonLadderStudios/MoonMind",
+            pr_number=350,
+            head_sha=HEAD_1,
+            provider="codex",
+        ),
+        "requestCommentId": 98765,
+        "requestedAt": "2026-08-24T22:15:00Z",
+    }
+    active[invalid_binding] = (
+        "untrusted-provider" if invalid_binding == "provider" else "different-owner-request"
+    )
+    payload["activeReviewRequest"] = active
+    payload["reviewCycles"] = [{"cycle": 1, **active, "status": "requested"}]
+    harness = _review_only_harness(
+        monkeypatch, readiness=[_review_only_completed(HEAD_1)]
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] in {"blocked", "failed"}
+    assert harness.request_payloads == []
+    assert not any(
+        cycle["status"] == "completed" for cycle in result["reviewLoop"]["cycleRecords"]
+    )
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_completion", ["missing_kind", "before_request"])
+async def test_review_only_restored_completed_cycle_requires_fresh_completion(
+    monkeypatch, invalid_completion
+):
+    """Restoration must enforce the same completion evidence as a live request."""
+    payload = _review_only_payload()
+    cycle = {
+        "cycle": 1,
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": build_review_request_key(
+            parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            repository="MoonLadderStudios/MoonMind",
+            pr_number=350,
+            head_sha=HEAD_1,
+            provider="codex",
+        ),
+        "requestCommentId": 98765,
+        "requestedAt": "2026-08-24T22:15:00Z",
+        "completionKind": "review",
+        "completionId": 45678,
+        "completedAt": "2026-08-24T22:19:00Z",
+        "status": "completed",
+    }
+    if invalid_completion == "missing_kind":
+        cycle.pop("completionKind")
+    else:
+        cycle["completedAt"] = "2026-08-24T22:14:00Z"
+    payload["reviewCycles"] = [cycle]
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 120
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1) for _ in range(3)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] in {"blocked", "expired"}
+    assert harness.request_payloads == []
+    assert result["latestHeadSha"] == HEAD_1
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_request_transports_admitted_parent_authority(monkeypatch):
+    payload = _review_only_payload()
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+        request_results=[_posted(HEAD_1)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert len(harness.request_payloads) == 1
+    request = harness.request_payloads[0]
+    # The gate owns ledger idempotency; the distinct admitted parent owns the
+    # immutable repository authority. Neither identity may replace the other.
+    assert request["parentWorkflowId"] == MERGE_AUTOMATION_WORKFLOW_ID
+    assert request["admittedParentWorkflowId"] == payload["parentWorkflowId"]
+    assert request["parentRunId"] == payload["parentRunId"]
+    assert request["principal"] == payload["principal"]
+    assert request["parentExecutionPlan"] == payload["parentExecutionPlan"]
+    assert request["finishMode"] == "review_only"
+    assert "githubToken" not in request
+    assert "token" not in request
+    assert "fixture-selected-token" not in json.dumps(request)
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_mode", ["review_only", "merge", "fix_only"])
+async def test_review_only_summary_projects_mode_without_changing_legacy_summary(
+    monkeypatch, finish_mode
+):
+    if finish_mode == "review_only":
+        payload = _review_only_payload()
+        harness = _review_only_harness(
+            monkeypatch,
+            readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+            request_results=[_posted(HEAD_1)],
+        )
+    else:
+        payload = _payload()
+        payload["mergeAutomationConfig"]["finishMode"] = finish_mode
+        harness = _Harness(
+            monkeypatch,
+            readiness=[_ready(HEAD_1)],
+            child_results=[
+                {
+                    "status": "success",
+                    "mergeAutomationDisposition": (
+                        "merged" if finish_mode == "merge" else "review_clean"
+                    ),
+                }
+            ],
+        )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    if finish_mode == "review_only":
+        assert result["status"] == "review_complete"
+        assert result["finishMode"] == "review_only"
+        _assert_review_only_has_no_resolver(harness, result)
+    else:
+        assert result["status"] == (
+            "merged" if finish_mode == "merge" else "review_clean"
+        )
+        assert "finishMode" not in result
+        assert len(harness.child_payloads) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_binding", ["missing_parent", "wrong_workflow", "wrong_run"])
+async def test_review_only_requires_actual_owning_temporal_parent_before_activities(
+    monkeypatch, parent_binding
+):
+    harness = _review_only_harness(monkeypatch, readiness=[])
+    parent = (
+        None
+        if parent_binding == "missing_parent"
+        else SimpleNamespace(
+            workflow_id="different-parent" if parent_binding == "wrong_workflow" else "wf-parent",
+            run_id="different-run" if parent_binding == "wrong_run" else "run-parent",
+        )
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            run_id=OWNER_RUN_ID,
+            parent=parent,
+        ),
+    )
+    activity_calls = []
+    original_activity = merge_automation_module.workflow.execute_activity
+
+    async def activity(name, payload, **kwargs):
+        activity_calls.append(name)
+        return await original_activity(name, payload, **kwargs)
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+
+    with pytest.raises(
+        ApplicationError, match="review_only requires its owning Temporal parent"
+    ) as rejection:
+        await MoonMindMergeAutomationWorkflow().run(_review_only_payload())
+    assert rejection.value.non_retryable is True
+
+    assert activity_calls == []
+    assert harness.typed_activity_names == []
+    assert harness.request_payloads == []
+    assert harness.child_payloads == []
+    assert harness.artifact_names == []
+    assert harness.wait_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_review_only_restored_completion_waits_for_live_pr_observation(
+    monkeypatch,
+):
+    """Saved completion cannot prove the target head is still open during an outage."""
+    payload = _review_only_payload()
+    payload["reviewCycles"] = [
+        {
+            "cycle": 1,
+            "provider": "codex",
+            "headSha": HEAD_1,
+            "requestKey": build_review_request_key(
+                parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+                repository="MoonLadderStudios/MoonMind",
+                pr_number=350,
+                head_sha=HEAD_1,
+                provider="codex",
+            ),
+            "requestCommentId": 98765,
+            "requestedAt": "2026-08-24T22:15:00Z",
+            "completionKind": "review",
+            "completionId": 45678,
+            "completedAt": "2026-08-24T22:19:00Z",
+            "status": "completed",
+        }
+    ]
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[
+            _awaiting_review(
+                HEAD_1,
+                pullRequestOpen=None,
+                automatedReviewComplete=None,
+                blockers=[
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "GitHub pull request state could not be fetched (HTTP 503).",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            ),
+            _ready(HEAD_1),
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_complete"
+    assert len(harness.readiness_payloads) == 2
+    assert harness.wait_calls == 1
+    assert harness.request_payloads == []
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delayed_activity", ["merge_automation.evaluate_readiness", "artifact.create"]
+)
+async def test_review_only_does_not_post_when_readiness_crosses_expiry(
+    monkeypatch, delayed_activity
+):
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 60
+    harness = _review_only_harness(monkeypatch, readiness=[_awaiting_review(HEAD_1)])
+    execute = merge_automation_module.workflow.execute_activity
+    delayed = False
+
+    async def activity(name, payload, **kwargs):
+        nonlocal delayed
+        result = await execute(name, payload, **kwargs)
+        if name == delayed_activity and not delayed:
+            delayed = True
+            harness._now += timedelta(seconds=120)
+        return result
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert harness.request_payloads == []
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delayed_activity", ["merge_automation.evaluate_readiness", "artifact.create"]
+)
+async def test_review_only_rejects_completion_observed_after_expiry(
+    monkeypatch, delayed_activity
+):
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 180
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1), _review_only_completed(HEAD_1)],
+        request_results=[_posted(HEAD_1)],
+    )
+    execute = merge_automation_module.workflow.execute_activity
+    reads = 0
+    delayed = False
+
+    async def activity(name, payload, **kwargs):
+        nonlocal reads, delayed
+        if name == "merge_automation.evaluate_readiness":
+            reads += 1
+        result = await execute(name, payload, **kwargs)
+        if reads == 2 and name == delayed_activity and not delayed:
+            delayed = True
+            harness._now += timedelta(seconds=180)
+        return result
+
+    monkeypatch.setattr(merge_automation_module.workflow, "execute_activity", activity)
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert len(harness.request_payloads) == 1
+    _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+async def test_review_only_carries_deadline_into_request_activity(monkeypatch):
+    payload = _review_only_payload()
+    payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 180
+    harness = _review_only_harness(
+        monkeypatch,
+        readiness=[_awaiting_review(HEAD_1)],
+        request_results=[
+            {
+                "status": "expired",
+                "headSha": HEAD_1,
+                "retryable": False,
+                "summary": "Review deadline expired before a new request was posted.",
+            }
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "expired"
+    assert harness.request_payloads[0]["expiresAt"] == "2026-08-24T22:03:00+00:00"
+    assert result["reviewLoop"]["cycleRecords"] == []
+    _assert_review_only_has_no_resolver(harness, result)

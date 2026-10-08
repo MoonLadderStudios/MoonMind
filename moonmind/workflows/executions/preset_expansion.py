@@ -13,6 +13,7 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
     schedule_preset_from_goal,
     workflow_is_already_authored,
 )
+from moonmind.workflows.executions.repository_contract import repository_name_from_value
 from moonmind.workflows.executions.runtime_target_selection import (
     AuthoringSurface,
     resolve_runtime_target_selection,
@@ -122,8 +123,9 @@ async def expand_preset_for_child_run(
 
     template_scope = str(template_payload.get("scope") or "global").strip() or "global"
     template_scope_ref = (
-        str(template_payload.get("scopeRef") or template_payload.get("scope_ref") or "")
-        .strip()
+        str(
+            template_payload.get("scopeRef") or template_payload.get("scope_ref") or ""
+        ).strip()
         or None
     )
     template_inputs = _coerce_mapping(task_payload.get("inputs"))
@@ -133,9 +135,12 @@ async def expand_preset_for_child_run(
         or parameters.get("repo")
     )
     template_context: dict[str, Any] = {}
-    if isinstance(repository, str) and repository.strip():
-        template_context["repository"] = repository.strip()
-        template_context["repo"] = repository.strip()
+    repository_name = repository_name_from_value(repository)
+    if repository_name:
+        # Project template context without replacing the selected connection,
+        # provider, or branch in the authoritative repository target.
+        template_context["repository"] = repository_name
+        template_context["repo"] = repository_name
     git_payload = _coerce_mapping(task_payload.get("git"))
     branch = (
         git_payload.get("branch")
@@ -234,9 +239,7 @@ async def expand_preset_for_child_run(
     ):
         task_payload["publish"] = dict(expanded_publish)
     expanded_checkpoint_branching = (
-        expanded.get("checkpointBranching")
-        if isinstance(expanded, Mapping)
-        else None
+        expanded.get("checkpointBranching") if isinstance(expanded, Mapping) else None
     )
     if isinstance(expanded_checkpoint_branching, Mapping) and not isinstance(
         task_payload.get("checkpointBranching"), Mapping

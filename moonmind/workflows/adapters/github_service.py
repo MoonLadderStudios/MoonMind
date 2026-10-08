@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -365,11 +365,6 @@ class GitHubService:
     @staticmethod
     def github_permission_profiles() -> dict[str, GitHubPermissionProfile]:
         return {
-            "indexing": GitHubPermissionProfile(
-                profile_id="indexing",
-                required_permissions={"Contents": "read"},
-                optional_permissions={},
-            ),
             "publish": GitHubPermissionProfile(
                 profile_id="publish",
                 required_permissions={
@@ -911,11 +906,15 @@ class GitHubService:
         credential: Any | None = None,
         connection: Any | None = None,
         revision_reader: Any | None = None,
+        admitted_repositories: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Observe read access with selected authority; never claim write access.
 
         A selected connection retains its trusted endpoint and typed acquisition
-        path, including bound App installation tokens. ``credential`` remains
+        path, including bound App installation tokens. Other selected
+        credentials read only a repository the connection admits: its saved
+        ``admitted_repositories`` or its own permitted repositories. A token
+        usually sees more than its connection admits. ``credential`` remains
         available to historical callers with already-resolved credentials. Only
         callers without either selection use the legacy deployment resolver.
         """
@@ -925,7 +924,10 @@ class GitHubService:
             BOUND_UNAVAILABLE,
             BoundAccessError,
         )
-        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.auth.github_app_wiring import (
+            github_api_base_for,
+            permitted_repositories_for,
+        )
         from moonmind.auth.github_credentials import (
             resolve_connection_github_credential,
             resolve_github_credential,
@@ -946,7 +948,14 @@ class GitHubService:
             "defaultBranchAccessible": None,
             "pullRequestAccessible": None,
             "remoteDefaultBranch": None,
-            "observations": {"read": "not_checked", "write": "untested"},
+            "testedBranch": None,
+            "reportedPermissions": None,
+            "retryAfterSeconds": None,
+            "observations": {
+                "read": "not_checked",
+                "branch": "not_checked",
+                "write": "untested",
+            },
             "permissionChecklist": checklist,
             "diagnostics": [],
             "limitations": [
@@ -965,6 +974,29 @@ class GitHubService:
         app_read_scope = (
             connection is not None and connection.credential.source == "github_app"
         )
+        if connection is not None and not app_read_scope:
+            # Bound App issuance enforces its own repository restriction; a
+            # PAT does not, so refuse before reading its secret or GitHub.
+            admitted = {
+                str(name).strip().casefold()
+                for name in (
+                    *admitted_repositories,
+                    *permitted_repositories_for(connection),
+                )
+                if str(name).strip()
+            }
+            if repo.strip().casefold() not in admitted:
+                result["diagnostics"].append(
+                    {
+                        "operation": "repository_assignment",
+                        "message": (
+                            f"{repo} is not assigned to this connection; "
+                            "assign it before testing."
+                        ),
+                        "retryable": False,
+                    }
+                )
+                return result
         try:
             if connection is not None:
                 # Validate the deployment-controlled trust policy before reading
@@ -1039,9 +1071,11 @@ class GitHubService:
                 permission = check["permission"]
                 if "{ref}" in url:
                     if not ref:
-                        # The default branch was not observed; do not guess one.
+                        # No branch was observed; do not guess one.
                         continue
                     url = url.replace("{ref}", ref)
+                    if operation == "branch":
+                        result["testedBranch"] = ref
                 try:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
@@ -1049,43 +1083,83 @@ class GitHubService:
                         result[field] = True
                     if operation == "repository":
                         result["observations"]["read"] = "verified"
-                        default_branch = self._probe_default_branch(response)
+                        payload = self._probe_json_object(response)
+                        default_branch = (
+                            str(payload.get("default_branch") or "").strip() or None
+                        )
                         result["remoteDefaultBranch"] = default_branch
+                        result["reportedPermissions"] = self._probe_reported_permissions(
+                            payload
+                        )
                         ref = ref or default_branch or ""
+                    elif operation == "branch":
+                        result["observations"]["branch"] = "verified"
                     if permission:
                         self._mark_probe_permission(
                             result["permissionChecklist"],
                             permission=str(permission),
                             success=True,
                         )
+                    continue
                 except httpx.HTTPStatusError as exc:
                     status_code = exc.response.status_code
-                    rate_limit = self._github_rate_limit_event(exc.response)
-                    unavailable = status_code >= 500 or rate_limit is not None
-                    if field and not unavailable:
-                        result[field] = False
-                    if operation == "repository":
-                        result["observations"]["read"] = (
-                            "unavailable" if unavailable else "denied"
-                        )
-                    if permission and not unavailable:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
-                        )
-                    result["diagnostics"].append(
-                        {
-                            "operation": operation,
-                            "httpStatus": status_code,
-                            "message": self._github_permission_summary(exc.response),
-                            "retryable": unavailable,
-                        }
+                    unavailable = self._record_probe_http_failure(
+                        result, operation=operation, response=exc.response
                     )
+                    if unavailable:
+                        if operation == "repository":
+                            result["observations"]["read"] = "unavailable"
+                        elif operation == "branch":
+                            result["observations"]["branch"] = "unavailable"
+                    elif operation == "branch" and status_code in {404, 409}:
+                        # A missing branch says nothing about Contents access.
+                        result[str(field)] = False
+                        branch_kind = (
+                            "empty_repository"
+                            if status_code == 409
+                            else await self._probe_missing_branch_kind(
+                                client,
+                                api_base=api_base,
+                                repo=repo,
+                                headers=headers,
+                                result=result,
+                            )
+                        )
+                        result["observations"]["branch"] = branch_kind
+                        ref = ""
+                        if branch_kind != "unavailable":
+                            if branch_kind == "denied" and permission:
+                                self._mark_probe_permission(
+                                    result["permissionChecklist"],
+                                    permission=str(permission),
+                                    success=False,
+                                )
+                            continue
+                        # The listing read was throttled or failed: stop.
+                        unavailable = True
+                    else:
+                        if field:
+                            result[field] = False
+                        if operation == "repository":
+                            # GitHub hides unshared private repositories as 404.
+                            result["observations"]["read"] = (
+                                "not_found" if status_code == 404 else "denied"
+                            )
+                        elif operation == "branch":
+                            result["observations"]["branch"] = "denied"
+                        if permission:
+                            self._mark_probe_permission(
+                                result["permissionChecklist"],
+                                permission=str(permission),
+                                success=False,
+                            )
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
                     # An outage is not denied access: leave the field unknown.
+                    unavailable = True
                     if operation == "repository":
                         result["observations"]["read"] = "unavailable"
+                    elif operation == "branch":
+                        result["observations"]["branch"] = "unavailable"
                     result["diagnostics"].append(
                         {
                             "operation": operation,
@@ -1093,18 +1167,105 @@ class GitHubService:
                             "retryable": True,
                         }
                     )
+                if unavailable or operation == "repository":
+                    # A throttle or outage ends the test rather than spending
+                    # more requests, and nothing else is observable about an
+                    # unreadable repository. Remaining checks stay unchecked.
+                    break
         return result
 
     @staticmethod
-    def _probe_default_branch(response: httpx.Response) -> str | None:
+    def _probe_json_object(response: httpx.Response) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _probe_reported_permissions(payload: Mapping[str, Any]) -> dict[str, bool] | None:
+        """Permission metadata GitHub reports; it is not an observed write."""
+
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, Mapping):
             return None
-        if not isinstance(payload, dict):
-            return None
-        branch = str(payload.get("default_branch") or "").strip()
-        return branch or None
+        reported = {
+            str(name): value
+            for name, value in permissions.items()
+            if isinstance(value, bool)
+        }
+        return reported or None
+
+    def _record_probe_http_failure(
+        self,
+        result: dict[str, Any],
+        *,
+        operation: str,
+        response: httpx.Response,
+    ) -> bool:
+        """Record one failed probe read; report whether it was a throttle/outage."""
+
+        rate_limit = self._github_rate_limit_event(response)
+        unavailable = response.status_code >= 500 or rate_limit is not None
+        diagnostic: dict[str, Any] = {
+            "operation": operation,
+            "httpStatus": response.status_code,
+            "message": self._github_permission_summary(response),
+            "retryable": unavailable,
+        }
+        if rate_limit is not None:
+            retry_after = resolve_provider_cooldown_seconds(
+                rate_limit,
+                now=datetime.now(timezone.utc),
+                default_seconds=60,
+            )
+            result["retryAfterSeconds"] = retry_after
+            diagnostic["retryAfterSeconds"] = retry_after
+        result["diagnostics"].append(diagnostic)
+        return unavailable
+
+    async def _probe_missing_branch_kind(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        api_base: str,
+        repo: str,
+        headers: Mapping[str, str],
+        result: dict[str, Any],
+    ) -> str:
+        """Tell an empty repository from a missing branch with one read.
+
+        A throttle or outage on that read is ``unavailable``, not a missing
+        branch; the caller then stops probing.
+        """
+
+        operation = "branch_listing"
+        try:
+            response = await client.get(
+                f"{api_base}/repos/{repo}/branches?per_page=1", headers=headers
+            )
+            response.raise_for_status()
+            branches = response.json()
+        except httpx.HTTPStatusError as exc:
+            if self._record_probe_http_failure(
+                result, operation=operation, response=exc.response
+            ):
+                return "unavailable"
+            return "denied" if exc.response.status_code in {401, 403} else "not_found"
+        except httpx.HTTPError as exc:
+            result["diagnostics"].append(
+                {
+                    "operation": operation,
+                    "message": exc.__class__.__name__,
+                    "retryable": True,
+                }
+            )
+            return "unavailable"
+        except ValueError:
+            return "not_found"
+        if isinstance(branches, list):
+            return "missing" if branches else "empty_repository"
+        return "not_found"
 
     # -- PR operations ----------------------------------------------------
 
@@ -1714,6 +1875,7 @@ class GitHubService:
         attempt_started_at: str,
         recorded_comment_id: int | None = None,
         github_token: str | None = None,
+        expires_at: str | None = None,
     ) -> AutomatedReviewRequestResult:
         """Post exactly one automated review request for one exact head SHA.
 
@@ -1727,6 +1889,9 @@ class GitHubService:
         record = automated_review_provider_or_raise(provider)
         command = record.command
         expected_head_sha = str(expected_head_sha or "").strip()
+        deadline = _parse_github_timestamp(expires_at)
+        if expires_at is not None and deadline is None:
+            raise ValueError("review request expires_at must be an ISO timestamp")
 
         def _result(**kwargs: Any) -> AutomatedReviewRequestResult:
             payload: dict[str, Any] = {
@@ -1842,6 +2007,17 @@ class GitHubService:
                         "Adopted an automated review request created by this "
                         "identity after the attempt started."
                     ),
+                )
+
+            # A late acknowledgement must preserve a reconciled effect above.
+            # Only a new POST is forbidden once the original gate expires,
+            # including when reads or an Activity retry crossed the deadline.
+            if deadline is not None and datetime.now(timezone.utc) >= deadline:
+                return _result(
+                    status="expired",
+                    observedHeadSha=observed_head_sha or None,
+                    retryable=False,
+                    summary="Review deadline expired before a new request was posted.",
                 )
 
             try:
@@ -2538,14 +2714,16 @@ class GitHubService:
                 "blockers": [],
             }
 
-        reaction = await self._find_request_clean_review_reaction(
-            client=client,
-            repo=repo,
-            pr_number=pr_number,
-            headers=headers,
-            provider=record,
-            request_comment_id=review_request.get("requestCommentId"),
-            requested_at=requested_at,
+        reaction, reaction_blocker = (
+            await self._find_request_clean_review_reaction(
+                client=client,
+                repo=repo,
+                pr_number=pr_number,
+                headers=headers,
+                provider=record,
+                request_comment_id=review_request.get("requestCommentId"),
+                requested_at=requested_at,
+            )
         )
         if reaction is not None:
             return {
@@ -2599,6 +2777,12 @@ class GitHubService:
                         "providerFailure": provider_failure.to_metadata(),
                     }
                 ],
+            }
+        if reaction_blocker is not None:
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [reaction_blocker],
             }
         return pending
 
@@ -2676,7 +2860,9 @@ class GitHubService:
         provider: Any,
         request_comment_id: Any,
         requested_at: datetime | None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Retain permission denial while the caller checks other review evidence."""
+
         def _matches(reaction: Any, *, enforce_not_before: bool) -> bool:
             if not isinstance(reaction, dict):
                 return False
@@ -2713,23 +2899,41 @@ class GitHubService:
                 True,
             )
         )
+        permission_blocker = None
         for url, enforce_not_before in urls:
             try:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 reactions = response.json()
-            except (
-                httpx.HTTPStatusError,
-                httpx.TransportError,
-                httpx.TimeoutException,
-            ):
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code == 403
+                    and self._github_rate_limit_event(exc.response) is None
+                    and permission_blocker is None
+                ):
+                    permission_blocker = {
+                        **self._permission_blocker(
+                            response=exc.response,
+                            evidence_source="issue_reactions",
+                            missing_permission="Issues: read",
+                            summary=(
+                                "Requested review reaction evidence is denied "
+                                "by the selected GitHub connection (HTTP 403); "
+                                "no fresh provider review or clean comment "
+                                "is available."
+                            ),
+                        ),
+                        "kind": "policy_denied",
+                    }
+                continue
+            except (httpx.TransportError, httpx.TimeoutException):
                 continue
             if not isinstance(reactions, list):
                 continue
             for reaction in reactions:
                 if _matches(reaction, enforce_not_before=enforce_not_before):
-                    return reaction
-        return None
+                    return reaction, None
+        return None, permission_blocker
 
     async def _evaluate_automated_review(
         self,

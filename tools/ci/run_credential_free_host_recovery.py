@@ -572,6 +572,8 @@ def main(argv=None):
                             )
                 ET.ElementTree(summary).write(output / JUNIT, encoding="unicode")
             except (OSError, ET.ParseError):
+                # The projected summary is auxiliary evidence; an unreadable
+                # report is omitted rather than failing cleanup of the run.
                 pass
         shutil.rmtree(work, ignore_errors=True)
 

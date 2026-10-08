@@ -83,8 +83,8 @@ function providerFormMarkup(): string {
         <legend class="px-2 text-sm font-semibold">Identity &mdash; required</legend>
         <div class="provider-profile-identity-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <label class="flex flex-col gap-1.5 text-sm">Profile ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="${LONG_ID}" /></label>
-          <label class="flex flex-col gap-1.5 text-sm">Runtime ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="codex_cli" /></label>
-          <label class="flex flex-col gap-1.5 text-sm">Provider ID<input class="w-full rounded-xl border px-3 py-2 text-sm" value="openai" /></label>
+          <label class="flex flex-col gap-1.5 text-sm">Harness<select class="w-full rounded-xl border px-3 py-2 text-sm"><option value="codex_cli">Codex CLI</option></select></label>
+          <label class="flex flex-col gap-1.5 text-sm">Provider<select class="w-full rounded-xl border px-3 py-2 text-sm"><option value="openai">OpenAI</option></select></label>
           <label class="flex flex-col gap-1.5 text-sm">Account label<input class="w-full rounded-xl border px-3 py-2 text-sm" value="Team account" /></label>
         </div>
       </fieldset>
