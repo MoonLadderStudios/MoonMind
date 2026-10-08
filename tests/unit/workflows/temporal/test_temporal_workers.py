@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -206,14 +205,6 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert first.versioning_enabled is True
     assert first.build_id == "abc123"
 
-    alternate_lane = build_worker_spec(
-        topology=replace(topology, task_queues=("mm.workflow.merge_automation",)),
-        workflows=workflow_fleet_workflow_classes(),
-        activities=workflow_fleet_activity_handlers(),
-        environ=kwargs["environ"],
-    )
-    assert alternate_lane.registry_fingerprint == first.registry_fingerprint
-
 
 def test_production_worker_spec_requires_immutable_release_identity() -> None:
     topology = build_worker_topology(fleet=WORKFLOW_FLEET)
@@ -341,6 +332,58 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
         "agent_runtime",
         "docker_workload",
     )
+
+def test_workflow_topology_polls_every_lane_with_independent_merge_limit():
+    """MoonLadderStudios/MoonMind#3937: one workflow process owns all three lanes.
+
+    The merge-automation lane keeps its own bounded workflow-task slots instead
+    of inheriting the normal-lane limit, so co-locating it cannot change the
+    aggregate capacity the separate interpreter used to provide.
+    """
+
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "worker_fleet": WORKFLOW_FLEET,
+            "workflow_task_queue": "mm.workflow",
+            "user_workflow_v2_task_queue": "mm.workflow.user.v2",
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation",
+            "workflow_worker_concurrency": 8,
+            "merge_automation_workflow_worker_concurrency": 3,
+        }
+    )
+
+    topology = describe_configured_worker(temporal_settings=temporal_settings)
+
+    assert topology.task_queues == (
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    )
+    assert topology.concurrency_limit == 8
+    assert topology.task_queue_concurrency_limits == {
+        "mm.workflow.merge_automation": 3
+    }
+    assert topology.to_payload()["task_queue_concurrency_limits"] == {
+        "mm.workflow.merge_automation": 3
+    }
+
+
+def test_merge_automation_worker_concurrency_defaults_to_two(monkeypatch):
+    monkeypatch.delenv(
+        "TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY", raising=False
+    )
+    from moonmind.config.settings import TemporalSettings
+
+    assert TemporalSettings(_env_file=None).merge_automation_workflow_worker_concurrency == 2
+    monkeypatch.setenv("TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY", "5")
+    assert TemporalSettings(_env_file=None).merge_automation_workflow_worker_concurrency == 5
+
+
+def test_activity_topologies_have_no_per_queue_concurrency_overrides():
+    topology = build_worker_topology(fleet=AGENT_RUNTIME_FLEET)
+
+    assert topology.task_queue_concurrency_limits == {}
+
 
 def test_agent_runtime_topology_exposes_docker_workload_capability():
     topology = describe_configured_worker(

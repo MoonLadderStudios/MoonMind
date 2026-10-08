@@ -4353,8 +4353,15 @@ async def test_main_async_workflow_fleet(
     mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
-    mock_topology.task_queues = ["mm.workflow.user.v2", "mm.workflow"]
+    mock_topology.task_queues = [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    ]
     mock_topology.concurrency_limit = 7
+    mock_topology.task_queue_concurrency_limits = {
+        "mm.workflow.merge_automation": 2
+    }
     mock_describe.return_value = mock_topology
 
     mock_client = MagicMock()
@@ -4366,17 +4373,42 @@ async def test_main_async_workflow_fleet(
     mock_worker_replay = MagicMock()
     mock_worker_replay.run = AsyncMock()
     mock_worker_replay.shutdown = AsyncMock()
-    mock_worker_cls.side_effect = [mock_worker_v2, mock_worker_replay]
+    mock_worker_merge = MagicMock()
+    mock_worker_merge.run = AsyncMock()
+    mock_worker_merge.shutdown = AsyncMock()
+    mock_worker_cls.side_effect = [
+        mock_worker_v2,
+        mock_worker_replay,
+        mock_worker_merge,
+    ]
 
     # Run
     await main_async()
 
-    # Verify Worker creation uses the mock workflows
-    assert mock_worker_cls.call_count == 2
+    # MoonLadderStudios/MoonMind#3937: one process, one client, one health
+    # server and one serve_workers group host every workflow lane. The merge
+    # lane keeps its own workflow-task slots instead of the normal-lane limit.
+    mock_connect.assert_awaited_once()
+    mock_healthcheck.assert_awaited_once()
+    assert mock_worker_cls.call_count == 3
     assert [call.kwargs["task_queue"] for call in mock_worker_cls.call_args_list] == [
         "mm.workflow.user.v2",
         "mm.workflow",
+        "mm.workflow.merge_automation",
     ]
+    assert [
+        call.kwargs["max_concurrent_workflow_tasks"]
+        for call in mock_worker_cls.call_args_list
+    ] == [7, 7, 2]
+    assert all(call.args == (mock_client,) for call in mock_worker_cls.call_args_list)
+    health_state = mock_healthcheck.call_args.args[0]
+    assert health_state.readiness_metadata["taskQueues"] == [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    ]
+    # Every member stopped, so readiness was withdrawn before exit.
+    assert health_state.pollers_started is False
     kwargs = mock_worker_cls.call_args_list[0].kwargs
     from moonmind.workflows.temporal.workflows.agent_session import (
         MoonMindAgentSessionWorkflow,
@@ -4463,6 +4495,9 @@ async def test_main_async_workflow_fleet(
     # Verify worker run is called
     mock_worker_v2.run.assert_awaited_once()
     mock_worker_replay.run.assert_awaited_once()
+    mock_worker_merge.run.assert_awaited_once()
+    for worker in (mock_worker_v2, mock_worker_replay, mock_worker_merge):
+        worker.shutdown.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")

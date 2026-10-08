@@ -16,8 +16,7 @@ Providing owners:
   (`build_default_activity_catalog`) with worker bindings in
   `moonmind/workflows/temporal/activity_runtime.py`
   (`validate_activity_catalog_runtime_bindings`)
-- Worker construction: `moonmind/workflows/temporal/worker_entrypoint.py`
-  and `moonmind/workflows/temporal/worker_runtime.py` via
+- Worker construction: `moonmind/workflows/temporal/worker_runtime.py` via
   `moonmind/workflows/temporal/workers.py`
 - Search Attributes: `moonmind/workflows/temporal/service.py`,
   `moonmind/workflows/temporal/scheduled_start.py`,
@@ -33,8 +32,8 @@ types link to the operator surface in
 `docs/Temporal/SourceOfTruthAndProjectionModel.md`; valid controls per type live in
 `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` §6.2. Version-looking names (for example
 `MoonMind.PublicationRecoveryV1`) are first-class registrations and
-are never omitted. Conditional workflow-queue polling (start queue
-plus pre-patch replay queue) is declared by
+are never omitted. Workflow-queue polling (start queue, pre-patch
+replay queue and merge-automation lane) is declared by
 `get_workflow_poll_task_queues`; conditional registrations, when
 present, are listed with their supported condition below.
 
@@ -67,11 +66,13 @@ New workflow starts use `mm.workflow.user.v2`. The workflow fleet polls:
 
 - `mm.workflow.user.v2`
 - `mm.workflow`
+- `mm.workflow.merge_automation`
 
 A pre-patch replay queue is polled only when it differs from the
-start queue (`get_workflow_poll_task_queues`); otherwise the fleet
-polls the start queue alone. This conditional queue is routing
-plumbing for in-flight histories, not product semantics.
+start queue (`get_workflow_poll_task_queues`). This conditional queue
+is routing plumbing for in-flight histories, not product semantics.
+The merge-automation queue is polled by the same worker process
+with its own bounded workflow-task slots.
 
 ## Workflow-queue handler routing
 

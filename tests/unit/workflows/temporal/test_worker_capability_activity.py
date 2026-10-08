@@ -37,8 +37,8 @@ async def test_capability_preflight_reports_exact_ready_worker(monkeypatch) -> N
         "ready": True,
         "workflowTypes": ["MoonMind.UserWorkflow", "MoonMind.PRResolver"],
         "taskQueues": ["mm.workflow"],
-        "registryFingerprints": ["sha256:registry"],
-        "buildIds": ["build-3199"],
+        "registryFingerprint": "sha256:registry",
+        "buildId": "build-3199",
     }
     monkeypatch.setattr(
         activity_runtime_module.httpx,
@@ -68,8 +68,8 @@ async def test_capability_preflight_fails_closed_for_registration_mismatch(
                 "ready": True,
                 "workflowTypes": ["MoonMind.UserWorkflow"],
                 "taskQueues": ["mm.workflow"],
-                "registryFingerprints": ["sha256:old"],
-                "buildIds": ["old-build"],
+                "registryFingerprint": "sha256:old",
+                "buildId": "old-build",
             }
         ),
     )
@@ -97,9 +97,8 @@ async def test_capability_preflight_handles_null_readiness_collections(
                 "ready": True,
                 "workflowTypes": None,
                 "taskQueues": None,
-                "registryFingerprints": None,
-                "buildIds": None,
-                "children": None,
+                "registryFingerprint": None,
+                "buildId": None,
             }
         ),
     )

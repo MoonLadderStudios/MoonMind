@@ -594,43 +594,6 @@ def test_probe_worker_readiness_parses_503_stale_body(
     assert payload["codeRevision"] == "startup-rev"
 
 
-def test_collect_worker_code_freshness_expands_group_children_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The supervisor envelope (children, no top-level identity) per-lane."""
-
-    monkeypatch.setenv("MOONMIND_BUILD_SHA", "checkout-rev")
-    current = WorkerCodeIdentity(revision="checkout-rev", source="MOONMIND_BUILD_SHA")
-
-    def _probe(url: str) -> dict[str, Any]:
-        assert url == "http://group:8080/readyz"
-        return {
-            "status": "unhealthy",
-            "children": [
-                {
-                    "fleet": "workflow",
-                    "codeRevision": "checkout-rev",
-                    "codeDigest": "sha256:x",
-                    "codeIdentitySource": "MOONMIND_BUILD_SHA",
-                },
-                {
-                    "fleet": "workflow",
-                    "codeRevision": "startup-rev",
-                    "codeDigest": "sha256:y",
-                    "codeIdentitySource": "MOONMIND_BUILD_SHA",
-                },
-            ],
-        }
-
-    freshness = collect_worker_code_freshness(
-        [("workflow", "http://group:8080/readyz")], current=current, probe=_probe
-    )
-    assert len(freshness) == 2
-    by_name = {item.name: item.status for item in freshness}
-    assert by_name["workflow/workflow"] == "healthy"
-    assert by_name["workflow/workflow-1"] == "stale"
-
-
 def test_current_worker_code_revision_falls_back_to_digest() -> None:
     from moonmind.workflows.temporal.worker_code_identity import (
         current_worker_code_revision,
@@ -651,20 +614,14 @@ def test_payload_busy_hint_is_conservative() -> None:
     assert payload_busy_hint({"busy": True}) is True
     assert payload_busy_hint({"busy": False}) is False
     assert payload_busy_hint({"busy": False, "activeActivities": 2}) is True
-    assert payload_busy_hint({"children": [{"busy": False}]}) is False
-    assert payload_busy_hint({"children": [{}, {"busy": False}]}) is True
 
 
-def test_compose_service_for_worker_maps_lanes_and_hostnames() -> None:
+def test_compose_service_for_worker_maps_fleets_and_hostnames() -> None:
     from moonmind.workflows.skills.deployment_execution import (
         _compose_service_for_worker,
     )
 
     assert _compose_service_for_worker("workflow") == "temporal-worker-workflow"
-    assert (
-        _compose_service_for_worker("workflow/workflow-1")
-        == "temporal-worker-workflow"
-    )
     assert (
         _compose_service_for_worker("temporal-worker-workflow")
         == "temporal-worker-workflow"

@@ -3101,12 +3101,15 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         raise
 
 
-def _worker_concurrency_kwargs(topology) -> dict[str, int]:
-    if topology.concurrency_limit is None:
+def _worker_concurrency_kwargs(topology, task_queue: str) -> dict[str, int]:
+    limit = topology.concurrency_limit
+    if task_queue in topology.task_queue_concurrency_limits:
+        limit = topology.task_queue_concurrency_limits[task_queue]
+    if limit is None:
         return {}
     if topology.fleet == WORKFLOW_FLEET:
-        return {"max_concurrent_workflow_tasks": topology.concurrency_limit}
-    return {"max_concurrent_activities": topology.concurrency_limit}
+        return {"max_concurrent_workflow_tasks": limit}
+    return {"max_concurrent_activities": limit}
 
 
 def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
@@ -3275,7 +3278,6 @@ async def main_async() -> None:
             "workflows": spec.workflows,
             "activities": spec.activities,
             "workflow_runner": UnsandboxedWorkflowRunner(),
-            **_worker_concurrency_kwargs(topology),
         }
         from moonmind.workflows.temporal.worker_lifecycle import WORKER_DRAIN_TIMEOUT, serve_workers
         worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
@@ -3288,11 +3290,15 @@ async def main_async() -> None:
                 use_worker_versioning=True,
                 default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
             )
+        # Every queue of the fleet, including the separately bounded
+        # merge-automation lane, is one SDK Worker in this process's single
+        # serve_workers group: one signal owner, one client, one /readyz.
         workers = [
             Worker(
                 client,
                 task_queue=task_queue,
                 **worker_kwargs,
+                **_worker_concurrency_kwargs(topology, task_queue),
             )
             for task_queue in topology.task_queues
         ]

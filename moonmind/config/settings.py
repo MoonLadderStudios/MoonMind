@@ -142,6 +142,14 @@ class TemporalSettings(BaseSettings):
         validation_alias="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
         ge=1,
     )
+    # The workflow fleet polls the merge-automation queue with its own SDK
+    # Worker, so this bounds that lane's workflow-task slots independently of
+    # the start/replay lanes (MoonLadderStudios/MoonMind#3937).
+    merge_automation_workflow_worker_concurrency: int | None = Field(
+        2,
+        validation_alias="TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY",
+        ge=1,
+    )
     artifacts_worker_concurrency: int | None = Field(
         8,
         validation_alias="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",

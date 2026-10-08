@@ -1843,9 +1843,9 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
     )
 
 
-@pytest.mark.parametrize("agent_session_on_workflow_queue", [True, False])
-def test_catalog_checks_workflow_supervisor_child_registration(
-    monkeypatch, agent_session_on_workflow_queue
+@pytest.mark.parametrize("agent_session_registered", [True, False])
+def test_catalog_checks_workflow_worker_registration(
+    monkeypatch, agent_session_registered
 ):
     live_readiness = catalog._live_deployment_readiness
     app = _app(monkeypatch, session=_Session([_profile()]))
@@ -1874,33 +1874,19 @@ def test_catalog_checks_workflow_supervisor_child_registration(
             _HealthResponse(
                 {
                     "ready": True,
-                    "taskQueues": ["mm.workflow"],
-                    "workflowTypes": ["MoonMind.AgentSession"],
-                    "buildIds": ["workflow-build"],
-                    "registryFingerprints": ["sha256:workflow-registry"],
-                    "children": [
-                        {
-                            "ready": True,
-                            "taskQueues": ["mm.workflow"],
-                            "workflowTypes": (
-                                ["MoonMind.AgentSession"]
-                                if agent_session_on_workflow_queue
-                                else []
-                            ),
-                            "buildId": "workflow-build",
-                            "registryFingerprint": "sha256:workflow-registry",
-                            "immutableReleaseIdentity": True,
-                        },
-                        {
-                            "ready": True,
-                            "taskQueues": ["mm.workflow.merge_automation"],
-                            "workflowTypes": (
-                                []
-                                if agent_session_on_workflow_queue
-                                else ["MoonMind.AgentSession"]
-                            ),
-                        },
+                    "taskQueues": [
+                        "mm.workflow.user.v2",
+                        "mm.workflow",
+                        "mm.workflow.merge_automation",
                     ],
+                    "workflowTypes": (
+                        ["MoonMind.AgentSession"]
+                        if agent_session_registered
+                        else ["MoonMind.UserWorkflow"]
+                    ),
+                    "buildId": "workflow-build",
+                    "registryFingerprint": "sha256:workflow-registry",
+                    "immutableReleaseIdentity": True,
                 }
             ),
         ]
@@ -1924,10 +1910,10 @@ def test_catalog_checks_workflow_supervisor_child_registration(
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["available"] is agent_session_on_workflow_queue
-    assert body["admissionReadiness"]["admitNew"] is agent_session_on_workflow_queue
+    assert body["available"] is agent_session_registered
+    assert body["admissionReadiness"]["admitNew"] is agent_session_registered
     assert ("reconciler_generation" in body["admissionReadiness"]["blocking"]) is (
-        not agent_session_on_workflow_queue
+        not agent_session_registered
     )
 
 

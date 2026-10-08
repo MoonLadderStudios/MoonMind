@@ -4931,32 +4931,19 @@ class TemporalIntegrationActivities:
             and workflow_type in workflow_types
             and task_queue in task_queues
         )
-        fingerprints = [
-            str(item) for item in (readiness.get("registryFingerprints") or [])
-        ]
-        if not fingerprints and readiness.get("registryFingerprint"):
-            fingerprints = [str(readiness["registryFingerprint"])]
-        build_ids = [str(item) for item in (readiness.get("buildIds") or [])]
-        if not build_ids and readiness.get("buildId"):
-            build_ids = [str(readiness["buildId"])]
-        children = [
-            item
-            for item in (readiness.get("children") or [])
-            if isinstance(item, Mapping)
-            and workflow_type
-            in {str(value) for value in (item.get("workflowTypes") or [])}
-            and task_queue in {str(value) for value in (item.get("taskQueues") or [])}
-        ]
-        if not children and workflow_type in workflow_types and task_queue in task_queues:
-            children = [readiness]
+        # One workflow process serves every workflow queue, so its readiness
+        # is a single identity rather than a per-lane envelope
+        # (MoonLadderStudios/MoonMind#3937).
+        fingerprint = str(readiness.get("registryFingerprint") or "").strip()
+        fingerprints = [fingerprint] if fingerprint else []
+        build_id = str(readiness.get("buildId") or "").strip()
+        build_ids = [build_id] if build_id else []
+        registered = workflow_type in workflow_types and task_queue in task_queues
+        identity = readiness if registered else {}
 
         def _single_value(key: str) -> str | None:
-            values = {
-                str(item.get(key))
-                for item in children
-                if item.get(key) is not None and str(item.get(key)).strip()
-            }
-            return next(iter(values)) if len(values) == 1 else None
+            value = identity.get(key)
+            return str(value) if value is not None and str(value).strip() else None
 
         result = {
             "available": available,
@@ -4976,11 +4963,7 @@ class TemporalIntegrationActivities:
             "buildSha": _single_value("buildSha"),
             "imageDigest": _single_value("imageDigest"),
             "deploymentId": _single_value("deploymentId"),
-            "resolverCore": (
-                dict(children[0].get("resolverCore") or {})
-                if len(children) == 1
-                else {}
-            ),
+            "resolverCore": dict(identity.get("resolverCore") or {}),
         }
         if not available:
             logger.error(

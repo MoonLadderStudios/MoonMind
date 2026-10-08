@@ -1,4 +1,4 @@
-"""One graceful signal/drain owner shared by the supported worker entrypoints."""
+"""One graceful signal/drain owner for every SDK Worker in a worker process."""
 
 from __future__ import annotations
 

@@ -498,48 +498,6 @@ def _startup_identity_from_payload(payload: Mapping[str, Any]) -> WorkerCodeIden
     )
 
 
-def _children_freshness(
-    name: str,
-    payload: Mapping[str, Any],
-    checkout: WorkerCodeIdentity,
-) -> list[WorkerCodeFreshness] | None:
-    """Expand a workflow-group readiness envelope into per-lane freshness.
-
-    The default Compose topology points ``TEMPORAL_WORKFLOW_READINESS_URL``
-    at the workflow worker-group supervisor (port 8080), whose response
-    stores per-process readiness under ``children`` and carries no
-    top-level ``codeRevision``/``codeDigest``. Reading only the top-level
-    fields would classify the whole fleet as ``unknown`` on every
-    successful response, so each child identity is compared with the
-    checkout and reported as ``<group>/<lane>``. Returns ``None`` when
-    the payload carries no child identities (caller falls back to the
-    top-level fields).
-    """
-
-    children = payload.get("children")
-    if not isinstance(children, list) or not children:
-        return None
-    lanes = [child for child in children if isinstance(child, Mapping)]
-    if not lanes:
-        return None
-    seen: dict[str, int] = {}
-    results: list[WorkerCodeFreshness] = []
-    for index, child in enumerate(lanes):
-        label = (
-            str(child.get("fleet") or child.get("worker") or f"child-{index}").strip()
-            or f"child-{index}"
-        )
-        occurrence = seen.get(label, 0)
-        seen[label] = occurrence + 1
-        unique = label if occurrence == 0 else f"{label}-{occurrence}"
-        startup = _startup_identity_from_payload(child)
-        freshness = evaluate_worker_freshness(
-            name=f"{name}/{unique}", startup=startup, current=checkout
-        )
-        results.append(freshness)
-    return results
-
-
 def payload_busy_hint(payload: Mapping[str, Any]) -> bool:
     """Return a conservative busy hint for one readiness payload.
 
@@ -556,26 +514,15 @@ def payload_busy_hint(payload: Mapping[str, Any]) -> bool:
             return None
         return count if count >= 0 else None
 
-    candidates: list[Mapping[str, Any]] = [payload]
-    children = payload.get("children")
-    if isinstance(children, list):
-        lanes = [child for child in children if isinstance(child, Mapping)]
-        if lanes:
-            # The group envelope itself is an aggregate: busyness is
-            # decided by the per-lane payloads, not the envelope.
-            candidates = lanes
-    for candidate in candidates:
-        if candidate.get("busy") is True:
+    if payload.get("busy") is True:
+        return True
+    for key in ("activeActivities", "inFlightActivities", "pendingActivities"):
+        count = _active_count(payload.get(key))
+        if count is not None and count > 0:
             return True
-        for key in ("activeActivities", "inFlightActivities", "pendingActivities"):
-            count = _active_count(candidate.get(key))
-            if count is not None and count > 0:
-                return True
-        if candidate.get("busy") is not False:
-            # No explicit idle signal: conservatively drain rather than
-            # interrupting potentially long-running activities.
-            return True
-    return False
+    # No explicit idle signal: conservatively drain rather than interrupting
+    # potentially long-running activities.
+    return payload.get("busy") is not False
 
 
 def collect_worker_code_freshness(
@@ -602,10 +549,6 @@ def collect_worker_code_freshness(
                     current_revision=(checkout.revision or "").strip() or UNKNOWN,
                 )
             )
-            continue
-        children = _children_freshness(name, payload, checkout)
-        if children is not None:
-            results.extend(children)
             continue
         startup = _startup_identity_from_payload(payload)
         results.append(evaluate_worker_freshness(name=name, startup=startup, current=checkout))

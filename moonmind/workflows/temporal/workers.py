@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -169,6 +169,10 @@ class TemporalWorkerTopology:
     concurrency_limit: int | None
     resource_class: str
     egress_policy: str
+    # Queues whose SDK Worker is bounded independently of concurrency_limit.
+    task_queue_concurrency_limits: dict[str, int | None] = field(
+        default_factory=dict
+    )
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -398,6 +402,18 @@ def _concurrency_limit_for_fleet(
     }[fleet]
 
 
+def _task_queue_concurrency_limits_for_fleet(
+    fleet: str, *, temporal_settings: TemporalSettings
+) -> dict[str, int | None]:
+    if fleet != WORKFLOW_FLEET:
+        return {}
+    return {
+        temporal_settings.merge_automation_workflow_task_queue: (
+            temporal_settings.merge_automation_workflow_worker_concurrency
+        )
+    }
+
+
 def _fleet_entry(
     catalog: TemporalActivityCatalog, *, fleet: str
 ) -> TemporalWorkerFleet:
@@ -447,6 +463,10 @@ def build_worker_topology(
         ),
         resource_class=_FLEET_RESOURCE_CLASSES[normalized],
         egress_policy=_FLEET_EGRESS_POLICIES[normalized],
+        task_queue_concurrency_limits=_task_queue_concurrency_limits_for_fleet(
+            normalized,
+            temporal_settings=temporal_cfg,
+        ),
     )
 
 

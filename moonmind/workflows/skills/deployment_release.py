@@ -261,11 +261,6 @@ def readiness_matches(state, digest):
     routing = state.get("releaseRouting")
     if isinstance(routing, dict) and routing.get("status") == "awaiting_promotion":
         return False
-    if "children" in state:
-        children = state["children"]
-        return bool(children) and all(
-            readiness_matches(child, digest) for child in children
-        )
     return state.get("buildId") == digest
 
 
