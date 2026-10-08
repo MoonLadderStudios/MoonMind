@@ -1192,16 +1192,18 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("generic_admitted", [False, True])
-async def test_codex_admission_rejects_conflicting_policy_image_before_persistence(
+async def test_codex_admission_rejects_foreign_policy_image_before_persistence(
     monkeypatch, generic_admitted
 ) -> None:
+    # A same-repository rebuild is reconciled to the installed image (#4627,
+    # see test_profile_bound_plan_authority); another image family is not.
     monkeypatch.setenv(
         "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", str(generic_admitted)
     )
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     monkeypatch.setenv(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
-        "ghcr.io/example/omnigent-host@sha256:" + "8" * 64,
+        "ghcr.io/example/other-host@sha256:" + "8" * 64,
     )
     monkeypatch.setattr(
         service, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")

@@ -8,6 +8,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.omnigent.cutover import CutoverPhase, select_runtime
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.executions.repository_contract import (
     repository_name_from_value,
 )
@@ -1708,3 +1709,221 @@ async def test_final_verifier_gate_pre_and_post_patch_histories_replay() -> None
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+# ---------------------------------------------------------------------------
+# #4627: an interrupted agent step's successor waits for the predecessor's
+# confirmed stop and restores the save that confirmation verified. The real
+# MoonMindRunWorkflow retry loop runs under real Temporal commands; only the
+# Activities and the AgentRun child workflow outside its boundary are stubbed.
+# ---------------------------------------------------------------------------
+
+_INTERRUPTED_RETRY_STATE: dict[str, Any] = {"legacy": False, "children": []}
+_INTERRUPTED_RETRY_SAVED = {
+    "kind": "worktree_archive",
+    "baseCommit": "a" * 40,
+    "archiveRef": "artifact://art-reconciled-archive",
+    "archiveDigest": "sha256:" + "b" * 64,
+    "manifestRef": "artifact://art-reconciled-manifest",
+    "manifestDigest": "sha256:" + "c" * 64,
+    "checkpointRef": "artifact://art-reconciled-checkpoint",
+}
+
+
+@activity.defn(name="artifact.read")
+async def _interrupted_retry_plan_read(_payload: Any) -> bytes:
+    from tests.unit.workflows.temporal.workflows.test_run_integration import (
+        _mock_plan_payload,
+    )
+
+    return _mock_plan_payload(
+        [
+            {
+                "id": "omnigent-turn",
+                "tool": {"type": "agent_runtime", "name": "omnigent"},
+                "inputs": {
+                    "instructions": "Implement the change.",
+                    "runtime": {"mode": "omnigent"},
+                },
+            }
+        ]
+    )
+
+
+@activity.defn(name="integration.omnigent.oauth_host_janitor")
+async def _interrupted_retry_confirm_stop(payload: dict[str, Any]) -> dict[str, Any]:
+    confirm = payload["confirmAttemptStop"]
+    assert confirm == {
+        "executionPlanRef": "plan-interrupted",
+        "runtimeBindingRef": "binding-interrupted",
+    }
+    return {
+        "stopConfirmed": True,
+        "runtimeBindingRef": confirm["runtimeBindingRef"],
+        "savedWorkspaceCheckpoint": dict(_INTERRUPTED_RETRY_SAVED),
+    }
+
+
+@workflow.defn(name="MoonMind.AgentRun")
+class _InterruptedRetryAgentRunStub:
+    @workflow.run
+    async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        ordinal = request.step_execution.execution_ordinal
+        _INTERRUPTED_RETRY_STATE["children"].append(
+            (ordinal, request.workspace_spec.get("workspaceCheckpointRestoreRef"))
+        )
+        if ordinal == 1:
+            return AgentRunResult(
+                summary="Omnigent dispatch failed (OMNIGENT_SESSION_HOST_LOST).",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+                metadata={
+                    "unconfirmedAttemptStop": {
+                        "executionPlanRef": "plan-interrupted",
+                        "runtimeBindingRef": "binding-interrupted",
+                        "bindingState": "cleanup_pending",
+                    }
+                },
+            )
+        return AgentRunResult(summary="Completed on the installed runtime.")
+
+
+@workflow.defn(name="InterruptedStepRetryReplayFixture")
+class _InterruptedStepRetryReplayFixture:
+    @workflow.run
+    async def run(self) -> str:
+        wf = MoonMindRunWorkflow()
+        wf._owner_id = "owner-1"
+        wf._repo = "org/repo"
+        wf._integration = None
+
+        async def passthrough(request: AgentExecutionRequest) -> AgentExecutionRequest:
+            return request
+
+        async def no_manifest(_logical_step_id: str, **_kwargs: Any) -> None:
+            return None
+
+        wf._maybe_bind_workflow_scoped_session = passthrough
+        wf._record_step_execution_manifest = no_manifest
+        await wf._run_execution_stage(
+            parameters={"publishMode": "none"}, plan_ref="plan-ref"
+        )
+        return "completed"
+
+
+def _history_activity_types(history: Any) -> list[str]:
+    return [
+        event.activity_task_scheduled_event_attributes.activity_type.name
+        for event in history.events
+        if event.HasField("activity_task_scheduled_event_attributes")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_step_retry_pre_and_post_patch_histories_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.data_converter import (
+        MOONMIND_TEMPORAL_DATA_CONVERTER,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import (
+        DEFAULT_ACTIVITY_CATALOG,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH,
+        RUN_STEP_EXECUTION_MANIFEST_PATCH,
+        WORKFLOW_TASK_QUEUE,
+    )
+
+    real_patched = workflow.patched
+    enabled = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_STEP_EXECUTION_MANIFEST_PATCH,
+    }
+
+    def selective_patched(patch_id: str) -> bool:
+        # The patch under test records a real marker unless this run stands in
+        # for a worker that predates it; replay always consults the history.
+        if patch_id == RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH:
+            return False if _INTERRUPTED_RETRY_STATE["legacy"] else real_patched(
+                patch_id
+            )
+        return real_patched(patch_id) if patch_id in enabled else False
+
+    monkeypatch.setattr(run_module.workflow, "patched", selective_patched)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow, "upsert_search_attributes", lambda _attrs: None
+    )
+
+    activity_queues: dict[str, list[Any]] = {}
+    for name, fn in (
+        ("artifact.read", _interrupted_retry_plan_read),
+        ("integration.omnigent.oauth_host_janitor", _interrupted_retry_confirm_stop),
+    ):
+        queue = DEFAULT_ACTIVITY_CATALOG.resolve_activity(name).task_queue
+        activity_queues.setdefault(queue, []).append(fn)
+
+    histories: dict[str, Any] = {}
+    children: dict[str, list[tuple[int, Any]]] = {}
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+    ) as env:
+        workers = [
+            Worker(
+                env.client,
+                task_queue=WORKFLOW_TASK_QUEUE,
+                workflows=[
+                    _InterruptedStepRetryReplayFixture,
+                    _InterruptedRetryAgentRunStub,
+                ],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            *(
+                Worker(env.client, task_queue=queue, activities=fns)
+                for queue, fns in activity_queues.items()
+            ),
+        ]
+        for worker in workers:
+            await worker.__aenter__()
+        try:
+            for label in ("legacy", "current"):
+                _INTERRUPTED_RETRY_STATE["legacy"] = label == "legacy"
+                _INTERRUPTED_RETRY_STATE["children"] = []
+                handle = await env.client.start_workflow(
+                    _InterruptedStepRetryReplayFixture.run,
+                    id=f"test-interrupted-step-retry-{label}",
+                    task_queue=WORKFLOW_TASK_QUEUE,
+                )
+                assert await handle.result() == "completed"
+                histories[label] = await handle.fetch_history()
+                children[label] = list(_INTERRUPTED_RETRY_STATE["children"])
+        finally:
+            _INTERRUPTED_RETRY_STATE["legacy"] = False
+            for worker in reversed(workers):
+                await worker.__aexit__(None, None, None)
+
+    janitor = "integration.omnigent.oauth_host_janitor"
+    # Older workers started the successor at once from admitted inputs.
+    assert janitor not in _history_activity_types(histories["legacy"])
+    assert children["legacy"] == [(1, None), (2, None)]
+    # Now the successor starts only after the confirmed stop and restores the
+    # save that confirmation verified.
+    assert _history_activity_types(histories["current"]).count(janitor) == 1
+    assert children["current"] == [
+        (1, None),
+        (2, _INTERRUPTED_RETRY_SAVED["archiveRef"]),
+    ]
+
+    replayer = Replayer(
+        workflows=[_InterruptedStepRetryReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    )
+    await replayer.replay_workflow(histories["legacy"])
+    await replayer.replay_workflow(histories["current"])

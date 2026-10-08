@@ -414,6 +414,38 @@ class _MarkedTurnStartWatchdog:
                 0.0, time.time() - self.last_progress_wall_time
             )
 
+    def _wall_time(self, loop_time: float) -> float:
+        return time.time() - (self._loop.time() - loop_time)
+
+    def _restored_loop_time(self, wall_time: Any) -> float | None:
+        if (
+            not isinstance(wall_time, (int, float))
+            or isinstance(wall_time, bool)
+            or not math.isfinite(wall_time)
+            or wall_time <= 0
+        ):
+            return None
+        return self._loop.time() - max(0.0, time.time() - float(wall_time))
+
+    def restore_clocks(self, state: Mapping[str, Any]) -> None:
+        """Continue the clocks a replaced observer of this turn recorded.
+
+        Worker replacement retries the Activity, which reattaches to the same
+        accepted turn. Its turn-start budget and host-loss grace keep running
+        from the times already observed, so repeated updates cannot reset
+        them; a later or invalid record never extends a budget.
+        """
+
+        dispatched_at = self._restored_loop_time(state.get("turnDispatchedAt"))
+        if dispatched_at is not None and dispatched_at < self.started_at:
+            self.started_at = dispatched_at
+            self.deadline = self.started_at + self.timeout_seconds
+        offline_since = self._restored_loop_time(state.get("hostOfflineSince"))
+        if offline_since is not None and (
+            self.host_offline_since is None or offline_since < self.host_offline_since
+        ):
+            self.host_offline_since = offline_since
+
     def restore_progress_events(self, events: list[dict[str, Any]]) -> None:
         for event in events:
             metadata = event.get("metadata")
@@ -598,6 +630,12 @@ class _MarkedTurnStartWatchdog:
             "turnTerminalResponseIds": list(self._terminal_response_ids),
             "turnProgressSignature": self.progress_signature,
             "turnLastProgressAt": self.last_progress_wall_time,
+            "turnDispatchedAt": self._wall_time(self.started_at),
+            "hostOfflineSince": (
+                self._wall_time(self.host_offline_since)
+                if self.host_offline_since is not None
+                else None
+            ),
             "turnStartWaitSeconds": (
                 round(self._loop.time() - self.started_at, 3)
                 if not self.progress
@@ -3259,6 +3297,8 @@ async def run_omnigent_execution(
                 stall_timeout_seconds=marked_turn_timeout_seconds,
             )
             start_watchdog.restore_progress(retry_state)
+            if heartbeat_session_id and heartbeat_session_id == session_id:
+                start_watchdog.restore_clocks(retry_state)
             start_watchdog.restore_progress_events(normalized_events)
             start_watchdog.restore_terminal_response_ids(
                 retry_state.get("turnTerminalResponseIds")

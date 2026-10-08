@@ -132,5 +132,53 @@ class GenericOmnigentHostJanitor:
             "failures": failures,
         }
 
+    async def confirm_attempt_stopped(
+        self, *, execution_plan_ref: str, runtime_binding_ref: str
+    ) -> dict[str, Any]:
+        """Finish an interrupted attempt's cleanup before its successor writes.
+
+        The scan above waits for a binding to go stale. A Run workflow that is
+        about to start a successor Step Execution (#4627) cannot wait: an
+        expired lease or lost stop acknowledgement does not prove the old
+        process stopped. Once the attempt's own owner has closed, the realizer
+        reconciliation fences the binding, stops the host and releases its
+        credentials and capacity. Anything short of ``cleaned`` raises, so the
+        caller retries within its bounds instead of starting parallel compute.
+        """
+
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError,
+            HarnessPlatformFailure,
+        )
+        from moonmind.omnigent.runtime_bindings import RuntimeBindingState
+
+        binding = await self._runtime_bindings.get(runtime_binding_ref)
+        if binding is None or binding.executionPlanRef != execution_plan_ref:
+            raise HarnessPlatformError(
+                "interrupted attempt's runtime binding is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if binding.state is not RuntimeBindingState.cleaned:
+            if await self._owner_has_closed(binding) is not True:
+                raise HarnessPlatformError(
+                    "interrupted attempt's owner has not closed; its stop is "
+                    "not yet confirmed",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            await self._realizer.reconcile(execution_plan_ref, runtime_binding_ref)
+            binding = await self._runtime_bindings.get(runtime_binding_ref)
+        if binding is None or binding.state is not RuntimeBindingState.cleaned:
+            raise HarnessPlatformError(
+                "interrupted attempt's cleanup did not confirm its stop",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        saved = (binding.phaseResults or {}).get("saved")
+        return {
+            "stopConfirmed": True,
+            "runtimeBindingRef": binding.bindingId,
+            "fencingGeneration": binding.fencingGeneration,
+            **({"savedWorkspaceCheckpoint": dict(saved)} if saved else {}),
+        }
+
 
 __all__ = ["GenericOmnigentHostJanitor"]

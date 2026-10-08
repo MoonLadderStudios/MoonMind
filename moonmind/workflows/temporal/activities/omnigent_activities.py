@@ -921,6 +921,11 @@ def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
     if isinstance(saved, dict) and saved:
         receipt["savedWorkspaceCheckpoint"] = saved
         receipt["workPreserved"] = True
+    # Otherwise the attempt's stop is unconfirmed; the successor's owner must
+    # finish this binding's reconciliation before another attempt may write.
+    unconfirmed = getattr(exc, "unconfirmed_attempt_stop", None)
+    if isinstance(unconfirmed, dict) and unconfirmed:
+        receipt["unconfirmedAttemptStop"] = unconfirmed
     return receipt
 
 
@@ -1385,6 +1390,27 @@ async def omnigent_oauth_host_janitor_activity(
     # Explicit control actions keep their precise failure contract.
     if (request or {}).get("actionKind"):
         return await _reconcile_oauth_hosts(request)
+    confirm = (request or {}).get("confirmAttemptStop")
+    if isinstance(confirm, dict):
+        # A Run workflow confirms its interrupted attempt stopped before a
+        # successor Step Execution may write (#4627). Failure raises so the
+        # bounded Activity retry resumes this same reconciliation.
+        from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
+
+        services = build_generic_omnigent_execution_services(
+            session_factory=async_session_maker
+        )
+        return await GenericOmnigentHostJanitor(
+            host_leases=services.host_lease_repository,
+            runtime_bindings=services.runtime_binding_store,
+            realizer=services.generic_realizer,
+        ).confirm_attempt_stopped(
+            execution_plan_ref=str(confirm.get("executionPlanRef") or ""),
+            runtime_binding_ref=str(confirm.get("runtimeBindingRef") or ""),
+        )
     try:
         async with asyncio.timeout(120):
             result = await _reconcile_oauth_hosts(request)

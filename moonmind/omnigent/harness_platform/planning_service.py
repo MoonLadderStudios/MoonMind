@@ -478,18 +478,16 @@ class OmnigentExecutionPlanningService:
             # selected Host Class image (launch-time attestation re-verifies
             # major.minor); a foreign repository still fails closed.
             #
-            # Two cases keep the exact conflict: legacy Codex plans are
-            # consumed by a coordinator that recompiles launch authority from
-            # the unchanged policy snapshot and rejects a reconciled digest,
-            # so admitting a reconciled Codex plan would guarantee a later
-            # failure; and an explicitly requested Host Class is preserved as
-            # explicit selection authority rather than silently rewritten.
+            # The legacy Codex coordinator recompiles launch authority from the
+            # unchanged policy snapshot and applies this same reconciliation,
+            # so a fresh Codex attempt after an update also runs on the
+            # installed image (#4627). An explicitly requested Host Class keeps
+            # the exact conflict: it is explicit selection authority and is
+            # never silently rewritten.
             if str(effective_launch.get("hostImageRef") or "") != (
                 host_class.imageRef
             ):
-                if harness.id == "codex-native" or self._requested_host_class_ref(
-                    request
-                ) is not None:
+                if self._requested_host_class_ref(request) is not None:
                     raise HarnessPlatformError(
                         "effective launch host image conflicts with the selected "
                         "Host Class "

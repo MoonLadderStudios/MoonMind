@@ -7,6 +7,7 @@ from typing import Any, Callable
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio import exceptions
 
 pytest.importorskip("temporalio")
 
@@ -1932,6 +1933,186 @@ async def test_run_execution_stage_restores_interrupted_attempt_saved_work(
         }
     assert restarts[2] == expected_restart
     assert restarts[3] == expected_restart
+
+
+_UNCONFIRMED_STOP = {
+    "executionPlanRef": "plan-interrupted",
+    "runtimeBindingRef": "binding-interrupted",
+    "bindingState": "cleanup_pending",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", ["confirmed", "unconfirmed", "cancelled"],
+)
+async def test_run_execution_stage_confirms_interrupted_attempt_stop_before_successor(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    """No successor writes until the interrupted attempt's stop is confirmed.
+
+    Issue #4627 R2: the host-lost attempt's in-band cleanup lost its stop
+    acknowledgement. The workflow resumes that reconciliation through the
+    existing janitor Activity before admitting a successor, restores the
+    save that reconciliation verified, and never runs parallel compute: when
+    the stop cannot be confirmed, or the run is cancelled meanwhile, no
+    successor starts.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    events: list[str] = []
+    confirmations: list[dict[str, Any]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if activity_type == "integration.omnigent.oauth_host_janitor":
+            confirmations.append(dict(payload))
+            events.append("confirm")
+            assert kwargs["retry_policy"].maximum_attempts >= 1
+            if outcome == "unconfirmed":
+                raise exceptions.ActivityError(
+                    "activity failed",
+                    scheduled_event_id=1,
+                    started_event_id=2,
+                    identity="worker",
+                    activity_type=activity_type,
+                    activity_id="confirm-stop",
+                    retry_state=None,
+                )
+            if outcome == "cancelled":
+                workflow._cancel_requested = True
+            return {
+                "stopConfirmed": True,
+                "runtimeBindingRef": _UNCONFIRMED_STOP["runtimeBindingRef"],
+                "savedWorkspaceCheckpoint": dict(_INTERRUPTED_SAVED_WORK),
+            }
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        events.append("attempt")
+        if len(child_requests) == 1:
+            return AgentRunResult(
+                summary="Omnigent dispatch failed (OMNIGENT_SESSION_HOST_LOST).",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+                metadata={"unconfirmedAttemptStop": dict(_UNCONFIRMED_STOP)},
+            )
+        return AgentRunResult(summary="Completed on the installed runtime.")
+
+    async def passthrough(request: AgentExecutionRequest) -> AgentExecutionRequest:
+        return request
+
+    async def no_manifest(_logical_step_id: str, **_kwargs: Any) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_STEP_EXECUTION_MANIFEST_PATCH,
+        RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-interrupted-stop",
+            "run_id": "run-interrupted-stop",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(workflow, "_maybe_bind_workflow_scoped_session", passthrough)
+    monkeypatch.setattr(workflow, "_record_step_execution_manifest", no_manifest)
+
+    if outcome == "unconfirmed":
+        with pytest.raises(ValueError, match="stop could not be confirmed"):
+            await workflow._run_execution_stage(
+                parameters={"publishMode": "none"}, plan_ref="plan-ref"
+            )
+    else:
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"}, plan_ref="plan-ref"
+        )
+
+    assert confirmations == [
+        {
+            "confirmAttemptStop": {
+                "executionPlanRef": _UNCONFIRMED_STOP["executionPlanRef"],
+                "runtimeBindingRef": _UNCONFIRMED_STOP["runtimeBindingRef"],
+            }
+        }
+    ]
+    if outcome != "confirmed":
+        # Neither an unconfirmed stop nor a cancellation starts a successor.
+        assert events == ["attempt", "confirm"]
+        return
+    assert events == ["attempt", "confirm", "attempt"]
+    assert child_requests[1].step_execution.execution_ordinal == 2
+    assert child_requests[1].workspace_spec.get("workspaceCheckpointRestoreRef") == (
+        _INTERRUPTED_SAVED_WORK["archiveRef"]
+    )
 
 
 @pytest.mark.asyncio
