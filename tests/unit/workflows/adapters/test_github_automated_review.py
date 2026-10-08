@@ -756,19 +756,25 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
     assert mock_client.get.await_args_list[-1].args == (second_page_url,)
 
 
+# The provider's status comment: short SHAs and timestamps are not HTTP status
+# codes.
+_CODEX_STATUS_SUMMARY = (
+    "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+    "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+    "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |"
+)
+# A task reply that merely discusses failures it fixed.
+_CODEX_TASK_REPLY = (
+    "### Summary\n* Return 403 Forbidden when the token is unauthorized and "
+    "retry later on the API rate limit."
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
-    [
-        # The provider's status comment: short SHAs and timestamps are not
-        # HTTP status codes.
-        "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
-        "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
-        "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |",
-        # A task reply that merely discusses failures it fixed.
-        "### Summary\n* Return 403 Forbidden when the token is unauthorized and "
-        "retry later on the API rate limit.",
-    ],
+    [_CODEX_STATUS_SUMMARY, _CODEX_TASK_REPLY],
+    ids=["status_summary", "task_reply"],
 )
 async def test_requested_review_ignores_provider_chatter(monkeypatch, body):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
