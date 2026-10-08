@@ -2742,6 +2742,19 @@ class MoonMindAgentRun:
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
 
+        # MoonLadderStudios/MoonMind#4640: a managed launch's
+        # execution_profile_ref is the Provider Profile the manager granted, so
+        # the parent can record a selection that was still pending at admission.
+        provider_profile_id = str(request.execution_profile_ref or "").strip()
+        if request.agent_kind == "managed" and provider_profile_id:
+            metadata.setdefault("providerProfileId", provider_profile_id)
+            snapshot = self._profile_snapshots.get(provider_profile_id) or {}
+            provider_profile_label = str(
+                snapshot.get("account_label") or snapshot.get("provider_label") or ""
+            ).strip()
+            if provider_profile_label:
+                metadata.setdefault("providerProfileLabel", provider_profile_label)
+
         if request.agent_kind == "managed":
             runtime_id = (
                 request.managed_session.runtime_id

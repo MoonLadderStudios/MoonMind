@@ -71,18 +71,24 @@ Scope to required repositories only.
 Before starting the Temporal Worker daemon:
 
 1. Verify the intended credential source is present.
-2. Run the targeted token probe for the exact `owner/repo` and publish mode.
+2. Run the connection test for the selected repository connection and the exact
+   `owner/repo`, which must be assigned to (or permitted for) that connection.
+   The test requires `connectionId`; it never falls back to an ambient token.
+   An omitted `baseBranch` uses the remote default branch.
 3. If local operator tooling needs `gh`, login with `GH_TOKEN`; do not rely on
    `gh auth` for managed publish correctness.
 
 ```bash
 curl -X POST /api/v1/settings/github/token-probe \
   -H 'content-type: application/json' \
-  -d '{"repo":"owner/repo","mode":"publish","baseBranch":"main"}'
+  -d '{"connectionId":"<connection-id>","repo":"owner/repo","mode":"publish"}'
 ```
 
-Fail fast if the probe cannot access the selected repository or reports missing
-required permissions.
+Fail fast if the test cannot read the selected repository or reports a denied
+permission. The test only reads, so write access stays untested until a
+workflow publishes. A throttled or unavailable result is not a denial: wait for
+the reported `retryAfterSeconds` and test again. The delay uses GitHub’s retry
+signal when available, with MoonMind’s bounded fallback otherwise.
 
 ### 5.3 Keep repository values token-free
 

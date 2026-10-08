@@ -960,7 +960,7 @@ Suggested verdicts:
 | --- | --- |
 | `FULLY_IMPLEMENTED` | Gate passed and downstream publication may proceed. |
 | `ADDITIONAL_WORK_NEEDED` | More bounded work is required and may be attempted if budget remains. |
-| `NO_DETERMINATION` | Evidence is insufficient; proceed only when missing evidence is recoverable in the current runtime. |
+| `NO_DETERMINATION` | Evidence is insufficient. Retry within the review budget only when the missing evidence is recoverable in the current runtime, or the verifier explicitly asks for `reattempt_current_step` (a fresh verifier runtime). |
 | `BLOCKED` | External or policy condition prevents progress. |
 | `FAILED_UNRECOVERABLE` | The gate found a permanent blocker or unsafe condition. |
 
