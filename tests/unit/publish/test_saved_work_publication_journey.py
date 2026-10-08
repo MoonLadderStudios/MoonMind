@@ -576,6 +576,7 @@ async def test_recorded_default_connection_publishes_instead_of_an_ambient_token
     )
     from tests.helpers.repository_connections import (
         github_pat_connection,
+        github_repository_assignment,
         record_repository_connections,
     )
 
@@ -598,6 +599,9 @@ async def test_recorded_default_connection_publishes_instead_of_an_ambient_token
             monkeypatch,
             tmp_path,
             github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_CONNECTION_PAT"),
+            assignments=[
+                github_repository_assignment(DEFAULT_GIT_CONNECTION_REF, REPOSITORY)
+            ],
         )
         try:
             result = await state.run(
