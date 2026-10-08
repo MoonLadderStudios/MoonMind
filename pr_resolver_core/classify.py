@@ -28,6 +28,16 @@ def _decision(
     )
 
 
+def _review_request_failed() -> ResolverDecision:
+    # The provider refused the request (for example a usage limit). Waiting
+    # cannot produce the review; a newer request supersedes the refusal.
+    return _decision(
+        "manual_review",
+        "automated_review_request_failed",
+        ResolverAction.STOP_MANUAL_REVIEW,
+    )
+
+
 def classify_snapshot(
     snapshot: CanonicalPullRequestSnapshot,
     *,
@@ -54,13 +64,20 @@ def classify_snapshot(
         return _decision(
             "manual_review", "publish_unavailable", ResolverAction.STOP_MANUAL_REVIEW
         )
-    review_pending = (
-        pending_review_precedes_remediation
-        and snapshot.review_loop_enabled
-        and snapshot.automated_review_requested
-        and not snapshot.fresh_automated_review
+    review_outstanding = (
+        snapshot.review_loop_enabled and not snapshot.fresh_automated_review
     )
-    if snapshot.merge_conflict and not review_pending:
+    review_request_failed = (
+        review_outstanding and snapshot.automated_review_request_failed
+    )
+    # The outstanding request owns the unchanged head until the provider
+    # answers. A refusal is an answer: it stops instead of remediating a head
+    # the provider has just declined to review.
+    review_owns_head = pending_review_precedes_remediation and (
+        review_request_failed
+        or (review_outstanding and snapshot.automated_review_requested)
+    )
+    if snapshot.merge_conflict and not review_owns_head:
         return _decision(
             "merge_conflicts", "merge_conflicts", ResolverAction.RUN_REMEDIATION
         )
@@ -95,7 +112,9 @@ def classify_snapshot(
         return _decision(
             "manual_review", "deferred_comments", ResolverAction.STOP_MANUAL_REVIEW
         )
-    if review_pending:
+    if review_owns_head:
+        if review_request_failed:
+            return _review_request_failed()
         # Preserve the reviewed head until the outstanding request completes,
         # including when CI, conflicts, or older comments need remediation.
         return _decision(
@@ -107,10 +126,12 @@ def classify_snapshot(
         )
     if snapshot.checks_failed:
         return _decision("ci_failures", "ci_failures", ResolverAction.RUN_REMEDIATION)
-    if snapshot.review_loop_enabled and not snapshot.fresh_automated_review:
+    if review_outstanding:
         # Every head SHA needs its own automated review. The Skill decides that a
         # fresh review is required; the owning workflow performs and supervises
         # the external request and the wait for its result.
+        if review_request_failed:
+            return _review_request_failed()
         if snapshot.automated_review_requested:
             return _decision(
                 "automated_review_wait", "automated_review_wait", ResolverAction.WAIT
