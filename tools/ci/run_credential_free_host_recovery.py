@@ -84,7 +84,58 @@ def _image(ref):
     return rows[0]
 
 
-def validate_evidence(root, *, source_commit, host_image_ref, host_image_id):
+def observe_harness_identity(image_id, build_digest):
+    """Read expected receipt identity from the selected immutable artifact."""
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+
+    _require(
+        isinstance(build_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", build_digest) is not None,
+        "selected host artifact has no valid upstream build identity",
+    )
+    observed = json.loads(
+        _command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "/opt/venv/bin/python",
+                image_id,
+                "-c",
+                (
+                    "import json; from importlib.metadata import version; "
+                    "from omnigent.harness_plugins import valid_harnesses, harness_capabilities; "
+                    "cap = harness_capabilities().get('opencode-native'); "
+                    "row = {'id': 'opencode-native', 'capabilities': cap.as_dict()} "
+                    "if 'opencode-native' in valid_harnesses() and cap is not None else None; "
+                    "print(json.dumps({'version': version('omnigent'), 'harness': row}))"
+                ),
+            ]
+        ).stdout
+    )
+    raw = observed.get("harness")
+    _require(
+        isinstance(raw, dict) and raw.get("id") == "opencode-native",
+        "expected native recovery harness is unavailable",
+    )
+    harness = _normalize_harness(
+        raw,
+        omnigent_version=observed["version"],
+        omnigent_build_digest=build_digest,
+    )
+    return {
+        "omnigentVersion": harness.implementation.version,
+        "omnigentBuildDigest": build_digest,
+        "harnessImplementationRef": harness.implementation.implementation_ref(),
+    }
+
+
+def validate_evidence(
+    root, *, source_commit, host_image_ref, host_image_id, expected_harness_identity
+):
     """Reject pytest skips, stale receipts and unsupported boolean-only claims."""
     try:
         row = json.loads((root / RECEIPT).read_text())
@@ -103,6 +154,9 @@ def validate_evidence(root, *, source_commit, host_image_ref, host_image_id):
         "schemaVersion",
         "sourceCommit",
         "hostImageRef",
+        "omnigentVersion",
+        "omnigentBuildDigest",
+        "harnessImplementationRef",
         "before",
         "after",
         "containerReplaced",
@@ -120,6 +174,21 @@ def validate_evidence(root, *, source_commit, host_image_ref, host_image_id):
     _require(row.get("schemaVersion") == 1, "unsupported recovery receipt")
     _require(row.get("sourceCommit") == source_commit, "stale recovery sourceCommit")
     _require(row.get("hostImageRef") == host_image_ref, "recovery host ref mismatch")
+    for field, pattern in (
+        ("omnigentVersion", r"[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9.+-]*"),
+        ("omnigentBuildDigest", r"sha256:[0-9a-f]{64}"),
+        (
+            "harnessImplementationRef",
+            r"omnigent-harness-implementation:sha256:[0-9a-f]{64}",
+        ),
+    ):
+        value = row.get(field)
+        _require(
+            isinstance(value, str)
+            and re.fullmatch(pattern, value) is not None
+            and value == expected_harness_identity.get(field),
+            f"recovery {field} does not match the selected host artifact/harness",
+        )
     before, after = row.get("before", {}), row.get("after", {})
     for sample in (before, after):
         _require(isinstance(sample, dict), "missing observed recovery identity")
@@ -487,6 +556,10 @@ def main(argv=None):
                     == source,
                     "host layer was not built from the candidate MoonMind source",
                 )
+                expected_harness_identity = observe_harness_identity(
+                    image["Id"],
+                    image["Config"].get("Labels", {}).get("moonmind.omnigent.build_digest"),
+                )
             images[role] = {"ref": ref, "id": image["Id"]}
         identity = {
             "sourceCommit": source,
@@ -495,6 +568,7 @@ def main(argv=None):
             "omnigentSourceCommit": pin,
             "moonmindImageId": app["Id"],
             "images": images,
+            "expectedHarnessIdentity": expected_harness_identity,
         }
         (output / "credential-recovery-artifacts.json").write_text(
             json.dumps(identity, indent=2) + "\n"
@@ -542,6 +616,7 @@ def main(argv=None):
             source_commit=source,
             host_image_ref=args.host_image,
             host_image_id=images["host"]["id"],
+            expected_harness_identity=expected_harness_identity,
         )
         (output / "credential-recovery-result.json").write_text(
             json.dumps({**identity, "status": "passed", "recovery": row}, indent=2)
