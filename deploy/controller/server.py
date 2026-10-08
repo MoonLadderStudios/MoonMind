@@ -34,6 +34,7 @@ LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
+CONTROLLER_CAPABILITIES = ("active-journal-transition",)
 # The deployment checkout bootstrap mounts read-only at its host path.
 TARGET_REPO_ENV = "MOONMIND_CONTROLLER_TARGET_REPO"
 # The MoonMind Compose project bootstrap recorded in the controller identity
@@ -142,7 +143,7 @@ def default_legacy_writer_probe() -> bool:
             (operation.get("target") or {}).get("project") or ""
         )
         for operation in (*store.list_open(), *store.list_terminal())
-        if operation.get("omnigentStep") in ("select", "migrate")
+        if operation.get("omnigentStep") in ("select", "migrate", "journal-prepare", "journal-quiesce")
         and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
         and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
     }
@@ -612,7 +613,9 @@ def build_app(
                 return _logs(start_response, operation_id)
             return _json_response(start_response, "404 Not Found", {"error": "unknown route"})
         if method == "GET" and path == "/v1/healthz":
-            return _json_response(start_response, "200 OK", {"status": "ok"})
+            return _json_response(start_response, "200 OK", {
+                "status": "ok", "capabilities": list(CONTROLLER_CAPABILITIES),
+            })
         return _json_response(start_response, "404 Not Found", {"error": "unknown route"})
 
     def _submit(start_response, body):
@@ -943,6 +946,7 @@ def run_omnigent_step(
     overlay: str,
     phase: str,
     selected_revision: int | None = None,
+    helper_image: str | None = None,
 ) -> dict:
     """Delegate one release step to the selected image, never a full updater.
 
@@ -981,7 +985,7 @@ def run_omnigent_step(
         {
             "services": {
                 LEGACY_CONTROL_SERVICE: {
-                    "image": operation["desired"]["image"],
+                    "image": helper_image or operation["desired"]["image"],
                     "user": "0:0",
                     "environment": {
                         "DOCKER_HOST": "unix:///var/run/docker.sock",
@@ -1005,9 +1009,30 @@ def run_omnigent_step(
         "operationId": operation_id,
         "moonmindImage": operation["desired"]["image"],
         "target": target,
+        "controllerCapabilities": list(CONTROLLER_CAPABILITIES),
     }
     if selected_revision is not None:
         request["selectedRevision"] = selected_revision
+    command = (
+        "-m", "moonmind.workflows.skills.deployment_release",
+        f"--omnigent-{phase}", json.dumps(request, sort_keys=True),
+    )
+    if phase in ("journal-prepare", "journal-quiesce"):
+        # The installed source is retained for rollback to a target predating
+        # this helper. Capability absence is distinct from an execution error;
+        # only absence permits falling back to the staged target.
+        command = (
+            "-c",
+            (
+                "import asyncio,importlib.util,json,sys; "
+                "r=__import__('moonmind.workflows.skills.deployment_release', "
+                "fromlist=['controller_journal_cli']) if importlib.util.find_spec('moonmind') else None; "
+                "f=getattr(r,'controller_journal_cli',None); "
+                "sys.exit(asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
+                "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0))"
+            ),
+            phase, json.dumps(request, sort_keys=True),
+        )
     store.record_omnigent_step(operation_id, phase)
     try:
         result = engine.run_command(
@@ -1025,10 +1050,7 @@ def run_omnigent_step(
                 "--entrypoint",
                 "python",
                 LEGACY_CONTROL_SERVICE,
-                "-m",
-                "moonmind.workflows.skills.deployment_release",
-                f"--omnigent-{phase}",
-                json.dumps(request, sort_keys=True),
+                *command,
             ),
             timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
         )
@@ -1045,6 +1067,83 @@ def run_omnigent_step(
             if isinstance(receipt, dict):
                 return receipt
     raise ValueError(f"Omnigent {phase} returned no release receipt")
+
+
+def prepare_controller_journals(store, operation, *, runner, overlay, compact=True):
+    """Prepare active data using installed-image provenance, under stack ownership."""
+    operation_id = operation["operationId"]
+    target = operation.get("target") or {}
+    state = store.load(operation_id).get("journalTransition") or {}
+    if "sourceImages" not in state:
+        listed = engine.run_command(runner, (
+            "docker", "ps", "--all", "--quiet", "--filter",
+            f"label=com.docker.compose.project={target.get('project', operation.get('stack'))}",
+        ), timeout_seconds=30)
+        if int(listed.get("exit", 0)) != 0:
+            raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumers unavailable")
+        identifiers = str(listed.get("output") or "").split()
+        rows = []
+        if identifiers:
+            inspected = engine.run_command(runner, ("docker", "inspect", *identifiers), timeout_seconds=30)
+            if int(inspected.get("exit", 0)) != 0:
+                raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumer images unavailable")
+            rows = json.loads(str(inspected.get("output") or ""))
+            if not isinstance(rows, list) or len(rows) != len(identifiers):
+                raise ValueError("Journal consumer inventory is incomplete")
+        selected = set(target.get("services") or ())
+        standard = {"temporal-worker-agent-runtime", "temporal-worker-artifacts"}
+        images, services = [], set()
+        for row in rows:
+            config = row.get("Config") or {}
+            labels = config.get("Labels") or {}
+            environment = dict(item.split("=", 1) for item in config.get("Env", ()) if "=" in item)
+            service = labels.get("com.docker.compose.service")
+            if service not in standard and environment.get("TEMPORAL_WORKER_FLEET") not in ("agent_runtime", "artifacts"):
+                continue
+            if labels.get("com.docker.compose.project") != target.get("project", operation.get("stack")):
+                raise ValueError("Journal consumer inventory escaped the selected project")
+            if not row.get("Image") or not service:
+                raise ValueError("Installed journal consumer image is unavailable")
+            images.append(row["Image"])
+            services.add(service)
+        if not selected.intersection(standard | services):
+            return {"status": "skipped"}
+        if services - selected:
+            raise ValueError("Journal writers and sweepers must be selected together for recreation")
+        state = {"sourceImages": list(dict.fromkeys(images))}
+        store.record_journal_transition(operation_id, state)
+    if compact:
+        base = engine.compose_base(
+            project=target.get("project", operation.get("stack")),
+            project_dir=target.get("projectDir", ""),
+            compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
+            env_files=_env_files_for_apply(target, overlay),
+        )
+        engine.ensure_journal_storage(runner, base, tuple(target.get("services") or ()))
+    # Bootstrap already records the concrete privileged image it verified.
+    # Keeping this provenance usable also covers a second rollback after all
+    # installed workers have returned to a release predating the helper.
+    try:
+        controller_image = json.loads((store.state_dir / "controller-image.json").read_text())
+    except (OSError, ValueError):
+        controller_image = {}
+    candidates = list(dict.fromkeys(filter(None, [
+        state.get("helperImage"), *state["sourceImages"], operation["desired"]["image"],
+        controller_image.get("pinned") if controller_image.get("verified") else None,
+    ])))
+    for helper_image in candidates:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay,
+            phase="journal-prepare" if compact else "journal-quiesce", helper_image=helper_image,
+        )
+        if receipt.get("status") == "unsupported":
+            continue
+        expected = "prepared" if compact else "quiesced"
+        if receipt.get("status") != expected:
+            raise ValueError(f"Journal transition returned no {expected} receipt")
+        store.record_journal_transition(operation_id, {"helperImage": helper_image, "receipt": receipt})
+        return receipt
+    raise ValueError("No installed or staged image can prepare the active recovery journals")
 
 
 def production_apply(
@@ -1111,6 +1210,18 @@ def production_apply(
             )
 
     env_files = _env_files_for_apply(target, overlay)
+
+    def before_compose():
+        try:
+            return prepare_controller_journals(
+                store, operation, runner=runner, overlay=overlay
+            )
+        except Exception as exc:
+            raise engine.ApplyError(
+                "journal-prepare", 1,
+                redact_text(f"{exc} {getattr(exc, 'output', '')}"),
+            ) from exc
+
     try:
         outcome = engine.apply(
             runner,
@@ -1120,6 +1231,7 @@ def production_apply(
             services=tuple(target.get("services", ())),
             images=(operation["desired"]["image"],),
             env_files=env_files,
+            before_compose=before_compose,
         )
     except engine.StageError as exc:
         store.record_attempt_error(
@@ -1130,6 +1242,21 @@ def production_apply(
         store.record_attempt_error(
             operation["operationId"], error=f"apply failed: {exc} {exc.output}"
         )
+        # Compose can recreate only part of the fleet before failing. Keep
+        # every writer/sweeper stopped until this same owner recompacts and
+        # retries; do not resume an old reader beside a new chunk writer.
+        if store.load(operation["operationId"]).get("journalTransition"):
+            try:
+                prepare_controller_journals(
+                    store, operation, runner=runner, overlay=overlay, compact=False
+                )
+            except Exception as cleanup:  # noqa: BLE001 - preserve the original apply error
+                with contextlib.suppress(OSError):
+                    store.note_reporting_failure(
+                        operation["operationId"], error=redact_text(
+                            f"journal consumer quiescence after failed apply: {cleanup}"
+                        ),
+                    )
         raise
     store.confirm_installed(
         operation["operationId"], image=operation["desired"]["image"]

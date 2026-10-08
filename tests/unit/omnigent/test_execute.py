@@ -3443,8 +3443,9 @@ async def test_stream_failure_commits_every_delivered_event(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
+@pytest.mark.parametrize("compact_before_retry", [False, True])
 async def test_retry_restores_every_committed_journal_chunk(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, compact_before_retry
 ) -> None:
     """A crash between journal commit and index commit loses no evidence.
 
@@ -3496,6 +3497,9 @@ async def test_retry_restores_every_committed_journal_chunk(
                 request, artifact_gateway=harness.gateway, run_store=store
             )
         monkeypatch.setattr(store, "append_events", append_events)
+        if compact_before_retry:
+            receipt = await store.compact_active_journals()
+            assert receipt["compacted"] == 1
         durable_row = await store.get_existing("idem-retry")
         _, restored = await _restore_active_journals(
             artifact_gateway=harness.gateway, durable_row=durable_row

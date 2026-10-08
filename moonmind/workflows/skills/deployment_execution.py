@@ -26,6 +26,7 @@ from .deployment_controller import (
     ControllerTransportError,
     DeploymentOperationError,
     controller_action_status,
+    ensure_controller_journal_transition,
     observe_controller_operation,
     resolve_controller_endpoint,
     submit_controller_update,
@@ -1794,6 +1795,7 @@ class DeploymentUpdateExecutor:
     # image verifies and before any service is recreated. Its result is kept
     # in the command log.
     before_compose: Callable[[], Awaitable[Mapping[str, Any] | None]] | None = None
+    on_compose_failure: Callable[[], Awaitable[Mapping[str, Any] | None]] | None = None
 
     async def _reconcile_stale_workers(
         self,
@@ -2469,6 +2471,13 @@ class DeploymentUpdateExecutor:
                 final_status = "FAILED"
                 failure_reason = failure_reason or _failure_reason(exc)
                 _record_command_exception(command_log, exc)
+                if self.on_compose_failure is not None and "beforeCompose" in command_log:
+                    try:
+                        command_log["journalQuiescence"] = dict(
+                            await self.on_compose_failure() or {}
+                        )
+                    except Exception as quiescence_error:  # noqa: BLE001 - retain the original apply failure
+                        command_log["journalQuiescenceError"] = _redact_sensitive(str(quiescence_error))
                 raise
             finally:
                 if (
@@ -3786,6 +3795,10 @@ async def _execute_through_controller(
         )
     operation_id = "wf-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
     try:
+        await asyncio.to_thread(
+            ensure_controller_journal_transition, endpoint,
+            stack=parsed["stack"], desired_image=requested_image,
+        )
         operation = await asyncio.to_thread(
             submit_controller_update,
             endpoint,
