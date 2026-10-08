@@ -337,8 +337,22 @@ def authored_github_operations(
         dict.fromkeys((*parameter_operations, *publish_operations, *skill_operations))
     )
     gh_required = "gh" in authored_required_capabilities(request)
-    if (publish_mode == "auto" or skill_publish_mode == "auto") and not any(
-        op != "read" for op in publish_operations + parameter_operations
+    # Auto is provider-neutral. Apply its GitHub declaration rule only when
+    # GitHub transport/tooling or explicit GitHub action metadata is involved;
+    # local and other-provider publishers must not acquire GitHub authority.
+    github_action_relevant = (
+        gh_required
+        or _classify_repository(authored_repository_source(request)) == "github_https"
+        or kind == "merge_pull_request"
+        or any(
+            "githubOperations" in source
+            for source in (parameters, publish, side_effect)
+        )
+    )
+    if (
+        github_action_relevant
+        and (publish_mode == "auto" or skill_publish_mode == "auto")
+        and not any(op != "read" for op in publish_operations + parameter_operations)
     ):
         invalid("auto publication requires explicit githubOperations")
     if (

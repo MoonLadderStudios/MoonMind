@@ -377,9 +377,11 @@ cached grant.
 
 Authenticated read-only `gh` requires only `read`. Branch publication requires
 `write` and `branch_write`; PR publication also requires `review_request`.
-Skill-owned Auto and generic actions carry explicit `githubOperations`; they do
-not infer merge permission from publication mode. The publisher checks only its
-destination operations, so a saved branch/PR publication does not reacquire
+GitHub-relevant Skill-owned Auto and generic actions carry explicit
+`githubOperations`; they do not infer merge permission from publication mode.
+Auto for a local or other-provider source, with no `gh` or explicit GitHub action
+metadata, does not require or acquire GitHub authority. The publisher checks only
+its destination operations, so a saved branch/PR publication does not reacquire
 source-read authority or imply merge permission. Prepared clone-only work still
 resolves a source credential lazily only if materialization is necessary.
 

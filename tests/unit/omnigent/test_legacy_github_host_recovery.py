@@ -420,7 +420,6 @@ async def test_legacy_recovery_captures_current_dirty_and_untracked_work_before_
 async def test_worker_restart_after_save_recaptures_newer_work_without_rollback(
     tmp_path, monkeypatch, cpu_millis
 ):
-    import asyncio
     import io
     import tarfile
 
@@ -1202,3 +1201,135 @@ async def test_exact_recovery_class_uses_observed_build_and_canonical_harness_id
         result.declaredHarnessImplementations[0].implementationRef
         != "omnigent-harness-implementation:sha256:" + "3" * 64
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_old_authority", [False, True])
+async def test_restart_after_recreation_before_binding_uses_new_attachment_authority(
+    tmp_path, monkeypatch, has_old_authority
+):
+    """A replacement already running after worker loss is still a new attachment."""
+    import copy
+    from unittest.mock import MagicMock
+
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    launch = fixture.args["effective_launch"]
+    old_authority = {
+        "effectiveLaunch": launch,
+        "egressEvidence": {
+            **_egress_attestation().model_dump(by_alias=True, mode="json"),
+            "attachmentIdentity": "a" * 64,
+        },
+        "launchEvidenceRef": "artifact://original-host-launch",
+        "phase": "attested",
+    } if has_old_authority else None
+    authority = copy.deepcopy(old_authority)
+    prior_authorities = []
+    bind_calls = []
+
+    async def get_authority(**_kwargs):
+        return authority
+
+    async def bind_authority(**kwargs):
+        nonlocal authority
+        bind_calls.append(copy.deepcopy(kwargs))
+        if kwargs["phase"] == "launched":
+            receipt = fixture.row.metadata_["githubCredentialRecovery"]
+            assert receipt["phase"] == "saved"
+            assert receipt["replacementEgressPending"] is True
+            if old_authority is not None:
+                assert kwargs["replaces_launch_evidence_ref"] == old_authority["launchEvidenceRef"]
+                prior_authorities.append(copy.deepcopy(authority))
+            else:
+                assert "replaces_launch_evidence_ref" not in kwargs
+            receipt.update(phase="recreated", replacementEgressPending=False)
+        authority = {
+            "effectiveLaunch": launch,
+            "egressEvidence": copy.deepcopy(kwargs["egress_evidence"]),
+            "launchEvidenceRef": kwargs["launch_evidence_ref"],
+            "phase": kwargs["phase"],
+        }
+
+    fixture.store.get_egress_cleanup_authority = get_authority
+    fixture.store.bind_egress_cleanup_authority = bind_authority
+
+    # Execute the real save and container-replacement owner, then lose the
+    # worker before prepare_host can bind any new cleanup authority.
+    await fixture.new_runtime()._launch_on_demand(**fixture.args)
+    receipt = fixture.row.metadata_["githubCredentialRecovery"]
+    assert receipt["phase"] == "saved"
+    receipt["replacementEgressPending"] = True  # Production save-store contract.
+    checkpoint = copy.deepcopy(receipt["checkpoint"])
+    replacement_id = fixture.state["cpu"]["sourceContainerId"]
+    assert replacement_id != receipt["sourceContainerId"]
+    assert fixture.state["running"]
+    assert authority == old_authority
+    assert not bind_calls
+    launches_before_retry = fixture.state["events"].count(("docker", "run"))
+
+    runtime = fixture.new_runtime()
+    runtime._existing_github_projection_is_compatible.return_value = True
+    runtime._prepare_skill_projection = AsyncMock(return_value=tmp_path / "skills")
+    runtime._prepare_workspace = AsyncMock(return_value=fixture.workspace)
+    runtime._align_workspace_ownership = MagicMock()
+    runtime._prepare_runtime_scripts = MagicMock(return_value=tmp_path)
+    runtime._container_job_environment = MagicMock(return_value={})
+    runtime._initialize_required_tools = AsyncMock()
+    fresh_attestation = _egress_attestation().model_copy(update={
+        "gateway_image_digest": "sha256:" + "d" * 64,
+        "applied_rule_digest": "sha256:" + "e" * 64,
+    })
+    runtime._attest_egress = AsyncMock(return_value=fresh_attestation)
+    runtime._attest_server_image = AsyncMock(return_value={})
+    runtime._resolve_workload_attachment_identity = AsyncMock(return_value=replacement_id)
+    runtime._attest_launched_workload_egress = AsyncMock(return_value={
+        **fresh_attestation.model_dump(by_alias=True, mode="json"),
+        "attachmentIdentity": replacement_id,
+        "endpointIdentity": "replacement-endpoint",
+    })
+    runtime._exec_check = AsyncMock()
+    runtime._exec_tools_check = AsyncMock()
+    runtime._resolve_exact_host = AsyncMock(return_value={
+        "id": "host-1", "harnesses": ["codex-native"],
+    })
+    runtime._preflight_mounted_tools = AsyncMock(return_value={})
+    binding = _binding().model_copy(update={
+        "static_host_id": None,
+        "host_launch_profile_ref": "codex-on-demand",
+        "execution_profile_ref": "omnigent-codex@1",
+        "launch_policy_ref": "codex-on-demand@1",
+        "effective_launch_snapshot": launch,
+    })
+    result = await runtime.prepare_host(
+        binding=binding,
+        host_lease=fixture.lease.model_copy(update={"container_name": "mm-host-lease-1"}),
+        workspace_key="workspace-1",
+        workspace_locator=fixture.request.workspace_spec["workspaceLocator"],
+        current_workflow_id="workflow-1",
+        current_step_execution_id=fixture.args["current_step_execution_id"],
+        artifact_gateway=fixture.artifacts,
+        recovery_artifact_gateway=fixture.artifacts,
+        evidence_request=fixture.request,
+        cleanup_authority_store=fixture.store,
+        effective_launch=launch,
+        github_token=fixture.args["github_token"],
+        required_capabilities=("gh",),
+    )
+    assert result["status"] == "ready"
+    assert [call["phase"] for call in bind_calls] == ["launched", "attested"]
+    assert prior_authorities == ([old_authority] if has_old_authority else [])
+    assert authority["egressEvidence"]["attachmentIdentity"] == replacement_id
+    assert authority["egressEvidence"]["endpointIdentity"] == "replacement-endpoint"
+    runtime._attest_launched_workload_egress.assert_awaited_once_with(
+        attestation=fresh_attestation,
+        attachment_identity=replacement_id,
+        expected_image_ref=launch["hostImageRef"],
+    )
+    assert receipt["checkpoint"] == checkpoint
+    assert receipt["omnigentSessionId"] == "session-1"
+    assert receipt["bridgeSessionId"] == "bridge-1"
+    assert (fixture.workspace / "README.md").read_text() == "current dirty work\n"
+    assert (fixture.workspace / "untracked.txt").read_text() == "new saved work\n"
+    # The one additional docker run is the credential writer, never a host.
+    assert fixture.state["events"].count(("docker", "run")) == launches_before_retry + 1
+    assert not any(call.args[:3] == ("docker", "run", "-d") for call in runtime._run.await_args_list)
