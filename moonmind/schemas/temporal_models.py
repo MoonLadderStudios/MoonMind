@@ -2133,6 +2133,24 @@ class ReadinessBlockerModel(BaseModel):
             raise ValueError("summary must be a non-empty string")
         return candidate[:500]
 
+
+class AutomatedReviewRequestReceiptModel(BaseModel):
+    """One identifiable request observed in the complete provider inventory."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_comment_id: int = Field(..., alias="requestCommentId", strict=True, gt=0)
+    requested_at: str = Field(..., alias="requestedAt")
+
+    @field_validator("requested_at")
+    @classmethod
+    def _aware_request_time(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("requestedAt must include a timezone")
+        return value
+
+
 class ReadinessEvidenceModel(BaseModel):
     """Compact result of evaluating external PR readiness."""
 
@@ -2153,6 +2171,9 @@ class ReadinessEvidenceModel(BaseModel):
     )
     automated_review_requested_at: str | None = Field(
         None, alias="automatedReviewRequestedAt"
+    )
+    automated_review_requests: list[AutomatedReviewRequestReceiptModel] | None = Field(
+        None, alias="automatedReviewRequests"
     )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"

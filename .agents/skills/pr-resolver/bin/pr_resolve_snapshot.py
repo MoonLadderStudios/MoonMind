@@ -1703,14 +1703,40 @@ def main():
         # GitHub publishes the review summary and inline findings separately.
         # Fetch the full inventory after observing completion, so a snapshot
         # collected while the review was running cannot authorize a clean exit.
-        comments_data = run_command(
-            comments_cmd, "Failed to retrieve completed review comments."
-        )
-        comments = (
-            comments_data.get("comments", []) if isinstance(comments_data, dict) else []
-        )
-        if not isinstance(comments, list):
-            comments = []
+        for _ in range(2):
+            previous_review = automated_review
+            comments_data = run_command(
+                comments_cmd, "Failed to retrieve completed review comments."
+            )
+            comments = (
+                comments_data.get("comments", [])
+                if isinstance(comments_data, dict)
+                else []
+            )
+            if not isinstance(comments, list):
+                comments = []
+            automated_review = build_automated_review_evidence(
+                provider=args.review_provider,
+                require_fresh_review=bool(args.require_fresh_review),
+                pr_repo=pr_repo,
+                pr_number=pr_data.get("number"),
+                head_sha=head_sha,
+                comments=comments,
+            )
+            if (
+                not isinstance(comments_data, dict)
+                or not isinstance(comments_data.get("comments"), list)
+                or automated_review.get("freshReviewForHead") is not True
+                or automated_review == previous_review
+            ):
+                break
+        else:
+            print(
+                "Review evidence changed during completed inventory collection; "
+                "refresh the snapshot.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         # Comments/reactions have no reviewed commit. Revalidate the remote
         # head after completion and inventory collection before publishing them.
         completed_pr, _, _ = fetch_pr_data(args.pr)

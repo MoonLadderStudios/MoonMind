@@ -1289,6 +1289,130 @@ def test_equal_timestamp_replies_use_ids_not_inventory_order(
         assert evidence["requestFailed"] is (not latest_clean)
 
 
+@pytest.mark.parametrize("initial_completion", ["reply", "reaction"])
+@pytest.mark.parametrize(
+    "refreshed_response",
+    ["pending_request", "refusal", "completed_request", "changing_completion"],
+)
+def test_snapshot_recomputes_review_after_completed_inventory_refresh(
+    snapshot_module, monkeypatch, tmp_path, initial_completion, refreshed_response
+):
+    main = snapshot_module["main"]
+    scope = main.__globals__
+    checks = [{"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    pr = {
+        **_snapshot()["pr"],
+        "url": "https://github.com/owner/repo/pull/350",
+        "statusCheckRollup": checks,
+    }
+    monkeypatch.setitem(scope, "fetch_pr_data", lambda _selector: (pr, "350", []))
+    monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
+    monkeypatch.setitem(scope, "_fetch_commit_statuses", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_previous_commit_sha", lambda **_kwargs: None)
+    monkeypatch.setitem(
+        scope, "_fetch_head_commit_timestamp", lambda **_kwargs: HEAD_COMMITTED_AT
+    )
+    monkeypatch.setitem(scope, "_fetch_pull_request_reviews", lambda **_kwargs: [])
+    monkeypatch.setitem(scope, "_fetch_pr_reactions", lambda **_kwargs: [])
+    reaction_reads = []
+
+    def reactions(**_kwargs):
+        reaction_reads.append(True)
+        if initial_completion == "reaction" and len(reaction_reads) == 1:
+            return [
+                {
+                    "id": 88,
+                    "user": {"login": CODEX_LOGIN},
+                    "content": "+1",
+                    "created_at": "2026-08-24T22:19:00Z",
+                }
+            ]
+        return []
+
+    monkeypatch.setitem(scope, "_fetch_comment_reactions", reactions)
+    initial = [_request_comment()]
+    if initial_completion == "reply":
+        initial.append(_codex_reply("Codex Review: Didn't find any major issues."))
+    refreshed = list(initial)
+    if refreshed_response != "refusal":
+        refreshed.append({**_request_comment("2026-08-24T22:20:00Z"), "id": 98770})
+        if refreshed_response in {"completed_request", "changing_completion"}:
+            refreshed.append(
+                _codex_reply(
+                    "Codex Review: Didn't find any major issues.",
+                    created_at="2026-08-24T22:21:00Z",
+                    comment_id=98771,
+                )
+            )
+    else:
+        refreshed.append(
+            _codex_reply(
+                CODEX_USAGE_LIMIT_REPLY,
+                created_at="2026-08-24T22:21:00Z",
+                comment_id=98771,
+            )
+        )
+    inventories = []
+
+    def read_comments(*_args):
+        inventories.append(True)
+        if refreshed_response == "changing_completion" and len(inventories) > 2:
+            return {
+                "comments": [
+                    *refreshed,
+                    {**_request_comment("2026-08-24T22:22:00Z"), "id": 98772},
+                    _codex_reply(
+                        "Codex Review: Didn't find any major issues.",
+                        created_at="2026-08-24T22:23:00Z",
+                        comment_id=98773,
+                    ),
+                ]
+            }
+        return {"comments": initial if len(inventories) == 1 else refreshed}
+
+    monkeypatch.setitem(scope, "run_command", read_comments)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_snapshot.py",
+            "--pr",
+            "350",
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--snapshot-path",
+            str(path),
+        ],
+    )
+    if refreshed_response == "changing_completion":
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        assert len(inventories) == 3
+        assert not path.exists()
+        return
+    main()
+    captured = json.loads(path.read_text())
+    evidence = captured["automatedReview"]
+    assert len(inventories) >= 2
+    if refreshed_response == "completed_request":
+        assert len(inventories) == 3
+        assert evidence["freshReviewForHead"] is True
+        assert evidence["requestCommentId"] == 98770
+        assert evidence["completionId"] == 98771
+        return
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["completionId"] is None
+    assert evidence["requestPending"] is (refreshed_response == "pending_request")
+    assert evidence["requestFailed"] is (refreshed_response == "refusal")
+    assert evidence["requestCommentId"] == (
+        98770 if refreshed_response == "pending_request" else 98765
+    )
+
+
 def test_equal_timestamp_requests_use_ids_not_inventory_order(snapshot_module):
     first = {**_request_comment(), "id": 101}
     failure = _codex_reply(

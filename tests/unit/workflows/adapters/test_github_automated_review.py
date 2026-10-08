@@ -70,6 +70,80 @@ def _review_clock(monkeypatch, initial):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response", ["pending", "clean", "refusal"])
+async def test_readiness_preserves_every_causal_review_request(response):
+    from moonmind.schemas.temporal_models import ReadinessEvidenceModel
+
+    timestamp = _ACTIVE_REQUEST["requestedAt"]
+    request = {"body": "@codex review", "created_at": timestamp}
+    first_page = [{**request, "id": 98764}, {**request, "id": 98766}]
+    second_page = [
+        {**request, "id": 98765},
+        {**request, "id": 98766},
+        {**request, "id": 98767},
+        {**request, "id": 98768, "body": "    @codex review"},
+        {**request, "id": 98770, "commit_id": _OLD_HEAD},
+    ]
+    if response != "pending":
+        second_page.append(
+            {
+                "id": 98771,
+                "body": (
+                    "Codex Review: Didn't find any major issues."
+                    if response == "clean"
+                    else "You have reached your Codex usage limits for code reviews."
+                ),
+                "created_at": "2026-08-24T22:21:00Z",
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+            }
+        )
+
+    def respond(request):
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path == "issues/350/comments":
+            if request.url.params.get("page") != "2":
+                return httpx.Response(
+                    200,
+                    json=first_page,
+                    headers={
+                        "Link": f'<https://api.github.com/repos/{_REPO}/issues/350/comments?page=2>; rel="next"'
+                    },
+                )
+            body = second_page
+        elif path == "pulls/350/reviews" or path.endswith("/reactions"):
+            body = []
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    projected = ReadinessEvidenceModel.model_validate(
+        result.model_dump(by_alias=True)
+    ).model_dump(by_alias=True)
+    assert projected["automatedReviewRequests"] == [
+        {"requestCommentId": identifier, "requestedAt": timestamp}
+        for identifier in (98765, 98766, 98767)
+    ]
+    assert projected["automatedReviewRequestCommentId"] == 98767
+    assert (
+        projected["automatedReviewComplete"]
+        is {"pending": False, "clean": True, "refusal": None}[response]
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
 async def test_request_posts_exactly_the_configured_command(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
