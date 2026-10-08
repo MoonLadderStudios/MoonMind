@@ -13,6 +13,7 @@ def _run(run_id=101, **changes):
     return {
         "id": run_id,
         "head_sha": HEAD,
+        "head_branch": "feature",
         "workflow_id": 7,
         "path": ".github/workflows/ci.yml",
         "event": "pull_request",
@@ -423,7 +424,10 @@ def test_explicit_empty_pr_inventory_allows_non_pr_event_supersession(event):
     new = _check(2, 102)
     checks, evidence = _reconcile(
         [old, new],
-        [_run(event=event, pull_requests=[]), _run(102, event=event, pull_requests=[])],
+        [
+            _run(event=event, pull_requests=[], head_branch="main"),
+            _run(102, event=event, pull_requests=[], head_branch="main"),
+        ],
     )
 
     assert checks == [new]
@@ -450,6 +454,7 @@ def test_same_run_rerun_does_not_need_cross_run_pr_inventory():
     new = _check(2, run_attempt=2)
     run = _run(run_attempt=2)
     run.pop("pull_requests")
+    run.pop("head_branch")
     checks, evidence = _reconcile([old, new], [run])
 
     assert checks == [new]
@@ -499,3 +504,195 @@ def test_observed_head_branch_conflict_preserves_failure_for_same_sha(event):
 
     assert checks == [old, new]
     assert evidence["supersededChecks"] == []
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+@pytest.mark.parametrize("incomplete_run_index", [0, 1])
+@pytest.mark.parametrize(
+    "branch_fields",
+    [
+        {},
+        {"head_branch": None},
+        {"head_branch": ""},
+        {"head_branch": " \t"},
+        {"head_branch": 42},
+        {"head_branch": False},
+        {"head_branch": []},
+        {"head_branch": {}},
+    ],
+)
+def test_non_pr_cross_run_missing_or_invalid_branch_preserves_failure(
+    event, incomplete_run_index, branch_fields
+):
+    old = _check(conclusion="failure")
+    new = _check(2, 102)
+    runs = [
+        _run(event=event, pull_requests=[], head_branch="main"),
+        _run(102, event=event, pull_requests=[], head_branch="main"),
+    ]
+    runs[incomplete_run_index].pop("head_branch")
+    runs[incomplete_run_index].update(branch_fields)
+    checks, evidence = _reconcile([old, new], runs)
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "workflow_ref_context_unverified"
+    }
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_non_pr_cross_run_both_missing_branches_cannot_establish_equivalence(event):
+    old = _check(conclusion="cancelled")
+    new = _check(2, 102)
+    checks, evidence = _reconcile(
+        [old, new],
+        [
+            _run(event=event, pull_requests=[], head_branch=None),
+            _run(102, event=event, pull_requests=[], head_branch=None),
+        ],
+    )
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "workflow_ref_context_unverified"
+    }
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_non_pr_same_run_verified_attempts_do_not_require_head_branch(event):
+    old = _check(conclusion="cancelled", run_attempt=1)
+    new = _check(2, run_attempt=2)
+    checks, evidence = _reconcile(
+        [old, new],
+        [_run(event=event, pull_requests=[], run_attempt=2, head_branch=None)],
+    )
+
+    assert checks == [new]
+    assert evidence["supersededChecks"][0]["reason"] == "newer_run_attempt"
+    assert evidence["unresolvedChecks"] == []
+
+
+@pytest.mark.parametrize("incomplete_run_index", [0, 1])
+@pytest.mark.parametrize("branch", [None, "", " \t", 42, False, [], {}])
+def test_pr_cross_run_requires_nonblank_string_head_branch(
+    incomplete_run_index, branch
+):
+    old = _check(conclusion="failure")
+    new = _check(2, 102)
+    runs = [_run(), _run(102)]
+    runs[incomplete_run_index]["head_branch"] = branch
+    checks, evidence = _reconcile([old, new], runs)
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "workflow_ref_context_unverified"
+    }
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        "pull_request",
+        "pull_request_target",
+        "push",
+        "workflow_dispatch",
+        "repository_dispatch",
+        "workflow_run",
+        "provider_future_event",
+    ],
+)
+def test_cross_run_event_context_truth_table(event):
+    old = _check(conclusion="failure")
+    new = _check(2, 102)
+    inventory = _run()["pull_requests"] if event.startswith("pull_request") else []
+    checks, evidence = _reconcile(
+        [old, new],
+        [
+            _run(event=event, pull_requests=inventory),
+            _run(102, event=event, pull_requests=inventory),
+        ],
+    )
+
+    assert checks == [new]
+    assert len(evidence["supersededChecks"]) == 1
+    assert evidence["unresolvedChecks"] == []
+
+
+@pytest.mark.parametrize("event", [None, "", " \t", 42, True, [], {"type": "push"}])
+def test_missing_or_malformed_workflow_event_never_supersedes(event):
+    old = _check(conclusion="failure")
+    new = _check(2, 102)
+    checks, evidence = _reconcile(
+        [old, new], [_run(event=event), _run(102, event=event)]
+    )
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "workflow_identity_unavailable"
+    }
+
+
+@pytest.mark.parametrize("name", [None, "", " \t", 42, True, [], {"name": "ci"}])
+def test_missing_or_malformed_check_name_never_supersedes(name):
+    old = _check(conclusion="failure", name=name)
+    new = _check(2, 102, name=name)
+    checks, evidence = _reconcile([old, new], [_run(), _run(102)])
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "check_identity_unavailable"
+    }
+
+
+@pytest.mark.parametrize("incomplete_run_index", [0, 1])
+@pytest.mark.parametrize(
+    "repo", [None, "repo", 42, [], {}, {"id": None}, {"id": True}, {"id": "invalid"}]
+)
+def test_malformed_observed_base_repository_is_not_absent_optional_metadata(
+    incomplete_run_index, repo
+):
+    old = _check(conclusion="failure")
+    new = _check(2, 102)
+    runs = [_run(), _run(102)]
+    runs[incomplete_run_index]["pull_requests"][0]["base"]["repo"] = repo
+    checks, evidence = _reconcile([old, new], runs)
+
+    assert checks == [old, new]
+    assert evidence["supersededChecks"] == []
+    assert {item["reason"] for item in evidence["unresolvedChecks"]} == {
+        "workflow_pr_context_unverified"
+    }
+
+
+@pytest.mark.parametrize("explicit_attempt", [None, 1])
+def test_zero_url_attempt_is_never_verified(explicit_attempt):
+    old = _check(
+        conclusion="failure",
+        run_attempt=explicit_attempt,
+        details_url="https://github.com/acme/repo/actions/runs/101/attempts/0/job/1001",
+    )
+    new = _check(
+        2,
+        details_url="https://github.com/acme/repo/actions/runs/101/attempts/1/job/1002",
+    )
+    checks, evidence = _reconcile([old, new], [_run()])
+    assert checks == [old, new]
+    assert not evidence["supersededChecks"]
+    assert evidence["unresolvedChecks"][0]["reason"] == "check_attempt_unverified"
+
+
+def test_zero_job_identity_cannot_bind_a_check_to_a_workflow():
+    old = _check(
+        conclusion="failure",
+        details_url="https://github.com/acme/repo/actions/runs/101/job/0",
+    )
+    new = _check(2, 102)
+    checks, evidence = _reconcile([old, new], [_run(), _run(102)])
+    assert checks == [old, new]
+    assert not evidence["supersededChecks"]
+    assert evidence["unresolvedChecks"][0]["reason"] == "check_identity_unavailable"

@@ -288,8 +288,9 @@ metadata flag.
    issue reply or reaction observed afterward still requires another inventory
    refresh, including review bodies. CI supersession
    requires the same head, workflow, event, app and check name, with matching
-   observed PR/base context across runs; a later unrelated check never erases an
-   older failure. Same-run reruns require verified job
+   observed PR/base context and nonempty matching head branches across runs;
+   a later unrelated or unproven check never erases an older failure.
+   Same-run reruns require verified job
    attempt evidence. Missing checks, unknown states and unresolved identities
    stay blocked, and security checks remain gating.
    Forward `finishMode`, review provider/policy, and freshness settings

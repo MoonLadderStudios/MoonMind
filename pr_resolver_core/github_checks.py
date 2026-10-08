@@ -136,8 +136,14 @@ def _pull_request_context(run: Mapping[str, Any]) -> tuple | None:
         ref, sha = base.get("ref"), base.get("sha")
         if not all(isinstance(value, str) and value.strip() for value in (ref, sha)):
             return None
-        repo = base.get("repo")
-        repo_id = repo.get("id") if isinstance(repo, Mapping) else None
+        repo_id = None
+        if "repo" in base:
+            repo = base["repo"]
+            if not isinstance(repo, Mapping):
+                return None
+            repo_id = _positive_integer(repo.get("id"))
+            if repo_id is None:
+                return None
         identities.append((number, ref, sha, repo_id))
     return tuple(sorted(identities, key=lambda identity: identity[0]))
 
@@ -151,10 +157,12 @@ def reconcile_check_runs(
     """Keep applicable checks, with auditable supersession and stranded evidence.
 
     Only same-head, same-workflow/event/app/name checks can supersede one
-    another. Across runs, matching observed PR/base context is required and
-    run_number orders them; within a run, per-job run_attempt evidence is required. Checks and workflow observations are
-    never mutated. Unknown mappings remain applicable, and unresolvedChecks
-    must degrade the caller's CI signal rather than grant a clean gate.
+    another. Across runs, matching observed PR/base context and nonempty head
+    branches are required, including for non-PR runs with empty PR inventories.
+    run_number orders runs; within a run, per-job run_attempt evidence is required.
+    Checks and workflow observations are never mutated. Unknown mappings remain
+    applicable, and unresolvedChecks must degrade the caller's CI signal rather
+    than grant a clean gate.
 
     Successful unique checks need no workflow lookup. Other providers, including
     security apps, always remain applicable. Empty input remains empty, so the
@@ -190,7 +198,14 @@ def reconcile_check_runs(
         actions[index] = (slug, app_id, name)
         run_id = int(match[1]) if match else None
         run = runs.get(run_id)
-        if not match or app_id is None or slug != "github-actions" or not name:
+        if (
+            not match
+            or _positive_integer(match[3]) is None
+            or app_id is None
+            or slug != "github-actions"
+            or not isinstance(name, str)
+            or not name.strip()
+        ):
             unresolved[index] = "check_identity_unavailable"
             continue
         if not run:
@@ -205,12 +220,18 @@ def reconcile_check_runs(
             continue
         workflow = _workflow_identity(run)
         run_number = _positive_integer(run.get("run_number"))
-        if workflow is None or not run.get("event") or run_number is None:
+        event = run.get("event")
+        if (
+            workflow is None
+            or not isinstance(event, str)
+            or not event.strip()
+            or run_number is None
+        ):
             unresolved[index] = "workflow_identity_unavailable"
             continue
         run_attempt = _positive_integer(run.get("run_attempt"))
         explicit_attempt = check.get("run_attempt")
-        url_attempt = int(match[2]) if match[2] else None
+        url_attempt = _positive_integer(match[2]) if match[2] else None
         attempt = (
             _positive_integer(explicit_attempt)
             if explicit_attempt is not None
@@ -218,6 +239,7 @@ def reconcile_check_runs(
         )
         if (
             (explicit_attempt is not None and attempt is None)
+            or (match[2] is not None and url_attempt is None)
             or (url_attempt is not None and attempt != url_attempt)
             or (attempt is not None and (run_attempt is None or attempt > run_attempt))
         ):
@@ -225,8 +247,12 @@ def reconcile_check_runs(
             continue
         if attempt is None and run_attempt == 1:
             attempt = 1
+        head_branch = run.get("head_branch")
+        if not isinstance(head_branch, str) or not head_branch.strip():
+            head_branch = None
         mapped[index] = {
             "run": run,
+            "headBranch": head_branch,
             "runId": run_id,
             "runNumber": run_number,
             "runAttempt": attempt,
@@ -247,6 +273,8 @@ def reconcile_check_runs(
             return (
                 candidate["pullRequestContext"] is not None
                 and candidate["pullRequestContext"] == old["pullRequestContext"]
+                and candidate["headBranch"] is not None
+                and candidate["headBranch"] == old["headBranch"]
                 and candidate["runNumber"] > old["runNumber"]
             )
         return (
@@ -324,6 +352,13 @@ def reconcile_check_runs(
                 for candidate in mapped.values()
             ):
                 unresolved[index] = "workflow_pr_context_unverified"
+            if any(
+                candidate["identity"] == current["identity"]
+                and candidate["runId"] != current["runId"]
+                and (candidate["headBranch"] is None or current["headBranch"] is None)
+                for candidate in mapped.values()
+            ):
+                unresolved[index] = "workflow_ref_context_unverified"
         if index in unresolved and (state not in _PASSING_CHECK_STATES or duplicated):
             evidence["unresolvedChecks"].append({**detail, "reason": unresolved[index]})
     return applicable, evidence
