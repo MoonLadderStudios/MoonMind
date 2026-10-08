@@ -261,15 +261,58 @@ async def test_capacity_exhaustion_is_failed_with_bounded_backoff_and_preserved_
         workflow._determine_publish_completion(parameters={"publishMode": "none"})[0]
         == "failed"
     )
-    assert waits[:4] == [timedelta(seconds=value) for value in (30, 60, 120, 240)]
-    assert max(waits) <= timedelta(minutes=5)
+    assert set(waits) == {timedelta(seconds=30)}
     assert sum(waits, timedelta()) == timedelta(minutes=30)
-    assert len(calls) <= 10
+    assert len(calls) == 60
     assert [payload["idempotency_key"] for payload in calls] == [
         f"stable-step-execute_capacity_recheck_{index}"
         for index in range(1, len(calls) + 1)
     ]
     assert all(payload["context"] == _execute_payload()["context"] for payload in calls)
+
+
+@pytest.mark.asyncio
+async def test_capacity_freed_between_other_workflows_is_observed_before_budget(
+    mock_run_workflow, monkeypatch
+):
+    """Reproduce mm:a81dd46f-…-2026-10-08T05:35:00Z.
+
+    A PR resolver chain re-took the single slot every few minutes. Between
+    attempts the slot sat free for 75 seconds (28:09-29:24 into the wait), but
+    rechecks backed off to five minutes and probed at 27:31 and 30:00, so the
+    search failed with RESOURCE_EXHAUSTED although capacity had been free.
+    """
+    workflow = mock_run_workflow
+    start = datetime(2026, 10, 8, 5, 35, 1, tzinfo=UTC)
+    clock = [start]
+    monkeypatch.setattr(run_module.workflow, "now", lambda: clock[0])
+    _prepare_wait(workflow)
+    free_from = start + timedelta(minutes=28, seconds=9)
+    free_until = start + timedelta(minutes=29, seconds=24)
+
+    async def elapse(predicate, *, timeout=None, **_kwargs):
+        if timeout is None:
+            assert predicate()
+            return
+        assert not predicate()
+        clock[0] += timeout
+        raise TimeoutError
+
+    async def activity(activity_type, _payload, **_kwargs):
+        assert activity_type == "mm.skill.execute"
+        if free_from <= clock[0] < free_until:
+            return {"status": "COMPLETED", "outputs": {"issue": {"number": 3970}}}
+        return _deferred_result()
+
+    monkeypatch.setattr(run_module.workflow, "wait_condition", elapse)
+    monkeypatch.setattr(run_module.workflow, "execute_activity", activity)
+    result = await _wait_for_capacity(workflow)
+
+    assert result["status"] == "COMPLETED"
+    assert result["outputs"]["issue"]["number"] == 3970
+    assert workflow._publish_context.get("objectiveOutcome") != "failed"
+    assert not workflow._plan_blocked_message
+    assert workflow._state == "executing"
 
 
 @pytest.mark.asyncio

@@ -579,6 +579,54 @@ def test_fix_only_finish_mode_preserves_the_review_loop_instructions() -> None:
     assert "--finish-mode fix_only" in task["instructions"]
 
 
+@pytest.mark.parametrize(
+    "review_loop",
+    [
+        None,
+        {
+            "enabled": False,
+            "provider": "codex",
+            "requireFreshReviewForEveryHead": True,
+        },
+    ],
+)
+def test_disabled_review_loop_forwards_an_explicit_no_review_policy(
+    review_loop,
+) -> None:
+    """Resolve PR #2788 relaunched eight resolvers on a green, mergeable PR.
+
+    The coordinator selected review_provider none, so the gate never requests
+    a review and rejects a child's request for one. The child received no
+    review inputs, read "fresh owning Codex review ... remain required" from
+    the forwarded task text, ran with --require-fresh-review, and returned
+    automated_review_wait on every pass. The gate's policy must reach the
+    child explicitly so prose cannot turn it into an unsatisfiable wait.
+    """
+
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template={
+            "instructions": (
+                "Required preflight, exact-head CI, fresh owning Codex review, "
+                "and applicable gates remain required."
+            ),
+            "inputs": {"returnToGate": True},
+        },
+        review_loop=review_loop,
+    )
+
+    task = request["initial_parameters"]["task"]
+    assert task["skill"]["args"]["reviewProvider"] == "none"
+    assert task["skill"]["args"]["requireFreshReview"] is False
+    instructions = task["instructions"]
+    assert "--review-provider none" in instructions
+    assert "--no-require-fresh-review" in instructions
+    assert "--review-provider codex" not in instructions
+
+
 def test_fix_only_prompt_does_not_require_an_open_merge_gate() -> None:
     """The managed prompt must match the Skill's fix_only stop condition.
 

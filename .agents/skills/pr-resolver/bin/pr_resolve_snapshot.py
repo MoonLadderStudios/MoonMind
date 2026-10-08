@@ -1548,7 +1548,10 @@ def main():
     fetched_statuses = _fetch_commit_statuses(pr_repo=pr_repo, commit_sha=head_sha)
     head_check_runs = fetched_runs or []
     statuses = fetched_statuses or []
-    from pr_resolver_core.github_checks import partition_commit_statuses
+    from pr_resolver_core.github_checks import (
+        head_ci_reported,
+        partition_commit_statuses,
+    )
 
     gating_statuses, advisory_statuses = partition_commit_statuses(
         statuses, required_checks
@@ -1560,13 +1563,15 @@ def main():
     ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
     degraded = list(ci_summary["degradedReasons"])
     if (
-        required_checks == []
-        and advisory_statuses
-        and fetched_runs is not None
+        fetched_runs is not None
         and fetched_statuses is not None
+        and head_ci_reported(
+            head_check_runs, gating_statuses, advisory_statuses, required_checks
+        )
     ):
-        # Policy confirms nothing gates, and HEAD did report (advisory) status:
-        # an empty gating set is a clean signal, not a missing one.
+        # HEAD reported a signal the merge gate also accepts (for example only
+        # advisory status on an unprotected base): an empty gating set is a
+        # clean signal, not a missing one.
         degraded = [r for r in degraded if r != "no_status_checks_reported"]
         if not degraded:
             ci_summary["signalQuality"] = "ok"
