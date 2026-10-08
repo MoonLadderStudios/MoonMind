@@ -176,7 +176,9 @@ metadata flag.
    evidence for the exact head SHA, then revalidates the target and head.
    The existing branch API supplies the base commit, including on older GitHub
    CLI versions without a `baseRefOid` JSON field. Reuse that metadata for branch
-   requirements, and verify the base again after collecting the inventory.
+   requirements, and verify the base and effective requirements again after
+   collecting the inventory. Requirements participate in the wait fingerprint,
+   so protection/rules changes cannot leave a formerly required status waiting.
    An unchanged `ci_running` retry reads only PR/base metadata and exact-head CI
    observations (including Actions workflow/attempt evidence when needed).
    Its explicitly wait-only snapshot cannot authorize remediation, a clean
