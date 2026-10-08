@@ -1293,6 +1293,16 @@ metadata and undeclared mutation intent are rejected before binding a host.
 Auto snapshots without enough action metadata require a corrected request; they
 never receive inferred broader permissions. Retained work remains available.
 
+Generic Omnigent plans compose the selected resolved Skill metadata and authored
+action declarations through this same canonical reader before freezing
+collaboration authority. At credential use, the current agent's required actions
+must remain within that frozen snapshot; the current connection and assignment
+must still admit its full operation set. Source reads, trusted native review,
+and publisher destination operations retain their distinct roles. Conflicting
+workspace and runtime repository projections fail before credentials or host
+mutation; equivalent GitHub slug/URL spellings retain one canonical target for
+preflight and publication.
+
 
 ---
 

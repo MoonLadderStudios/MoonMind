@@ -876,6 +876,75 @@ async def _verify_native_review_graph(
     return True
 
 
+def _authored_plan_github_operations(
+    initial_parameters: Mapping[str, Any],
+    *,
+    publish_mode: Any,
+    requires_github: bool,
+    resolved_skills: AgentResolvedSkillSet | None,
+) -> tuple[str, ...]:
+    """Freeze composed actions through the same intent reader used at execution."""
+    from moonmind.omnigent.workspace_intent import authored_github_operations
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    workflow = _workflow_payload(initial_parameters)
+    invocations: list[dict[str, Any]] = []
+    for block in (initial_parameters, workflow, *(workflow.get("steps") or [])):
+        if not isinstance(block, Mapping):
+            continue
+        tool = block.get("tool")
+        candidates = [block.get("skill")]
+        if isinstance(tool, Mapping) and tool.get("type") == "skill":
+            candidates.append(tool)
+        for raw in candidates:
+            if isinstance(raw, str):
+                raw = {"name": raw}
+            if isinstance(raw, Mapping):
+                invocations.append(dict(raw))
+    resolved = {
+        skill.skill_name: skill
+        for skill in (resolved_skills.skills if resolved_skills else ())
+    }
+    operations: tuple[str, ...] = ()
+    for invocation in invocations or [{}]:
+        name = str(invocation.get("name") or invocation.get("id") or "").strip().lower()
+        selected = resolved.get(name)
+        frozen_skill = (
+            {
+                "name": name,
+                "publish": selected.publish,
+                "sideEffect": selected.side_effect,
+            }
+            if selected is not None
+            else {}
+        )
+        parameters = {
+            **workflow,
+            **initial_parameters,
+            "publishMode": publish_mode,
+            "requiredCapabilities": list(
+                dict.fromkeys(
+                    (
+                        *(workflow.get("requiredCapabilities") or ()),
+                        *(initial_parameters.get("requiredCapabilities") or ()),
+                        *(selected.required_capabilities if selected else ()),
+                        *(("gh",) if requires_github else ()),
+                    )
+                )
+            ),
+            "skill": invocation,
+        }
+        request = AgentExecutionRequest.model_construct(
+            parameters=parameters,
+            skill=frozen_skill,
+            workspace_spec=(initial_parameters.get("workspaceSpec") or {}),
+        )
+        operations = tuple(
+            dict.fromkeys((*operations, *authored_github_operations(request)))
+        )
+    return operations
+
+
 async def _admit_repository_plan_inputs(
     *,
     session_factory: Any,
@@ -888,6 +957,7 @@ async def _admit_repository_plan_inputs(
     parent_plan: OmnigentExecutionPlanEnvelope | None,
     typed_authority: bool = True,
     native_review: bool = False,
+    resolved_skills: AgentResolvedSkillSet | None = None,
 ) -> dict[str, Any]:
     """Derive transport/tool roles and freeze selection through existing owners.
 
@@ -902,7 +972,9 @@ async def _admit_repository_plan_inputs(
         repository_bindings_of,
     )
     from moonmind.omnigent.repository_sources import normalize_repository_source
+    from moonmind.omnigent.workspace_intent import authored_repository_source
     from moonmind.omnigent.workspace_sources import compile_workspace_source
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
         RepositoryIdentity,
@@ -919,10 +991,17 @@ async def _admit_repository_plan_inputs(
         or workflow.get("workspace")
         or {}
     )
+    # Check aliases before adapting a canonical target into the runtime shape.
+    authored_repository_source(
+        AgentExecutionRequest.model_construct(
+            workspace_spec=workspace, parameters=dict(initial_parameters)
+        )
+    )
     target = (
         initial_parameters.get("repository")
         or workspace.get("repositoryTarget")
         or workspace.get("repository")
+        or workflow.get("repository")
     )
     if isinstance(target, Mapping) and target.get("provider"):
         workspace["repositoryTarget"] = dict(target)
@@ -982,9 +1061,12 @@ async def _admit_repository_plan_inputs(
         else (AccessMode.EXPLICIT if connection_ref else AccessMode.ROUTED)
     )
     publication = workflow.get("publish") or {}
-    publish_mode = str(
-        initial_parameters.get("publishMode") or publication.get("mode") or "none"
-    ).lower()
+    # Retain false/zero/container inputs for canonical type validation; a
+    # truthiness fallback here would silently turn malformed writes into None.
+    authored_publish_mode = initial_parameters.get("publishMode")
+    if authored_publish_mode is None or authored_publish_mode == "":
+        authored_publish_mode = publication.get("mode")
+    publish_mode = str(authored_publish_mode or "none").strip().lower()
     merge_automation = _enabled_merge_automation(initial_parameters)
     finish_mode = merge_automation.get("finishMode") or merge_automation.get(
         "finish_mode"
@@ -1012,18 +1094,24 @@ async def _admit_repository_plan_inputs(
     # authority against this plan, so a coordinator whose own publication is
     # None must still hold that push authority (fix_only pushes too).
     resolver_publishes = bool(merge_automation) and not review_only
+    operations = (
+        ("read", "review_request")
+        if review_only
+        else _authored_plan_github_operations(
+            initial_parameters,
+            publish_mode="pr" if resolver_publishes else authored_publish_mode,
+            requires_github=requires_github or resolver_publishes,
+            resolved_skills=resolved_skills,
+        )
+    )
     slots = {} if native_review else {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
     if (
-        requires_github or review_only or resolver_publishes
+        requires_github
+        or review_only
+        or resolver_publishes
+        or any(operation != "read" for operation in operations)
     ) and mode != AccessMode.ANONYMOUS:
-        operations = ("read",)
-        if review_only:
-            operations = ("read", "review_request")
-        elif publish_mode in {"auto", "pr"} or resolver_publishes:
-            operations = ("read", "write", "branch_write", "review_request")
-        elif publish_mode == "branch":
-            operations = ("read", "write", "branch_write")
         slots["collaboration"] = ("collaboration", operations)
     if publish_mode in {"branch", "pr"}:
         slots["destination"] = (
@@ -1670,6 +1758,7 @@ async def compile_and_persist_execution_plan(
             requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
             native_review=native_review,
+            resolved_skills=agent_resolved_skills,
             # A model-only realizer keeps its existing credential path; typed
             # repository authority is admitted only where it can be consumed.
             typed_authority=selected_realizer_consumes_repository_authority(

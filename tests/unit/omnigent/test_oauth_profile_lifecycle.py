@@ -1965,6 +1965,15 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     artifact_service = ArtifactService()
 
     class CleanupAuthorityStore:
+
+        async def reserve_github_projection(self, **_kwargs):
+            from tests.helpers.github_projection import projection_reservation
+
+            return projection_reservation(lease.lease_id)
+
+        async def validate_github_projection(self, **_kwargs):
+            return None
+
         def __init__(self) -> None:
             self.authority = None
             self.bind_calls: list[dict] = []
@@ -2007,7 +2016,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
             return_value={}
         )
-        request["github_token"] = "selected_token_B"
+        request["github_token_resolver"] = AsyncMock(return_value="selected_token_B")
         request["required_capabilities"] = ("gh",)
 
     first = await runtime.prepare_host(**request)
@@ -2029,7 +2038,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             "sha256:" + "0" * 64
         )
         if mutation == "server_image_without_publisher":
-            request["evidence_request"] = None
+            # Keep the durable credential owner, but remove artifact writes.
+            request["artifact_gateway"] = SimpleNamespace(read=artifact_service.read)
     elif mutation == "host_label":
         state["host_labels"]["moonmind.egress.applied_rule_digest"] = (
             "sha256:" + "0" * 64
@@ -6311,6 +6321,10 @@ async def _run_coordinator_failure_case(
     runtime._run = AsyncMock(side_effect=run_cleanup_command)  # type: ignore[method-assign]
 
     class Store:
+
+        async def get_github_projection_cleanup_authority(self, **_kwargs):
+            return None
+
         async def get_or_create(self, **_kwargs):
             actions.append("envelope_created")
             return SimpleNamespace(bridge_session_id="bridge-1")
@@ -8709,7 +8723,11 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
 ):
     """A real failed atomic writer must not tear down an already assigned host."""
     from moonmind.omnigent.host_services.github_credentials import (
-        github_hosts_writer_script,
+        github_projection_script,
+    )
+    from tests.helpers.github_projection import (
+        projection_reservation,
+        reserve_projection,
     )
     from tests.unit.omnigent.test_gh_config_migration_suppression import (
         _static_host_github_block,
@@ -8730,16 +8748,19 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
         "GIT_TERMINAL_PROMPT": "0",
         "GH_PROMPT_DISABLED": "1",
     }
+    reservation = projection_reservation(_host_lease().lease_id)
+    reserve_projection(config_home / "gh", reservation)
     await asyncio.to_thread(
         subprocess.run,
         [
             "/bin/sh",
             "-ceu",
-            github_hosts_writer_script(str(config_home / "gh")),
+            github_projection_script(str(config_home / "gh")),
             "--",
             str(os.getuid()),
             str(os.getgid()),
             "github.com",
+            json.dumps(reservation),
         ],
         input=b"initialSelectedTokenA",
         check=True,
@@ -8759,13 +8780,7 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
     session = tmp_path / "saved-session"
     session.write_text("same active session")
     before = hosts_file.read_bytes()
-    # Fail the production writer at its final atomic rename, leaving the old
-    # live file intact and exercising its temporary-file cleanup trap.
-    tools_dir = tmp_path / "failing-tools"
-    tools_dir.mkdir()
-    mv = tools_dir / "mv"
-    mv.write_text("#!/bin/sh\nexit 73\n")
-    mv.chmod(0o755)
+    # Fail the production writer exactly at the atomic publication rename.
     failure_code = "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
     retained = {}
     failing = True
@@ -8802,6 +8817,15 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
         retained["lease"] = coordinator._hosts.lease
         coordinator._github_token = AsyncMock(return_value="selectedTokenB")
         coordinator._github_action_authority_error = AsyncMock(return_value=None)
+        revision = 1
+
+        async def reserve(**_):
+            nonlocal revision
+            revision += 1
+            return projection_reservation(retained["lease"].lease_id, revision)
+
+        coordinator._run_store.reserve_github_projection = reserve
+        coordinator._run_store.validate_github_projection = AsyncMock()
         coordinator._execute = AsyncMock()
         coordinator._run_store.bind_profile_authorization = AsyncMock(
             wraps=coordinator._run_store.bind_profile_authorization
@@ -8830,12 +8854,15 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
                     ),
                     "",
                 )
-            if kwargs.get("input_bytes"):
+            if "-ceu" in args and "moonmind-projection" in args[args.index("-ceu") + 1]:
                 assert args[:4] == ("docker", "run", "--rm", "-i")
                 script = args[args.index("-ceu") + 1].replace("/home/app", str(home))
                 writer_env = dict(environment)
-                if failing:
-                    writer_env["PATH"] = f"{tools_dir}:{writer_env['PATH']}"
+                if failing and kwargs.get("input_bytes"):
+                    script = script.replace(
+                        "os.replace(temporary, path)",
+                        '(_ for _ in ()).throw(OSError("injected rename failure")) if path.name == "hosts.yml" else os.replace(temporary, path)',
+                    )
                 result = await asyncio.to_thread(
                     subprocess.run,
                     [
@@ -8846,8 +8873,9 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
                         str(os.getuid()),
                         str(os.getgid()),
                         "github.com",
+                        args[-1],
                     ],
-                    input=kwargs["input_bytes"],
+                    input=kwargs.get("input_bytes"),
                     env=writer_env,
                     capture_output=True,
                     check=False,
@@ -8857,6 +8885,8 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
                         "atomic GitHub projection command failed (exit 73)",
                         code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
                     )
+            elif "-ceu" in args and "chown" in args[args.index("-ceu") + 1]:
+                return 0, "", ""
             else:
                 assert args[:3] == ("docker", "exec", "container-1")
                 result = await asyncio.to_thread(

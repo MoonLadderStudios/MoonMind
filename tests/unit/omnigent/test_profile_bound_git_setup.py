@@ -19,6 +19,7 @@ from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from tests.helpers.git_transport import basic_authorization, start_synthetic_github
+from tests.helpers.github_projection import projection_reservation, reserve_projection
 from tests.unit.omnigent.test_gh_config_migration_suppression import (
     _static_host_github_block,
 )
@@ -449,6 +450,9 @@ async def test_profile_bound_launch_projects_selected_gh_credential_off_metadata
         runtime_scripts=scripts,
         current_step_execution_id="workflow:run:node-1:execution:1",
         github_token=SELECTED_TOKEN,
+        github_projection_reservation=projection_reservation(_host_lease().lease_id),
+        recovery_request=SimpleNamespace(),
+        recovery_store=SimpleNamespace(validate_github_projection=AsyncMock()),
         effective_launch=compile_effective_launch(
             profile_ref="omnigent-codex@1",
             policy_ref="codex-on-demand@1",
@@ -482,6 +486,7 @@ async def test_profile_bound_launch_projects_selected_gh_credential_off_metadata
     home = tmp_path / "host-home"
     config_home = home / ".cache/moonmind-xdg"
     script = writer.args[writer.args.index("-ceu") + 1]
+    reserve_projection(config_home / "gh", json.loads(writer.args[-1]))
     subprocess.run(
         [
             "/bin/sh",
@@ -490,6 +495,7 @@ async def test_profile_bound_launch_projects_selected_gh_credential_off_metadata
             "--",
             str(os.getuid()),
             str(os.getgid()),
+            "github.com",
             writer.args[-1],
         ],
         input=writer.kwargs["input_bytes"],
@@ -594,6 +600,7 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
                     str(os.getuid()),
                     str(os.getgid()),
                     "github.com",
+                    args[-1],
                 ],
                 input=kwargs["input_bytes"],
                 capture_output=True,
@@ -620,8 +627,11 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
     )
     launch["limits"]["cpuMillis"] = cpu_millis
     initial_token = "initialSelectedTokenA"
+    reservation = projection_reservation(lease.lease_id)
+    reserve_projection(config_home / "gh", reservation)
     await runtime._project_github_credential(
         initial_token,
+        github_projection_reservation=reservation,
         cache_volume=f"{container_name}-cache",
         host_image_ref=launch["hostImageRef"],
         runtime_uid=launch["runtimeUid"],
@@ -663,6 +673,8 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
 
     assert_consumers_read(initial_token)
     runtime._run.reset_mock()
+    reservation = projection_reservation(lease.lease_id, revision=2)
+    reserve_projection(config_home / "gh", reservation)
     arguments = {
         "binding": _binding(),
         "host_lease": lease,
@@ -672,6 +684,9 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
         "runtime_scripts": tmp_path,
         "current_step_execution_id": "step-1",
         "github_token": SELECTED_TOKEN,
+        "github_projection_reservation": reservation,
+        "recovery_request": SimpleNamespace(),
+        "recovery_store": SimpleNamespace(validate_github_projection=AsyncMock()),
         "effective_launch": launch,
         "egress_attestation": _egress_attestation(),
     }

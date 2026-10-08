@@ -758,6 +758,174 @@ async def _credential_recovery_host_class(backend, image_ref):
     return HostClass.model_validate(payload)
 
 
+async def _qualify_exact_image_github_projection(backend, image_ref, run_ref, runtime):
+    """Exercise the production Linux projection protocol without provider access."""
+    import json
+
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_projection_script,
+    )
+
+    uid, gid = str(runtime["uid"]), str(runtime["gid"])
+    for lane, mount_root, config_root, writer_user in (
+        ("generic", "/config", "/config", "0:0"),
+        (
+            "profile",
+            "/home/app/.cache",
+            "/home/app/.cache/moonmind-xdg/gh",
+            f"{uid}:{gid}",
+        ),
+    ):
+        volume = f"moonmind-test-gh-projection-{run_ref}-{lane}"
+        mount = f"type=volume,src={volume},dst={mount_root}"
+        owner = f"test:{run_ref}:{lane}"
+        older = {"ownerRef": owner, "revision": 1, "reservationId": str(uuid.uuid4())}
+        newer = {"ownerRef": owner, "revision": 2, "reservationId": str(uuid.uuid4())}
+
+        async def project(
+            action,
+            reservation,
+            *,
+            token=None,
+            rejected=False,
+            config_root=config_root,
+            writer_user=writer_user,
+            mount=mount,
+            lane=lane,
+        ):
+            code, output, error = await backend.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-i",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--user",
+                    writer_user,
+                    "--mount",
+                    mount,
+                    "--entrypoint",
+                    "/bin/sh",
+                    image_ref,
+                    "-ceu",
+                    github_projection_script(config_root, action=action),
+                    "--",
+                    uid,
+                    gid,
+                    "github.com",
+                    json.dumps(reservation, sort_keys=True),
+                ],
+                input_bytes=token,
+                check=False,
+                timeout_seconds=60,
+            )
+            if token and token.decode() in output + error:
+                pytest.fail(
+                    "projection exposed its synthetic credential", pytrace=False
+                )
+            if rejected:
+                assert (
+                    code == 73
+                ), "stale projection was not rejected by the production fence"
+                assert (
+                    not output.strip()
+                ), "rejected projection returned unexpected metadata"
+                return
+            assert code == 0, f"{lane} projection {action} failed"
+            try:
+                acknowledged = json.loads(output)
+            except (TypeError, ValueError):
+                pytest.fail(
+                    "projection returned invalid acknowledgement metadata",
+                    pytrace=False,
+                )
+            if acknowledged != reservation:
+                pytest.fail(
+                    "projection did not acknowledge the exact reservation",
+                    pytrace=False,
+                )
+
+        try:
+            await backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "create",
+                    "--label",
+                    "moonmind.owner=test-github-projection",
+                    volume,
+                ],
+                timeout_seconds=30,
+            )
+            await backend.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--user",
+                    "0:0",
+                    "--mount",
+                    mount,
+                    "--entrypoint",
+                    "/bin/sh",
+                    image_ref,
+                    "-ceu",
+                    'chown "$1:$2" "$3"; chmod 0700 "$3"',
+                    "--",
+                    uid,
+                    gid,
+                    mount_root,
+                ],
+                timeout_seconds=60,
+            )
+            await project("reserve", older)
+            await project("publish", older, token=b"synthetic-old-projection")
+            await project("reserve", newer)
+            await project("publish", newer, token=b"synthetic-new-projection")
+            await project(
+                "publish", older, token=b"synthetic-old-projection", rejected=True
+            )
+            await project("inspect", newer)
+            # Validate the retained value inside the networkless container;
+            # neither expected nor observed credential bytes enter its output.
+            await backend.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-i",
+                    "--network",
+                    "none",
+                    "--read-only",
+                    "--user",
+                    writer_user,
+                    "--mount",
+                    mount,
+                    "--entrypoint",
+                    "python3",
+                    image_ref,
+                    "-c",
+                    (
+                        "import pathlib, sys; value = sys.stdin.buffer.read(); "
+                        "body = pathlib.Path(sys.argv[1]).read_bytes(); "
+                        "sys.exit(0 if b'    oauth_token: ' + value + b'\\n' in body else 1)"
+                    ),
+                    f"{config_root}/hosts.yml",
+                ],
+                input_bytes=b"synthetic-new-projection",
+                timeout_seconds=60,
+            )
+        finally:
+            await backend.run(
+                ["docker", "volume", "rm", "--force", volume], timeout_seconds=30
+            )
+
+
 def _credential_recovery_receipt(
     *, source_commit, image_ref, host_class, before_facts, after_facts, workspace_digest
 ):
@@ -812,8 +980,9 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
 
     Use the existing pinned-image launcher and actual upstream retry owner. No
     message or model request is submitted: this row proves runner restoration,
-    state-volume retention, current workspace save, and stable bridge/session
-    identity. The OAuth-specific launcher/cleanup-CAS paths have separate
+    state-volume retention, current workspace save, stable bridge/session
+    identity, and the production credential projection fence on the exact image.
+    The OAuth-specific launcher/cleanup-CAS paths have separate
     deterministic boundary tests; a missing real environment is not a pass.
     """
     import json
@@ -973,6 +1142,9 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
     try:
         await backend.run(["docker", "pull", image_ref])
         host_class = await _credential_recovery_host_class(backend, image_ref)
+        await _qualify_exact_image_github_projection(
+            backend, image_ref, run_ref, host_class.runtime
+        )
         agents = await client.list_agents()
         agent = next(
             (item for item in agents if item.get("name") == "opencode-native-ui"), None

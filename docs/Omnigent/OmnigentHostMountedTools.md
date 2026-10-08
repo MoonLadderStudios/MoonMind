@@ -367,13 +367,23 @@ Mutation-capable workflows must also verify that the selected GitHub credential 
 For the profile-bound path, `authored_github_operations` is the canonical reader
 of these requirements. Before any bridge/host/lease mutation, a metadata-only
 check verifies the selected default connection and its repository assignment.
-Already-required agent-action credential acquisition rechecks the same narrowed
-operations before secret access, also before bridge/provider/host ownership is
-mutated. Its result populates the existing lazy credential owner without another
-source read. A grant revoked between metadata preflight and acquisition, or an
-unavailable selected secret, therefore cannot claim, release, or clean up an
-existing recovery host's ownership. A successful preflight never becomes a
-cached grant.
+Agent-facing projection then reserves a monotonically increasing revision under
+the durable bridge and host-lease owner, and installs that reservation in the
+lease-private cache before acquiring a credential. Acquisition rechecks the same
+narrowed operations before secret access. The value keeps its original
+reservation through retries; cached values cannot acquire a newer publication
+stamp. Destination writers serialize reservations and atomically replace the
+credential and its stamp together, so a late older acquisition cannot overwrite
+a newer one. Lost acknowledgments reconcile the installed stamp without reading
+or logging the credential. The durable owner is rechecked after destination
+reservation and immediately before publication. Reservation, acquisition, or
+refresh failures retain the host, workspace, and lease for the existing retry
+owner. Cleanup retires the current reservation before deleting its cache and
+cannot remove a newer projection. A successful metadata preflight never becomes
+a cached grant. The generic host stores its reservation under the existing
+runtime-binding compare-and-swap fence and uses the same destination writer.
+Historical generic cleanup reuses its frozen tool-image authority and can retire
+only an unversioned destination; it cannot adopt a newer stamped projection.
 
 Authenticated read-only `gh` requires only `read`. Branch publication requires
 `write` and `branch_write`; PR publication also requires `review_request`.

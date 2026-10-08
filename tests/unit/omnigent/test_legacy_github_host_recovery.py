@@ -9,6 +9,7 @@ import pytest
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from tests.helpers.github_projection import projection_reservation, reserve_projection
 from tests.unit.omnigent.test_oauth_profile_lifecycle import (
     _binding,
     _egress_attestation,
@@ -45,6 +46,11 @@ async def test_legacy_host_without_current_save_cannot_return_ready(
             runtime_scripts=tmp_path,
             current_step_execution_id="step-1",
             github_token="currentSelectedToken",
+            github_projection_reservation=projection_reservation(
+                _host_lease().lease_id
+            ),
+            recovery_request=SimpleNamespace(),
+            recovery_store=SimpleNamespace(validate_github_projection=AsyncMock()),
             effective_launch=launch,
             egress_attestation=_egress_attestation(),
         )
@@ -144,6 +150,8 @@ async def _recovery_fixture(tmp_path, monkeypatch):
     }
     gh = shutil.which("gh")
     home = tmp_path / "home"
+    reservation = projection_reservation(lease.lease_id)
+    reserve_projection(home / ".cache/moonmind-xdg/gh", reservation)
     environment = {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".cache/moonmind-xdg"),
@@ -202,6 +210,13 @@ async def _recovery_fixture(tmp_path, monkeypatch):
         return observed
 
     class Store:
+
+        async def validate_github_projection(self, **kwargs):
+            assert kwargs["reservation"] == reservation
+
+        async def reserve_github_projection(self, **kwargs):
+            return reservation
+
         async def get_existing(self, key):
             assert key == request.idempotency_key
             return row
@@ -279,7 +294,7 @@ async def _recovery_fixture(tmp_path, monkeypatch):
 
         async def run(*args, **kwargs):
             state["events"].append(args[:2])
-            if kwargs.get("input_bytes"):
+            if "-ceu" in args and "moonmind-projection" in args[args.index("-ceu") + 1]:
                 script = args[args.index("-ceu") + 1].replace("/home/app", str(home))
                 result = await asyncio.to_thread(
                     subprocess.run,
@@ -291,8 +306,9 @@ async def _recovery_fixture(tmp_path, monkeypatch):
                         str(os.getuid()),
                         str(os.getgid()),
                         "github.com",
+                        args[-1],
                     ],
-                    input=kwargs["input_bytes"],
+                    input=kwargs.get("input_bytes"),
                     capture_output=True,
                     check=True,
                 )
@@ -366,6 +382,7 @@ async def _recovery_fixture(tmp_path, monkeypatch):
         "runtime_scripts": tmp_path,
         "current_step_execution_id": step_id,
         "github_token": "currentSelectedToken",
+        "github_projection_reservation": reservation,
         "effective_launch": launch,
         "egress_attestation": _egress_attestation(),
         "recovery_request": request,
@@ -1310,6 +1327,7 @@ async def test_restart_after_recreation_before_binding_uses_new_attachment_autho
     runtime._align_workspace_ownership = MagicMock()
     runtime._prepare_runtime_scripts = MagicMock(return_value=tmp_path)
     runtime._container_job_environment = MagicMock(return_value={})
+    runtime.reserve_github_projection = AsyncMock()
     runtime._initialize_required_tools = AsyncMock()
     fresh_attestation = _egress_attestation().model_copy(update={
         "gateway_image_digest": "sha256:" + "d" * 64,
@@ -1338,7 +1356,9 @@ async def test_restart_after_recreation_before_binding_uses_new_attachment_autho
     })
     result = await runtime.prepare_host(
         binding=binding,
-        host_lease=fixture.lease.model_copy(update={"container_name": "mm-host-lease-1"}),
+        host_lease=fixture.lease.model_copy(
+            update={"container_name": "mm-host-lease-1"}
+        ),
         workspace_key="workspace-1",
         workspace_locator=fixture.request.workspace_spec["workspaceLocator"],
         current_workflow_id="workflow-1",
@@ -1348,7 +1368,7 @@ async def test_restart_after_recreation_before_binding_uses_new_attachment_autho
         evidence_request=fixture.request,
         cleanup_authority_store=fixture.store,
         effective_launch=launch,
-        github_token=fixture.args["github_token"],
+        github_token_resolver=AsyncMock(return_value=fixture.args["github_token"]),
         required_capabilities=("gh",),
     )
     assert result["status"] == "ready"

@@ -19,6 +19,7 @@ from moonmind.services.skill_resolution import (
 )
 from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.helpers.github_projection import projection_reservation, reserve_projection
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -338,8 +339,11 @@ async def test_auto_merge_conflict_skill_projects_usable_git_credentials(
         return 0, "", ""
 
     runtime._run = run_projection
+    reservation = projection_reservation("owned")
+    reserve_projection(config / "gh", reservation)
     await runtime._project_github_credential(
         token,
+        github_projection_reservation=reservation,
         cache_volume="owned-cache",
         host_image_ref="host",
         runtime_uid=os.getuid(),
@@ -775,20 +779,11 @@ async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
     if revocation == "credential":
         secret.side_effect = RuntimeError("selected credential disabled")
     monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
-    coordinator = object.__new__(OmnigentProfileBoundExecutionCoordinator)
-    coordinator._execution_plan = None
-    coordinator._run_store = SimpleNamespace(
-        get_or_create=AsyncMock(), bind_profile_authorization=AsyncMock()
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import (
+        _run_coordinator_failure_case,
     )
-    coordinator._hosts = SimpleNamespace(
-        get_binding_for_profile=AsyncMock(),
-        create_host_lease=AsyncMock(),
-        claim_host_lease_cleanup=AsyncMock(),
-    )
-    coordinator._lease_client = SimpleNamespace(
-        acquire_execution_lease=AsyncMock(), release_lease=AsyncMock()
-    )
-    coordinator._host_release = SimpleNamespace(stop_host=AsyncMock())
+
+    retained = {}
 
     async def validate_then_revoke(built):
         denied = await OmnigentProfileBoundExecutionCoordinator._github_action_authority_error(
@@ -807,20 +802,54 @@ async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
                     principal_scope=("system", None),
                 )
 
-    coordinator._github_action_authority_error = validate_then_revoke
+    async def setup(runtime, coordinator):
+        retained.update(runtime=runtime, coordinator=coordinator)
+        coordinator._github_action_authority_error = validate_then_revoke
+        coordinator._github_token = (
+            OmnigentProfileBoundExecutionCoordinator._github_token
+        )
+        coordinator._run_store.reserve_github_projection = AsyncMock(
+            return_value=projection_reservation(coordinator._hosts.lease.lease_id),
+        )
+        coordinator._run_store.validate_github_projection = AsyncMock()
+        runtime.reserve_github_projection = AsyncMock()
+        runtime.stop_host = AsyncMock()
+
+    built = request(
+        githubOperations=["merge_request"],
+        omnigent={"launchPolicyRef": "codex-on-demand@1"},
+    )
+    import hashlib
+
+    built = built.model_copy(
+        update={
+            "workspace_spec": {
+                **built.workspace_spec,
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": hashlib.sha256(b"actions:actions").hexdigest()[:24],
+                },
+            }
+        }
+    )
     try:
-        result = await coordinator.execute(request(githubOperations=["merge_request"]))
-        assert result.provider_error_code == "github_auth_unavailable"
-        if revocation == "operation":
-            assert "merge_request" in result.summary
-        coordinator._run_store.get_or_create.assert_not_awaited()
-        coordinator._run_store.bind_profile_authorization.assert_not_awaited()
-        coordinator._hosts.get_binding_for_profile.assert_not_awaited()
-        coordinator._hosts.create_host_lease.assert_not_awaited()
-        coordinator._hosts.claim_host_lease_cleanup.assert_not_awaited()
-        coordinator._lease_client.acquire_execution_lease.assert_not_awaited()
-        coordinator._lease_client.release_lease.assert_not_awaited()
-        coordinator._host_release.stop_host.assert_not_awaited()
+        events, actions, owners = await _run_coordinator_failure_case(
+            fail_at="container_start",
+            code="OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED",
+            request=built,
+            setup=setup,
+        )
+        coordinator, runtime = retained["coordinator"], retained["runtime"]
+        coordinator._run_store.reserve_github_projection.assert_awaited_once()
+        runtime.reserve_github_projection.assert_awaited_once()
+        runtime._prepare_workspace.assert_not_awaited()
+        runtime._launch_on_demand.assert_not_awaited()
+        runtime.stop_host.assert_not_awaited()
+        assert "provider_released" not in actions
+        assert not {"host_stop", "host_remove"}.intersection(owners)
+        cleanup = next(payload for kind, payload in events if kind == "host_cleanup")
+        assert cleanup["status"] == "waiting"
+        assert cleanup["metadata"]["cleanupCompleted"] is False
         if revocation == "operation":
             secret.assert_not_awaited()
         else:
@@ -830,9 +859,7 @@ async def test_action_revoked_after_metadata_preflight_preserves_live_ownership(
 
 
 @pytest.mark.asyncio
-async def test_early_action_token_is_reused_by_lazy_workspace_owner(
-    monkeypatch, tmp_path
-):
+async def test_action_token_is_reused_by_lazy_workspace_owner(monkeypatch, tmp_path):
     from moonmind.schemas.agent_runtime_models import AgentRunResult
     from tests.unit.omnigent.test_oauth_profile_lifecycle import (
         _drive_authority_chain_coordinator,
