@@ -307,6 +307,98 @@ if problems:
 print(f"healthz ok (uptime {health.get('uptime_seconds')}s)")
 EOF
   record_provenance
+  record_resource_footprint "$phase" || echo "Note: resource footprint capture failed for $phase." >&2
+}
+
+# MoonLadderStudios/MoonMind#3937: a bounded account of what the ready
+# installation keeps running, so a change's idle cost is measured rather than
+# assumed. The upgrade journey records its old release as "source" and the
+# candidate on the same runner. It is evidence, not a gate: an unavailable
+# observation is recorded and never fails the journey.
+record_resource_footprint() {
+  local phase="$1" scratch output="$LOG_DIR/resource-footprint-$1.log"
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/first-run-3938-footprint.XXXXXX")"
+  compose --profile '*' config --format json > "$scratch/config.json" 2>/dev/null \
+    || compose config --format json > "$scratch/config.json" 2>/dev/null || true
+  docker ps --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+    --format '{{.ID}}\t{{.Label "com.docker.compose.service"}}' > "$scratch/ps.txt" 2>/dev/null || true
+  if [[ -s "$scratch/ps.txt" ]]; then
+    # shellcheck disable=SC2046 # one argument per container ID
+    docker stats --no-stream --format '{{json .}}' $(cut -f1 "$scratch/ps.txt") \
+      > "$scratch/stats.jsonl" 2>/dev/null || true
+  fi
+  compose top temporal-worker-workflow > "$scratch/top.txt" 2>/dev/null || true
+  python3 - "$phase" "$scratch" <<'EOF' 2>&1 | redact > "$output"
+import json, re, sys
+from pathlib import Path
+
+phase, scratch = sys.argv[1], Path(sys.argv[2])
+units = {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9,
+         "kib": 2**10, "mib": 2**20, "gib": 2**30}
+
+def read(name):
+    path = scratch / name
+    return path.read_text(errors="replace") if path.is_file() else ""
+
+def mib(usage):
+    value, unit = re.match(r"\s*([\d.]+)\s*([A-Za-z]+)", usage.split("/")[0]).groups()
+    return float(value) * units[unit.lower()] / 2**20
+
+try:
+    services = json.loads(read("config.json"))["services"]
+    running = dict(line.split("\t", 1) for line in read("ps.txt").splitlines() if "\t" in line)
+    stats = [json.loads(line) for line in read("stats.jsonl").splitlines() if line.strip()]
+    if not running or not stats:
+        raise ValueError("no running project containers were observed")
+    for row in stats:
+        row["service"] = next((service for cid, service in running.items()
+                               if cid.startswith(row["ID"]) or row["ID"].startswith(cid)), "?")
+        row["mib"] = mib(row["MemUsage"])
+except Exception as error:
+    print(f"footprint phase={phase} unavailable: {type(error).__name__}: {error}")
+    raise SystemExit(0)
+
+profiled = {name: spec["profiles"] for name, spec in services.items() if spec.get("profiles")}
+init = sorted({
+    dependency
+    for spec in services.values()
+    if isinstance(spec.get("depends_on"), dict)
+    for dependency, condition in spec["depends_on"].items()
+    if (condition or {}).get("condition") == "service_completed_successfully"
+} - set(profiled))
+observed = set(running.values())
+label = lambda name: f"{name}[{','.join(profiled.get(name, ['unmodeled']))}]"
+print("long-lived:", *sorted(set(services) - set(init) - set(profiled)))
+print("one-shot init:", *init)
+print("optional profiles (not running):", *(label(n) for n in sorted(set(profiled) - observed)))
+print("on-demand (profile service running):",
+      *(label(n) for n in sorted(observed - (set(services) - set(profiled)))))
+print("running containers (snapshot after up --wait):")
+for row in sorted(stats, key=lambda row: row["service"]):
+    print(f"  {row['service']:<40} mem={row['mib']:.0f}MiB cpu={row['CPUPerc']} pids={row['PIDs']} {row['Name']}")
+
+top = read("top.txt")
+lines = top.splitlines()
+header = next((index for index, line in enumerate(lines) if line.split()[:1] == ["UID"]), None)
+processes = []
+if header is not None:
+    columns = len(lines[header].split())
+    processes = [line.split(None, columns - 1)[-1] for line in lines[header + 1:] if line.strip()]
+python = [command for command in processes
+          if command.split()[0].rsplit("/", 1)[-1].startswith("python")]
+print("temporal-worker-workflow processes (compose top):")
+print(top.rstrip() or "  unavailable")
+print(
+    f"footprint phase={phase} running_containers={len(stats)} "
+    f"memory_mib={round(sum(row['mib'] for row in stats))} "
+    f"workflow_worker_processes={len(processes)} "
+    f"workflow_worker_python_processes={len(python)} "
+    f"workflow_worker_memory_mib="
+    f"{round(sum(row['mib'] for row in stats if row['service'] == 'temporal-worker-workflow'))}"
+)
+EOF
+  rm -rf "$scratch"
+  grep '^footprint ' "$output" || true
 }
 
 checks() {

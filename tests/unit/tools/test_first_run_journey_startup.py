@@ -42,12 +42,18 @@ if args == ["compose", "version"]:
     raise SystemExit(0)
 config = json.loads(Path(os.environ["STARTUP_TEST_CONFIG"]).read_text())
 calls = Path(os.environ["STARTUP_TEST_DOCKER_CALLS"])
+image = os.environ.get("MOONMIND_IMAGE", "")
+phase = "source" if image == "test-source" else "candidate"
+footprint = config.get("footprint", {}).get(phase, {})
+if args[:1] != ["compose"]:
+    with calls.with_suffix(".host.jsonl").open("a") as output:
+        output.write(json.dumps(args) + "\n")
+    print(footprint.get(args[0], ""))
+    raise SystemExit(footprint.get("host_status", 0))
 previous = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 directory = Path(args[args.index("--project-directory") + 1])
 command = args[args.index("--project-directory") + 2:]
-image = os.environ.get("MOONMIND_IMAGE", "")
 startup = command[:1] == ["up"] and "600" in command
-phase = "source" if image == "test-source" else "candidate"
 attempt = 1 + sum(item["startup"] and item["phase"] == phase for item in previous)
 statuses = config.get(phase + "_statuses", [0])
 status = statuses[min(attempt - 1, len(statuses) - 1)] if startup else 0
@@ -84,8 +90,10 @@ if startup:
                 break
             time.sleep(0.01)
     raise SystemExit(status)
-if command[:1] == ["config"]:
-    print(json.dumps({"services": {"minio": {"image": "test-minio"}}}))
+if "config" in command[:3]:
+    print(json.dumps(config.get("compose_config", {"services": {"minio": {"image": "test-minio"}}})))
+elif command[:1] == ["top"]:
+    print(footprint.get("top", ""))
 elif command[:1] == ["logs"]:
     print("cleanup sk-startup_test_secret ghp_startup_test_secret github_pat_startup_test_secret key=startup_test_secret")
 else:
@@ -375,4 +383,99 @@ def test_successful_startup_preserves_complete_fresh_journey_and_cleanup(
     assert any(call["command"][:1] == ["restart"] for call in journey.calls())
     output = _startup_log(journey, "fresh", "candidate", 1)
     assert "phase=candidate attempt=1" in output and "exit_status=0" in output
+    journey.assert_cleaned()
+
+
+COMPOSE_MODEL = {
+    "services": {
+        "minio": {"image": "test-minio"},
+        "api": {"depends_on": {"init-db": {"condition": "service_completed_successfully"}}},
+        "init-db": {"restart": "no"},
+        "temporal-worker-workflow": {},
+        "temporal-ui": {"profiles": ["temporal-ui"]},
+        "omnigent-host-claude": {"profiles": ["omnigent-host-claude"]},
+    }
+}
+
+
+def _footprint(workflow_rows: list[str], workflow_mib: int) -> dict[str, str]:
+    stats = [
+        {"ID": "a1", "Name": "api-1", "CPUPerc": "1.0%", "MemUsage": "300MiB / 7.7GiB", "PIDs": "20"},
+        {"ID": "w1", "Name": "workflow-1", "CPUPerc": "2.0%", "MemUsage": f"{workflow_mib}MiB / 7.7GiB", "PIDs": "40"},
+        {"ID": "h1", "Name": "host-1", "CPUPerc": "0.5%", "MemUsage": "1GiB / 7.7GiB", "PIDs": "5"},
+    ]
+    return {
+        "ps": "a1\tapi\nw1\ttemporal-worker-workflow\nh1\tomnigent-host-claude",
+        "stats": "\n".join(json.dumps(row) for row in stats),
+        "top": "\n".join(
+            [
+                "moonmind-test-startup-unit-temporal-worker-workflow-1",
+                "UID    PID    PPID   C    STIME   TTY   TIME       CMD",
+                *workflow_rows,
+            ]
+        ),
+    }
+
+
+def test_upgrade_records_before_and_after_resource_footprint(journey: Journey) -> None:
+    init = "root 1 0 0 10:00 ? 00:00:00 /sbin/docker-init -- python"
+    supervisor = [
+        init,
+        "app 7 1 1 10:00 ? 00:00:01 python start-workflow-worker-group.py key=startup_test_secret",
+        "app 9 7 9 10:00 ? 00:00:05 python -m moonmind.workflows.temporal.worker_runtime",
+        "app 10 7 9 10:00 ? 00:00:05 python -m moonmind.workflows.temporal.worker_runtime",
+    ]
+    single = [init, "app 7 1 9 10:00 ? 00:00:05 python -m moonmind.workflows.temporal.worker_runtime"]
+    result = journey.run(
+        upgrade=True,
+        source_statuses=[0],
+        candidate_statuses=[0],
+        lines=1,
+        compose_config=COMPOSE_MODEL,
+        footprint={
+            "source": _footprint(supervisor, 600),
+            "candidate": _footprint(single, 250),
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    source = (journey.logs / "upgrade/resource-footprint-source.log").read_text()
+    candidate = (journey.logs / "upgrade/resource-footprint-candidate.log").read_text()
+    for text in (source, candidate):
+        assert "long-lived: api minio temporal-worker-workflow" in text
+        assert "one-shot init: init-db" in text
+        assert "optional profiles (not running): temporal-ui[temporal-ui]" in text
+        assert "on-demand (profile service running): omnigent-host-claude[omnigent-host-claude]" in text
+        assert "temporal-worker-workflow" in text and "docker-init" in text
+        assert "startup_test_secret" not in text
+    assert (
+        "footprint phase=source running_containers=3 memory_mib=1924 "
+        "workflow_worker_processes=4 workflow_worker_python_processes=3 "
+        "workflow_worker_memory_mib=600"
+    ) in source
+    assert (
+        "footprint phase=candidate running_containers=3 memory_mib=1574 "
+        "workflow_worker_processes=2 workflow_worker_python_processes=1 "
+        "workflow_worker_memory_mib=250"
+    ) in candidate
+    host_calls = [
+        json.loads(line)
+        for line in journey.docker_calls.with_suffix(".host.jsonl").read_text().splitlines()
+    ]
+    assert all(
+        "label=com.docker.compose.project=moonmind-test-startup-unit" in call
+        for call in host_calls
+        if call[0] == "ps"
+    )
+    journey.assert_cleaned()
+
+
+def test_unavailable_resource_footprint_never_fails_the_journey(journey: Journey) -> None:
+    result = journey.run(
+        candidate_statuses=[0],
+        lines=1,
+        footprint={"candidate": {"host_status": 1, "stats": "not json"}},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    footprint = (journey.logs / "fresh/resource-footprint-candidate.log").read_text()
+    assert "footprint phase=candidate unavailable" in footprint
     journey.assert_cleaned()

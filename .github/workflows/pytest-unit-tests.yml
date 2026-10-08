@@ -1017,12 +1017,14 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
-      - name: Upload redacted journey startup timings
+      - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         uses: actions/upload-artifact@v7
         with:
           name: journey-startup-${{ matrix.suite }}
-          path: var/artifacts/first-run-3938/*/compose-startup-*.log
+          path: |
+            var/artifacts/first-run-3938/*/compose-startup-*.log
+            var/artifacts/first-run-3938/*/resource-footprint-*.log
           if-no-files-found: warn
       - name: Capture docker compose diagnostics
         if: failure()
