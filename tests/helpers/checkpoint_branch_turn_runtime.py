@@ -2,8 +2,9 @@
 
 The harness deliberately keeps :class:`OmnigentProfileBoundExecutionCoordinator`
 as the lifecycle owner.  Only its external lease, host, bridge, provider,
-publication, artifact, and cleanup interfaces are replaced, matching the
-credential-free hermetic boundary required by MoonLadderStudios/MoonMind#3621.
+repository credential, publication, artifact, and cleanup interfaces are replaced,
+matching the credential-free hermetic boundary required by
+MoonLadderStudios/MoonMind#3621.
 """
 
 from __future__ import annotations
@@ -558,8 +559,15 @@ async def execute_checkpoint_branch_request(
     async def resolve_policy(_policy_ref: str) -> dict[str, Any]:
         return policy
 
+    async def resolve_repository_credential(_request: AgentExecutionRequest) -> str:
+        return "checkpoint-branch-test-credential"
+
     coordinator._profile_authority.resolve = resolve_profile
     coordinator._policy_authority.resolve_runtime_snapshot = resolve_policy
+    # The deployment-owned repository connection is an external boundary just
+    # like the provider profile. Keep this fake instance-local so concurrent
+    # turns never patch the real credential resolver for another coordinator.
+    coordinator._github_token = resolve_repository_credential
     return await coordinator.branch_from_checkpoint(
         request=request,
         checkpoint=checkpoint,
