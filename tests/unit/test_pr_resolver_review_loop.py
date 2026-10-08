@@ -713,7 +713,7 @@ def test_snapshot_collects_findings_after_review_completion(
     main()
     captured = json.loads(path.read_text())
     assert len(reads) == 2
-    assert captured["automatedReview"]["freshReviewForHead"] is True
+    assert captured["automatedReview"]["freshReviewForHead"] is inventory_available
     decision = classify_snapshot(normalize_portable_snapshot(captured))
     if inventory_available:
         assert captured["commentsSummary"]["actionableCommentIds"] == [51]
@@ -1211,3 +1211,146 @@ def test_unrelated_request_does_not_supersede_a_refusal(snapshot_module, change)
     )
     assert evidence["requestCommentId"] == 98765
     assert evidence["requestFailed"] is True
+
+
+@pytest.mark.parametrize("prefix", ["    ", "\t", "\n    "])
+def test_indented_clean_reply_is_not_completion(snapshot_module, prefix):
+    evidence = _evidence(
+        snapshot_module,
+        comments=[
+            _request_comment(),
+            _codex_reply(prefix + "Codex Review: Didn't find any major issues. 🚀"),
+        ],
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize("exact_review", [False, True])
+def test_missing_head_timestamp_cannot_bind_historical_comments(
+    snapshot_module, monkeypatch, exact_review
+):
+    build = snapshot_module["build_automated_review_evidence"]
+    monkeypatch.setitem(
+        build.__globals__, "_fetch_head_commit_timestamp", lambda **kwargs: None
+    )
+    kwargs = {
+        "head_committed_at": None,
+        "comments": [
+            _request_comment("2020-01-01T00:00:00Z"),
+            _codex_reply(
+                "Codex Review: Didn't find any major issues. 🚀",
+                created_at="2020-01-01T00:00:01Z",
+            ),
+        ],
+        "reviews": (
+            [
+                {
+                    "id": 50,
+                    "state": "COMMENTED",
+                    "commit_id": HEAD,
+                    "submitted_at": "2026-08-24T22:19:00Z",
+                    "user": {"login": CODEX_LOGIN},
+                }
+            ]
+            if exact_review
+            else []
+        ),
+    }
+    if exact_review:
+        with pytest.raises(RuntimeError, match="head.*timestamp"):
+            _evidence(snapshot_module, **kwargs)
+        kwargs["comments"] = []
+        evidence = _evidence(snapshot_module, **kwargs)
+        assert evidence["freshReviewForHead"] is True
+        assert evidence["requestCommentId"] is None
+    else:
+        with pytest.raises(RuntimeError, match="head.*timestamp"):
+            _evidence(snapshot_module, **kwargs)
+
+
+@pytest.mark.parametrize("new_result", ["pending", "failure", "complete"])
+def test_refreshed_inventory_rebinds_review_evidence(
+    snapshot_module, monkeypatch, tmp_path, new_result
+):
+    main = snapshot_module["main"]
+    scope = main.__globals__
+    first = {**_request_comment(), "id": 100}
+    second = {**_request_comment("2026-08-24T22:22:00Z"), "id": 102}
+    first_clean = _codex_reply(
+        "Codex Review: Didn't find any major issues. 🚀", comment_id=101
+    )
+    second_reply = _codex_reply(
+        (
+            CODEX_USAGE_LIMIT_REPLY
+            if new_result == "failure"
+            else "Codex Review: Didn't find any major issues. 🚀"
+        ),
+        created_at="2026-08-24T22:23:00Z",
+        comment_id=103,
+    )
+    checks = [{"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+    pr = {
+        **_snapshot()["pr"],
+        "url": "https://github.com/owner/repo/pull/350",
+        "statusCheckRollup": checks,
+    }
+    replacements = {
+        "fetch_pr_data": lambda selector: (pr, "350", []),
+        "_fetch_required_status_checks": lambda **kw: [],
+        "_fetch_commit_check_runs": lambda **kw: checks,
+        "_fetch_commit_statuses": lambda **kw: [],
+        "_fetch_previous_commit_sha": lambda **kw: None,
+        "_fetch_head_commit_timestamp": lambda **kw: HEAD_COMMITTED_AT,
+        "_fetch_pull_request_reviews": lambda **kw: [],
+        "_fetch_comment_reactions": lambda **kw: [],
+        "_fetch_pr_reactions": lambda **kw: [],
+    }
+    for key, value in replacements.items():
+        monkeypatch.setitem(scope, key, value)
+    reads = []
+
+    def read_comments(*args):
+        reads.append(True)
+        comments = [first, first_clean]
+        if len(reads) > 1:
+            comments.append(second)
+            if new_result != "pending":
+                comments.append(second_reply)
+        if len(reads) > 2:
+            comments.append(
+                {
+                    "id": 104,
+                    "type": "review_comment",
+                    "user": CODEX_LOGIN,
+                    "body": "[P1] Preserve authorization",
+                    "created_at": "2026-08-24T22:23:01Z",
+                }
+            )
+        return {"comments": comments, "thread_inventory_complete": True}
+
+    monkeypatch.setitem(scope, "run_command", read_comments)
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / "snapshot.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "snapshot",
+            "--pr",
+            "350",
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--snapshot-path",
+            str(path),
+        ],
+    )
+    main()
+    result = json.loads(path.read_text())
+    assert result["automatedReview"]["requestCommentId"] == 102
+    assert result["automatedReview"]["freshReviewForHead"] is (new_result == "complete")
+    assert result["automatedReview"]["requestPending"] is (new_result == "pending")
+    assert result["automatedReview"]["requestFailed"] is (new_result == "failure")
+    if new_result == "complete":
+        assert len(reads) == 3
+        assert result["commentsSummary"]["actionableCommentIds"] == [104]

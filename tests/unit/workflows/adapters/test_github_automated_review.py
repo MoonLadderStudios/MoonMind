@@ -417,6 +417,7 @@ async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
             ),
             _get(200, []),
             _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -570,6 +571,7 @@ async def test_requested_review_accepts_review_for_requested_commit(monkeypatch)
                 ],
             ),
             _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -628,6 +630,7 @@ async def test_requested_review_follows_pagination_for_requested_commit(monkeypa
                 ],
             ),
             _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -833,6 +836,7 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
                     }
                 ],
             ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -1031,6 +1035,7 @@ async def test_requested_review_uses_latest_comment_across_pages(
             _get(200, [last]),
             _get(200, []),
             _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -1164,6 +1169,7 @@ async def test_requested_review_fresh_clean_comment_completes_despite_reaction_d
             ),
             _get(403, {"message": "Resource not accessible by integration"}),
             _get(403, {"message": "Resource not accessible by integration"}),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -1195,7 +1201,7 @@ async def test_requested_review_fresh_clean_comment_completes_despite_reaction_d
         (503, {}, "Service unavailable"),
     ],
 )
-async def test_requested_review_nonpermission_reaction_errors_keep_existing_wait(
+async def test_requested_review_nonpermission_reaction_errors_remain_observable(
     monkeypatch, status, headers, message
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
@@ -1218,11 +1224,11 @@ async def test_requested_review_nonpermission_reaction_errors_keep_existing_wait
         )
 
     assert result.ready is False
-    assert result.automated_review_complete is False
+    assert result.automated_review_complete is None
     assert [blocker["kind"] for blocker in result.blockers] == [
-        "automated_review_pending"
+        "policy_denied" if status == 401 else "external_state_unavailable"
     ]
-    assert result.blockers[0]["retryable"] is True
+    assert result.blockers[0]["retryable"] is (status != 401)
     mock_client.post.assert_not_awaited()
 
 
@@ -1452,7 +1458,9 @@ async def test_unavailable_request_inventory_cannot_accept_an_older_review(probl
         )
     assert result.automated_review_complete is None
     assert result.ready is False
-    assert [b["kind"] for b in result.blockers] == ["external_state_unavailable"]
+    assert [b["kind"] for b in result.blockers] == [
+        "policy_denied" if problem == "denied" else "external_state_unavailable"
+    ]
 
     assert result.blockers[0]["retryable"] is (problem in {"http_error", "partial_page"})
 
@@ -1498,7 +1506,11 @@ async def test_request_inventory_preserves_quota_retry_and_permission_denial(
     assert result.ready is False
     assert result.automated_review_complete is None
     blocker = result.blockers[0]
-    assert blocker["kind"] == "external_state_unavailable"
+    assert blocker["kind"] == (
+        "policy_denied"
+        if status in {401, 403} and not limited
+        else "external_state_unavailable"
+    )
     assert blocker["retryable"] is retryable
     assert bool(blocker.get("providerFailure")) is limited
     if limited:

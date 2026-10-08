@@ -315,7 +315,11 @@ submitted review or clean reaction completes the request, the gate blocks with
 non-retryable `automated_review_request_failed`. The Skill's snapshot reports
 `requestFailed` and `requestFailure` instead of `requestPending`, and it
 classifies `automated_review_request_failed` as `manual_review`, ahead of
-remediation, rather than waiting. A newer request supersedes the refusal.
+remediation, rather than waiting. A newer request supersedes the refusal. Its adoption consumes the same configured review-cycle budget before either the retained request or cycle is changed. A newer external request cannot bypass an exhausted budget. Superseded records remain visible, and restored active request/cycle identities must agree on provider, head, key, comment, and known creation time. Missing times can be recovered only from the exact recorded comment and repaired on that same cycle; contradictory known times fail closed.
+
+Unavailable completion evidence is distinct from absence. Review and reaction collections are paginated, malformed or failed reads remain observable, and a refusal becomes terminal only when no qualified completion exists and every relevant completion route was read successfully. A known qualified completion can satisfy an unavailable alternative route. Retryable GitHub quota, service, and transport failures retain a wait; confirmed access denial retains the existing policy blocker. Complete request comments are always required to select the latest request. Missing observed head data never substitutes tracked state as completion proof, and qualified completion is rechecked against the current PR head.
+
+The portable snapshot reclassifies the refreshed comment inventory after observing completion, refreshing again when the selected request or completion changes. Repeated change fails closed after three refreshes. When the current head's commit timestamp is unavailable, unbound request/comment/reaction history cannot establish freshness; a standalone submitted review explicitly naming the head remains valid only when no unbound request must be reconciled.
 Once that head has a completed review, review-only finishes even with findings.
 Merge and fix-only also require no remaining blockers before finishing according
 to their finishMode. Completion does not request another review for the same head.

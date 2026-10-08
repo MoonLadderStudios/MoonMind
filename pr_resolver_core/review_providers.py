@@ -227,6 +227,23 @@ class ReviewRequest:
     created_at: datetime
 
 
+def is_review_request_comment(provider: AutomatedReviewProvider, comment: Any) -> bool:
+    """Recognize only the provider's explicit issue-comment command."""
+    if (
+        not isinstance(comment, Mapping)
+        or comment.get("type", "issue_comment") != "issue_comment"
+    ):
+        return False
+    raw_body = str(comment.get("body") or "")
+    opening = next((line for line in raw_body.splitlines() if line.strip()), "")
+    if opening.startswith(("    ", "\t")):
+        return False
+    return (
+        " ".join(raw_body.split()).rstrip(".").strip().lower()
+        == provider.command.lower()
+    )
+
+
 def latest_review_request(
     provider: AutomatedReviewProvider,
     comments: Iterable[Any],
@@ -245,16 +262,7 @@ def latest_review_request(
     if not head_sha:
         return None
     for comment in comments:
-        if not isinstance(comment, Mapping):
-            continue
-        if comment.get("type", "issue_comment") != "issue_comment":
-            continue
-        raw_body = str(comment.get("body") or "")
-        opening = next((line for line in raw_body.splitlines() if line.strip()), "")
-        if opening.startswith(("    ", "\t")):
-            continue
-        body = " ".join(raw_body.split()).rstrip(".").strip()
-        if body.lower() != provider.command.lower():
+        if not is_review_request_comment(provider, comment):
             continue
         created_at = _comment_time(comment)
         if created_at is None or (not_before is not None and created_at < not_before):
@@ -365,7 +373,11 @@ def classify_review_reply(
     )
     if created_at is None:
         return None
-    body = str(comment.get("body") or "").strip()
+    raw_body = str(comment.get("body") or "")
+    opening = next((line for line in raw_body.splitlines() if line.strip()), "")
+    if opening.startswith(("    ", "\t")):
+        return None
+    body = raw_body.strip()
     if _is_clean_review_body(provider, body):
         return ReviewReply(comment=comment, created_at=created_at)
     failure_class = _failure_class(provider, str(comment.get("body") or ""))

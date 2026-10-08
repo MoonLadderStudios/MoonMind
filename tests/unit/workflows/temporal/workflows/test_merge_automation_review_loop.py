@@ -2180,3 +2180,153 @@ async def test_superseding_request_is_retained_before_completion(
     assert second_cycle["requestCommentId"] == 7
     assert second_cycle["requestedAt"] == second["requestedAt"]
     assert second_cycle["completionId"] == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True])
+async def test_superseding_review_cannot_bypass_cycle_budget(monkeypatch, complete):
+    payload = _payload(maxCycles=1)
+    first = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": "request-key",
+        "requestCommentId": 5,
+        "requestedAt": "2026-08-24T22:00:00Z",
+    }
+    payload["activeReviewRequest"] = first
+    payload["reviewCycles"] = [{"cycle": 1, **first, "status": "requested"}]
+    selected = {
+        "readinessObservationId": "new-observation",
+        "automatedReviewRequestCommentId": 7,
+        "automatedReviewRequestedAt": "2026-08-24T22:10:00Z",
+        "automatedReviewComplete": complete,
+    }
+    harness = _Harness(
+        monkeypatch, readiness=[_ready(HEAD_1, **selected)], child_results=[]
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "blocked", json.dumps(result)
+    assert any(b["kind"] == "review_cycle_budget_exhausted" for b in result["blockers"])
+    assert harness.child_payloads == [] and harness.request_payloads == []
+    assert result["reviewLoop"]["cycles"] == 1
+    assert result["reviewLoop"]["activeRequest"]["requestCommentId"] == 5
+    assert result["reviewLoop"]["cycleRecords"][0]["status"] == "requested"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch", ["requestCommentId", "requestedAt", "headSha", "provider"]
+)
+async def test_restored_active_request_must_match_its_cycle_identity(
+    monkeypatch, mismatch
+):
+    payload = _review_only_payload()
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": build_review_request_key(
+            parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            repository="MoonLadderStudios/MoonMind",
+            pr_number=350,
+            head_sha=HEAD_1,
+            provider="codex",
+        ),
+        "requestCommentId": 7,
+        "requestedAt": "2026-08-24T22:10:00Z",
+    }
+    cycle = {"cycle": 1, **active, "status": "requested"}
+    cycle[mismatch] = {
+        "requestCommentId": 5,
+        "requestedAt": "2026-08-24T22:00:00Z",
+        "headSha": HEAD_2,
+        "provider": "other",
+    }[mismatch]
+    payload["activeReviewRequest"] = active
+    payload["reviewCycles"] = [cycle]
+    harness = _review_only_harness(
+        monkeypatch, readiness=[_review_only_completed(HEAD_1)]
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "blocked"
+    assert not any(
+        c["status"] == "completed" for c in result["reviewLoop"]["cycleRecords"]
+    )
+    assert harness.request_payloads == [] and harness.child_payloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_only", [False, True])
+@pytest.mark.parametrize("missing_time", [None, "malformed", "2026-08-24T22:15:00"])
+@pytest.mark.parametrize("retained_conflict", [False, True])
+async def test_exact_request_time_recovery_repairs_retained_identity(
+    monkeypatch, review_only, missing_time, retained_conflict
+):
+    payload = _review_only_payload() if review_only else _payload()
+    if not review_only:
+        payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": build_review_request_key(
+            parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            repository="MoonLadderStudios/MoonMind",
+            pr_number=350,
+            head_sha=HEAD_1,
+            provider="codex",
+        ),
+        "requestCommentId": 7,
+        "requestedAt": missing_time,
+    }
+    payload["activeReviewRequest"] = active
+    payload["reviewCycles"] = [{"cycle": 1, **active, "status": "requested"}]
+    if retained_conflict:
+        payload["reviewCycles"][0]["requestedAt"] = "2026-08-24T22:14:00Z"
+    selected = {
+        "readinessObservationId": "time-recovery-poll",
+        "automatedReviewRequestCommentId": 7,
+        "automatedReviewRequestedAt": "2026-08-24T22:15:00Z",
+    }
+    readiness = [
+        _awaiting_review(HEAD_1, **selected),
+        _ready(
+            HEAD_1,
+            **selected,
+            automatedReviewCompletionKind="issue_comment",
+            automatedReviewCompletionId=8,
+            automatedReviewCompletedAt="2026-08-24T22:20:00Z",
+        ),
+    ]
+    harness = (
+        _review_only_harness(monkeypatch, readiness=readiness)
+        if review_only
+        else _Harness(
+            monkeypatch,
+            readiness=readiness,
+            child_results=[
+                {"status": "success", "mergeAutomationDisposition": "review_clean"}
+            ],
+        )
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    if retained_conflict:
+        assert result["status"] == "blocked"
+        assert (
+            result["reviewLoop"]["cycleRecords"][0]["requestedAt"]
+            == "2026-08-24T22:14:00Z"
+        )
+        assert result["reviewLoop"]["cycleRecords"][0]["status"] == "requested"
+        assert result["reviewLoop"]["activeRequest"]["requestedAt"] == missing_time
+        assert len(harness.readiness_payloads) == 1
+        assert harness.child_payloads == []
+        return
+    assert result["status"] == ("review_complete" if review_only else "review_clean")
+    assert result["reviewLoop"]["cycles"] == 1
+    assert (
+        result["reviewLoop"]["cycleRecords"][0]["requestedAt"]
+        == selected["automatedReviewRequestedAt"]
+    )
+    assert (
+        harness.readiness_payloads[1]["activeReviewRequest"]["requestedAt"]
+        == selected["automatedReviewRequestedAt"]
+    )
+    assert result["reviewLoop"]["cycleRecords"][0]["completionId"] == 8

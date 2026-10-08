@@ -2208,11 +2208,18 @@ class GitHubService:
                 )
                 pr_response.raise_for_status()
                 pr_data = pr_response.json()
+                if not isinstance(pr_data, dict):
+                    raise TypeError("GitHub pull request body is malformed")
                 pr_open = pr_data.get("state") == "open"
                 pr_merged = bool(pr_data.get("merged"))
                 head = pr_data.get("head") if isinstance(pr_data, dict) else {}
                 if isinstance(head, dict):
-                    observed_head_sha = str(head.get("sha") or head_sha)
+                    observed_head_sha = str(
+                        head.get("sha")
+                        or ("" if review_loop_enabled and review_request else head_sha)
+                    ).strip()
+                elif review_loop_enabled and review_request:
+                    observed_head_sha = ""
                 base = pr_data.get("base") if isinstance(pr_data, dict) else {}
                 if isinstance(base, dict):
                     observed_base_sha = str(base.get("sha") or "").strip() or None
@@ -2242,6 +2249,11 @@ class GitHubService:
                     }
                 )
 
+            except (TypeError, ValueError) as exc:
+                blockers.append(
+                    self._review_evidence_read_failure(exc, source="pull_request")
+                )
+
             if pr_open is False and pr_merged is not True:
                 blockers.append(
                     {
@@ -2265,6 +2277,7 @@ class GitHubService:
 
             if (
                 checks_required
+                and bool(observed_head_sha)
                 and pr_merged is not True
                 and not any(
                     blocker.get("kind") != "merge_conflict" for blocker in blockers
@@ -2313,6 +2326,56 @@ class GitHubService:
                             review_request=review_request,
                             observed_head_sha=observed_head_sha,
                         )
+                        if review_evidence["complete"] is True:
+                            try:
+                                verified = await client.get(
+                                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                                    headers=headers,
+                                )
+                                verified.raise_for_status()
+                                current = verified.json()
+                                if (
+                                    not isinstance(current, dict)
+                                    or not isinstance(current.get("head"), dict)
+                                    or not current["head"].get("sha")
+                                ):
+                                    raise TypeError(
+                                        "GitHub pull request head is unavailable"
+                                    )
+                                if (
+                                    current["head"]["sha"] != observed_head_sha
+                                    or current.get("state") != "open"
+                                    or current.get("merged") is True
+                                ):
+                                    review_evidence = {
+                                        **review_evidence,
+                                        "complete": False,
+                                        "stale": True,
+                                        "blockers": [
+                                            {
+                                                "kind": "automated_review_pending",
+                                                "summary": "Pull request changed during review evidence collection.",
+                                                "retryable": True,
+                                                "source": "github",
+                                            }
+                                        ],
+                                    }
+                            except (httpx.HTTPError, TypeError, ValueError) as exc:
+                                review_evidence = {
+                                    **review_evidence,
+                                    "complete": None,
+                                    "blockers": [
+                                        self._review_evidence_read_failure(
+                                            exc, source="pull_request"
+                                        )
+                                    ],
+                                }
+                            if review_evidence["complete"] is not True:
+                                review_evidence.update(
+                                    completionKind=None,
+                                    completionId=None,
+                                    completedAt=None,
+                                )
                         automated_review_complete = review_evidence["complete"]
                         automated_review_request_comment_id = review_evidence.get(
                             "requestCommentId"
@@ -2344,7 +2407,7 @@ class GitHubService:
                     blockers.extend(review_evidence["blockers"])
 
         return PullRequestReadinessResult(
-            headSha=observed_head_sha,
+            headSha=observed_head_sha or head_sha,
             baseSha=observed_base_sha,
             ready=not any(
                 blocker.get("kind") != "merge_conflict" for blocker in blockers
@@ -2584,6 +2647,48 @@ class GitHubService:
         rules = await optional_read(f"rules/branches/{branch}")
         return required_check_contexts(branch_data, protection, rules)
 
+    def _review_evidence_read_failure(
+        self, exc: Exception, *, source: str
+    ) -> dict[str, Any]:
+        status = (
+            exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        )
+        rate_limit = (
+            self._github_rate_limit_event(exc.response)
+            if isinstance(exc, httpx.HTTPStatusError)
+            else None
+        )
+        if source == "issue_reactions" and status == 403 and rate_limit is None:
+            return {
+                **self._permission_blocker(
+                    response=exc.response,
+                    evidence_source=source,
+                    missing_permission="Issues: read",
+                    summary="Requested review reaction evidence is denied by the selected GitHub connection (HTTP 403).",
+                ),
+                "kind": "policy_denied",
+            }
+        if status in {401, 403} and rate_limit is None:
+            return {
+                "kind": "policy_denied",
+                "summary": f"GitHub {source} access is denied (HTTP {status}).",
+                "retryable": False,
+                "source": "github",
+                "evidenceSource": source,
+            }
+        return {
+            "kind": "external_state_unavailable",
+            "summary": f"GitHub {source} evidence is unavailable"
+            + (f" (HTTP {status})." if status else " or malformed."),
+            "retryable": (
+                (status >= 500 or rate_limit is not None)
+                if status is not None
+                else isinstance(exc, httpx.TransportError)
+            ),
+            "source": "github",
+            **({"providerFailure": rate_limit.to_metadata()} if rate_limit else {}),
+        }
+
     async def _evaluate_requested_review(
         self,
         *,
@@ -2638,11 +2743,20 @@ class GitHubService:
             }
 
         requested_head_sha = str(review_request.get("headSha") or "").strip()
-        if (
-            requested_head_sha
-            and observed_head_sha
-            and requested_head_sha != observed_head_sha
-        ):
+        if not requested_head_sha or not observed_head_sha:
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "Review completion requires an observed and requested head SHA.",
+                        "retryable": True,
+                        "source": "github",
+                    }
+                ],
+            }
+        if requested_head_sha != observed_head_sha:
             return {
                 **pending,
                 "stale": True,
@@ -2659,112 +2773,78 @@ class GitHubService:
                 ],
             }
 
-        requested_at = _parse_github_timestamp(review_request.get("requestedAt"))
         reviews: list[Any] = []
+        review_blocker = None
         review_url: str | None = (
-            f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
-            "?per_page=100"
+            f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews?per_page=100"
         )
         try:
             while review_url:
                 response = await client.get(review_url, headers=headers)
                 response.raise_for_status()
                 page = response.json()
-                if not isinstance(page, list):
-                    break
+                if not isinstance(page, list) or any(
+                    not isinstance(item, dict) for item in page
+                ):
+                    raise TypeError("GitHub review collection is malformed")
                 reviews.extend(page)
                 review_url = response.links.get("next", {}).get("url")
-        except httpx.HTTPStatusError as exc:
-            return {
-                **pending,
-                "blockers": [
-                    {
-                        "kind": "external_state_unavailable",
-                        "summary": (
-                            "GitHub review state could not be fetched "
-                            f"(HTTP {exc.response.status_code})."
-                        ),
-                        "retryable": exc.response.status_code >= 500,
-                        "source": "github",
-                    }
-                ],
-            }
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return {
-                **pending,
-                "blockers": [
-                    {
-                        "kind": "external_state_unavailable",
-                        "summary": (
-                            "GitHub review state request failed: "
-                            f"{exc.__class__.__name__}."
-                        ),
-                        "retryable": True,
-                        "source": "github",
-                    }
-                ],
-            }
-
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            review_blocker = self._review_evidence_read_failure(exc, source="reviews")
         try:
             comments = await self._fetch_request_review_comments(
                 client=client, repo=repo, pr_number=pr_number, headers=headers
             )
         except (httpx.HTTPError, TypeError, ValueError) as exc:
-            status = (
-                exc.response.status_code
-                if isinstance(exc, httpx.HTTPStatusError)
-                else None
-            )
-            rate_limit = (
-                self._github_rate_limit_event(exc.response)
-                if isinstance(exc, httpx.HTTPStatusError)
-                else None
-            )
             return {
                 **pending,
                 "complete": None,
                 "blockers": [
-                    {
-                        "kind": "external_state_unavailable",
-                        "summary": (
-                            "GitHub review request comments could not be fetched "
-                            f"(HTTP {status})."
-                            if status is not None
-                            else "GitHub review request comment inventory is unavailable or malformed."
-                        ),
-                        "retryable": (
-                            (status >= 500 or rate_limit is not None)
-                            if status is not None
-                            else isinstance(exc, httpx.TransportError)
-                        ),
-                        "source": "github",
-                        **(
-                            {"providerFailure": rate_limit.to_metadata()}
-                            if rate_limit
-                            else {}
-                        ),
-                    }
+                    self._review_evidence_read_failure(exc, source="request_comments")
                 ],
             }
-        # Retain the known request if the collection no longer contains it.
-        # The shared selector can advance it only to a causally later explicit
-        # request for this unchanged head, never to an embedded command.
         request_comment_id = review_request.get("requestCommentId")
         active_request = {
             "id": request_comment_id,
             "body": record.command,
             "created_at": review_request.get("requestedAt"),
         }
+        anchor = latest_review_request(
+            record, [active_request], head_sha=requested_head_sha
+        )
+        if anchor is None and request_comment_id is not None:
+            # Recover only the exact recorded comment. Never open a historical
+            # search window when retained request timestamps are unavailable.
+            anchor = latest_review_request(
+                record,
+                (
+                    comment
+                    for comment in comments
+                    if str(comment.get("id")) == str(request_comment_id)
+                ),
+                head_sha=requested_head_sha,
+            )
+        if anchor is None:
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "The active review request timestamp could not be established from its exact comment.",
+                        "retryable": False,
+                        "source": "github",
+                    }
+                ],
+            }
         request = latest_review_request(
             record,
-            [active_request, *comments],
+            [anchor.comment, *comments],
             head_sha=requested_head_sha,
-            not_before=requested_at,
+            not_before=anchor.created_at,
         )
-        if request is not None:
-            requested_at = request.created_at
-            request_comment_id = request.comment.get("id")
-
+        requested_at = request.created_at
+        request_comment_id = request.comment.get("id")
         request_evidence = {
             "requestCommentId": request_comment_id,
             "requestedAt": (
@@ -2853,6 +2933,14 @@ class GitHubService:
                 "stale": False,
                 "blockers": [],
             }
+        unavailable = [
+            item for item in (review_blocker, reaction_blocker) if item is not None
+        ]
+        if unavailable:
+            blocker = next(
+                (item for item in unavailable if item["retryable"]), unavailable[0]
+            )
+            return {**pending, "complete": None, "blockers": [blocker]}
         provider_failure = (
             build_provider_failure_event(provider_error_class=reply.failure_class)
             if reply is not None
@@ -2879,12 +2967,6 @@ class GitHubService:
                     }
                 ],
             }
-        if reaction_blocker is not None:
-            return {
-                **pending,
-                "complete": None,
-                "blockers": [reaction_blocker],
-            }
         return pending
 
     async def _fetch_request_review_comments(
@@ -2906,7 +2988,9 @@ class GitHubService:
             response = await client.get(comments_url, headers=headers)
             response.raise_for_status()
             page = response.json()
-            if not isinstance(page, list):
+            if not isinstance(page, list) or any(
+                not isinstance(item, dict) for item in page
+            ):
                 raise TypeError("GitHub issue comment collection is malformed")
             comments.extend(page)
             comments_url = response.links.get("next", {}).get("url")
@@ -2961,41 +3045,29 @@ class GitHubService:
                 True,
             )
         )
-        permission_blocker = None
+        read_blockers = []
         for url, enforce_not_before in urls:
             try:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                reactions = response.json()
-            except httpx.HTTPStatusError as exc:
-                if (
-                    exc.response.status_code == 403
-                    and self._github_rate_limit_event(exc.response) is None
-                    and permission_blocker is None
-                ):
-                    permission_blocker = {
-                        **self._permission_blocker(
-                            response=exc.response,
-                            evidence_source="issue_reactions",
-                            missing_permission="Issues: read",
-                            summary=(
-                                "Requested review reaction evidence is denied "
-                                "by the selected GitHub connection (HTTP 403); "
-                                "no fresh provider review or clean comment "
-                                "is available."
-                            ),
-                        ),
-                        "kind": "policy_denied",
-                    }
-                continue
-            except (httpx.TransportError, httpx.TimeoutException):
-                continue
-            if not isinstance(reactions, list):
-                continue
-            for reaction in reactions:
-                if _matches(reaction, enforce_not_before=enforce_not_before):
-                    return reaction, None
-        return None, permission_blocker
+                while url:
+                    response = await client.get(url, headers=headers)
+                    response.raise_for_status()
+                    reactions = response.json()
+                    if not isinstance(reactions, list) or any(
+                        not isinstance(item, dict) for item in reactions
+                    ):
+                        raise TypeError("GitHub reaction collection is malformed")
+                    for reaction in reactions:
+                        if _matches(reaction, enforce_not_before=enforce_not_before):
+                            return reaction, None
+                    url = response.links.get("next", {}).get("url")
+            except (httpx.HTTPError, TypeError, ValueError) as exc:
+                read_blockers.append(
+                    self._review_evidence_read_failure(exc, source="issue_reactions")
+                )
+        # Another route may recover and prove completion even if one endpoint
+        # is permanently denied. Exhaust every qualified alternative first.
+        blocker = next((item for item in read_blockers if item["retryable"]), None)
+        return None, blocker or (read_blockers[0] if read_blockers else None)
 
     async def _evaluate_automated_review(
         self,

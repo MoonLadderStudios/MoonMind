@@ -27,9 +27,23 @@ from moonmind.workflows.temporal.workflows.merge_automation import (
 
 @workflow.defn(name="MoonMind.MergeAutomation")
 class _BeforeRequestReconciliation(MoonMindMergeAutomationWorkflow):
+
+    def _review_adoption_blocker(self, evaluation: Any):
+        return None
+
     def _reconcile_selected_review_request(self, evaluation: Any) -> None:
         # Capture the old consumer, including a rolling upgrade where the
         # Activity already emits the selected request fields.
+        return None
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _BeforeAdoptionBudget(MoonMindMergeAutomationWorkflow):
+    def _review_adoption_blocker(self, evaluation: Any):
         return None
 
     @workflow.run
@@ -50,8 +64,10 @@ class _CleanFixtureResolver:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_producer", [True, False])
+@pytest.mark.parametrize("max_cycles", [1, 2])
+@pytest.mark.parametrize("old_adopted", [False, True])
 async def test_selected_request_survives_worker_upgrade_and_replay(
-    monkeypatch, legacy_producer
+    monkeypatch, legacy_producer, max_cycles, old_adopted
 ):
     repo = "MoonLadderStudios/MoonMind"
     state = {"upgraded": False, "complete": False}
@@ -170,7 +186,7 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         "mergeAutomationConfig": {
             "finishMode": "fix_only",
             "timeouts": {"fallbackPollSeconds": 2},
-            "reviewLoop": {"enabled": True},
+            "reviewLoop": {"enabled": True, "maxCycles": max_cycles},
         },
         "activeReviewRequest": first,
         "reviewCycles": [{"cycle": 1, **first, "status": "requested"}],
@@ -178,8 +194,11 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
     payload = MergeAutomationStartInput.model_validate(payload).model_dump(
         by_alias=True, mode="json"
     )
-    parent_queue = f"review-request-upgrade-{legacy_producer}"
+    parent_queue = (
+        f"review-request-upgrade-{legacy_producer}-{max_cycles}-{old_adopted}"
+    )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
+    old_worker = _BeforeAdoptionBudget if old_adopted else _BeforeRequestReconciliation
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await env.client.operator_service.add_search_attributes(
             AddSearchAttributesRequest(
@@ -223,12 +242,12 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
-                workflows=[_BeforeRequestReconciliation],
+                workflows=[old_worker],
                 workflow_runner=UnsandboxedWorkflowRunner(),
                 max_cached_workflows=0,
             ):
                 handle = await env.client.start_workflow(
-                    _BeforeRequestReconciliation.run,
+                    old_worker.run,
                     payload,
                     id=parent_queue,
                     task_queue=parent_queue,
@@ -248,6 +267,29 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 max_cached_workflows=0,
             ):
                 await env.sleep(timedelta(seconds=3))
+                if max_cycles == 1:
+                    result = await asyncio.wait_for(handle.result(), timeout=30)
+                    history = await handle.fetch_history()
+                    assert result["status"] == "blocked"
+                    assert any(
+                        item["kind"] == "review_cycle_budget_exhausted"
+                        for item in result["blockers"]
+                    )
+                    cycles = result["reviewLoop"]["cycleRecords"]
+                    assert len(cycles) == (
+                        2 if old_adopted and not legacy_producer else 1
+                    )
+                    assert all(item.get("completionId") is None for item in cycles)
+                    assert result["resolverChildWorkflowIds"] == []
+                    assert (
+                        result["reviewLoop"]["activeRequest"]["requestCommentId"]
+                        == cycles[-1]["requestCommentId"]
+                    )
+                    await Replayer(
+                        workflows=[MoonMindMergeAutomationWorkflow],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                    ).replay_workflow(history)
+                    return
                 pending_history = await wait_for_timer(2)
                 pending = await handle.query(MoonMindMergeAutomationWorkflow.summary)
             assert pending["reviewLoop"]["activeRequest"]["requestCommentId"] == 102

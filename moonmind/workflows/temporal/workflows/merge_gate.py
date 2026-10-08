@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():
 
 TERMINAL_BLOCKER_KINDS = {
     "automated_review_request_failed",
+    "review_cycle_budget_exhausted",
     "pull_request_closed",
     "stale_revision",
     "policy_denied",
@@ -33,6 +34,7 @@ BASE_KNOWN_BLOCKER_KINDS = {
     "checks_failed",
     "automated_review_pending",
     "automated_review_request_failed",
+    "review_cycle_budget_exhausted",
     "jira_status_pending",
     "pull_request_closed",
     "stale_revision",
