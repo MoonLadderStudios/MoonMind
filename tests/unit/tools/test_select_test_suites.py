@@ -23,15 +23,22 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
 
 @pytest.mark.parametrize(
     "changed_path",
-    ["AGENTS.md", "docs/Development/PreCommitWorkflow.md"],
+    [
+        "AGENTS.md",
+        "README.md",
+        "docs/Development/BackendTestSelection.md",
+        "docs/Development/PreCommitWorkflow.md",
+        "docs/FirstRunServiceInventory.md",
+        "docs/UI/WorkflowConsoleArchitecture.md",
+    ],
 )
-def test_docs_only_change_does_not_select_heavy_backend_suites(
+def test_audited_prose_only_change_skips_test_suites(
     changed_path: str,
 ) -> None:
     outputs = _outputs([changed_path])
 
     assert outputs == {
-        "unit_fast": "true",
+        "unit_fast": "false",
         "unit_slow": "false",
         "api_component": "false",
         "temporal_boundary": "false",
@@ -45,6 +52,97 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "frontend_browser_firefox": "false",
         "full_frontend": "false",
     }
+
+
+def test_measured_readme_inventory_and_screenshot_diff_skips_test_suites() -> None:
+    outputs = _outputs(
+        [
+            "README.md",
+            "docs/FirstRunServiceInventory.md",
+            "docs/UI/WorkflowConsoleArchitecture.md",
+            "docs/assets/workflow-detail.png",
+            "docs/assets/workflow-list.png",
+        ]
+    )
+
+    assert all(value == "false" for value in outputs.values())
+
+
+def test_audited_prose_does_not_suppress_api_coverage() -> None:
+    outputs = _outputs(["README.md", "api_service/api/routers/automation.py"])
+
+    assert outputs["unit_fast"] == "true"
+    assert outputs["api_component"] == "true"
+    assert outputs["full_backend"] == "false"
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "selected_keys"),
+    [
+        (
+            "docs/Temporal/WorkflowTypeCatalogGenerated.md",
+            {"unit_fast", "temporal_boundary"},
+        ),
+        (
+            "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md",
+            {"unit_fast", "temporal_boundary"},
+        ),
+        (
+            "docs/Steps/StepExecutionsAndCheckpointing.md",
+            {"unit_fast", "temporal_boundary"},
+        ),
+        (
+            "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
+            {"unit_fast"},
+        ),
+        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        ("docs/UnlistedContract.md", {"unit_fast"}),
+    ],
+)
+def test_prose_exemption_preserves_executable_and_unlisted_markdown_coverage(
+    changed_path: str, selected_keys: set[str]
+) -> None:
+    outputs = _outputs(["README.md", changed_path])
+
+    assert {key for key, value in outputs.items() if value == "true"} == selected_keys
+
+
+@pytest.mark.parametrize(
+    ("source_path", "selected_keys"),
+    [
+        ("docs/Guide.md", {"unit_fast"}),
+        (
+            "docs/Temporal/WorkflowTypeCatalogGenerated.md",
+            {"unit_fast", "temporal_boundary"},
+        ),
+        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+    ],
+)
+def test_rename_to_audited_prose_retains_source_path_coverage(
+    source_path: str, selected_keys: set[str]
+) -> None:
+    # The changed-file helper supplies both endpoints of a detected rename.
+    outputs = _outputs([source_path, "README.md"])
+
+    assert {key for key, value in outputs.items() if value == "true"} == selected_keys
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [".specify/templates/spec-template.md", "moonspec", "omnigent"],
+)
+def test_prose_exemption_keeps_templates_and_submodules_on_full_verification(
+    changed_path: str,
+) -> None:
+    outputs = _outputs(["README.md", changed_path])
+
+    assert all(value == "true" for value in outputs.values())
+
+
+def test_schedule_with_audited_prose_selects_full_verification() -> None:
+    outputs = select_suites(["README.md"], event_name="schedule").as_outputs()
+
+    assert all(value == "true" for value in outputs.values())
 
 
 def test_backend_only_change_skips_frontend() -> None:
@@ -641,7 +739,7 @@ def test_unknown_and_empty_diffs_conservatively_select_full_verification():
         assert outputs["full_backend"] == "true", paths
         assert all(value == "true" for value in outputs.values()), paths
     # A mixed known + unknown diff still fails open to the full corpus.
-    mixed = _outputs(["docs/Guide.md", "totally-unknown-path-xyz"])
+    mixed = _outputs(["README.md", "totally-unknown-path-xyz"])
     assert all(value == "true" for value in mixed.values())
 
 
