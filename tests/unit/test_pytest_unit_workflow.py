@@ -1090,12 +1090,9 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
 
 
 def _run_required_gate(tmp_path, *, outputs=None, results=None):
-    import json
     import os
     import re
     import subprocess
-
-    from tools.select_test_suites import select_suites
 
     selected = select_suites(["README.md"], event_name="pull_request").as_outputs()
     selected.setdefault("backend_matrix", '{"include":[]}')
