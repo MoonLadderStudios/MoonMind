@@ -37,7 +37,7 @@ describe('dashboardPreferences', () => {
           status: true,
           progress: false,
           repository: true,
-          targetRuntime: false,
+          providerProfile: false,
           updatedAt: true,
         },
         workflowListPageSize: 100,
@@ -194,6 +194,31 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListColumnVisibility.status).toBe(false);
       expect(prefs.workflowListColumnVisibility.progress).toBe(false);
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('nextAction');
+    });
+
+    it('MoonLadderStudios/MoonMind#4640 carries a saved Runtime column choice to Provider Profile', () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: DASHBOARD_PREFERENCES_VERSION,
+          preferences: {
+            workflowListColumnVisibility: { status: true, targetRuntime: false },
+            workflowListDefaultStatuses: ['failed'],
+          },
+        }),
+      );
+
+      const prefs = readDashboardPreferences();
+
+      expect(prefs.workflowListColumnVisibility.providerProfile).toBe(false);
+      expect(prefs.workflowListColumnVisibility).not.toHaveProperty('targetRuntime');
+      // Only column visibility migrates; saved filters keep their own meaning.
+      expect(prefs.workflowListDefaultStatuses).toEqual(['failed']);
+      expect(
+        sanitizeDashboardPreferences({
+          workflowListColumnVisibility: { providerProfile: true, targetRuntime: false },
+        }).workflowListColumnVisibility.providerProfile,
+      ).toBe(true);
     });
 
     it('round-trip preferences no longer include nextAction', () => {

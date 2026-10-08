@@ -719,11 +719,19 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
 
             # The real mismatch detector accepts the current action and
             # rejects drifted workflow type/input (duplicate/loss guard).
+            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            metadata = await service._workflow_start_metadata(
+                definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
+            )
             action = SimpleNamespace(
                 workflow=workflow_type,
                 id=make_scheduled_workflow_id_base(created.id),
                 args=[workflow_input],
                 task_queue="mm.workflow.user.v2",
+                memo=metadata["memo"],
+                typed_search_attributes=_build_typed_search_attributes(
+                    {key: [value] for key, value in metadata["search_attributes"].items()}
+                ),
             )
             assert (
                 service._schedule_action_mismatch(
@@ -1002,6 +1010,10 @@ async def test_r4b_schedule_reconcile_no_duplicate_or_loss(tmp_path: Path):
                 created
             )
             expected_id = make_scheduled_workflow_id_base(created.id)
+            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            metadata = await service._workflow_start_metadata(
+                definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
+            )
 
             calls: dict[str, list] = {"describe": [], "update": [], "create": []}
 
@@ -1015,6 +1027,10 @@ async def test_r4b_schedule_reconcile_no_duplicate_or_loss(tmp_path: Path):
                             id=expected_id,
                             args=[workflow_input],
                             task_queue="mm.workflow.user.v2",
+                            memo=metadata["memo"],
+                            typed_search_attributes=_build_typed_search_attributes(
+                                {key: [value] for key, value in metadata["search_attributes"].items()}
+                            ),
                         )
                     )
                 )
@@ -1381,7 +1397,11 @@ async def test_r4c_schedule_recreate_carries_cadence_and_frozen_inputs(tmp_path:
             assert recreated["enabled"] is True
             assert recreated["workflow_type"] == "MoonMind.UserWorkflow"
             assert recreated["workflow_input"] == workflow_input
-            assert recreated["memo"] == {"definitionId": str(created.id)}
+            metadata = await service._workflow_start_metadata(
+                definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
+            )
+            assert recreated["memo"] == metadata["memo"]
+            assert recreated["search_attributes"] == metadata["search_attributes"]
             # Frozen runtime/profile/preset inputs and publication intent
             # travel with the action payload.
             initial = (recreated["workflow_input"].get("initial_parameters") or {})
