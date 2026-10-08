@@ -52,7 +52,7 @@ full_frontend=true|false
 
 ### Backend Detection
 
-Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. Canonical prose such as `AGENTS.md`, `README.md`, and `docs/` does not itself select backend execution unless another sensitive or unknown path requires it.
+Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. The selector exempts six explicitly audited prose paths from the general Markdown fast-unit rule. Unlisted Markdown retains existing coverage, including executable examples and Skill contracts. Sensitive, mixed, unknown, and full-run changes keep their existing suite decisions; prose exemptions never override them. Always-run preflight policy and ownership checks remain required.
 
 Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage. `test-frontend` aggregates selected frontend jobs even when intentional nonselection leaves both browser jobs skipped.
 
@@ -168,6 +168,8 @@ Mutable release records, images under test, containers, volumes, queues, and wor
 The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter. #4371 delivered this path and is closed; remaining interruption-evidence work belongs to #4369 and the #4365 coordinator.
 
 Keep normal success evidence small: tested revision, suite/shard and attempt identity, real output, any JUnit report, and useful slow-case timings. Existing artifacts use finite retention and distinct shard/attempt names. Richer service diagnostics belong on the failure path where useful, from known test-owned locations with redaction. Do not collect whole environments, source trees, tokens, or unrelated host files.
+
+The disposable fresh, upgrade, and controller journeys retain redacted Compose startup output in `var/artifacts/first-run-3938/<mode>/compose-startup-<phase>-<attempt>.log`. Each attempt keeps the first 5,000 lines and final 40 without overlap, with an explicit omission notice when middle lines are dropped. Retained lines carry UTC receipt timestamps, and the summary records phase, attempt, elapsed whole seconds, and the original Compose exit status. Receipt time describes arrival at the host recorder. The console prints the final 40 lines and summary; the workflow uploads these bounded logs for successful and failed journey rows. A logging failure fails the journey without retrying a successful Compose startup.
 
 Missing or partial JUnit is unavailable/incomplete evidence, never zero tests or a pass. Preserve the original failure through logging, report generation, and cleanup. Bound secondary operations separately so a hung log command cannot consume the rest of the job. Matrix cancellation is best effort for artifact collection, and a hard job kill or runner loss can prevent final uploads entirely.
 
