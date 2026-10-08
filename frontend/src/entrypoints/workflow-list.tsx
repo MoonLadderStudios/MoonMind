@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
@@ -201,12 +201,16 @@ function isFilterField(field: string): field is FilterField {
   return ACTIVE_FILTER_FIELDS.has(field as FilterField);
 }
 type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'include' | 'exclude' | '' };
-// Stable Provider Profile IDs plus typed absence states. Both share the mode:
-// include ORs IDs and states together; exclude rejects any listed ID or state.
-type ProviderProfileFilter = {
-  mode: 'include' | 'exclude';
+// IDs and absence states remain distinct. Include ORs its selections together;
+// exclude rejects any selected member. Mode only chooses which side to edit.
+type ProviderProfileSelection = {
   values: string[];
   states: ProviderProfileAbsenceState[];
+};
+type ProviderProfileFilter = {
+  mode: 'include' | 'exclude';
+  include: ProviderProfileSelection;
+  exclude: ProviderProfileSelection;
 };
 type RepositoryFilter = ValueFilter & { exactText?: string };
 type TextFilter = { contains?: string };
@@ -841,7 +845,7 @@ function emptyValueFilter(): ValueFilter {
 }
 
 function emptyProviderProfileFilter(): ProviderProfileFilter {
-  return { mode: 'include', values: [], states: [] };
+  return { mode: 'include', include: { values: [], states: [] }, exclude: { values: [], states: [] } };
 }
 
 function isProviderProfileAbsenceState(value: string): value is ProviderProfileAbsenceState {
@@ -887,6 +891,16 @@ function splitParam(params: URLSearchParams, key: string): string[] {
   return splitParamValues(params.getAll(key));
 }
 
+function providerProfileIdParams(params: URLSearchParams, mode: 'include' | 'exclude'): string[] {
+  const suffix = mode === 'include' ? 'In' : 'NotIn';
+  // Legacy CSV links retain their meaning. Exact-ID parameters treat every
+  // occurrence as one opaque ID, including commas and state-like strings.
+  return uniqueValues([
+    ...splitParam(params, `providerProfile${suffix}`),
+    ...params.getAll(`providerProfileId${suffix}`),
+  ]);
+}
+
 function progressBucketParams(params: URLSearchParams, key: string): ProgressBucket[] {
   return splitParam(params, key).filter((value): value is ProgressBucket =>
     (PROGRESS_BUCKET_OPTIONS as readonly string[]).includes(value),
@@ -917,18 +931,15 @@ function validateCanonicalFilterPair(
 
 function validateProviderProfileParams(params: URLSearchParams): string[] {
   const errors: string[] = [];
-  const included = [
-    ...splitParam(params, 'providerProfileIn'),
-    ...splitParam(params, 'providerProfileStateIn'),
-  ];
-  const excluded = [
-    ...splitParam(params, 'providerProfileNotIn'),
-    ...splitParam(params, 'providerProfileStateNotIn'),
-  ];
-  if (included.length > 0 && excluded.length > 0) {
-    errors.push(
-      'Provider Profile filters cannot combine included and excluded values in one view.',
-    );
+  const includedIds = providerProfileIdParams(params, 'include');
+  const excludedIds = providerProfileIdParams(params, 'exclude');
+  const includedStates = splitParam(params, 'providerProfileStateIn');
+  const excludedStates = splitParam(params, 'providerProfileStateNotIn');
+  if (includedIds.some((id) => excludedIds.includes(id))) {
+    errors.push('Provider Profile IDs cannot be both included and excluded.');
+  }
+  if (includedStates.some((state) => excludedStates.includes(state))) {
+    errors.push('Provider Profile states cannot be both included and excluded.');
   }
   for (const key of ['providerProfileStateIn', 'providerProfileStateNotIn']) {
     if (splitParam(params, key).some((value) => !isProviderProfileAbsenceState(value))) {
@@ -938,7 +949,7 @@ function validateProviderProfileParams(params: URLSearchParams): string[] {
   const blank = (params.get('providerProfileBlank') || '').trim();
   if (blank && blank !== 'true' && blank !== 'false') {
     errors.push('providerProfileBlank must be true or false.');
-  } else if (blank && (included.length > 0 || excluded.length > 0)) {
+  } else if (blank && (includedIds.length + excludedIds.length + includedStates.length + excludedStates.length > 0)) {
     errors.push('providerProfileBlank cannot be combined with other Provider Profile filters.');
   }
   return errors;
@@ -978,25 +989,25 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   filters.workflowId = { contains: params.get('workflowIdContains') || params.get('workflowId') || '' };
   filters.title = { contains: params.get('titleContains') || '' };
 
-  const profileIn = splitParam(params, 'providerProfileIn');
-  const profileNotIn = splitParam(params, 'providerProfileNotIn');
+  const profileIn = providerProfileIdParams(params, 'include');
+  const profileNotIn = providerProfileIdParams(params, 'exclude');
   const profileStateIn = splitParam(params, 'providerProfileStateIn').filter(isProviderProfileAbsenceState);
   const profileStateNotIn = splitParam(params, 'providerProfileStateNotIn').filter(
     isProviderProfileAbsenceState,
   );
   const profileBlank = (params.get('providerProfileBlank') || '').trim();
-  if (profileNotIn.length > 0 || profileStateNotIn.length > 0) {
-    filters.providerProfile = { mode: 'exclude', values: profileNotIn, states: profileStateNotIn };
-  } else if (profileIn.length > 0 || profileStateIn.length > 0) {
-    filters.providerProfile = { mode: 'include', values: profileIn, states: profileStateIn };
-  } else if (profileBlank === 'true' || profileBlank === 'false') {
+  filters.providerProfile = {
+    mode: profileIn.length + profileStateIn.length > 0 ? 'include'
+      : profileNotIn.length + profileStateNotIn.length > 0 ? 'exclude' : 'include',
+    include: { values: profileIn, states: profileStateIn },
+    exclude: { values: profileNotIn, states: profileStateNotIn },
+  };
+  if (profileBlank === 'true' || profileBlank === 'false') {
     // The blank shortcut is the aggregate of the three absence states; keep
     // its meaning with explicit typed states.
-    filters.providerProfile = {
-      mode: profileBlank === 'true' ? 'include' : 'exclude',
-      values: [],
-      states: [...PROVIDER_PROFILE_ABSENCE_STATES],
-    };
+    const mode = profileBlank === 'true' ? 'include' : 'exclude';
+    filters.providerProfile.mode = mode;
+    filters.providerProfile[mode].states = [...PROVIDER_PROFILE_ABSENCE_STATES];
   }
 
   // Legacy runtime constraints keep their runtime meaning (never relabeled as
@@ -1097,15 +1108,12 @@ function appendProgressParams(params: URLSearchParams, filter: ProgressFilter) {
 }
 
 function appendProviderProfileParams(params: URLSearchParams, filter: ProviderProfileFilter) {
-  const exclude = filter.mode === 'exclude';
-  if (filter.values.length > 0) {
-    params.set(exclude ? 'providerProfileNotIn' : 'providerProfileIn', filter.values.join(','));
-  }
-  if (filter.states.length > 0) {
-    params.set(
-      exclude ? 'providerProfileStateNotIn' : 'providerProfileStateIn',
-      filter.states.join(','),
-    );
+  for (const mode of ['include', 'exclude'] as const) {
+    const suffix = mode === 'include' ? 'In' : 'NotIn';
+    for (const id of filter[mode].values) params.append(`providerProfileId${suffix}`, id);
+    if (filter[mode].states.length > 0) {
+      params.set(`providerProfileState${suffix}`, filter[mode].states.join(','));
+    }
   }
 }
 
@@ -1242,11 +1250,13 @@ function summarizeProviderProfileFilter(
   filter: ProviderProfileFilter,
   formatProfile: (id: string) => string,
 ): string {
-  const labels = [
-    ...filter.values.map(formatProfile),
-    ...filter.states.map((state) => PROVIDER_PROFILE_STATE_LABELS[state]),
-  ];
-  return summarizeValues({ mode: filter.mode, values: labels, blank: '' });
+  return (['include', 'exclude'] as const).map((mode) => {
+    const labels = [
+      ...filter[mode].values.map(formatProfile),
+      ...filter[mode].states.map((state) => PROVIDER_PROFILE_STATE_LABELS[state]),
+    ];
+    return summarizeValues({ mode, values: labels, blank: '' });
+  }).filter(Boolean).join('; ');
 }
 
 function filterSummary(
@@ -1463,13 +1473,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
   // every value field at once; desktop column popovers request the active field.
-  // This reuses the existing single-facet backend contract without API changes.
+  // This reuses the existing single-facet backend contract.
+  const providerProfileFacetFilters = useMemo(
+    () => ({ ...filters, providerProfile: emptyProviderProfileFilter() }),
+    [filters],
+  );
   const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => {
     // A facet describes values outside its own selection, so the Provider
     // Profile facet omits every Provider Profile ID/state parameter.
     const facetFilters =
       facet === 'providerProfile'
-        ? { ...filters, providerProfile: emptyProviderProfileFilter() }
+        ? providerProfileFacetFilters
         : filters;
     return {
       queryKey: ['workflow-list-facet', facet, facetFilters] as const,
@@ -1477,13 +1491,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         listEnabled &&
         filterValidationErrors.length === 0 &&
         (drawerOpen || facetForFilterField(desktopFilterField) === facet),
-      queryFn: async () => {
+      queryFn: async ({ signal, pageParam }: { signal: AbortSignal; pageParam?: unknown }) => {
         const params = new URLSearchParams();
         params.set('source', 'temporal');
         params.set('facet', facet);
         params.set('pageSize', '50');
+        if (typeof pageParam === 'string' && pageParam) params.set('nextPageToken', pageParam);
         appendFilterParams(params, facetFilters);
-        const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
+        const response = await fetch(`${payload.apiBase}/executions/facets?${params}`, { signal });
         if (!response.ok) {
           throw new Error(`Failed to fetch facets: ${response.statusText}`);
         }
@@ -1494,9 +1509,49 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     };
   };
 
+  const providerProfileFacetOptions = getFacetQueryOptions('providerProfile');
+  const providerProfileFacetQuery = useInfiniteQuery({
+    ...providerProfileFacetOptions,
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextPageToken || undefined,
+    // Keep the opened checklist stable. Only the explicit continuation action
+    // fetches another page; reopening a stale editor refreshes page one below.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const providerProfileFacetData = useMemo(() => {
+    const pages = providerProfileFacetQuery.data?.pages;
+    const first = pages?.[0];
+    if (!pages || !first) return undefined;
+    const latest = pages[pages.length - 1] || first;
+    const items = new Map<string, ExecutionFacetResponse['items'][number]>();
+    for (const page of pages) {
+      for (const item of page.items) if (!items.has(item.value)) items.set(item.value, item);
+    }
+    return { ...first, ...latest, stateItems: first.stateItems, items: [...items.values()] };
+  }, [providerProfileFacetQuery.data]);
+  const providerProfileFacetOpen = drawerOpen || desktopFilterField === 'providerProfile';
+  useEffect(() => {
+    if (!providerProfileFacetOpen) return;
+    const queryKey = ['workflow-list-facet', 'providerProfile', providerProfileFacetFilters] as const;
+    return () => {
+      // Closing or changing scope cancels outstanding work for that snapshot.
+      // Retaining only page one prevents automatic continuation-chain replays
+      // on a stale reopen without changing any applied or staged selections.
+      void queryClient.cancelQueries({ queryKey, exact: true });
+      const current = queryClient.getQueryData<InfiniteData<ExecutionFacetResponse, string | null>>(queryKey);
+      if (current && current.pages.length > 1) {
+        queryClient.setQueryData(queryKey, {
+          pages: current.pages.slice(0, 1),
+          pageParams: current.pageParams.slice(0, 1),
+        }, { updatedAt: queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0 });
+      }
+    };
+  }, [providerProfileFacetOpen, providerProfileFacetFilters, queryClient]);
+
   const facetByField = {
     status: useQuery(getFacetQueryOptions('status')),
-    providerProfile: useQuery(getFacetQueryOptions('providerProfile')),
+    providerProfile: { ...providerProfileFacetQuery, data: providerProfileFacetData },
     targetSkill: useQuery(getFacetQueryOptions('targetSkill')),
     repository: useQuery(getFacetQueryOptions('repository')),
   } as const;
@@ -1943,6 +1998,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }));
   };
 
+  const updateDraftProviderProfileSelection = (patch: Partial<ProviderProfileSelection>) => {
+    setDraftFilters((current) => {
+      const profile = current.providerProfile;
+      return {
+        ...current,
+        providerProfile: { ...profile, [profile.mode]: { ...profile[profile.mode], ...patch } },
+      };
+    });
+  };
+
   const updateDraftRepository = (value: string) => {
     setDraftFilters((current) => ({
       ...current,
@@ -1971,8 +2036,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       // Applied and staged IDs stay selectable even when a facet fails,
       // truncates, or omits them.
       return uniqueValues([
-        ...filters.providerProfile.values,
-        ...draftFilters.providerProfile.values,
+        ...filters.providerProfile.include.values,
+        ...filters.providerProfile.exclude.values,
+        ...draftFilters.providerProfile.include.values,
+        ...draftFilters.providerProfile.exclude.values,
         ...facetValues,
         ...(data?.items || []).flatMap((row) =>
           (row.providerProfile?.profiles || []).map((profile) => profile.id),
@@ -2002,6 +2069,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     const facetKey = facetForFilterField(field);
     if (!facetKey) return null;
     const facetQuery = facetByField[facetKey];
+    if (field === 'providerProfile' && providerProfileFacetQuery.isFetchNextPageError) {
+      return (
+        <p className="small workflow-list-facet-notice" role="status">
+          More Provider Profile values unavailable. Previously loaded values are still available.
+        </p>
+      );
+    }
     if (facetQuery.isError || facetQuery.data?.source === 'current_page_fallback') {
       return (
         <p className="small workflow-list-facet-notice" role="status">
@@ -2230,8 +2304,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'providerProfile') {
-      const profileOptions = valueOptionsForField('providerProfile');
       const draft = draftFilters.providerProfile;
+      const selection = draft[draft.mode];
+      const opposite = draft[draft.mode === 'include' ? 'exclude' : 'include'];
+      const profileOptions = valueOptionsForField('providerProfile').filter((id) => !opposite.values.includes(id));
       const facetData = facetByField.providerProfile.data;
       const stateCounts = new Map(
         (facetData?.facet === 'providerProfile' ? facetData.stateItems || [] : []).map((item) => [
@@ -2255,7 +2331,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             </select>
           </label>
           <FilterPillMultiSelect
-            values={draft.values}
+            values={selection.values}
             options={profileOptions}
             formatValue={formatProviderProfileId}
             disabled={!listEnabled}
@@ -2263,7 +2339,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             ariaLabelSelected="Selected Provider Profile filters"
             addPlaceholder="Add Provider Profile"
             emptyMessage="No Provider Profiles selected"
-            onChange={(next) => updateDraftProviderProfile({ values: uniqueValues(next) })}
+            onChange={(next) => updateDraftProviderProfileSelection({ values: uniqueValues(next) })}
           />
           <fieldset className="workflow-list-progress-filter-group">
             <legend>Selection states</legend>
@@ -2273,13 +2349,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 <label className="checkbox" key={state}>
                   <input
                     type="checkbox"
-                    checked={draft.states.includes(state)}
-                    disabled={!listEnabled}
+                    checked={selection.states.includes(state)}
+                    disabled={!listEnabled || opposite.states.includes(state)}
                     onChange={(event) =>
-                      updateDraftProviderProfile({
+                      updateDraftProviderProfileSelection({
                         states: event.target.checked
-                          ? [...draft.states.filter((entry) => entry !== state), state]
-                          : draft.states.filter((entry) => entry !== state),
+                          ? [...selection.states.filter((entry) => entry !== state), state]
+                          : selection.states.filter((entry) => entry !== state),
                       })
                     }
                   />
@@ -2289,7 +2365,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               );
             })}
           </fieldset>
+          <p className="small">Include and exclude selections apply together. Switch modes to edit each selection.</p>
           {renderFacetNotice('providerProfile')}
+          {providerProfileFacetQuery.hasNextPage ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={!listEnabled || providerProfileFacetQuery.isFetching}
+              onClick={() => {
+                if (!providerProfileFacetQuery.isFetching) {
+                  void providerProfileFacetQuery.fetchNextPage({ cancelRefetch: false });
+                }
+              }}
+            >
+              {providerProfileFacetQuery.isFetchNextPageError
+                ? 'Retry loading Provider Profiles'
+                : 'Load more Provider Profiles'}
+            </button>
+          ) : null}
         </div>
       );
     }

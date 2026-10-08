@@ -18451,6 +18451,10 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
                 providerProfileIn?: string | null;
                 providerProfileNotIn?: string | null;
                 providerProfileStateIn?: string | null;
@@ -18560,6 +18564,10 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
                 providerProfileIn?: string | null;
                 providerProfileNotIn?: string | null;
                 providerProfileStateIn?: string | null;
@@ -18626,6 +18634,10 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
                 providerProfileIn?: string | null;
                 providerProfileNotIn?: string | null;
                 providerProfileStateIn?: string | null;

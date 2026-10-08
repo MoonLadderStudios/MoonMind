@@ -20,6 +20,20 @@ describe("workflowListContextParams", () => {
     );
   });
 
+  it("preserves repeated exact profile IDs including commas through API and return links", () => {
+    const params = new URLSearchParams("providerProfileIdIn=account%2Cprimary&providerProfileIdIn=other&providerProfileIdNotIn=excluded%2Cone&providerProfileStateNotIn=pending&targetRuntimeIn=codex_cli");
+    const detail = workflowDetailHref("wf-1", params);
+    const context = new URL(detail, "https://example.test").searchParams;
+    const back = new URL(workflowListHrefFromContext(context), "https://example.test").searchParams;
+    const api = new URLSearchParams(workflowListApiQueryFromContext(context));
+    for (const result of [context, back, api]) {
+      expect(result.getAll("providerProfileIdIn")).toEqual(["account,primary", "other"]);
+      expect(result.getAll("providerProfileIdNotIn")).toEqual(["excluded,one"]);
+      expect(result.get("providerProfileStateNotIn")).toBe("pending");
+      expect(result.get("targetRuntimeIn")).toBe("codex_cli");
+    }
+  });
+
   it("drops parameters that are not part of the workflow list context", () => {
     const params = workflowListContextParams(
       new URLSearchParams("integration=jira&unknown=value"),

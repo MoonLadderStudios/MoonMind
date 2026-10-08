@@ -347,6 +347,78 @@ describe('workflow list recorded Provider Profile', () => {
     expect(within(section).getByRole('option', { name: 'Work · acct-a' })).toBeTruthy();
   });
 
+  it.each([
+    ['desktop', DESKTOP],
+    ['mobile', MOBILE],
+  ] as const)('stages mixed profile filters and loads comma-containing IDs on %s', async (surface, viewport) => {
+    window.history.replaceState({}, '', '/workflows?providerProfileIn=acct-a&providerProfileNotIn=acct-b&providerProfileStateIn=pending&providerProfileStateNotIn=not_applicable');
+    const profileUrls: string[] = [];
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/facets')) {
+        if (!url.includes('facet=providerProfile')) return Promise.resolve({ ok: false } as Response);
+        profileUrls.push(url);
+        const continued = new URL(url, window.location.origin).searchParams.has('nextPageToken');
+        return Promise.resolve({ ok: true, json: async () => ({
+          facet: 'providerProfile',
+          items: continued
+            ? [{ value: 'account,primary', label: 'Later primary account', count: 1 }]
+            : [{ value: 'acct-a', label: 'Work', count: 1 }, { value: 'acct-b', label: 'Work', count: 1 }],
+          stateItems: [
+            { value: 'pending', label: 'Pending selection', count: 1 },
+            { value: 'not_recorded', label: 'Not recorded', count: 0 },
+            { value: 'not_applicable', label: 'Not applicable', count: 0 },
+          ],
+          truncated: !continued,
+          nextPageToken: continued ? null : 'profile-page-two',
+          source: 'authoritative',
+        }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: rows }) } as Response);
+    });
+    await page.viewport(viewport.width, viewport.height);
+    const { unmount } = renderWithClient(
+      <main className="dashboard-root"><WorkflowListPage payload={payload} /></main>,
+    );
+    cleanupRender = unmount;
+    await screen.findAllByText('Long profile run');
+    const openEditor = async () => {
+      if (surface === 'desktop') await page.getByRole('button', { name: /^Provider Profile column filter:/ }).click();
+      else await page.getByRole('button', { name: 'Filters', exact: true }).click();
+      return screen.findByRole(surface === 'desktop' ? 'dialog' : 'region', { name: 'Provider Profile filter' });
+    };
+    const listParams = () => new URL(String(fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?')).at(-1)?.[0]), window.location.origin).searchParams;
+    let editor = await openEditor();
+    await within(editor).findByRole('button', { name: 'Load more Provider Profiles' });
+    expect(profileUrls).toHaveLength(1);
+    await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter mode'), 'exclude');
+    expect((within(editor).getByRole('checkbox', { name: 'Not applicable (0)' }) as HTMLInputElement).checked).toBe(true);
+    expect(within(editor).getByText('Work · acct-b')).toBeTruthy();
+    await userEvent.click(within(editor).getByRole('checkbox', { name: 'Not recorded (0)' }));
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole(surface === 'desktop' ? 'dialog' : 'region', { name: 'Provider Profile filter' })).toBeNull());
+    expect(listParams().get('providerProfileStateNotIn')).toBe('not_applicable');
+    editor = await openEditor();
+    await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter mode'), 'exclude');
+    expect((within(editor).getByRole('checkbox', { name: 'Not recorded (0)' }) as HTMLInputElement).checked).toBe(false);
+    await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter mode'), 'include');
+    await userEvent.click(within(editor).getByRole('button', { name: 'Load more Provider Profiles' }));
+    await within(editor).findByRole('option', { name: 'Later primary account' });
+    expect(profileUrls.filter((url) => url.includes('nextPageToken='))).toHaveLength(1);
+    await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter value'), 'account,primary');
+    expect(within(editor).getByText('Later primary account')).toBeTruthy();
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    await page.getByRole('button', { name: surface === 'desktop' ? 'Apply Provider Profile filter' : 'Apply filters' }).click();
+    await waitFor(() => expect(listParams().getAll('providerProfileIdIn')).toEqual(['account,primary', 'acct-a']));
+    expect(listParams().getAll('providerProfileIdNotIn')).toEqual(['acct-b']);
+    expect(listParams().get('providerProfileStateIn')).toBe('pending');
+    expect(listParams().get('providerProfileStateNotIn')).toBe('not_applicable');
+    expect(new URLSearchParams(window.location.search).getAll('providerProfileIdIn')).toEqual(['acct-a', 'account,primary']);
+    editor = await openEditor();
+    expect(within(editor).getByText('Later primary account')).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+  });
+
   it('shows the empty state with the Provider Profile header still available', async () => {
     mockRows([]);
     await page.viewport(DESKTOP.width, DESKTOP.height);

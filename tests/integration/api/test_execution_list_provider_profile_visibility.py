@@ -79,15 +79,26 @@ _RECORDS: dict[str, Mapping[str, Any] | None] = {
         "targetRuntime": "codex",
         "agentProfileSnapshot": {"providerProfileRef": "acct"},
     },
+    "comma": {
+        "targetRuntime": "codex",
+        "agentProfileSnapshot": {"providerProfileRef": "account,primary"},
+    },
     "pending": {"targetRuntime": "codex"},
     "not_applicable": {},
     "legacy": None,
 }
 _ALL = frozenset(_RECORDS)
-_RECORDED = frozenset({"single", "multi", "duplicate", "prefix"})
+_RECORDED = frozenset({"single", "multi", "duplicate", "prefix", "comma"})
 
 _CASES: list[tuple[Sequence[tuple[str, str]], frozenset[str]]] = [
     ([], _ALL),
+    ([("providerProfileIdIn", "account,primary")], frozenset({"comma"})),
+    ([("providerProfileIdIn", "account")], frozenset()),
+    ([("providerProfileIdNotIn", "account,primary")], _ALL - {"comma"}),
+    (
+        [("providerProfileIdIn", "account,primary"), ("providerProfileIn", "acct-a")],
+        frozenset({"comma", "single", "duplicate"}),
+    ),
     ([("providerProfileIn", "acct-a")], frozenset({"single", "duplicate"})),
     ([("providerProfileIn", "acct-ab")], frozenset({"multi"})),
     ([("providerProfileIn", "acct")], frozenset({"prefix"})),
@@ -388,6 +399,7 @@ async def test_profile_facets_keep_overflow_names_counts_and_scope_4640() -> Non
             assert len(page.items) <= 2
             for item in page.items:
                 assert item.value != "outside-scope"
+                assert item.value not in items, "facet IDs must be unique across pages"
                 assert item.count == (2 if item.value == "retired-profile-0" else 1)
                 items[item.value] = item.label
             cursor = page.next_page_token

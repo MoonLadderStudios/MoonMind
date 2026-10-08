@@ -24,6 +24,14 @@ describe('workflowListQuery', () => {
     );
   });
 
+  it('distinguishes a comma-containing exact profile ID from legacy CSV membership', () => {
+    const exact = buildWorkflowListQueryParams(new URLSearchParams('providerProfileIdIn=account%2Cprimary&providerProfileIdIn=second&providerProfileIdNotIn=third%2Cone'));
+    const legacy = buildWorkflowListQueryParams(new URLSearchParams('providerProfileIn=account%2Cprimary'));
+    expect(exact.getAll('providerProfileIdIn')).toEqual(['account,primary', 'second']);
+    expect(exact.getAll('providerProfileIdNotIn')).toEqual(['third,one']);
+    expect(buildWorkflowListQueryKey(exact)).not.toEqual(buildWorkflowListQueryKey(legacy));
+  });
+
   it('keeps non-matching list contexts on separate cache identities', () => {
     const currentPage = buildWorkflowListQueryParams(
       new URLSearchParams('source=temporal&pageSize=25&stateIn=completed&nextPageToken=page-2'),

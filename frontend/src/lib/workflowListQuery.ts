@@ -28,6 +28,8 @@ const PARAM_ORDER = [
   'repoExact',
   'repo',
   'integration',
+  'providerProfileIdIn',
+  'providerProfileIdNotIn',
   'providerProfileIn',
   'providerProfileNotIn',
   'providerProfileStateIn',

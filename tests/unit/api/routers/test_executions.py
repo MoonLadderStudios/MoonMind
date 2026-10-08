@@ -21645,6 +21645,9 @@ def test_list_query_excluding_not_recorded_requires_recorded_projection_4640() -
         {"providerProfileStateIn": "unknown"},
         {"providerProfileBlank": "true", "providerProfileIn": "profile-a"},
         {"providerProfileBlank": "maybe"},
+        {"providerProfileIdIn": "a,b", "providerProfileIdNotIn": "a,b"},
+        {"providerProfileIdIn": "same", "providerProfileNotIn": "same"},
+        {"providerProfileBlank": "true", "providerProfileIdIn": "known"},
     ],
 )
 def test_list_query_rejects_invalid_provider_profile_filters_4640(params) -> None:
@@ -21659,12 +21662,13 @@ def test_list_query_rejects_invalid_provider_profile_filters_4640(params) -> Non
     temporal_client.list_workflows.assert_not_called()
 
 
-def test_list_query_reports_unavailable_provider_profile_projection_4640() -> None:
+@pytest.mark.parametrize("alias", ["providerProfileIn", "providerProfileIdIn"])
+def test_list_query_reports_unavailable_provider_profile_projection_4640(alias) -> None:
     temporal_client = _provider_profile_temporal_client(registered=False)
     with TestClient(_provider_profile_app(temporal_client)) as test_client:
         response = test_client.get(
             "/api/executions",
-            params={"source": "temporal", "providerProfileIn": "profile-a"},
+            params={"source": "temporal", alias: "profile-a"},
         )
 
     assert response.status_code == 200
@@ -21721,6 +21725,8 @@ def test_provider_profile_facet_counts_recorded_ids_and_states_4640() -> None:
                 "facet": "providerProfile",
                 "stateIn": "executing",
                 "providerProfileIn": "acct-1",
+                "providerProfileIdIn": "exact,include",
+                "providerProfileIdNotIn": "exact,exclude",
                 "providerProfileStateIn": "pending",
             },
         )
@@ -21843,3 +21849,93 @@ def test_provider_profile_facets_report_old_incomplete_projection_4640() -> None
     assert response.status_code == 200
     assert response.json()["truncated"] is True
     assert response.json()["items"][0]["value"] == "known"
+
+
+@pytest.mark.parametrize(
+    "profile_id", ["account,primary", '["account","primary"]', 'a"b\\c', "配置,工作"]
+)
+def test_provider_profile_exact_id_parameters_preserve_delimiters_4640(
+    profile_id,
+) -> None:
+    from moonmind.workflows.executions.provider_profile_projection import (
+        provider_profile_id_token,
+    )
+
+    temporal_client = _provider_profile_temporal_client()
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params=[
+                ("source", "temporal"),
+                ("providerProfileIdIn", profile_id),
+                ("providerProfileIdIn", "other"),
+                ("providerProfileIdIn", profile_id),
+                ("providerProfileIdNotIn", "excluded,profile"),
+                ("providerProfileIn", "legacy-a,legacy-b"),
+            ],
+        )
+    assert response.status_code == 200, response.text
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert (
+        query.count(f'mm_provider_profile="{provider_profile_id_token(profile_id)}"')
+        == 1
+    )
+    assert (
+        f'mm_provider_profile!="{provider_profile_id_token("excluded,profile")}"'
+        in query
+    )
+    assert provider_profile_id_token("other") in query
+    assert provider_profile_id_token("legacy-a") in query
+    assert provider_profile_id_token("legacy-b") in query
+
+
+def test_provider_profile_facets_deduplicate_across_visibility_pages_4640() -> None:
+    def workflow(*ids, incomplete=False):
+        return SimpleNamespace(
+            memo=AsyncMock(
+                return_value={
+                    "providerProfile": {
+                        "selectionState": "recorded",
+                        "profiles": [{"id": value} for value in ids],
+                        "profileCount": len(ids) + int(incomplete),
+                    }
+                }
+            )
+        )
+
+    pages = {
+        None: ([workflow("shared", "first", "overflow", incomplete=True)], b"second"),
+        b"second": ([workflow("shared", "last")], b"third"),
+        b"third": ([workflow("shared")], None),
+    }
+    temporal_client = _provider_profile_temporal_client()
+
+    def page(**kwargs):
+        workflows, continuation = pages[kwargs["next_page_token"]]
+        return SimpleNamespace(
+            current_page=workflows,
+            next_page_token=continuation,
+            fetch_next_page=AsyncMock(),
+        )
+
+    temporal_client.list_workflows.side_effect = page
+    received = []
+    token = None
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        for _ in range(10):
+            params = {"source": "temporal", "facet": "providerProfile", "pageSize": 2}
+            if token:
+                params["nextPageToken"] = token
+            response = test_client.get("/api/executions/facets", params=params)
+            assert response.status_code == 200, response.text
+            body = response.json()
+            received.extend(item["value"] for item in body["items"])
+            assert (
+                body["truncated"] is True
+            )  # earlier historical coverage is incomplete
+            token = body["nextPageToken"]
+            if not token:
+                break
+        else:
+            pytest.fail("Provider Profile facet pagination did not finish")
+    assert received == ["shared", "first", "overflow", "last"]
