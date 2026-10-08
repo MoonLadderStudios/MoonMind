@@ -253,10 +253,12 @@ def compose_document(source, repo_root, server_image, *, moonmind_image):
             "ARTIFACT_DIR": "/data/artifacts",
             "HOST": "0.0.0.0",
             "PORT": "8000",
-            "OMNIGENT_AUTH_ENABLED": "1",
-            "OMNIGENT_AUTH_PROVIDER": "header",
-            "OMNIGENT_AUTH_HEADER": "Authorization",
-            "OMNIGENT_AUTH_HEADER_STRIP_PREFIX": "Bearer ",
+            # The stock upstream host dials its tunnel without the MoonMind
+            # control credential, so strict header auth refuses it before
+            # registration (exit 78). Serve the deployment's default
+            # single-user "local" owner instead; the internal-only network
+            # keeps that unauthenticated listener unreachable from outside.
+            "OMNIGENT_AUTH_ENABLED": "0",
         },
         # Internal-only Docker networks do not publish host ports. Both the
         # readiness probe and actual recovery driver use this same network.
@@ -346,7 +348,7 @@ def test_command(
         "OMNIGENT_API_TOKEN": token,
         "OMNIGENT_HOST_RUNNER_TOKEN": token,
         "MOONMIND_OMNIGENT_HOST_SERVER_URL": "http://omnigent:8000",
-        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": token,
+        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": "local",
         "MOONMIND_OMNIGENT_CONCURRENCY_NETWORK": network,
         "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE": host_image_ref,
         "MOONMIND_OMNIGENT_CONCURRENCY_EVIDENCE_DIR": str(work),
