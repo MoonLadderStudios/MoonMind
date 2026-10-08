@@ -2686,7 +2686,27 @@ class GitHubService:
                 else isinstance(exc, httpx.TransportError)
             ),
             "source": "github",
+            "evidenceSource": source,
             **({"providerFailure": rate_limit.to_metadata()} if rate_limit else {}),
+        }
+
+    @staticmethod
+    def _select_review_evidence_blocker(
+        blockers: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not blockers:
+            return None
+        chosen = max(
+            blockers,
+            key=lambda item: (
+                bool(item["retryable"]),
+                bool(item.get("providerFailure")),
+                item["kind"] == "policy_denied",
+            ),
+        )
+        return {
+            **chosen,
+            "summary": " ".join(dict.fromkeys(item["summary"] for item in blockers)),
         }
 
     async def _evaluate_requested_review(
@@ -2812,7 +2832,13 @@ class GitHubService:
         anchor = latest_review_request(
             record, [active_request], head_sha=requested_head_sha
         )
-        if anchor is None and request_comment_id is not None:
+        comment_id = str(request_comment_id or "").strip()
+        if (
+            anchor is None
+            and comment_id.isascii()
+            and comment_id.isdecimal()
+            and int(comment_id) > 0
+        ):
             # Recover only the exact recorded comment. Never open a historical
             # search window when retained request timestamps are unavailable.
             anchor = latest_review_request(
@@ -2820,7 +2846,7 @@ class GitHubService:
                 (
                     comment
                     for comment in comments
-                    if str(comment.get("id")) == str(request_comment_id)
+                    if str(comment.get("id")) == comment_id
                 ),
                 head_sha=requested_head_sha,
             )
@@ -2937,9 +2963,7 @@ class GitHubService:
             item for item in (review_blocker, reaction_blocker) if item is not None
         ]
         if unavailable:
-            blocker = next(
-                (item for item in unavailable if item["retryable"]), unavailable[0]
-            )
+            blocker = self._select_review_evidence_blocker(unavailable)
             return {**pending, "complete": None, "blockers": [blocker]}
         provider_failure = (
             build_provider_failure_event(provider_error_class=reply.failure_class)
@@ -3066,8 +3090,8 @@ class GitHubService:
                 )
         # Another route may recover and prove completion even if one endpoint
         # is permanently denied. Exhaust every qualified alternative first.
-        blocker = next((item for item in read_blockers if item["retryable"]), None)
-        return None, blocker or (read_blockers[0] if read_blockers else None)
+        return None, self._select_review_evidence_blocker(read_blockers)
+
 
     async def _evaluate_automated_review(
         self,

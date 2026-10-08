@@ -124,6 +124,9 @@ MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
 MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX = (
     "merge-automation-missing-ci-wait-v1:"
 )
+MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_CYCLE_BUDGET_PATCH_PREFIX = (
+    "merge-automation-selected-review-request-cycle-budget-v1:"
+)
 MERGE_AUTOMATION_REVIEW_ADOPTION_GUARD_PATCH_PREFIX = (
     "merge-automation-review-adoption-guard-v1:"
 )
@@ -1523,6 +1526,20 @@ class MoonMindMergeAutomationWorkflow:
         self._publish_visibility()
         return await self._finish()
 
+    def _review_cycle_budget_blocker(self) -> ReadinessBlockerModel | None:
+        config = self._review_loop_config()
+        if len(self._review_cycles) < config.max_cycles:
+            return None
+        return ReadinessBlockerModel(
+            kind="review_cycle_budget_exhausted",
+            summary=(
+                "Automated review loop stopped: the configured budget of "
+                f"{config.max_cycles} review cycles is exhausted."
+            ),
+            retryable=False,
+            source="merge_automation",
+        )
+
     async def _request_automated_review(
         self,
         *,
@@ -1587,13 +1604,10 @@ class MoonMindMergeAutomationWorkflow:
                 ),
                 blocker_kind="review_loop_no_progress",
             )
-        if len(self._review_cycles) >= config.max_cycles:
+        budget_blocker = self._review_cycle_budget_blocker()
+        if budget_blocker is not None:
             return await self._blocked_review_summary(
-                summary=(
-                    "Automated review loop stopped: the configured budget of "
-                    f"{config.max_cycles} review cycles is exhausted."
-                ),
-                blocker_kind="review_cycle_budget_exhausted",
+                summary=budget_blocker.summary, blocker_kind=budget_blocker.kind
             )
 
         request_key = build_review_request_key(
@@ -1740,7 +1754,7 @@ class MoonMindMergeAutomationWorkflow:
     def _review_adoption_blocker(
         self, evaluation: Mapping[str, Any]
     ) -> dict[str, Any] | None:
-        """Enforce existing request/cycle identity and budget on new observations."""
+        """Enforce retained request/cycle identity on new observations."""
         active = self._active_review_request
         observation = evaluation.get("readinessObservationId")
         selected = evaluation.get("automatedReviewRequestCommentId")
@@ -1790,20 +1804,22 @@ class MoonMindMergeAutomationWorkflow:
                 "retryable": False,
                 "source": "policy",
             }
-        cycle_count = max(1, len(self._review_cycles))
-        max_cycles = self._review_loop_config().max_cycles
-        if cycle_count > max_cycles or (
-            selected != active.get("requestCommentId") and cycle_count >= max_cycles
-        ):
-            return {
-                "kind": "review_cycle_budget_exhausted",
-                "summary": "The configured review cycle budget is exhausted; a superseding external request cannot be adopted.",
-                "retryable": False,
-                "source": "policy",
-            }
         return None
 
-    def _reconcile_selected_review_request(self, evaluation: Mapping[str, Any]) -> None:
+    def _selected_review_request_cycle_budget_enabled(
+        self, observation_key: str
+    ) -> bool:
+        # Selection markers already exist in retained histories. A separate
+        # observation decision preserves their adoption while bounding the
+        # next new request seen after the workflow worker upgrades.
+        return workflow.patched(
+            MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_CYCLE_BUDGET_PATCH_PREFIX
+            + observation_key
+        )
+
+    def _reconcile_selected_review_request(
+        self, evaluation: Mapping[str, Any]
+    ) -> ReadinessBlockerModel | None:
         """Retain a superseding provider request before settling its result.
 
         The GitHub Activity owns request selection. Keep each observed request
@@ -1847,6 +1863,10 @@ class MoonMindMergeAutomationWorkflow:
             return
         if not self._review_cycles:
             self._review_cycles.append({"cycle": 1, **active, "status": "requested"})
+        if self._selected_review_request_cycle_budget_enabled(observation_key):
+            budget_blocker = self._review_cycle_budget_blocker()
+            if budget_blocker is not None:
+                return budget_blocker
         previous = self._review_cycles[-1]
         if previous.get("status") == "requested":
             previous["status"] = "superseded"
@@ -1870,15 +1890,19 @@ class MoonMindMergeAutomationWorkflow:
         )
         self._active_review_request = selected
 
-    def _settle_active_review_request(self, evaluation: Any) -> dict[str, Any] | None:
+    def _settle_active_review_request(
+        self, evaluation: Any
+    ) -> ReadinessBlockerModel | None:
         """Bind an observed review result (or staleness) to the active request."""
 
         if not self._active_review_request or not isinstance(evaluation, Mapping):
             return
         adoption_blocker = self._review_adoption_blocker(evaluation)
         if adoption_blocker is not None:
-            return adoption_blocker
-        self._reconcile_selected_review_request(evaluation)
+            return ReadinessBlockerModel.model_validate(adoption_blocker)
+        budget_blocker = self._reconcile_selected_review_request(evaluation)
+        if budget_blocker is not None:
+            return budget_blocker
         cycle = self._review_cycles[-1] if self._review_cycles else None
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
             # The provider activity owns classification and request matching.
@@ -1919,14 +1943,22 @@ class MoonMindMergeAutomationWorkflow:
             self._active_review_request = None
             self._refresh_tracked_head_sha_on_next_evaluation = True
 
-    async def _evaluate_readiness_once(self) -> tuple[Any, Any]:
+    async def _evaluate_readiness_once(
+        self,
+    ) -> tuple[Any, Any, dict[str, Any] | None]:
         if self._input is None:
             evaluation: dict[str, Any] = {}
-            return evaluation, classify_readiness(
+            return (
                 evaluation,
-                tracked_head_sha="",
-                actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
-                actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                classify_readiness(
+                    evaluation,
+                    tracked_head_sha="",
+                    actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
+                    actionable_ci_failures=self._actionable_ci_failures_enabled(
+                        evaluation
+                    ),
+                ),
+                None,
             )
         readiness_payload = self._input.model_dump(by_alias=True, mode="json")
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
@@ -1951,6 +1983,7 @@ class MoonMindMergeAutomationWorkflow:
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
+        budget_blocker = None
         if self._review_loop_active():
             if (
                 self._active_review_request
@@ -1963,26 +1996,22 @@ class MoonMindMergeAutomationWorkflow:
                 # when CI fails or conflicts are actionable. Unknown cannot
                 # release a resolver while this request still owns the head.
                 evaluation = {**evaluation, "automatedReviewComplete": False}
-            adoption_blocker = self._settle_active_review_request(
+            budget_blocker = self._settle_active_review_request(
                 evaluation if isinstance(evaluation, Mapping) else {}
             )
-            if adoption_blocker is not None:
-                evaluation = {
-                    **evaluation,
-                    "ready": False,
-                    "automatedReviewComplete": False,
-                    "automatedReviewCompletionKind": None,
-                    "automatedReviewCompletionId": None,
-                    "automatedReviewCompletedAt": None,
-                    "blockers": [*evaluation.get("blockers", []), adoption_blocker],
-                }
         evidence = classify_readiness(
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
         )
-        return evaluation, evidence
+        terminal = None
+        if budget_blocker is not None:
+            terminal = await self._blocked_review_summary(
+                summary=budget_blocker.summary,
+                blocker_kind=budget_blocker.kind,
+            )
+        return evaluation, evidence, terminal
 
     def _review_only_request_is_bound(
         self, request: Mapping[str, Any], *, require_timestamp: bool = True
@@ -2041,7 +2070,9 @@ class MoonMindMergeAutomationWorkflow:
                 self._status = STATE_EXPIRED
                 self._publish_visibility()
                 return await self._finish()
-            evaluation, evidence = await self._evaluate_readiness_once()
+            evaluation, evidence, terminal = await self._evaluate_readiness_once()
+            if terminal is not None:
+                return terminal
             observed = evaluation if isinstance(evaluation, Mapping) else {}
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=False)
@@ -2134,7 +2165,9 @@ class MoonMindMergeAutomationWorkflow:
         if not workflow.patched("merge-automation-post-resolver-merged-recovery-v1"):
             return RESOLVER_ISSUE_RECOVERY_NONE, None
         previous_head_sha = self._input.pull_request.head_sha
-        evaluation, evidence = await self._evaluate_readiness_once()
+        evaluation, evidence, terminal = await self._evaluate_readiness_once()
+        if terminal is not None:
+            return RESOLVER_ISSUE_RECOVERY_COMPLETED, terminal
         observed_head_sha = (
             self._head_sha_from_mapping(evaluation)
             if isinstance(evaluation, Mapping)
@@ -2225,7 +2258,9 @@ class MoonMindMergeAutomationWorkflow:
                 self._publish_visibility()
                 return await self._finish()
 
-            evaluation, evidence = await self._evaluate_readiness_once()
+            evaluation, evidence, terminal = await self._evaluate_readiness_once()
+            if terminal is not None:
+                return terminal
             if self._refresh_tracked_head_sha_on_next_evaluation:
                 self._refresh_tracked_head_sha_on_next_evaluation = False
                 if self._refresh_tracked_head_sha(evaluation):
@@ -2558,7 +2593,11 @@ class MoonMindMergeAutomationWorkflow:
                     # returning a head SHA. Re-read the tracked PR through its
                     # existing authority before finalizing either integration.
                     # Resolver prose or an echoed pre-repair SHA is not proof.
-                    evaluation, evidence = await self._evaluate_readiness_once()
+                    evaluation, evidence, terminal = (
+                        await self._evaluate_readiness_once()
+                    )
+                    if terminal is not None:
+                        return terminal
                     if (
                         not evidence.pull_request_merged
                         or not self._refresh_tracked_head_sha(evaluation)
