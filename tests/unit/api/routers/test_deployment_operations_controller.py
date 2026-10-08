@@ -29,6 +29,7 @@ from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
 )
+from moonmind.workflows.temporal import worker_code_identity
 from tests.support.deployment_controller import (
     DEFAULT_TARGET,
     InProcessController,
@@ -142,6 +143,127 @@ def _stack(client: TestClient) -> dict:
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
     assert response.status_code == 200, response.text
     return response.json()
+
+
+@pytest.mark.parametrize("worker_pin", [None, "ghcr.io/org/moonmind:explicit"])
+def test_old_controller_queues_existing_privileged_submitter_for_prerequisite(
+    controller_factory, monkeypatch, worker_pin
+):
+    controller = controller_factory()
+    request = controller_client._controller_request
+
+    def old_health(endpoint, **kwargs):
+        if kwargs["path"] == "/v1/healthz":
+            return 200, {"status": "ok"}
+        return request(endpoint, **kwargs)
+
+    monkeypatch.setattr(controller_client, "_controller_request", old_health)
+    if worker_pin:
+        monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", worker_pin)
+    monkeypatch.setattr(
+        worker_code_identity,
+        "probe_worker_readiness",
+        lambda url: {
+            "ready": True,
+            "fleet": "deployment",
+            "taskQueues": ["mm.activity.deployment"],
+            "activityTypes": ["mm.tool.execute"],
+            "controllerBootstrapCapabilities": ["active-journal-transition"],
+            "buildSha": "different-from-api-and-target",
+        },
+    )
+    client, temporal = _client()
+    queued = []
+
+    async def create_execution(**kwargs):
+        queued.append(kwargs)
+        return SimpleNamespace(
+            workflow_id="update-prerequisite", run_id="prerequisite-run"
+        )
+
+    temporal.create_execution = create_execution
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert response.status_code == 202, response.text
+    assert response.json()["workflowId"] == "update-prerequisite"
+    assert controller.applied == []
+    assert len(queued) == 1
+    assert queued[0]["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
+
+
+@pytest.mark.parametrize(
+    "worker_readiness",
+    [
+        None,
+        {
+            "ready": True,
+            "fleet": "deployment",
+            "taskQueues": ["mm.activity.deployment"],
+            "activityTypes": ["mm.tool.execute"],
+        },
+        {
+            "ready": False,
+            "fleet": "deployment",
+            "taskQueues": ["mm.activity.deployment"],
+            "activityTypes": ["mm.tool.execute"],
+            "controllerBootstrapCapabilities": ["active-journal-transition"],
+        },
+        {
+            "ready": True,
+            "fleet": "deployment",
+            "taskQueues": ["different-queue"],
+            "activityTypes": ["mm.tool.execute"],
+            "controllerBootstrapCapabilities": ["active-journal-transition"],
+        },
+    ],
+)
+def test_old_pinned_worker_cannot_receive_an_unsafe_controller_submission(
+    controller_factory, monkeypatch, worker_readiness
+):
+    controller = controller_factory()
+    request = controller_client._controller_request
+    monkeypatch.setattr(
+        controller_client,
+        "_controller_request",
+        lambda endpoint, **kwargs: (
+            (200, {"status": "ok"})
+            if kwargs["path"] == "/v1/healthz"
+            else request(endpoint, **kwargs)
+        ),
+    )
+    pin = "ghcr.io/org/moonmind:explicit-old"
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", pin)
+    monkeypatch.setattr(
+        worker_code_identity, "probe_worker_readiness", lambda url: worker_readiness
+    )
+    client, temporal = _client()
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_prerequisite_unavailable"
+    assert "host update command" in detail["message"]
+    assert temporal.calls == []
+    assert controller.applied == []
+    import os
+
+    assert os.environ["MOONMIND_DEPLOYMENT_WORKER_IMAGE"] == pin
+
+
+def test_current_controller_does_not_depend_on_an_old_pinned_worker(
+    controller_factory, monkeypatch
+):
+    controller = controller_factory()
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", "ghcr.io/org/moonmind:old")
+    monkeypatch.setattr(
+        worker_code_identity,
+        "probe_worker_readiness",
+        lambda url: pytest.fail("worker is irrelevant"),
+    )
+    client, temporal = _client()
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert response.status_code == 202, response.text
+    assert response.json()["owner"] == "controller"
+    assert len(controller.applied) == 1
+    assert temporal.calls == []
 
 
 def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
