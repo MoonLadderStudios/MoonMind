@@ -538,7 +538,13 @@ def reconcile_default_git_connection(
         provider="git",
         displayName="Default GitHub connection",
         endpointRef="https://github.com",
-        allowedOperations=("read", "write", "branch_write", "review_request"),
+        allowedOperations=(
+            "read",
+            "write",
+            "branch_write",
+            "review_request",
+            "merge_request",
+        ),
         clientPolicy=client_policy,
         credential={"source": "github_resolver"},
     )

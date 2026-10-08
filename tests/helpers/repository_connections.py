@@ -29,7 +29,13 @@ def github_pat_connection(connection_id: str, env_key: str) -> RepositoryConnect
             "provider": "git",
             "displayName": connection_id,
             "endpointRef": "https://github.com",
-            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "allowedOperations": [
+                "read",
+                "write",
+                "branch_write",
+                "review_request",
+                "merge_request",
+            ],
             "clientPolicy": {
                 "pinnedVersion": "2.46.0",
                 "toolBundleRef": "repository-client:git-system",
@@ -49,7 +55,13 @@ def github_repository_assignment(
     connection_id: str,
     repository: str,
     *,
-    operations: Sequence[str] = ("read", "write", "branch_write", "review_request"),
+    operations: Sequence[str] = (
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "merge_request",
+    ),
 ) -> RepositoryAssignment:
     """A verified grant of ``connection_id`` to the GitHub ``owner/name``."""
 
