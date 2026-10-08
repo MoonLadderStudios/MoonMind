@@ -389,7 +389,7 @@ class PublicationRecoveryRolloutPolicy(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
 
-    enabled: bool = False
+    enabled: bool = True
     shadow: bool = False
     canary_repositories: tuple[str, ...] = Field(
         default=(), alias="canaryRepositories"
@@ -398,7 +398,7 @@ class PublicationRecoveryRolloutPolicy(BaseModel):
     allowed_modes: tuple[Literal["pr", "draft_pr", "branch"], ...] = Field(
         default=("pr", "draft_pr", "branch"), alias="allowedModes"
     )
-    generation: str = "disabled"
+    generation: str = "default"
 
     def availability_reason(self, *, owner_id: str | None) -> str | None:
         """Why no destination can be admitted for this owner, before one is chosen."""

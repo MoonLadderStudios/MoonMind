@@ -268,25 +268,34 @@ def merge_resolved_provider_profile(
 
 def provider_profile_associations_from_memo(
     memo: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    *,
+    search_value: object | None = None,
+) -> dict[str, Any] | None:
     """Read all recorded associations for facet discovery.
 
-    Records that predate the projection report ``not_recorded``; their
-    runtime, model, or present defaults never fill the gap.
+    Only a missing memo and index report historical ``not_recorded``. Malformed
+    projections without usable IDs are unavailable. Preserve any trustworthy
+    associations from partial projections, marking their coverage incomplete.
     """
 
+    if PROVIDER_PROFILE_MEMO_KEY not in _mapping(memo):
+        if search_value is not None:
+            return None
+        return {"selectionState": "not_recorded", "profiles": [], "profileCount": 0}
     raw = _mapping(_mapping(memo).get(PROVIDER_PROFILE_MEMO_KEY))
     state = raw.get("selectionState")
-    if state not in _WRITTEN_STATES:
-        return {"selectionState": "not_recorded", "profiles": [], "profileCount": 0}
+    incomplete = not isinstance(state, str) or state not in _WRITTEN_STATES
     profiles: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
     raw_profiles = raw.get("profiles")
     if isinstance(raw_profiles, list):
         for item in raw_profiles:
             entry = _mapping(item)
             profile_id = _text(entry.get("id"))
-            if not profile_id:
+            if not profile_id or profile_id in seen_ids:
+                incomplete = True
                 continue
+            seen_ids.add(profile_id)
             profiles.append(
                 {
                     "id": profile_id,
@@ -294,23 +303,37 @@ def provider_profile_associations_from_memo(
                     "harness": _text(entry.get("harness")),
                 }
             )
-    if state != "recorded":
-        return {"selectionState": state, "profiles": [], "profileCount": 0}
-    if not profiles:
-        return {"selectionState": "not_recorded", "profiles": [], "profileCount": 0}
+    else:
+        incomplete = True
     count = raw.get("profileCount")
     if isinstance(count, bool) or not isinstance(count, int) or count < len(profiles):
+        incomplete = True
         count = len(profiles)
-    return {"selectionState": "recorded", "profiles": profiles, "profileCount": count}
+    incomplete |= count > len(profiles)
+    if not profiles:
+        if state in ("pending", "not_applicable") and not incomplete:
+            return {"selectionState": state, "profiles": [], "profileCount": 0}
+        return None
+    return {
+        "selectionState": "recorded",
+        "profiles": profiles,
+        "profileCount": count,
+        "incomplete": incomplete or state != "recorded",
+    }
 
 
 def provider_profile_summary_from_memo(
     memo: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    *,
+    search_value: object | None = None,
+) -> dict[str, Any] | None:
     """Return a bounded, secret-free row summary from the recorded projection."""
 
-    recorded = provider_profile_associations_from_memo(memo)
+    recorded = provider_profile_associations_from_memo(memo, search_value=search_value)
+    if recorded is None:
+        return None
     return {
-        **recorded,
+        "selectionState": recorded["selectionState"],
         "profiles": recorded["profiles"][:PROVIDER_PROFILE_SUMMARY_LIMIT],
+        "profileCount": recorded["profileCount"],
     }

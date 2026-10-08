@@ -664,8 +664,11 @@ RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH = (
 # histories retain their original immediate idle completion and memo commands.
 RUN_ISSUE_SEARCH_CAPACITY_RETRY_PATCH = "run-issue-search-capacity-retry-v1"
 ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT = timedelta(minutes=30)
-ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL = timedelta(seconds=30)
-ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL = timedelta(minutes=5)
+# The search is not queued at the ProviderProfileManager, so it only starts in
+# the gap between one holder's release and the next request. Those gaps last
+# about a minute when other workflows re-request a busy slot; a steady recheck
+# observes them, where a backed-off one sleeps through every gap in the budget.
+ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL = timedelta(seconds=30)
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Expose the workflow-owned continuation capability to the portable Skill at
@@ -1117,6 +1120,11 @@ RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
     "run-accepted-publication-head-handoff-v1"
 )
+# Histories that already handed off an accepted head omitted its authored base.
+# Preserve those request payloads even when the older head marker is present.
+RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH = (
+    "run-accepted-publication-base-handoff-v1"
+)
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
 # workflow-owned, remote-verified published branch instead. This changes both
@@ -1336,6 +1344,13 @@ RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
     "run-launch-provider-profile-projection-v1"
 )
+# Retained histories skipped repeat writes after a partial projection failure.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH = (
+    "run-launch-provider-profile-projection-retry-v1"
+)
+# Existing launch-result histories must retain their later upsert position.
+RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
+RUN_PAUSED_AGENT_PROGRESS_PATCH = "run-paused-agent-progress-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -1807,6 +1822,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Admitted recorded Provider Profile projection (memo summary, Search
         # Attribute value), seeded on first launch-resolved profile (#4640).
         self._provider_profile_projection: tuple[Any, str | None] | None = None
+        self._provider_profile_projection_dirty = False
 
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
@@ -16621,7 +16637,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         self._publish_context["capacityWait"] = wait_context
         deadline = workflow.now() + ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT
-        interval = ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL
         current_result = execution_result
         while capacity_deferred(current_result):
             remaining = deadline - workflow.now()
@@ -16656,7 +16671,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             try:
                 await workflow.wait_condition(
                     lambda: self._cancel_requested or self._paused,
-                    timeout=min(interval, remaining),
+                    timeout=min(ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL, remaining),
                 )
             except asyncio.TimeoutError:
                 # Timeout is the expected path for periodic capacity rechecks.
@@ -16684,7 +16699,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping) and outputs.get("capacityEvidence"):
                 wait_context["lastCapacityEvidence"] = outputs["capacityEvidence"]
-            interval = min(interval * 2, ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL)
 
         self._waiting_reason = None
         self._set_state(
@@ -22022,6 +22036,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "branch": accepted_head[0],
                     "headSha": accepted_head[1],
                 }
+                # The base recorded with the head lets a later step extend its
+                # own candidate instead of publishing a PR stacked on it.
+                accepted_base = self._accepted_published_base_branch()
+                if (
+                    accepted_base
+                    and accepted_base != accepted_head[0]
+                    and self._workflow_patch_enabled(
+                        RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH
+                    )
+                ):
+                    parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )
@@ -23843,10 +23868,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "provider-profile-complete-associations-v1"
             ),
         )
-        if merged is None:
+        if merged is not None:
+            # Retain the desired union and frozen labels even if only one
+            # store accepts its write. Later grants merge into this snapshot.
+            self._provider_profile_projection = merged
+            self._provider_profile_projection_dirty = workflow.patched(
+                RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH
+            )
+        elif not self._provider_profile_projection_dirty:
             return
-        self._provider_profile_projection = merged
-        merged_summary, merged_value = merged
+        merged_summary, merged_value = self._provider_profile_projection
         try:
             workflow.upsert_memo({PROVIDER_PROFILE_MEMO_KEY: merged_summary})
             workflow.upsert_search_attributes(
@@ -23862,6 +23893,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "Failed to record launch-resolved Provider Profile",
                 extra={"error": str(exc)},
             )
+        else:
+            # A repeated profile is a no-op only after both stores accepted
+            # the projection; progress or terminal metadata can retry it.
+            self._provider_profile_projection_dirty = False
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
@@ -26052,6 +26087,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 expected_step_execution_id=step_id,
             )
             self._agent_run_progress_by_child[child_id] = state
+        has_profile_fields = (
+            "providerProfileId" in payload or "providerProfileLabel" in payload
+        )
+        grant_progress_enabled = has_profile_fields and workflow.patched(
+            RUN_GRANTED_PROFILE_PROGRESS_PATCH
+        )
+        if has_profile_fields and not grant_progress_enabled:
+            # Older parents rejected these fields under extra="forbid". A new
+            # child can reach an old worker during rollout, so replay must keep
+            # ignoring that recorded signal, including ordinary state upserts.
+            return
         outcome = apply_agent_run_progress(
             state,
             payload,
@@ -26073,6 +26119,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             return
         accepted = outcome.accepted_state
+        if grant_progress_enabled:
+            # Only accepted progress crosses the child/attempt/revision fences.
+            # This records display identity, never profile lease ownership.
+            self._record_launch_provider_profile(accepted)
+        if (
+            str(accepted.get("state") or "") not in TERMINAL_PROGRESS_STATES
+            and (self._paused or self._pause_resume_transition_in_progress)
+            and workflow.patched(RUN_PAUSED_AGENT_PROGRESS_PATCH)
+        ):
+            # Identity remains visible immediately, but an operator pause owns
+            # product state until Resume succeeds. Reuse the accepted reducer
+            # state so older children need not emit the same grant again.
+            state["pausedProductProgress"] = accepted
+            return
+        state.pop("pausedProductProgress", None)
+        self._apply_agent_run_product_progress(child_id, accepted)
+
+    def _apply_agent_run_product_progress(
+        self, child_id: str, accepted: Mapping[str, Any]
+    ) -> None:
+        """Reflect already-fenced progress in workflow and Step product state."""
+
         self._note_issue_claim_work_started(str(accepted.get("state") or ""))
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated
@@ -26140,6 +26208,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "agent_run_progress ledger reflection skipped for %s",
                     progress_step_id,
                 )
+
+    def _apply_resumed_agent_progress(self, child_id: str | None) -> None:
+        """Drain paused progress only for the child the control update reached."""
+
+        if (
+            self._paused
+            or not child_id
+            or child_id != self._active_agent_child_workflow_id
+        ):
+            return
+        state = self._agent_run_progress_by_child.get(child_id) or {}
+        accepted = state.pop("pausedProductProgress", None)
+        if (
+            not isinstance(accepted, Mapping)
+            or self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED)
+            or state.get("terminalSealed")
+            or accepted.get("sourceGeneration") != state.get("acceptedSourceGeneration")
+            or accepted.get("agentRunRunId") != state.get("acceptedAgentRunRunId")
+            or accepted.get("projectionRevision") != state.get("acceptedRevision")
+        ):
+            return
+        previous_attention = self._attention_required
+        self._apply_agent_run_product_progress(child_id, accepted)
+        if self._attention_required != previous_attention:
+            # The ordinary reflection writes status before updating attention.
+            # Resume has no later child observation to persist that final value.
+            self._update_search_attributes()
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
@@ -26218,6 +26313,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and self._paused:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_waiting_reason = self._waiting_reason
         try:
@@ -26233,6 +26329,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @pause.validator
     def validate_pause(self, payload: dict[str, Any] | None = None) -> None:
@@ -26256,6 +26353,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and not self._paused and not self._awaiting_external:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_paused = self._paused
         previous_waiting_reason = self._waiting_reason
@@ -26275,6 +26373,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @resume.validator
     def validate_resume(self, payload: dict[str, Any] | None = None) -> None:

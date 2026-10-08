@@ -1015,10 +1015,11 @@ async def test_pre_review_loop_start_input_still_runs(
 
     assert result["status"] == "merged"
     assert "reviewLoop" not in result
-    # The legacy resolver child is launched without review-loop Skill args.
+    # Without a review loop the child is told explicitly that this gate
+    # requires no automated review, rather than inferring one from task prose.
     args = harness.child_payloads[0]["initial_parameters"]["task"]["skill"]["args"]
-    assert "reviewProvider" not in args
-    assert "requireFreshReview" not in args
+    assert args["reviewProvider"] == "none"
+    assert args["requireFreshReview"] is False
     # The readiness payload still carries the additive key with a null value.
     assert harness.readiness_payloads[0]["activeReviewRequest"] is None
     assert (
@@ -1173,6 +1174,80 @@ async def test_repeated_reenter_handoff_exhausts_shared_progress_budget(
     assert len(harness.child_workflow_ids) == budget + 1
     assert outcome["reviewLoop"]["noProgressCycles"] == budget
     assert not harness.request_payloads
+
+
+def _degraded_reenter_result(child_id, attempt):
+    value = _request_review_result(child_workflow_id=child_id, head_sha=HEAD_1)
+    value["mergeAutomationDisposition"] = "reenter_gate"
+    value["gatedContinuation"].update(
+        schemaVersion="gated-continuation/v1",
+        action="reenter_gate",
+        reason="ci_signal_degraded",
+        retryAfterSeconds=60,
+        progressSignature=f"{HEAD_1}|4213269206|",
+    )
+    return value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_loop", [{}, {"enabled": False}])
+async def test_reenter_progress_budget_applies_without_review_loop(
+    monkeypatch, review_loop
+):
+    """A resolver that keeps returning the same work cannot loop forever.
+
+    PR #4743 targeted a branch CI never runs for: 30 identical
+    ``ci_signal_degraded`` handoffs each launched another agent run.
+    """
+
+    def result(child_id, attempt):
+        # Bound the fixture so an unbounded gate fails instead of hanging.
+        if attempt > 10:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = review_loop
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1)],
+        child_results=result,
+    )
+
+    outcome = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert outcome["status"] == "blocked"
+    assert outcome["blockers"][0]["kind"] == "review_loop_no_progress"
+    assert "ci_signal_degraded" in outcome["summary"]
+    # The first handoff establishes the signature; two repeats exhaust the
+    # default budget.
+    assert len(harness.child_workflow_ids) == 3
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
+async def test_reenter_budget_without_review_loop_preserves_pre_patch_history(
+    monkeypatch,
+):
+    def result(child_id, attempt):
+        if attempt == 5:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = {}
+    harness = _Harness(monkeypatch, readiness=[_ready(HEAD_1)], child_results=result)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: name
+        not in {
+            merge_automation_module.MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH,
+            merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
+        },
+    )
+    assert (await MoonMindMergeAutomationWorkflow().run(payload))["status"] == "merged"
+    assert len(harness.child_workflow_ids) == 5
 
 
 @pytest.mark.asyncio
@@ -1949,3 +2024,94 @@ async def test_review_only_carries_deadline_into_request_activity(monkeypatch):
     assert harness.request_payloads[0]["expiresAt"] == "2026-08-24T22:03:00+00:00"
     assert result["reviewLoop"]["cycleRecords"] == []
     _assert_review_only_has_no_resolver(harness, result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_enabled", [True, False])
+@pytest.mark.parametrize("limit", [2, 4])
+async def test_missing_head_ci_stops_with_existing_no_progress_budget(
+    monkeypatch, review_enabled, limit
+):
+    missing = _ready(
+        HEAD_1,
+        ready=False,
+        checksComplete=False,
+        checksPassing=False,
+        checksReported=False,
+        blockers=[{"kind": "checks_running", "summary": "No head CI signal."}],
+    )
+    harness = _Harness(
+        monkeypatch,
+        readiness=[
+            dict(missing, readinessObservationId=f"poll-{i}") for i in range(limit + 1)
+        ],
+        child_results=[{"status": "success", "mergeAutomationDisposition": "merged"}],
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(
+        _payload(enabled=review_enabled, maxConsecutiveNoProgressCycles=limit)
+    )
+    assert result["status"] == "blocked"
+    assert result["blockers"][0]["kind"] == "review_loop_no_progress"
+    assert "CI" in result["summary"]
+    assert harness.wait_calls == limit
+    assert not harness.child_payloads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario",
+    ["running", "unknown", "old_producer", "head_change", "signal_returns", "expiry"],
+)
+async def test_missing_ci_budget_preserves_real_waits_and_progress(
+    monkeypatch, scenario
+):
+    missing = _ready(
+        HEAD_1,
+        ready=False,
+        checksComplete=False,
+        checksPassing=False,
+        checksReported=False,
+        blockers=[{"kind": "checks_running", "summary": "No head CI signal."}],
+    )
+    readiness = [dict(missing) for _ in range(4)]
+    if scenario == "running":
+        for item in readiness:
+            item["checksReported"] = True
+    elif scenario == "unknown":
+        for item in readiness:
+            item.update(
+                checksReported=None,
+                checksComplete=None,
+                blockers=[
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": "GitHub unavailable.",
+                    }
+                ],
+            )
+    elif scenario == "old_producer":
+        for item in readiness:
+            item.pop("checksReported")
+    elif scenario == "head_change":
+        for item in readiness[2:]:
+            item["headSha"] = HEAD_2
+    elif scenario == "signal_returns":
+        readiness[2]["checksReported"] = True
+    for i, item in enumerate(readiness):
+        item["readinessObservationId"] = f"poll-{i}"
+    final_head = HEAD_2 if scenario == "head_change" else HEAD_1
+    readiness.append(_ready(final_head, checksReported=True))
+    payload = _payload(enabled=False)
+    if scenario == "expiry":
+        payload["mergeAutomationConfig"]["timeouts"]["expireAfterSeconds"] = 60
+    harness = _Harness(
+        monkeypatch,
+        readiness=readiness,
+        child_results=[{"status": "success", "mergeAutomationDisposition": "merged"}],
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == ("expired" if scenario == "expiry" else "merged")
+    assert harness.wait_calls == (1 if scenario == "expiry" else 4)
+    assert len(harness.child_payloads) == (0 if scenario == "expiry" else 1)
+    if scenario != "expiry":
+        assert result["latestHeadSha"] == final_head
