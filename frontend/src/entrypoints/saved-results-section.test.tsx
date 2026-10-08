@@ -147,6 +147,7 @@ let handlers: {
 const PUBLICATION_RUN_URL = '/api/executions/mm%3Apublication%3Aabc?source=temporal';
 
 beforeEach(() => {
+  window.sessionStorage.clear();
   handlers = {
     capturedEvidence: async () =>
       jsonResponse({
@@ -265,6 +266,7 @@ describe('Saved Results section', () => {
     expect(String(call?.[0])).toBe('/api/executions/wf-4020/retry-publication');
     expect(bodyOf(call)).toEqual({
       savedWorkRef: 'art-manifest',
+      admissionGeneration: expect.any(String),
       sourceRunId: 'run-1',
       destination: {
         repository: 'Owner/Repo',
@@ -334,6 +336,117 @@ describe('Saved Results section', () => {
     expect(await screen.findByText(/Publication started/)).toBeTruthy();
     const [first, second] = calls('/retry-publication');
     expect(bodyOf(second)).toEqual(bodyOf(first));
+  });
+
+  it('retains the admission generation across reload after an ambiguous acknowledgment', async () => {
+    handlers.publish = async () => { throw new TypeError('Failed to fetch'); };
+    const firstView = renderSection();
+    fireEvent.submit(await openPublishForm());
+    expect(await screen.findByText(/may\s+have been accepted/)).toBeTruthy();
+    const original = bodyOf(calls('/retry-publication')[0]);
+    expect(original.admissionGeneration).toEqual(expect.any(String));
+    firstView.unmount();
+
+    handlers.publish = async () => jsonResponse(publication, 201);
+    renderSection();
+    fireEvent.submit(await openPublishForm());
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    expect(bodyOf(calls('/retry-publication')[1])).toEqual(original);
+  });
+
+  it('explicitly re-admits unchanged output after the prior publication is fenced', async () => {
+    let reads = 0;
+    handlers.publicationRun = async () => {
+      reads += 1;
+      return jsonResponse({ state: 'failed', temporalStatus: 'failed' });
+    };
+    renderSection();
+    const form = await openPublishForm();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication failed/)).toBeTruthy();
+    expect(reads).toBeGreaterThan(0);
+    const original = bodyOf(calls('/retry-publication')[0]);
+    expect(original.admissionGeneration).toEqual(expect.any(String));
+    fireEvent.submit(form);
+    await waitFor(() => expect(calls('/retry-publication')).toHaveLength(2));
+    const next = bodyOf(calls('/retry-publication')[1]);
+    expect(next.admissionGeneration).not.toBe(original.admissionGeneration);
+    expect({ ...next, admissionGeneration: original.admissionGeneration }).toEqual(original);
+  });
+
+  it('keeps an uncertain admission after a later API denial', async () => {
+    let attempt = 0;
+    handlers.publish = async () => {
+      attempt += 1;
+      if (attempt === 1) throw new TypeError('Failed to fetch');
+      if (attempt === 2) return jsonResponse({ detail: 'Session expired' }, 401);
+      return jsonResponse(publication, 201);
+    };
+    renderSection();
+    const form = await openPublishForm();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/may\s+have been accepted/)).toBeTruthy();
+    fireEvent.submit(form);
+    expect(await screen.findByText('Session expired')).toBeTruthy();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication started/)).toBeTruthy();
+    const [first, denied, recovered] = calls('/retry-publication');
+    expect(bodyOf(denied)).toEqual(bodyOf(first));
+    expect(bodyOf(recovered)).toEqual(bodyOf(first));
+  });
+
+  it('does not use an older terminal operation to rotate a newer ambiguous generation', async () => {
+    let attempts = 0;
+    handlers.publicationRun = async () => jsonResponse({ state: 'failed', temporalStatus: 'failed' });
+    handlers.publish = async () => {
+      attempts += 1;
+      if (attempts > 1) throw new TypeError('Lost new admission acknowledgment');
+      return jsonResponse(publication, 201);
+    };
+    const firstView = renderSection();
+    const form = await openPublishForm();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/Publication failed/)).toBeTruthy();
+    fireEvent.submit(form);
+    expect(await screen.findByText(/may\s+have been accepted/)).toBeTruthy();
+    const [first, second] = calls('/retry-publication');
+    expect(bodyOf(second).admissionGeneration).not.toBe(bodyOf(first).admissionGeneration);
+    fireEvent.submit(form);
+    await waitFor(() => expect(calls('/retry-publication')).toHaveLength(3));
+    expect(bodyOf(calls('/retry-publication')[2])).toEqual(bodyOf(second));
+    firstView.unmount();
+    renderSection();
+    fireEvent.submit(await openPublishForm());
+    await waitFor(() => expect(calls('/retry-publication')).toHaveLength(4));
+    expect(bodyOf(calls('/retry-publication')[3])).toEqual(bodyOf(second));
+  });
+
+  it('generates a fresh HTTP-compatible admission when randomUUID is unavailable', async () => {
+    const originalUUID = Object.getOwnPropertyDescriptor(crypto, 'randomUUID');
+    Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined });
+    try {
+      renderSection();
+      fireEvent.submit(await openPublishForm());
+      expect(await screen.findByText(/Publication started/)).toBeTruthy();
+      expect(bodyOf(calls('/retry-publication')[0]).admissionGeneration).toMatch(
+        /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+      );
+    } finally {
+      if (originalUUID) Object.defineProperty(crypto, 'randomUUID', originalUUID);
+      else Reflect.deleteProperty(crypto, 'randomUUID');
+    }
+  });
+
+  it('does not submit when a request identity cannot survive browser reload', async () => {
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage disabled', 'SecurityError');
+    });
+    try {
+      renderSection();
+      fireEvent.submit(await openPublishForm());
+      expect(await screen.findByText(/browser could not retain its request/)).toBeTruthy();
+      expect(calls('/retry-publication')).toHaveLength(0);
+    } finally { storage.mockRestore(); }
   });
 
   it('shows a server denial without claiming publication', async () => {
@@ -648,6 +761,7 @@ describe('Saved Results section', () => {
     expect(await screen.findByText(/Publication started/)).toBeTruthy();
     expect(bodyOf(calls('/retry-publication')[0])).toEqual({
       savedWorkRef: 'art-manifest',
+      admissionGeneration: expect.any(String),
       sourceRunId: 'run-1',
       destination: {
         repository: 'Owner/Repo',

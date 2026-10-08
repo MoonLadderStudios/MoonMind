@@ -8005,6 +8005,9 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
         github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
         assignments=[
             github_repository_assignment(
+                "repository-connection:git-default", "MoonLadderStudios/private-repo"
+            ),
+            github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
             )
         ],
@@ -8061,6 +8064,9 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
         github_pat_connection("repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"),
         github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
         assignments=[
+            github_repository_assignment(
+                "repository-connection:git-default", "MoonLadderStudios/private-repo"
+            ),
             github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
             )

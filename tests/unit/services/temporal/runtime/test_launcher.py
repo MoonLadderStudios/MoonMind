@@ -3494,9 +3494,9 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_resolve(secret_name: str) -> str:
+    async def _fake_resolve(secret_name: str) -> tuple[str, str]:
         assert secret_name == "db://github-pat"
-        return "resolved-github-token"
+        return "resolved-github-token", "db://github-pat:credential:1:policy:1"
 
     from moonmind.config.settings import settings as app_settings
 
@@ -3515,7 +3515,7 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_resolve,
     )
 
@@ -3576,9 +3576,12 @@ async def test_launch_resolves_migrated_settings_secret_through_default_connecti
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_secret(ref: str, **_kwargs) -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> tuple[str, str]:
         assert ref == "db://GITHUB_TOKEN"
-        return "resolved-from-managed-secrets-table"
+        return (
+            "resolved-from-managed-secrets-table",
+            "db://GITHUB_TOKEN:credential:1:policy:1",
+        )
 
     from moonmind.config.settings import settings as app_settings
 
@@ -3605,7 +3608,7 @@ async def test_launch_resolves_migrated_settings_secret_through_default_connecti
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret,
     )
 
@@ -3663,9 +3666,9 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_secret(ref: str, **_kwargs) -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> tuple[str, str]:
         assert ref == "db://GITHUB_TOKEN"
-        return "resolved-from-managed-secrets-table"
+        return "resolved-from-managed-secrets-table", "fixture-managed-revision"
 
     from moonmind.config.settings import settings as app_settings
 
@@ -3692,7 +3695,7 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret,
     )
 
@@ -5842,13 +5845,12 @@ async def test_recorded_schedule_target_reads_the_migrated_default_connection(
     )
     resolved_refs: list[str] = []
 
-    async def _fake_secret(ref: str, **_kwargs) -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> tuple[str, str]:
         resolved_refs.append(ref)
-        return "migrated-settings-token"
+        return "migrated-settings-token", "fixture-managed-revision"
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret,
     )
     recorded_schedule_target = json.loads(
