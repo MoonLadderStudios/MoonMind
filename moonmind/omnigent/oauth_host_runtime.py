@@ -1081,7 +1081,7 @@ class OmnigentOAuthHostRuntime:
                                             reconciled["egressEvidence"]
                                         )
                                         retained_cleanup_ref = reconciled_ref
-                            except (Exception, asyncio.CancelledError):
+                            except Exception:
                                 logger.warning(
                                     "Cleanup authority readback unavailable or conflicting "
                                     "after bind failure for host lease %s; retaining "

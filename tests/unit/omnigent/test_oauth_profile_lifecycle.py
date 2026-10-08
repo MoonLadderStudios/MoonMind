@@ -1719,6 +1719,8 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
         "pending_commit_failure",
         "pending_commit_readback_failure",
         "pending_commit_readback_timeout",
+        "pending_commit_readback_cancelled",
+        "pending_commit_bind_cancelled",
         "pending_commit_ref_mismatch",
         "pending_commit_identity_mismatch",
         "recreated_host",
@@ -1968,6 +1970,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             self.bind_failed = False
             self.read_calls = []
             self.persisted_after_failure = None
+            self.readback_started = asyncio.Event()
             self.bind_error = OmnigentOAuthHostError(
                 "test durable bind response unavailable", code="test_bind_failure"
             )
@@ -1981,10 +1984,11 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                 raise OmnigentOAuthHostError(
                     "test readback unavailable", code="test_readback_failure"
                 )
-            if (
-                self.bind_failed
-                and self.commit_failure == "pending_commit_readback_timeout"
-            ):
+            if self.bind_failed and self.commit_failure in {
+                "pending_commit_readback_timeout",
+                "pending_commit_readback_cancelled",
+            }:
+                self.readback_started.set()
                 await asyncio.Event().wait()
             return self.authority
 
@@ -2066,6 +2070,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "pending_commit_failure",
         "pending_commit_readback_failure",
         "pending_commit_readback_timeout",
+        "pending_commit_readback_cancelled",
+        "pending_commit_bind_cancelled",
         "pending_commit_ref_mismatch",
         "pending_commit_identity_mismatch",
     }:
@@ -2082,6 +2088,10 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             cleanup_authority_store.fail_attested_bind = True
         if mutation.startswith("pending_commit"):
             cleanup_authority_store.commit_failure = mutation
+            if mutation == "pending_commit_bind_cancelled":
+                cleanup_authority_store.bind_error = asyncio.CancelledError(
+                    "bind cancellation"
+                )
     elif mutation == "recreated_host":
         state["running"] = False
     elif mutation != "gateway_image":
@@ -2090,16 +2100,42 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         ] = "changed-authority"
     if mutation not in {"unchanged", "gateway_image", "pending_gateway_image"}:
         retained_authority = copy.deepcopy(cleanup_authority_store.authority)
-        with pytest.raises(OmnigentOAuthHostError) as caught:
-            await runtime.prepare_host(**request)
+        expected_error = (
+            asyncio.CancelledError
+            if mutation
+            in {"pending_commit_readback_cancelled", "pending_commit_bind_cancelled"}
+            else OmnigentOAuthHostError
+        )
+        with pytest.raises(expected_error) as caught:
+            if mutation == "pending_commit_readback_cancelled":
+                preparation = asyncio.create_task(runtime.prepare_host(**request))
+                await asyncio.wait_for(
+                    cleanup_authority_store.readback_started.wait(), timeout=5.0
+                )
+                preparation.cancel("workflow cancellation")
+                await preparation
+            else:
+                await runtime.prepare_host(**request)
+        if mutation == "pending_commit_readback_cancelled":
+            assert preparation.cancelled()
+            assert caught.value.args == ("workflow cancellation",)
         assert state["launches"] == (2 if mutation == "recreated_host" else 1)
         assert state["manifest_checks"] == (
             2 if mutation == "pending_probe_failure" else 1
         )
-        if mutation in {"pending_probe_failure", "pending_commit_failure"}:
+        if mutation in {
+            "pending_probe_failure",
+            "pending_commit_failure",
+            "pending_commit_bind_cancelled",
+        }:
             retained_authority = cleanup_authority_store.authority
             assert retained_authority["phase"] == "attested"
-        if mutation == "pending_probe_failure":
+        if mutation == "pending_commit_readback_cancelled":
+            expected_code = None
+        elif mutation == "pending_commit_bind_cancelled":
+            expected_code = None
+            assert caught.value is cleanup_authority_store.bind_error
+        elif mutation == "pending_probe_failure":
             expected_code = "test_probe_failure"
         elif mutation == "pending_bind_failure" or mutation.startswith(
             "pending_commit"
@@ -2122,7 +2158,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             expected_code = "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID"
         else:
             expected_code = "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH"
-        assert caught.value.code == expected_code
+        if expected_code is not None:
+            assert caught.value.code == expected_code
         assert len(cleanup_authority_store.bind_calls) == (
             3
             if mutation in {"pending_probe_failure", "pending_bind_failure"}

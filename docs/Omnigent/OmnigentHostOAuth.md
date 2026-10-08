@@ -532,6 +532,8 @@ confirms whether the same fully verified launch became attested. Cleanup adopts
 that stored pair only when its complete immutable identity and attempted launch
 reference match. Unavailable or conflicting readback retains the last confirmed
 pair for existing reconciliation, and the original bind error remains observable.
+A new cancellation during readback propagates through the existing cancellation
+path with the last confirmed pair; it is not replaced by the earlier bind error.
 The persisted workflow owner and lease purpose survive host-model projection.
 A binding saved before host attachment can be completed only when the current
 execution scope has the same provider lease, profile, and credential generation
