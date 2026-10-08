@@ -982,7 +982,7 @@ async def test_paused_grant_records_identity_without_advancing_until_resume(
         assert parent._summary == "Waiting for capacity"
         assert parent._step_ledger_row_for("step-1") == paused_row
         await parent.resume()
-        await launch
+        await asyncio.gather(launch)
         assert parent._state == STATE_EXECUTING
         assert parent._waiting_reason is None
         assert parent._attention_required is False
