@@ -352,3 +352,43 @@ async def test_changed_terminal_reply_requires_a_fresh_observation(
         settled, _ = await observe(comments=refreshed)
         assert settled.automated_review_complete is (True if was_refusal else None)
         assert settled.ready is was_refusal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retained_at", ["2026-08-24T22:14:00Z", "2026-08-24T22:18:00Z"]
+)
+@pytest.mark.parametrize("outcome", ["comment", "refusal", "review", "reaction"])
+async def test_exact_github_timestamp_cannot_be_overruled_by_retained_receipt(
+    retained_at, outcome
+):
+    result, _ = await observe(
+        comments=[COMMAND, CLEAN if outcome == "comment" else REFUSAL],
+        active={**REQUEST, "requestedAt": retained_at},
+        routes={
+            "pulls/350/reviews": [REVIEW] if outcome == "review" else [],
+            "issues/comments/100/reactions": [REACTION]
+            if outcome == "reaction"
+            else [],
+        },
+    )
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert result.automated_review_completion_id is None
+    assert result.blockers[0]["kind"] == "external_state_unavailable"
+    assert "timestamp" in result.blockers[0]["summary"]
+    assert result.blockers[0]["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["comment", "refusal"])
+async def test_final_exact_request_timestamp_must_still_agree(outcome):
+    initial = [COMMAND, CLEAN if outcome == "comment" else REFUSAL]
+    final = [{**COMMAND, "created_at": "2026-08-24T22:14:00Z"}, initial[1]]
+    inventories = iter([initial, final])
+    result, _ = await observe(routes={"issues/350/comments": lambda: next(inventories)})
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert result.automated_review_completion_id is None
+    assert result.blockers[0]["kind"] == "external_state_unavailable"
+    assert "timestamp" in result.blockers[0]["summary"]

@@ -206,12 +206,13 @@ def _comment_id(value: object) -> int | None:
     return int(text) if text.isascii() and text.isdecimal() and int(text) > 0 else None
 
 
-def _comment_is_after(
+def review_comment_is_after(
     created_at: datetime,
     comment_id: object,
     earlier_at: datetime,
     earlier_id: object,
 ) -> bool:
+    """Compare comment times, using numeric IDs for equal-second causality."""
     if created_at != earlier_at:
         return created_at > earlier_at
     later = _comment_id(comment_id)
@@ -270,7 +271,7 @@ def latest_review_request(
         commit = str(comment.get("commit_id") or "").strip()
         if commit and commit != head_sha:
             continue
-        if latest is None or _comment_is_after(
+        if latest is None or review_comment_is_after(
             created_at, comment.get("id"), latest.created_at, latest.comment.get("id")
         ):
             latest = ReviewRequest(comment=comment, created_at=created_at)
@@ -294,7 +295,7 @@ def _request_reply_time(
     if requested_at is None or not head_sha:
         return None
     created_at = _comment_time(comment)
-    if created_at is None or not _comment_is_after(
+    if created_at is None or not review_comment_is_after(
         created_at, comment.get("id"), requested_at, request_comment_id
     ):
         return None
@@ -415,7 +416,7 @@ def latest_review_reply(
         )
         if reply is not None and (
             latest is None
-            or _comment_is_after(
+            or review_comment_is_after(
                 reply.created_at,
                 reply.comment.get("id"),
                 latest.created_at,

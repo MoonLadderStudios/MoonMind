@@ -2412,3 +2412,173 @@ async def test_superseding_request_cannot_exceed_cycle_budget(
     assert harness.request_payloads == []
     assert harness.child_payloads == []
     assert harness.wait_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_only", [False, True])
+@pytest.mark.parametrize(
+    "problem",
+    [
+        None,
+        "earlier_id",
+        "wrong_request",
+        "missing_request_identity",
+        "wrong_provider",
+        "wrong_class",
+        "metadata_shape",
+        "zero_id",
+        "bool_id",
+        "invalid_time",
+        "naive_time",
+        "wrong_kind",
+        "completion_conflict",
+    ],
+)
+async def test_refusal_settles_only_its_bound_cycle(monkeypatch, review_only, problem):
+    payload = _review_only_payload() if review_only else _payload()
+    active = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": build_review_request_key(
+            parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            repository="MoonLadderStudios/MoonMind",
+            pr_number=350,
+            head_sha=HEAD_1,
+            provider="codex",
+        ),
+        "requestCommentId": 100,
+        "requestedAt": "2026-08-24T22:00:00Z",
+    }
+    payload["activeReviewRequest"] = active
+    payload["reviewCycles"] = [{"cycle": 1, **active, "status": "requested"}]
+    failure = {
+        "kind": "issue_comment",
+        "id": 101,
+        "failedAt": active["requestedAt"],
+        "providerErrorClass": "rate_limit",
+    }
+    blocker = {
+        "kind": "automated_review_request_failed",
+        "source": "codex",
+        "summary": "Provider refused review.",
+        "retryable": False,
+        "providerFailure": {"providerErrorClass": "rate_limit"},
+    }
+    selected_id = 100
+    if problem == "earlier_id":
+        failure["id"] = 99
+    elif problem == "wrong_request":
+        selected_id = None
+    elif problem == "missing_request_identity":
+        selected_id = active["requestCommentId"] = None
+        payload["reviewCycles"][0]["requestCommentId"] = None
+    elif problem == "wrong_provider":
+        blocker["source"] = "other"
+    elif problem == "wrong_class":
+        blocker["providerFailure"] = {"providerErrorClass": "auth"}
+    elif problem == "metadata_shape":
+        blocker["providerFailure"] = "malformed"
+    elif problem == "zero_id":
+        failure["id"] = 0
+    elif problem == "bool_id":
+        failure["id"] = True
+    elif problem == "invalid_time":
+        failure["failedAt"] = "invalid"
+    elif problem == "naive_time":
+        failure["failedAt"] = "2026-08-24T22:00:00"
+    elif problem == "wrong_kind":
+        failure["kind"] = "review"
+    observation = _awaiting_review(
+        HEAD_1,
+        automatedReviewComplete=None,
+        automatedReviewRequestCommentId=selected_id,
+        automatedReviewRequestedAt=active["requestedAt"],
+        automatedReviewRequestFailure=failure,
+        readinessObservationId="refusal-observation",
+        blockers=[blocker],
+    )
+    if problem == "completion_conflict":
+        observation.update(
+            automatedReviewComplete=True, automatedReviewCompletionKind="issue_comment",
+            automatedReviewCompletionId=102, automatedReviewCompletedAt="2026-08-24T22:01:00Z",
+        )
+    harness = (
+        _review_only_harness(monkeypatch, readiness=[observation])
+        if review_only
+        else _Harness(monkeypatch, readiness=[observation], child_results=[])
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "blocked"
+    assert harness.child_payloads == [] and harness.request_payloads == []
+    cycle = result["reviewLoop"]["cycleRecords"][0]
+    assert cycle["status"] == ("requested" if problem else "failed")
+    assert (result["reviewLoop"]["activeRequest"] is None) is (problem is None)
+    assert cycle.get("completionId") is None
+    if problem:
+        assert cycle.get("requestFailure") is None
+        assert any(
+            b["kind"] == "automated_review_request_failed"
+            and b["source"] in {"policy", "merge_automation"}
+            for b in result["blockers"]
+        )
+    else:
+        assert cycle["requestFailure"] == failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_only", [False, True])
+@pytest.mark.parametrize(
+    "early_return", ["no_active", "stale", "other_head", "completion"]
+)
+async def test_malformed_refusal_is_bounded_even_when_settlement_is_ineligible(
+    monkeypatch, review_only, early_return
+):
+    payload = _review_only_payload() if review_only else _payload()
+    if early_return != "no_active":
+        active = {
+            "provider": "codex",
+            "headSha": HEAD_1,
+            "requestKey": build_review_request_key(
+                parent_workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+                repository="MoonLadderStudios/MoonMind",
+                pr_number=350,
+                head_sha=HEAD_1,
+                provider="codex",
+            ),
+            "requestCommentId": 100,
+            "requestedAt": "2026-08-24T22:00:00Z",
+        }
+        payload["activeReviewRequest"] = active
+        payload["reviewCycles"] = [{"cycle": 1, **active, "status": "requested"}]
+    observation = _awaiting_review(
+        HEAD_2 if early_return == "other_head" else HEAD_1,
+        automatedReviewRequestStale=early_return == "stale",
+        automatedReviewRequestFailure={"id": True, "failedAt": "not-a-time"},
+        readinessObservationId="malformed-refusal-observation",
+        blockers=[],
+    )
+    if early_return == "completion":
+        observation.update(
+            automatedReviewComplete=True,
+            automatedReviewCompletionKind="issue_comment",
+            automatedReviewCompletionId=101,
+            automatedReviewCompletedAt="2026-08-24T22:01:00Z",
+        )
+    harness = (
+        _review_only_harness(monkeypatch, readiness=[observation])
+        if review_only
+        else _Harness(monkeypatch, readiness=[observation], child_results=[])
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "blocked"
+    assert harness.child_payloads == [] and harness.request_payloads == []
+    assert all(
+        c["status"] == "requested" and c.get("requestFailure") is None
+        for c in result["reviewLoop"]["cycleRecords"]
+    )
+    if early_return != "no_active":
+        assert result["reviewLoop"]["activeRequest"]["requestCommentId"] == 100
+    assert any(
+        b["kind"] in {"automated_review_request_failed", "stale_revision"}
+        for b in result["blockers"]
+    )
