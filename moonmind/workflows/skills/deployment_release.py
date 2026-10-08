@@ -122,7 +122,7 @@ def release_failure_summary(history):
 _GATEWAY_REPAIR_COOLDOWN_POLLS = 20
 
 
-async def docker(*args, input_bytes=None):
+async def docker(*args, input_bytes=None, timeout_seconds=360):
     process = await asyncio.create_subprocess_exec(
         "docker",
         *args,
@@ -131,7 +131,7 @@ async def docker(*args, input_bytes=None):
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), 360)
+        stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout_seconds)
     except BaseException:
         if process.returncode is None:
             process.kill()
@@ -159,6 +159,100 @@ async def inspect_owned(name, owner):
     ):
         raise ValueError("Release container ownership differs")
     return rows[0]
+
+
+async def _journal_consumers(project):
+    """Observe the selected project's real writers and retention sweepers.
+
+    Worker names can be overridden in Compose. The installed fleet environment
+    identifies the Activity owners; service names cover older standard images.
+    One-offs are consumers too and are never silently excluded.
+    """
+    identifiers = (await docker(
+        "ps", "--all", "--quiet", "--filter",
+        f"label=com.docker.compose.project={project}",
+    )).split()
+    if not identifiers:
+        return []
+    rows = json.loads(await docker("inspect", *identifiers))
+    if not isinstance(rows, list) or len(rows) != len(identifiers):
+        raise RuntimeError("Journal consumer observation was incomplete")
+    consumers = []
+    for row in rows:
+        config = row.get("Config") or {}
+        labels = config.get("Labels") or {}
+        if labels.get("com.docker.compose.project") != project:
+            raise RuntimeError("Journal consumer observation escaped the selected project")
+        env = dict(item.split("=", 1) for item in config.get("Env", ()) if "=" in item)
+        if env.get("TEMPORAL_WORKER_FLEET") not in ("agent_runtime", "artifacts") and labels.get("com.docker.compose.service") not in (
+            "temporal-worker-agent-runtime", "temporal-worker-artifacts",
+        ):
+            continue
+        state = row.get("State") or {}
+        if not row.get("Id") or not isinstance(state.get("Running"), bool):
+            raise RuntimeError("Journal consumer state is unavailable")
+        consumers.append(row)
+    return consumers
+
+
+async def compact_active_journals():
+    """Delegate artifact and reference changes to their existing data owner."""
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+
+    return await OmnigentBridgeSessionStore(async_session_maker).compact_active_journals()
+
+
+async def prepare_journal_storage(runner):
+    """The portable owner starts only storage present in its rendered project."""
+    configured = await runner._run_compose_services()
+    storage = tuple(service for service in ("postgres", "minio") if service in configured)
+    if storage:
+        result = await runner._run_compose_command((
+            "docker", "compose", "up", "-d", "--no-deps", "--no-recreate",
+            "--pull", "never", "--no-build", "--wait", *storage,
+        ))
+        _ensure_command_succeeded("journal-storage", result)
+
+
+async def prepare_journal_transition(project, *, compact=True):
+    """Fence consumers under the caller's deployment lock, then compact once.
+
+    A stopped Activity resumes through existing durable recovery. We do not
+    wait for a workflow to finish or alter its requested outcome/status.
+    Repeat observation and compaction on retry: partial Compose recreation can
+    have produced more chunks after an earlier successful preparation.
+    """
+    consumers = await _journal_consumers(project)
+    running = [row["Id"] for row in consumers if row["State"]["Running"]]
+    if running:
+        # Respect the installed stop_grace_period (normally six minutes).
+        # The helper's command budget is still bounded; its caller never
+        # waits for the underlying workflow to reach a terminal state.
+        await docker("stop", *running, timeout_seconds=900)
+    observed = await _journal_consumers(project)
+    if any(row["State"]["Running"] or row["State"].get("Restarting") for row in observed):
+        raise RuntimeError("Journal consumers are still running; no journal was compacted")
+    receipt = await compact_active_journals() if compact else {}
+    return {"status": "prepared" if compact else "quiesced",
+            "consumers": [row["Id"] for row in observed], **receipt}
+
+
+async def controller_journal_cli(phase, payload):
+    """Operation-scoped one-off; the standalone owner retains its outer lock."""
+    import sys
+
+    from moonmind.workflows.skills.omnigent_release import _deployment_lock
+
+    if phase not in ("journal-prepare", "journal-quiesce"):
+        raise ValueError("Unknown controller journal transition phase")
+    async with _deployment_lock():
+        receipt = await prepare_journal_transition(
+            str(payload["target"]["project"]), compact=phase == "journal-prepare"
+        )
+    print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+          file=sys.stderr, flush=True)
+    return 0
 
 
 def _activity_schedule_anchor():
@@ -849,14 +943,27 @@ async def run_controller_omnigent_step(phase, payload):
     launch the legacy full updater. Selection receipts survive lost command
     acknowledgments and preserve the exact revision migration must finish.
     """
+    if phase not in ("select", "migrate"):
+        raise ValueError("Unknown controller Omnigent release step")
+    capabilities = payload.get("controllerCapabilities")
+    if not isinstance(capabilities, (list, tuple)) or "active-journal-transition" not in capabilities:
+        # An old installed owner reaches this selected-image callback before
+        # any updated API or host client necessarily runs. It cannot retain
+        # source helper provenance or prepare a later rollback, and this
+        # one-off must neither replace its controller nor launch an updater.
+        raise RuntimeError(
+            f"Refusing Omnigent {phase}: the installed controller does not provide "
+            "active-journal-transition. This helper has not changed release state. "
+            "Run ./tools/update-moonmind.sh from the updated MoonMind checkout "
+            "to bootstrap the deployment controller, then retry this release."
+        )
+
     from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
     from moonmind.workflows.skills.omnigent_release import (
         _deployment_lock,
         read_omnigent_release,
     )
 
-    if phase not in ("select", "migrate"):
-        raise ValueError("Unknown controller Omnigent release step")
     operation_id = str(payload["operationId"])
     target = dict(payload["target"])
     image = str(payload["moonmindImage"])
@@ -1148,7 +1255,13 @@ async def _run_job_body(request_file):
                     selection_file,
                     {"owner": owner, "attempts": [*attempts, omnigent_selection]},
                 )
-                return omnigent_selection
+                await prepare_journal_storage(runner)
+                journal_receipt = await prepare_journal_transition(runner.project_name)
+                write_record(request_file.parent / "journal-preparation.json", journal_receipt)
+                return {**omnigent_selection, "activeJournals": journal_receipt}
+
+            async def quiesce_after_failed_compose():
+                return await prepare_journal_transition(runner.project_name, compact=False)
 
             async with get_async_session_context() as session:
                 executor = replace(
@@ -1166,6 +1279,7 @@ async def _run_job_body(request_file):
                         execution_ref=_execution_ref_from_context(context),
                     ),
                     before_compose=select_before_compose,
+                    on_compose_failure=quiesce_after_failed_compose,
                 )
                 result = await executor.execute(parsed, context)
                 if result.status != "COMPLETED":
@@ -1381,6 +1495,10 @@ async def submit(payload):
 if __name__ == "__main__":
     import sys
 
+    if sys.argv[1] in ("--omnigent-journal-prepare", "--omnigent-journal-quiesce"):
+        raise SystemExit(asyncio.run(controller_journal_cli(
+            sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2])
+        )))
     if sys.argv[1] in ("--omnigent-select", "--omnigent-migrate"):
         raise SystemExit(
             asyncio.run(
