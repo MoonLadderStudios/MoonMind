@@ -351,8 +351,10 @@ When admission records `pending` because selection resolves at launch, the workf
 
 | Store | Contents | Used for |
 | --- | --- | --- |
-| Memo `providerProfile` | `selectionState`, up to eight `{id, label, harness}` entries, `profileCount`. `label` is the display name captured at admission or launch grant; ID-only entries omit it. | List row summary and facet labels. |
+| Memo `providerProfile` | `selectionState`, one small `{id, label, harness}` entry per distinct recorded association, `profileCount`. The row serializer exposes only the first eight entries. `label` is the display name captured at admission or launch grant; ID-only entries omit it. | Bounded list row summary and complete facet identities/labels. |
 | `mm_provider_profile` (Text Search Attribute) | Space-separated opaque tokens: one state token plus one hashed token per recorded ID, including IDs beyond the display bound. | Filters, counts, and facet counts before pagination. |
+
+Provider Profile facet pagination retains an intra-workflow-page offset as well as the Visibility cursor, so an overflowing page cannot drop profile values. Keep the same `pageSize` while following its opaque `nextPageToken`. Earlier memo projections with a count greater than their retained associations report `truncated=true`, even when there is no remaining cursor; hashes cannot restore the lost historical IDs or names.
 
 Temporal SQL Visibility allows three `KeywordList` attributes and all three are in use, so membership is a `Text` attribute whose tokens are single lowercase alphanumeric terms that every Visibility store matches exactly. Records admitted before the projection have neither store and report `not_recorded`; the same absence is what `providerProfileStateIn=not_recorded` and the blank shortcut match. That state means no association is recorded in the projection, not that no profile was used. When the namespace has not registered `mm_provider_profile`, Provider Profile filters return a degraded empty list with an unknown count, the facet reports `current_page_fallback`, and the browser says so; a row without a parsed summary shows **Unavailable**, never an absence state.
 

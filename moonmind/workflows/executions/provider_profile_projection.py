@@ -2,9 +2,9 @@
 
 MoonLadderStudios/MoonMind#4640: the ordinary Workflows list shows the
 workflow's *recorded* Provider Profile selection instead of the legacy runtime
-identifier. Admission records one bounded summary in the workflow memo (for
-display) and one ``mm_provider_profile`` Text Search Attribute (for filtering,
-counts, and facets before pagination). Both derive from the same admitted
+identifier. Admission records small identity entries in the workflow memo (for
+facets and bounded row display) and one ``mm_provider_profile`` Text Search
+Attribute (for filtering, counts, and facets before pagination). Both derive from the same admitted
 parameters, so rows, filters, counts, and facets share one projection.
 
 Temporal SQL Visibility allows only three ``KeywordList`` attributes and all
@@ -144,7 +144,10 @@ def build_provider_profile_summary(
     *,
     labels: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
-    """Build the bounded memo summary from admitted parameters.
+    """Build the recorded memo projection from admitted parameters.
+
+    Keep every distinct association for facet discovery. Only the row reader
+    applies the display bound; truncating persistence loses recoverable IDs.
 
     ``labels`` is the display-name snapshot captured at admission; IDs without a
     label keep ``label=None`` so readers fall back to the stable ID instead of a
@@ -155,7 +158,7 @@ def build_provider_profile_summary(
     recorded = recorded_provider_profile_ids(params)
     label_map = labels or {}
     profiles = []
-    for profile_id, harness in recorded[:PROVIDER_PROFILE_SUMMARY_LIMIT]:
+    for profile_id, harness in recorded:
         label = _text(label_map.get(profile_id))
         entry: dict[str, Any] = {"id": profile_id}
         if label:
@@ -183,8 +186,7 @@ def build_provider_profile_projection(
 ) -> tuple[dict[str, Any], str]:
     """Return ``(memo_summary, search_attribute_value)`` for admission.
 
-    Every recorded ID is indexed, including IDs beyond the display bound, so
-    membership filters stay complete even when the memo summary is truncated.
+    Every recorded ID is indexed, including IDs beyond the row display bound.
     """
 
     summary = build_provider_profile_summary(parameters, labels=labels)
@@ -200,6 +202,7 @@ def merge_resolved_provider_profile(
     profile_id: str | None,
     *,
     label: str | None = None,
+    retain_all_profiles: bool = True,
 ) -> tuple[dict[str, Any], str] | None:
     """Fold one launch-resolved Provider Profile into the admitted projection.
 
@@ -220,7 +223,9 @@ def merge_resolved_provider_profile(
         dict(entry)
         for entry in raw.get("profiles") or []
         if isinstance(entry, Mapping) and _text(entry.get("id"))
-    ][:PROVIDER_PROFILE_SUMMARY_LIMIT]
+    ]
+    if not retain_all_profiles:
+        profiles = profiles[:PROVIDER_PROFILE_SUMMARY_LIMIT]
     id_tokens = [
         token
         for token in (search_value or "").split()
@@ -229,7 +234,12 @@ def merge_resolved_provider_profile(
     if not id_tokens:
         id_tokens = [provider_profile_id_token(entry["id"]) for entry in profiles]
     resolved_token = provider_profile_id_token(resolved_id)
-    if raw.get("selectionState") == "recorded" and resolved_token in id_tokens:
+    has_association = any(entry["id"] == resolved_id for entry in profiles)
+    if (
+        raw.get("selectionState") == "recorded"
+        and resolved_token in id_tokens
+        and (has_association or not retain_all_profiles)
+    ):
         return None
     count = raw.get("profileCount")
     if isinstance(count, bool) or not isinstance(count, int) or count < len(profiles):
@@ -237,12 +247,16 @@ def merge_resolved_provider_profile(
     if resolved_token not in id_tokens:
         id_tokens.append(resolved_token)
         count += 1
-        if len(profiles) < PROVIDER_PROFILE_SUMMARY_LIMIT:
-            entry: dict[str, Any] = {"id": resolved_id}
-            resolved_label = _text(label)
-            if resolved_label:
-                entry["label"] = resolved_label[:_LABEL_LIMIT]
-            profiles.append(entry)
+    # A confirmed launch can recover an association that an old bounded memo
+    # omitted. The existing membership token keeps its workflow count unchanged.
+    if not has_association and (
+        retain_all_profiles or len(profiles) < PROVIDER_PROFILE_SUMMARY_LIMIT
+    ):
+        entry: dict[str, Any] = {"id": resolved_id}
+        resolved_label = _text(label)
+        if resolved_label:
+            entry["label"] = resolved_label[:_LABEL_LIMIT]
+        profiles.append(entry)
     merged_summary = {
         "selectionState": "recorded",
         "profiles": profiles,
@@ -252,8 +266,10 @@ def merge_resolved_provider_profile(
     return merged_summary, " ".join(tokens)
 
 
-def provider_profile_summary_from_memo(memo: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Read the recorded summary for a list row.
+def provider_profile_associations_from_memo(
+    memo: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Read all recorded associations for facet discovery.
 
     Records that predate the projection report ``not_recorded``; their
     runtime, model, or present defaults never fill the gap.
@@ -266,7 +282,7 @@ def provider_profile_summary_from_memo(memo: Mapping[str, Any] | None) -> dict[s
     profiles: list[dict[str, Any]] = []
     raw_profiles = raw.get("profiles")
     if isinstance(raw_profiles, list):
-        for item in raw_profiles[:PROVIDER_PROFILE_SUMMARY_LIMIT]:
+        for item in raw_profiles:
             entry = _mapping(item)
             profile_id = _text(entry.get("id"))
             if not profile_id:
@@ -286,3 +302,15 @@ def provider_profile_summary_from_memo(memo: Mapping[str, Any] | None) -> dict[s
     if isinstance(count, bool) or not isinstance(count, int) or count < len(profiles):
         count = len(profiles)
     return {"selectionState": "recorded", "profiles": profiles, "profileCount": count}
+
+
+def provider_profile_summary_from_memo(
+    memo: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a bounded, secret-free row summary from the recorded projection."""
+
+    recorded = provider_profile_associations_from_memo(memo)
+    return {
+        **recorded,
+        "profiles": recorded["profiles"][:PROVIDER_PROFILE_SUMMARY_LIMIT],
+    }

@@ -21503,7 +21503,8 @@ def _provider_profile_temporal_client(
 def _provider_profile_app(temporal_client: SimpleNamespace) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[_get_service] = lambda: AsyncMock()
+    service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_async_session] = _empty_session_override
     _override_user_dependencies(app, is_superuser=False)
     app.dependency_overrides[get_temporal_client] = lambda: temporal_client
@@ -21764,3 +21765,81 @@ def test_provider_profile_facet_degrades_when_projection_unregistered_4640() -> 
     assert body["source"] == "current_page_fallback"
     assert body["items"] == []
     assert body["blankCount"] is None
+
+
+@pytest.mark.parametrize("profile_count,page_size", [(9, 100), (5, 2)])
+def test_provider_profile_facets_preserve_all_associations_across_pages_4640(
+    profile_count, page_size
+) -> None:
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
+    labels = {
+        f"acct-{index}": f"Recorded name {index}" for index in range(profile_count)
+    }
+    projection, _ = build_provider_profile_projection(
+        {
+            "task": {
+                "steps": [
+                    {"runtime": {"providerProfileRef": profile_id}}
+                    for profile_id in labels
+                ]
+            }
+        },
+        labels=labels,
+    )
+    workflow = SimpleNamespace(
+        memo=AsyncMock(return_value={"providerProfile": projection})
+    )
+    temporal_client = _provider_profile_temporal_client(workflows=[workflow])
+    received = []
+    token = None
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        for _ in range(profile_count + 1):
+            params = {
+                "source": "temporal",
+                "facet": "providerProfile",
+                "pageSize": page_size,
+            }
+            if token:
+                params["nextPageToken"] = token
+            response = test_client.get("/api/executions/facets", params=params)
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert len(body["items"]) <= page_size
+            received.extend((item["value"], item["label"]) for item in body["items"])
+            token = body["nextPageToken"]
+            assert body["truncated"] is bool(token)
+            if not token:
+                break
+        else:
+            pytest.fail("Provider Profile facet pagination did not finish")
+    assert received == list(labels.items())
+    assert len(received) == len(set(received))
+
+
+def test_provider_profile_facets_report_old_incomplete_projection_4640() -> None:
+    workflow = SimpleNamespace(
+        memo=AsyncMock(
+            return_value={
+                "providerProfile": {
+                    "selectionState": "recorded",
+                    "profiles": [{"id": "known"}],
+                    "profileCount": 2,
+                }
+            }
+        )
+    )
+    temporal_client = _provider_profile_temporal_client(workflows=[workflow])
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        response = test_client.get(
+            "/api/executions/facets",
+            params={
+                "source": "temporal",
+                "facet": "providerProfile",
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["truncated"] is True
+    assert response.json()["items"][0]["value"] == "known"

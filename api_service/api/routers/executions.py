@@ -277,6 +277,7 @@ from moonmind.workflows.executions.preset_goal_scheduler import (
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_ABSENCE_STATES,
     PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    provider_profile_associations_from_memo,
     provider_profile_id_token,
     provider_profile_state_token,
     provider_profile_summary_from_memo,
@@ -3537,19 +3538,46 @@ async def _provider_profile_facet_response(
     token, so a workflow counts once per profile and totals may overlap.
     """
 
+    # A workflow page may contain more facet values than the requested limit.
+    # Re-read that same page with an intra-page offset before advancing its
+    # Visibility cursor; never discard the remaining associations.
+    workflow_token = None
+    offset = 0
+    if next_page_token:
+        try:
+            cursor = json.loads(_decode_execution_facet_page_token(next_page_token))
+            workflow_token = _decode_execution_facet_page_token(cursor["workflowPage"])
+            offset = cursor["offset"]
+            if (
+                cursor["version"] != 1
+                or cursor["pageSize"] != page_size
+                or isinstance(offset, bool)
+                or not isinstance(offset, int)
+                or offset < 0
+            ):
+                raise ValueError("invalid cursor")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TemporalExecutionValidationError(
+                "nextPageToken must be a valid Provider Profile facet page token "
+                "with the same pageSize."
+            ) from exc
     iterator = client.list_workflows(
         query=base_query,
         page_size=page_size,
-        next_page_token=_decode_execution_facet_page_token(next_page_token),
+        next_page_token=workflow_token,
     )
     await iterator.fetch_next_page()
     labels: dict[str, str] = {}
+    incomplete = False
     needle = (search_value or "").lower()
     for workflow in iterator.current_page or []:
-        summary = provider_profile_summary_from_memo(
+        recorded = provider_profile_associations_from_memo(
             await _listed_workflow_memo(workflow)
         )
-        for profile in summary["profiles"]:
+        # Earlier bounded projections cannot recover omitted IDs from their
+        # opaque hashes. Retain the available entries and report the gap.
+        incomplete |= recorded["profileCount"] > len(recorded["profiles"])
+        for profile in recorded["profiles"]:
             profile_id = profile["id"]
             label = profile.get("label") or profile_id
             if profile_id in labels or (
@@ -3560,7 +3588,7 @@ async def _provider_profile_facet_response(
 
     attr = PROVIDER_PROFILE_SEARCH_ATTRIBUTE
     items = []
-    for profile_id, label in list(labels.items())[:page_size]:
+    for profile_id, label in list(labels.items())[offset : offset + page_size]:
         count_info = await client.count_workflows(
             query=_and_temporal_query(
                 base_query, f'{attr}="{provider_profile_id_token(profile_id)}"'
@@ -3569,6 +3597,29 @@ async def _provider_profile_facet_response(
         items.append(
             ExecutionFacetItemModel(value=profile_id, label=label, count=count_info.count)
         )
+    next_offset = offset + len(items)
+    if next_offset < len(labels):
+        next_workflow_token = workflow_token
+    else:
+        next_offset = 0
+        next_workflow_token = iterator.next_page_token
+    continuation = None
+    if next_offset or next_workflow_token:
+        continuation = base64.b64encode(
+            json.dumps(
+                {
+                    "version": 1,
+                    "workflowPage": (
+                        base64.b64encode(next_workflow_token).decode("ascii")
+                        if next_workflow_token
+                        else None
+                    ),
+                    "offset": next_offset,
+                    "pageSize": page_size,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).decode("ascii")
     state_items = []
     for absence in PROVIDER_PROFILE_ABSENCE_STATES:
         count_info = await client.count_workflows(
@@ -3588,12 +3639,8 @@ async def _provider_profile_facet_response(
         items=items,
         stateItems=state_items,
         blankCount=sum(item.count for item in state_items),
-        truncated=bool(iterator.next_page_token),
-        nextPageToken=(
-            base64.b64encode(iterator.next_page_token).decode("utf-8")
-            if iterator.next_page_token
-            else None
-        ),
+        truncated=incomplete or continuation is not None,
+        nextPageToken=continuation,
         countMode="exact",
         source="authoritative",
     )

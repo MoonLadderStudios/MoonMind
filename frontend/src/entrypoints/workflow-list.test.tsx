@@ -3268,48 +3268,72 @@ describe('Workflows Entrypoint', () => {
       });
     });
 
-    it('preserves selected IDs and staged states when the facet fails or omits them', async () => {
-      window.history.pushState({}, 'Selected', '/workflows?providerProfileIn=acct-gone&limit=50');
-      mockListAndFacets(
-        [
-          profileRow('wf-1', 'Profile run', {
-            selectionState: 'recorded',
-            profiles: [{ id: 'acct-1', label: 'Primary' }],
-            profileCount: 1,
-          }),
-        ],
-        () =>
-          Promise.resolve({
-            ok: false,
-            statusText: 'Service Unavailable',
-            json: async () => ({ detail: { code: 'temporal_unavailable' } }),
-          } as Response),
-      );
-
-      renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-      await screen.findByRole('row', { name: /Profile run/ });
-      openFilterDrawer();
-      fireEvent.click(screen.getByRole('checkbox', { name: /Pending selection/ }));
-
-      const section = screen.getByRole('region', { name: 'Provider Profile filter' });
-      expect(
-        await within(section).findByText('Facet values unavailable. Showing current page values only.'),
-      ).toBeTruthy();
-      const selected = within(section).getByRole('list', { name: 'Selected Provider Profile filters' });
-      expect(within(selected).getByText('acct-gone')).toBeTruthy();
-      expect(within(section).getByRole('option', { name: 'Primary' })).toBeTruthy();
-      expect((screen.getByRole('checkbox', { name: /Pending selection/ }) as HTMLInputElement).checked).toBe(
-        true,
-      );
-      applyFilterDrawer();
-
-      await waitFor(() => {
-        expect(lastExecutionListUrl()).toBe(
-          '/api/executions?source=temporal&pageSize=50&providerProfileIn=acct-gone&providerProfileStateIn=pending',
+    it.each(['unavailable', 'late-partial'] as const)(
+      'preserves selected IDs and staged states with %s facets',
+      async (facetState) => {
+        let resolveFacet: ((response: Response) => void) | undefined;
+        window.history.pushState({}, 'Selected', '/workflows?providerProfileIn=acct-gone&limit=50');
+        mockListAndFacets(
+          [
+            profileRow('wf-1', 'Profile run', {
+              selectionState: 'recorded',
+              profiles: [{ id: 'acct-1', label: 'Primary' }],
+              profileCount: 1,
+            }),
+          ],
+          (url) => {
+            if (facetState === 'late-partial' && url.includes('facet=providerProfile')) {
+              return new Promise<Response>((resolve) => {
+                resolveFacet = resolve;
+              });
+            }
+            return Promise.resolve({
+              ok: false,
+              statusText: 'Service Unavailable',
+              json: async () => ({ detail: { code: 'temporal_unavailable' } }),
+            } as Response);
+          },
         );
-      });
-    });
+
+        renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+        await screen.findByRole('row', { name: /Profile run/ });
+        openFilterDrawer();
+        fireEvent.click(screen.getByRole('checkbox', { name: /Pending selection/ }));
+
+        const section = screen.getByRole('region', { name: 'Provider Profile filter' });
+        if (facetState === 'late-partial') {
+          await waitFor(() => expect(resolveFacet).toBeDefined());
+          resolveFacet!({
+            ok: true,
+            json: async () => ({
+              facet: 'providerProfile', items: [], stateItems: [], blankCount: 0,
+              source: 'authoritative', countMode: 'exact', truncated: true, nextPageToken: 'more',
+            }),
+          } as Response);
+          expect(await within(section).findByText('Facet values truncated by the server.')).toBeTruthy();
+        } else {
+          expect(
+            await within(section).findByText('Facet values unavailable. Showing current page values only.'),
+          ).toBeTruthy();
+        }
+        // Partial facets must not trigger browser enumeration of remaining pages.
+        expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('nextPageToken='))).toBe(false);
+        const selected = within(section).getByRole('list', { name: 'Selected Provider Profile filters' });
+        expect(within(selected).getByText('acct-gone')).toBeTruthy();
+        expect(within(section).getByRole('option', { name: 'Primary' })).toBeTruthy();
+        expect((screen.getByRole('checkbox', { name: /Pending selection/ }) as HTMLInputElement).checked).toBe(
+          true,
+        );
+        applyFilterDrawer();
+
+        await waitFor(() => {
+          expect(lastExecutionListUrl()).toBe(
+            '/api/executions?source=temporal&pageSize=50&providerProfileIn=acct-gone&providerProfileStateIn=pending',
+          );
+        });
+      },
+    );
 
     it('shows facet values with ID disambiguation and state counts from the server', async () => {
       window.history.pushState({}, 'Facet', '/workflows?stateIn=executing&providerProfileIn=acct-1&limit=50');
