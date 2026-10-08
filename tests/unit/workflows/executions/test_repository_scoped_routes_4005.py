@@ -8,6 +8,7 @@ rename/transfer/endpoint handling, authorization, and versioned snapshots.
 
 from __future__ import annotations
 
+import importlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    ManagedSecret,
     RepositoryConnectionAssignment,
     RepositoryConnectionAuditEvent,
     RepositoryConnectionRecord,
@@ -138,6 +140,7 @@ async def route_db(tmp_path: Path):
             lambda sync: Base.metadata.create_all(
                 sync,
                 tables=[
+                    ManagedSecret.__table__,
                     RepositoryConnectionRecord.__table__,
                     RepositoryConnectionAssignment.__table__,
                     RepositoryRouteDefault.__table__,
@@ -1151,3 +1154,79 @@ async def test_system_default_uniqueness_single_row(tmp_path: Path) -> None:
             ).scalars().all()
             assert len(defaults) == 1
             assert defaults[0].scope_key == "system"
+
+
+@pytest.mark.asyncio
+async def test_removing_last_assignment_never_restores_migrated_default_scope(
+    tmp_path: Path,
+) -> None:
+    migration = importlib.import_module(
+        "api_service.migrations.versions.391_legacy_github_cred_4023"
+    )
+    principal = {
+        "principal_ref": "system:deployment",
+        "principal_scope": ("system", None),
+    }
+    repository = "MoonLadderStudios/MoonMind"
+    unrelated_repository = "other/repository"
+
+    async with route_db(tmp_path) as sessions, sessions() as session:
+        database = await session.connection()
+        mapping = await database.run_sync(
+            lambda sync: migration.migrate_legacy_github_connection(
+                sync, {"GITHUB_TOKEN": "fixture-only"}
+            )
+        )
+        await session.commit()
+        assert mapping.outcome == "mapped"
+
+        service = RepositoryConnectionService(session)
+        connection = await service.get_connection(
+            migration.DEFAULT_CONNECTION_REF, **principal
+        )
+        assert connection is not None
+        # The genuine, never-scoped migration mapping still bootstraps
+        # explicit selection without fabricating a recorded assignment.
+        bootstrap = await service.launch_assignment(connection, repository)
+        assert bootstrap.operations == connection.allowed_operations
+        await service.launch_assignment(connection, unrelated_repository)
+
+        assignment = await service.set_assignment(
+            bootstrap.model_copy(update={"operations": ("read",)}),
+            actor_ref="system:deployment",
+            request_id="scope-migrated-default",
+            **principal,
+        )
+        scoped = await service.launch_assignment(connection, repository)
+        assert scoped.operations == ("read",)
+        with pytest.raises(RepositoryRouteError) as denied:
+            await service.launch_assignment(connection, unrelated_repository)
+        assert denied.value.code == REPOSITORY_SETUP_REQUIRED
+
+        await service.remove_assignment(
+            connection_id=connection.id,
+            identity=assignment.identity,
+            actor_ref="system:deployment",
+            request_id="revoke-migrated-default",
+            **principal,
+        )
+        assert (
+            await session.execute(select(RepositoryConnectionAssignment))
+        ).scalars().all() == []
+        for target in (repository, unrelated_repository):
+            with pytest.raises(RepositoryRouteError) as denied:
+                await service.launch_assignment(connection, target)
+            assert denied.value.code == REPOSITORY_SETUP_REQUIRED
+
+    # Reopen the persisted database with a fresh engine, session, and service:
+    # revocation must survive restart rather than restoring legacy authority.
+    async with route_db(tmp_path) as sessions, sessions() as session:
+        service = RepositoryConnectionService(session)
+        connection = await service.get_connection(
+            migration.DEFAULT_CONNECTION_REF, **principal
+        )
+        assert connection is not None
+        for target in (repository, unrelated_repository):
+            with pytest.raises(RepositoryRouteError) as denied:
+                await service.launch_assignment(connection, target)
+            assert denied.value.code == REPOSITORY_SETUP_REQUIRED
