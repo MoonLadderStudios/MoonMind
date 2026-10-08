@@ -3598,11 +3598,17 @@ async def _provider_profile_facet_response(
     needle = (search_value or "").lower()
     for workflow in iterator.current_page or []:
         recorded = provider_profile_associations_from_memo(
-            await _listed_workflow_memo(workflow)
+            await _listed_workflow_memo(workflow),
+            search_value=(getattr(workflow, "search_attributes", None) or {}).get(
+                PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+            ),
         )
-        # Earlier bounded projections cannot recover omitted IDs from their
-        # opaque hashes. Retain the available entries and report the gap.
-        incomplete |= recorded["profileCount"] > len(recorded["profiles"])
+        if recorded is None:
+            incomplete = True
+            continue
+        # Partial and earlier bounded projections cannot recover omitted IDs
+        # from opaque hashes. Retain the available entries and report the gap.
+        incomplete |= recorded.get("incomplete", False)
         for profile in recorded["profiles"]:
             profile_id = profile["id"]
             label = profile.get("label") or profile_id
@@ -4643,7 +4649,10 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
         waiting_reason=str(waiting_reason) if waiting_reason else None,
         attention_required=attention_required,
         target_runtime=target_runtime,
-        provider_profile=provider_profile_summary_from_memo(memo),
+        provider_profile=provider_profile_summary_from_memo(
+            memo,
+            search_value=search_attributes.get(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
+        ),
         target_skill=target_skill,
         task_skills=task_skills,
         repository=repository,
