@@ -293,11 +293,15 @@ the request. Resolver modes re-enter the gate for the new revision; review-only
 blocks without retargeting.
 
 Completion includes the provider's submitted review, its request-bound clean
-comment (for Codex, `Codex Review: Didn't find any major issues. 🚀`), or its
-qualified clean-review reaction. Ordinary clean comments and PR-level reactions
-must be newer than the request on its unchanged head. Pending, unknown, blank,
-or dismissed review states, eyes reactions, quoted clean messages, and stale
-responses are not completion. The Skill reads every page of review/reaction
+comment, or its qualified clean-review reaction. A clean comment opens with the
+provider's clean-result sentence (for Codex, `Codex Review: Didn't find any
+major issues.`); the rest of that line is flair the provider varies, and any
+further text must be P2/medium-or-below findings. When the comment names the
+commit it reviewed (Codex's abbreviated `Reviewed commit` line), that commit
+must be the current head. Ordinary clean comments and PR-level reactions must
+be newer than the request on its unchanged head. Pending, unknown, blank, or
+dismissed review states, eyes reactions, quoted or embedded clean messages,
+responses carrying P0/P1 findings, and stale responses are not completion. The Skill reads every page of review/reaction
 evidence and refreshes the full comment inventory after observing completion,
 then revalidates the remote head. Merge operations require that verified head
 to still match. When a request has multiple provider response comments, the

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -984,6 +986,66 @@ async def test_requested_review_uses_latest_comment_across_pages(
         )
     assert (result.automated_review_complete is True) is latest_clean
     assert result.ready is latest_clean
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reviewed_head", [True, False])
+async def test_requested_review_real_codex_clean_reply_completes_only_its_head(
+    monkeypatch, reviewed_head
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    reply = json.loads(
+        (
+            Path(__file__).resolve().parents[4]
+            / "tests/fixtures/pr_resolver/codex_clean_replies.json"
+        ).read_text(encoding="utf-8")
+    )[-1]
+    head = reply["headSha"] if reviewed_head else _HEAD
+    prefix = _readiness_prefix()
+    prefix[0] = _get(
+        200,
+        {
+            "state": "open",
+            "merged": False,
+            "head": {"sha": head},
+            "base": {"sha": "base"},
+            "mergeable": True,
+            "mergeable_state": "clean",
+        },
+    )
+    mock_client = _client(
+        get_responses=[
+            *prefix,
+            _get(200, []),
+            _get(200, []),
+            _get(200, []),
+            _get(
+                200,
+                [
+                    {
+                        "id": reply["commentId"],
+                        "body": reply["body"],
+                        "created_at": reply["createdAt"],
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=head,
+            review_loop_enabled=True,
+            review_request={**_ACTIVE_REQUEST, "headSha": head},
+        )
+
+    assert (result.automated_review_complete is True) is reviewed_head
+    assert result.automated_review_completion_kind == (
+        "issue_comment" if reviewed_head else None
+    )
+    assert result.ready is reviewed_head
 
 
 @pytest.mark.asyncio

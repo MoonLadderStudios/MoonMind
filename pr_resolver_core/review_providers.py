@@ -24,7 +24,9 @@ class AutomatedReviewProvider:
     command: str
     reviewer_logins: tuple[str, ...]
     clean_review_reactions: tuple[str, ...] = ("+1",)
-    clean_review_comments: tuple[str, ...] = ()
+    # The sentence that opens the provider's clean-result comment. The rest of
+    # that line is decorative flair the provider varies between replies.
+    clean_review_result: str = ""
 
 
 AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
@@ -33,7 +35,7 @@ AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
             provider="codex",
             command="@codex review",
             reviewer_logins=("chatgpt-codex-connector",),
-            clean_review_comments=("Codex Review: Didn't find any major issues. 🚀",),
+            clean_review_result="Codex Review: Didn't find any major issues.",
         ),
     }
 )
@@ -154,6 +156,26 @@ def is_automated_review_provider_login(provider: object, login: object) -> bool:
     return normalize_reviewer_login(login) in record.reviewer_logins
 
 
+# Provider boilerplate is outside the result. Only the boilerplate block is
+# dropped so text around it still counts against a clean result.
+_PROVIDER_FOOTER_RE = re.compile(
+    r"<details>\s*<summary>\s*ℹ️ About Codex in GitHub\s*</summary>"
+    r".*?(?:</details>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_REVIEWED_COMMIT_RE = re.compile(r"Reviewed commit:\s*`?([^`]*)`?", re.IGNORECASE)
+_MIN_ABBREVIATED_SHA_LENGTH = 7
+
+
+def _names_head_commit(commit: str, head_sha: str) -> bool:
+    """Return True when *commit*, possibly abbreviated, names *head_sha*."""
+
+    commit = commit.strip().lower()
+    return len(commit) >= _MIN_ABBREVIATED_SHA_LENGTH and (
+        head_sha.strip().lower().startswith(commit)
+    )
+
+
 def is_clean_review_comment(
     provider: AutomatedReviewProvider,
     comment: dict,
@@ -163,14 +185,17 @@ def is_clean_review_comment(
 ) -> bool:
     """Recognize a provider's clean response within an unchanged-head request.
 
-    A bare phrase inside arbitrary prose, a quoted response, or an edited old
-    comment is not completion evidence. Callers own verifying the current head.
+    The response opens with the provider's clean-result sentence; the rest of
+    that line is flair. A reviewed commit, from ``commit_id`` or the reply's
+    ``Reviewed commit`` line, must name *head_sha*. A bare phrase inside
+    arbitrary prose, a quoted response, or an edited old comment is not
+    completion evidence. Callers own verifying the current head.
     """
     user = comment.get("user")
     login = user.get("login") if isinstance(user, dict) else user
     if normalize_reviewer_login(login) not in provider.reviewer_logins:
         return False
-    if requested_at is None or not head_sha:
+    if requested_at is None or not head_sha or not provider.clean_review_result:
         return False
     try:
         created_at = datetime.fromisoformat(
@@ -180,30 +205,28 @@ def is_clean_review_comment(
         return False
     if created_at.tzinfo is None or created_at <= requested_at:
         return False
-    commit = str(comment.get("commit_id") or "").strip()
-    if commit and commit != head_sha:
+    commit_id = str(comment.get("commit_id") or "").strip()
+    reviewed_commits = [commit_id] if commit_id else []
+    lines = []
+    body = _PROVIDER_FOOTER_RE.sub("", str(comment.get("body") or ""))
+    for line in body.splitlines():
+        line = re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "")
+        line = " ".join(line.split())
+        reviewed_commit = _REVIEWED_COMMIT_RE.fullmatch(line)
+        if reviewed_commit:
+            reviewed_commits.append(reviewed_commit.group(1))
+        elif line:
+            lines.append(line)
+    if not all(_names_head_commit(commit, head_sha) for commit in reviewed_commits):
         return False
-    body = str(comment.get("body") or "").strip()
-    # Provider boilerplate is outside the result. Keep any other text so a
-    # mixed clean/findings response cannot be mistaken for a clean result.
-    body = re.split(
-        r"<details>\s*<summary>\s*ℹ️ About Codex in GitHub\s*</summary>",
-        body,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0].strip()
-    body = re.sub(r"^#{1,6}\s+", "", body).replace("**", "")
-    body = " ".join(body.split())
-    if body in provider.clean_review_comments:
-        return True
-    # A clean response carrying only P2/medium-or-below trailing findings is
-    # still a clean review: there is nothing major left, so the Fix and Review
-    # Loop ends instead of requesting another review. Trailing P0/critical or
-    # P1/high findings keep the response non-clean.
-    for clean_phrase in provider.clean_review_comments:
-        normalized_clean = " ".join(str(clean_phrase).split())
-        if body.startswith(normalized_clean):
-            remainder = body[len(normalized_clean):].lstrip(" :.-–—\n\t")
-            if remainder and is_low_severity_only_finding(remainder):
-                return True
-    return False
+    if not lines or not lines[0].startswith(provider.clean_review_result):
+        return False
+    flair = lines[0][len(provider.clean_review_result) :]
+    findings = "\n".join(lines[1:])
+    # A clean response carrying only P2/medium-or-below findings is still a
+    # clean review: there is nothing major left, so the Fix and Review Loop ends
+    # instead of requesting another review. P0/critical or P1/high findings,
+    # including any hidden in the flair, keep the response non-clean.
+    if has_high_severity_finding(flair):
+        return False
+    return not findings or is_low_severity_only_finding(findings)
