@@ -4296,23 +4296,56 @@ async def _saved_work_destination_authority(
     ``github:repository-default`` is the deployment's default repository
     connection: a recorded connection's credential is read and no ambient
     token substitutes for it. The authority reference records only the
-    redaction-safe credential source, so a changed connection invalidates the
-    persisted decision while a token value never enters workflow history.
+    redaction-safe credential source and recorded connection revisions. A
+    changed connection invalidates the persisted decision while a token value
+    never enters workflow history.
     """
 
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+        RepositoryRouteError,
+    )
     from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-        resolve_default_github_connection_credential,
+        select_github_access_for_launch,
     )
 
-    credential = await resolve_default_github_connection_credential(
-        repo=contract.destination.repository
-    )
+    operations = ("read", "write", "branch_write")
+    if contract.destination.objective != "branch":
+        operations += ("review_request",)
+    try:
+        access = await select_github_access_for_launch(
+            DEFAULT_GIT_CONNECTION_REF,
+            repository=contract.destination.repository,
+            required_operations=operations,
+        )
+    except RepositoryContractError as exc:
+        raise _publication_authority_unavailable(
+            ResolvedGitHubCredential(
+                source=GitHubCredentialSource.UNRESOLVABLE,
+                diagnostic=str(exc),
+                retryable=(
+                    exc.code == "REPOSITORY_CONNECTION_UNAVAILABLE"
+                    and not isinstance(exc.__cause__, RepositoryRouteError)
+                ),
+            )
+        ) from exc
+    credential = access.credential
     if not credential.token:
         raise _publication_authority_unavailable(credential)
     authority_ref = (
         f"{contract.github_authority_ref}#{credential.source.value}:"
         f"{credential.source_name or 'default'}"
     )
+    if access.connection is not None:
+        authority_ref += (
+            f"#{access.connection.id}:policy:{access.connection.policy_revision}:"
+            f"credential:{access.connection.credential_revision}"
+        )
     if admitted_authority_ref is not None and authority_ref != admitted_authority_ref:
         raise temporal_exceptions.ApplicationError(
             "destination authority changed since the decision was admitted",
@@ -4322,13 +4355,11 @@ async def _saved_work_destination_authority(
     return credential.token, authority_ref
 
 
-def _saved_decision(
-    contract: Any, prepared: Mapping[str, Any], *, authority_ref: str | None = None
-) -> Any:
+def _saved_decision(contract: Any, prepared: Mapping[str, Any]) -> Any:
     """Return a persisted admission only if it is exactly this contract's decision.
 
-    ``authority_ref`` compares against the currently resolved authority
-    instead of the one the record carries.
+    Current authority is checked against this validated admission before
+    rebuilding or using its candidate.
     """
 
     from moonmind.publish.saved_candidate import SavedPublicationAdmission
@@ -4339,7 +4370,7 @@ def _saved_decision(
         )
         expected = contract.admission(
             expected_base_sha=admission.expected_base_sha,
-            authority_ref=authority_ref or admission.authority_ref,
+            authority_ref=admission.authority_ref,
         )
     except ValueError:
         return None
@@ -6038,8 +6069,8 @@ class TemporalAgentRuntimeActivities:
         Only saved-work artifacts are read, each under a publication use claim
         and the admitted owner scope; the original source is never looked up.
         ``priors`` are persisted decisions of the same operation, newest
-        first: the newest one that is exactly this decision under the current
-        authority is rebuilt instead of observing the base again.
+        first: the newest one that is exactly this request retains its
+        admission. Current authority must still match before any rebuild.
         """
         from moonmind.publish.saved_candidate import SavedPublicationError
         from moonmind.publish.saved_work_source import (
@@ -6087,21 +6118,21 @@ class TemporalAgentRuntimeActivities:
             await claim(saved_work_artifact_id(contract.saved_work_ref))
         except SavedPublicationError as exc:
             raise _saved_publication_failure(exc) from exc
+        # A plain retry completes the same decision; it never admits a moved
+        # base as a second candidate for the same operation, and a newer,
+        # different request of that operation never hides it.
+        for prior in priors if admission is None else ():
+            reused = _saved_decision(contract, prior)
+            if reused is not None:
+                admission = reused
+                persisted_head_sha = str(prior["candidate"]["headSha"])
+                break
         token, authority_ref = await _saved_work_destination_authority(
             contract,
             admitted_authority_ref=(
                 admission.authority_ref if admission is not None else None
             ),
         )
-        # A plain retry completes the same decision; it never admits a moved
-        # base as a second candidate for the same operation, and a newer,
-        # different request of that operation never hides it.
-        for prior in priors if admission is None else ():
-            reused = _saved_decision(contract, prior, authority_ref=authority_ref)
-            if reused is not None:
-                admission = reused
-                persisted_head_sha = str(prior["candidate"]["headSha"])
-                break
 
         async def read(ref: str, content_types: frozenset[str]) -> bytes:
             artifact_id = saved_work_artifact_id(ref)
