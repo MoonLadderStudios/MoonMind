@@ -327,7 +327,9 @@ record_resource_footprint() {
     docker stats --no-stream --format '{{json .}}' $(cut -f1 "$scratch/ps.txt") \
       > "$scratch/stats.jsonl" 2>/dev/null || true
   fi
-  compose top temporal-worker-workflow > "$scratch/top.txt" 2>/dev/null || true
+  local top_status=0
+  compose top temporal-worker-workflow > "$scratch/top.txt" 2> "$scratch/top.err" || top_status=$?
+  echo "$top_status" > "$scratch/top.status"
   python3 - "$phase" "$scratch" <<'EOF' 2>&1 | redact > "$output"
 import json, re, sys
 from pathlib import Path
@@ -377,22 +379,29 @@ print("running containers (snapshot after up --wait):")
 for row in sorted(stats, key=lambda row: row["service"]):
     print(f"  {row['service']:<40} mem={row['mib']:.0f}MiB cpu={row['CPUPerc']} pids={row['PIDs']} {row['Name']}")
 
+# Current Compose prints one table ("SERVICE  #  UID  PID ... CMD"); older
+# releases print a container name and a "UID  PID ... CMD" table per container.
 top = read("top.txt")
-lines = top.splitlines()
-header = next((index for index, line in enumerate(lines) if line.split()[:1] == ["UID"]), None)
-processes = []
-if header is not None:
-    columns = len(lines[header].split())
-    processes = [line.split(None, columns - 1)[-1] for line in lines[header + 1:] if line.strip()]
+is_header = lambda fields: {"UID", "PID", "CMD"} <= set(fields) and fields[-1] == "CMD"
+columns, processes = 0, []
+for line in top.splitlines():
+    fields = line.split()
+    if is_header(fields):
+        columns = len(fields)
+    elif columns and len(fields) >= columns:
+        processes.append(line.split(None, columns - 1)[-1])
 python = [command for command in processes
           if command.split()[0].rsplit("/", 1)[-1].startswith("python")]
 print("temporal-worker-workflow processes (compose top):")
-print(top.rstrip() or "  unavailable")
+print(top.rstrip() or "  (no output)")
+top_status = read("top.status").strip() or "unknown"
+print(f"compose top exit_status={top_status}", read("top.err").strip())
+counted = lambda items: len(items) if processes and top_status == "0" else "unavailable"
 print(
     f"footprint phase={phase} running_containers={len(stats)} "
     f"memory_mib={round(sum(row['mib'] for row in stats))} "
-    f"workflow_worker_processes={len(processes)} "
-    f"workflow_worker_python_processes={len(python)} "
+    f"workflow_worker_processes={counted(processes)} "
+    f"workflow_worker_python_processes={counted(python)} "
     f"workflow_worker_memory_mib="
     f"{round(sum(row['mib'] for row in stats if row['service'] == 'temporal-worker-workflow'))}"
 )
