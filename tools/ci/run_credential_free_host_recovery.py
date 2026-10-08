@@ -17,9 +17,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
-import urllib.error
-import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -31,6 +28,28 @@ TEST_FILE = "test_exact_docker_n_way_concurrency.py"
 RECEIPT = "credential-recovery-exact-docker.json"
 JUNIT = "credential-recovery-junit.xml"
 POSTGRES_IMAGE = "postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60"
+READINESS_SCRIPT = """import os
+import time
+import urllib.error
+import urllib.request
+
+request = urllib.request.Request(
+    'http://omnigent:8000/v1/agents',
+    headers={'Authorization': 'Bearer ' + os.environ['OMNIGENT_API_TOKEN']},
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+deadline = time.monotonic() + 180
+while time.monotonic() < deadline:
+    try:
+        with opener.open(request, timeout=2) as response:
+            if response.status == 200:
+                break
+    except (OSError, urllib.error.URLError):
+        pass
+    time.sleep(2)
+else:
+    raise SystemExit('Omnigent internal service did not become ready')
+"""
 
 
 class RecoveryError(RuntimeError):
@@ -205,7 +224,9 @@ def compose_document(source, repo_root, server_image):
             "OMNIGENT_AUTH_HEADER": "Authorization",
             "OMNIGENT_AUTH_HEADER_STRIP_PREFIX": "Bearer ",
         },
-        ports=["127.0.0.1::8000"],
+        # Internal-only Docker networks do not publish host ports. Both the
+        # readiness probe and actual recovery driver use this same network.
+        ports=[],
         volumes=["omnigent-data:/data"],
     )
     return {
@@ -213,6 +234,29 @@ def compose_document(source, repo_root, server_image):
         "networks": {"test": {"internal": True}},
         "volumes": {"postgres-data": {}, "omnigent-data": {}},
     }
+
+
+def readiness_command(*, image, network, token):
+    """Probe the built service from the exact driver's isolated network."""
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--network",
+        network,
+        "--env",
+        f"OMNIGENT_API_TOKEN={token}",
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        READINESS_SCRIPT,
+    ]
 
 
 def test_command(
@@ -421,20 +465,6 @@ def main(argv=None):
             work / "driver" / TEST_FILE,
         )
         _command([*compose, "up", "-d", "omnigent"])
-        port = _command([*compose, "port", "omnigent", "8000"]).stdout.strip()
-        _require(port.startswith("127.0.0.1:"), "test server is not loopback-only")
-        request = urllib.request.Request(
-            f"http://{port}/v1/agents", headers={"Authorization": f"Bearer {token}"}
-        )
-        for attempt in range(90):
-            try:
-                with urllib.request.urlopen(request, timeout=2) as response:
-                    _require(response.status == 200, "test server auth is unavailable")
-                break
-            except (OSError, urllib.error.URLError):
-                if attempt == 89:
-                    raise RecoveryError("test server did not become available")
-                time.sleep(2)
         server_container = _command([*compose, "ps", "-q", "omnigent"]).stdout.strip()
         server_actual = json.loads(
             _command(["docker", "inspect", server_container]).stdout
@@ -444,6 +474,7 @@ def main(argv=None):
             "running server differs from the built artifact",
         )
         identity["serverContainerId"] = server_actual["Id"]
+        _command(readiness_command(image=app["Id"], network=network, token=token))
         command = test_command(
             image=app["Id"],
             network=network,
