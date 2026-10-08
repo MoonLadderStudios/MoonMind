@@ -462,11 +462,13 @@ plan cannot be compiled is rejected rather than stored without one. A schedule
 stored without a plan before this admission existed is compiled by the existing
 deployment schedule refresh pass on its next run; a definition that cannot yet
 be compiled is named in the refresh failures and retried on the next pass. Session admission
-returns `realizer_managed_lifecycle` for `generic-omnigent-host@1`, and `codex-profile-bound@1` keeps its recorded
-coordinator, so both run through the one
-`integration.omnigent.profile_bound_execute` boundary. That boundary launches
-the host and session, delivers the first turn, and owns the terminal result and
-cleanup. AgentRun does not start a second supervisor around it.
+returns `realizer_managed_lifecycle` for `generic-omnigent-host@1`, which runs
+through `integration.omnigent.profile_bound_execute`. A plan recording
+`codex-profile-bound@1` uses `integration.omnigent.execute` and keeps its
+recorded coordinator. Each dispatch invokes the plan's one recorded realizer
+to launch the host and session, deliver the first turn, and own the terminal
+result and cleanup. AgentRun does not start a second supervisor around either
+realizer.
 
 The durable supervisor is retained compatibility for AgentRuns that carry no
 persisted plan: in-flight and replayed histories admitted before plan
