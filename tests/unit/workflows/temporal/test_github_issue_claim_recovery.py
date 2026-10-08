@@ -426,6 +426,7 @@ async def persist_saved_binding(
         "active_host",
         "changed_digest",
         "foreign_repository",
+        "contradictory_repository",
         "missing_proof",
         "commit",
         "remote_deleted",
@@ -449,11 +450,34 @@ async def test_serialized_native_checkpoint_and_cleanup_control_release(
         if fault in {"commit", "remote_deleted", "advanced_base", "untracked"}
         else "none"
     )
-    saved, _, workspace, _ = await capture_saved_workspace(
-        tmp_path, monkeypatch, change
+    saved, _, workspace, objects = await capture_saved_workspace(
+        tmp_path,
+        monkeypatch,
+        change,
+        parameters_repository=(
+            "other/repo" if fault == "contradictory_repository" else "example/repo"
+        ),
     )
     state["comparison_provider"] = comparison_from_git(workspace)
     saved = json.loads(json.dumps(saved))
+    if fault == "contradictory_repository":
+        import hashlib
+        import io
+        import tarfile
+
+        # The actual saver retains recoverable bytes even when the authored
+        # repository projections cannot prove that this claim has no work.
+        checkpoint = json.loads(
+            objects[saved["checkpointRef"].replace("artifact://", "artifact:", 1)]
+        )
+        archive = objects[saved["archiveRef"].replace("artifact://", "artifact:", 1)]
+        assert checkpoint["workspace"]["archiveRef"] == saved["archiveRef"]
+        assert "sha256:" + hashlib.sha256(archive).hexdigest() == saved["archiveDigest"]
+        with tarfile.open(fileobj=io.BytesIO(archive)) as captured:
+            assert captured.extractfile("work.txt").read() == b"original\n"
+        assert saved["recoveryEvidence"]["reasonCode"] == "no_work_unverified"
+        token = AsyncMock(side_effect=AssertionError("Unverified work cannot release"))
+        monkeypatch.setattr(service, "resolve_github_token", token)
     if fault == "changed_digest":
         saved["archiveDigest"] = "sha256:" + "b" * 64
     elif fault == "foreign_repository":
@@ -485,6 +509,9 @@ async def test_serialized_native_checkpoint_and_cleanup_control_release(
             ValueError, match="runtime_cleanup_pending|saved_work_requires_recovery"
         ):
             await asyncio.wait_for(call, timeout=120)
+    if fault == "contradictory_repository":
+        token.assert_not_awaited()
+        assert not any("/compare/" in path for path in state.get("reads", []))
 
 
 @pytest.mark.asyncio

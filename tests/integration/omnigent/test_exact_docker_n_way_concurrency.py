@@ -758,6 +758,13 @@ async def _credential_recovery_host_class(backend, image_ref):
     return HostClass.model_validate(payload)
 
 
+def _exact_image_github_projection_owner(run_ref: str, lane: str) -> str:
+    # Keep synthetic identity opaque so command-output redaction preserves the
+    # exact reservation acknowledgement, just as it does for real lease owners.
+    identity = hashlib.sha256(f"{run_ref}:{lane}".encode()).hexdigest()
+    return f"test:{identity}"
+
+
 async def _qualify_exact_image_github_projection(backend, image_ref, run_ref, runtime):
     """Exercise the production Linux projection protocol without provider access."""
     import json
@@ -778,7 +785,7 @@ async def _qualify_exact_image_github_projection(backend, image_ref, run_ref, ru
     ):
         volume = f"moonmind-test-gh-projection-{run_ref}-{lane}"
         mount = f"type=volume,src={volume},dst={mount_root}"
-        owner = f"test:{run_ref}:{lane}"
+        owner = _exact_image_github_projection_owner(run_ref, lane)
         older = {"ownerRef": owner, "revision": 1, "reservationId": str(uuid.uuid4())}
         newer = {"ownerRef": owner, "revision": 2, "reservationId": str(uuid.uuid4())}
 

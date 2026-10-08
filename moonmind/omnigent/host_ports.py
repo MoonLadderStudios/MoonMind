@@ -169,6 +169,12 @@ class AdmittedRepositoryIdentity(Protocol):
 class OmnigentGithubCredentialPort(Protocol):
     """Materialize and clean up run-owned repository credentials."""
 
+    async def validate_repository_intent(
+        self, *, request: AgentExecutionRequest, plan: OmnigentExecutionPlanEnvelope
+    ) -> None:
+        """Validate canonical intent and live authority without acquiring values."""
+        raise NotImplementedError
+
     async def admitted_repository_identity(
         self,
         *,

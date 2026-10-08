@@ -215,13 +215,9 @@ class GenericOmnigentHostRealizer:
 
         assert_agent_execution_authority(plan.payload.credentialBindings)
 
-        from moonmind.omnigent.workspace_intent import authored_repository_source
-
-        authored_repository_source(request)
-        if plan.payload.resolvedTools.get("repositoryAccess", {}).get("collaboration"):
-            await self._host_runtime.validate_repository_intent(
-                request=request, plan=plan
-            )
+        await self._host_runtime.validate_repository_intent(
+            request=request, plan=plan
+        )
 
         if plan.payload.executionRealizerRef != self.ref:
             raise HarnessPlatformError(

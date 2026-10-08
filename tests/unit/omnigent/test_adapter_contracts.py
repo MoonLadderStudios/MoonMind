@@ -552,6 +552,7 @@ def test_inherited_repository_identity_requires_an_implementation(
 @pytest.mark.parametrize(
     ("operation", "arguments"),
     (
+        ("validate_repository_intent", {}),
         ("admitted_repository_identity", {"role": "source_read", "operation": "read"}),
         ("acquire_repository_use", {"role": "source_read", "operation": "read"}),
         (
