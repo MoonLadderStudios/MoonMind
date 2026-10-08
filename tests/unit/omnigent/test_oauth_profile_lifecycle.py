@@ -4315,9 +4315,11 @@ async def test_coordinator_reports_janitor_drain_that_never_finishes(
 
 
 @pytest.mark.asyncio
-async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
+@pytest.mark.parametrize("exposure", ["not_projected", "agent_readable_unconfined"])
+async def test_coordinator_releases_provider_lease_after_host_cleanup(exposure) -> None:
     actions: list[str] = []
     lifecycle: list[tuple[str, str | None]] = []
+    credential_preflight_metadata = []
     preflight_heartbeat_observed = asyncio.Event()
     heartbeat_calls: list[str] = []
     provider_lease = SimpleNamespace(
@@ -4400,6 +4402,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
                 "workspacePath": "/workspaces/run",
                 "egressAttestation": {"attachmentIdentity": "host-1"},
                 "egressEvidenceRef": "artifact://launch-egress",
+                "githubCredentialExposure": exposure,
             }
 
         async def stop_host(self, **_kwargs):
@@ -4420,6 +4423,8 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             actions.append(event_type)
             lifecycle.append((event_type, kwargs.get("status")))
+            if event_type == "credential_preflight" and kwargs.get("status") == "ready":
+                credential_preflight_metadata.append(kwargs["metadata"])
 
     async def execute(request, **_kwargs):
         assert request.parameters["omnigent"]["session"] == {
@@ -4461,6 +4466,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
+    assert credential_preflight_metadata[0]["githubCredentialExposure"] == exposure
     assert heartbeat_calls
     assert set(heartbeat_calls) == {"host-lease-1"}
     assert actions[0] == "bridge_envelope_created"
@@ -4504,6 +4510,7 @@ async def _drive_authority_chain_coordinator(
     completion_evidence: list[dict] | None = None,
     request_parameters: dict | None = None,
     session_interruption: bool = True,
+    credential_resolver=None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -4689,7 +4696,7 @@ async def _drive_authority_chain_coordinator(
     )
     # Repository credential selection has its own coverage; this harness has no
     # repository connection store.
-    coordinator._github_token = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    coordinator._github_token = credential_resolver or AsyncMock(return_value=None)  # type: ignore[method-assign]
 
     async def _resolve_policy_snapshot(_policy_ref: str) -> dict:
         document = policy_document()
@@ -7575,7 +7582,6 @@ def _default_connection_credential(monkeypatch, result):
 
 def _record_default_connection(monkeypatch, *, secret_ref: str, read):
     """Record git-default as a typed SecretRef and serve that ref's secret."""
-    import moonmind.auth.github_credentials as github_credentials
     from moonmind.workflows.temporal.runtime import managed_api_key_resolve
 
     provider, _, key = secret_ref.partition("://")
@@ -7590,7 +7596,7 @@ def _record_default_connection(monkeypatch, *, secret_ref: str, read):
     monkeypatch.setattr(
         managed_api_key_resolve, "load_repository_connection_for_launch", load
     )
-    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", read)
+    monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", read)
     return load
 
 
@@ -7658,6 +7664,117 @@ async def test_github_token_explicit_anonymous_source_acquires_nothing(
 
     assert await OmnigentProfileBoundExecutionCoordinator._github_token(request) is None
     resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_github_token_anonymous_gh_is_rejected_before_credential_read(
+    monkeypatch,
+):
+    resolve = _default_connection_credential(
+        monkeypatch, SimpleNamespace(token="unused", source=SimpleNamespace(value="x"))
+    )
+    request = _execution_request(
+        parameters={"repository": "org/repo", "requiredCapabilities": ["git", "gh"]},
+        workspaceSpec={
+            "repository": "org/repo",
+            "workspaceSource": {"accessMode": "anonymous"},
+        },
+    )
+    with pytest.raises(OmnigentOAuthHostError) as error:
+        await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+    assert error.value.code == "github_auth_unavailable"
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_github_token_checks_canonical_workspace_repository(monkeypatch):
+    from moonmind.auth.github_credentials import ResolvedGitHubCredential
+
+    resolve = _default_connection_credential(
+        monkeypatch, ResolvedGitHubCredential(token="selected-token")
+    )
+    request = _execution_request(
+        parameters={"requiredCapabilities": ["git"]},
+        workspaceSpec={"repository": "org/from-workspace"},
+    )
+    assert await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+    resolve.assert_awaited_once_with(repo="org/from-workspace")
+
+
+@pytest.mark.asyncio
+async def test_coordinator_defers_git_only_source_auth_until_materialization():
+    resolve = AsyncMock(
+        side_effect=OmnigentOAuthHostError(
+            "selected source credential revoked", code="github_auth_unavailable"
+        )
+    )
+    result = await _drive_authority_chain_coordinator(
+        AsyncMock(return_value=AgentRunResult(summary="saved work continued")),
+        request_parameters={"requiredCapabilities": ["git"], "publishMode": "none"},
+        credential_resolver=resolve,
+    )
+    assert result[-1].summary == "saved work continued"
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["org/repo", ""])
+async def test_prepare_workspace_reuses_saved_work_without_source_auth(
+    tmp_path, source
+):
+    runtime = _runtime_for(tmp_path)
+    workspace_id = _sandbox_id()
+    workspace = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    (workspace / "saved-result.txt").write_text("keep saved work")
+    store = SandboxWorkspaceRecordStore(tmp_path / "workspaces")
+    store.ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=workspace_id,
+            workflow_id="workflow-1",
+            step_execution_id="step-1",
+            relative_path="repo",
+        )
+    )
+    if source:
+        store.mark_materialized(workspace_id)
+    resolve = AsyncMock(
+        side_effect=OmnigentOAuthHostError(
+            "selected source credential revoked", code="github_auth_unavailable"
+        )
+    )
+    actual = await runtime._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=source,
+        github_token_resolver=resolve,
+    )
+    assert (actual / "saved-result.txt").read_text() == "keep saved work"
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_workspace_resolves_auth_only_for_fresh_github_clone(tmp_path):
+    runtime = _runtime_for(tmp_path)
+    resolve = AsyncMock(
+        side_effect=OmnigentOAuthHostError(
+            "selected source credential revoked", code="github_auth_unavailable"
+        )
+    )
+    runtime._materialize_repository = AsyncMock()
+    with pytest.raises(
+        OmnigentOAuthHostError, match="selected source credential revoked"
+    ):
+        await runtime._prepare_workspace(
+            workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            repository_source="org/repo",
+            github_token_resolver=resolve,
+        )
+    resolve.assert_awaited_once_with()
+    runtime._materialize_repository.assert_not_awaited()
 
 
 @pytest.mark.asyncio

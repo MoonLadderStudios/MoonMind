@@ -253,9 +253,92 @@ def _ambient_worker_authority(monkeypatch, home: Path) -> bytes:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("branch", ["main", "feature"])
+async def test_profile_bound_clone_materializes_lfs_without_ambient_filters(
+    tmp_path, monkeypatch, branch
+) -> None:
+    """Real LFS clean/smudge survives isolation for clone and later checkout."""
+    if shutil.which("git-lfs") is None:
+        pytest.skip("requires Git LFS for its offline local transfer adapter")
+    system_config = tmp_path / "system.gitconfig"
+    system_config.write_text(
+        '[filter "lfs"]\n'
+        "\tclean = git-lfs clean -- %f\n"
+        "\tsmudge = git-lfs smudge -- %f\n"
+        "\tprocess = git-lfs filter-process\n"
+        "\trequired = true\n"
+        '[filter "ambient"]\n'
+        "\tsmudge = sed s/original/ambient-filter-ran/g\n"
+    )
+    source_env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_SYSTEM": str(system_config),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                *args,
+            ],
+            env=source_env,
+            capture_output=True,
+            check=True,
+        )
+
+    git("init", "--initial-branch=main")
+    (source / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n*.ambient filter=ambient\n"
+    )
+    (source / "untouched.ambient").write_text("original content\n")
+    for name in ("main", "feature"):
+        if name == "feature":
+            git("checkout", "-b", name)
+        (source / "asset.bin").write_bytes(f"{name} large-file payload\n".encode())
+        git("add", ".")
+        git("commit", "-m", name)
+        pointer = git("show", f"{name}:asset.bin").stdout
+        assert pointer.startswith(b"version https://git-lfs.github.com/spec/v1\n")
+    git("checkout", "main")
+
+    home = tmp_path / "worker-home"
+    oauth_before = _ambient_worker_authority(monkeypatch, home)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
+    # Reusing ambient filter definitions would also let global overrides win.
+    with (home / ".gitconfig").open("a") as config:
+        config.write('[filter "lfs"]\n\tprocess = false\n')
+
+    workspace = await _runtime_for(tmp_path)._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch=branch,
+    )
+
+    assert (workspace / "asset.bin").read_bytes() == (
+        f"{branch} large-file payload\n".encode()
+    )
+    assert (workspace / "untouched.ambient").read_text() == "original content\n"
+    assert (home / ".codex" / "auth.json").read_bytes() == oauth_before
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected", [True, False], ids=["selected-B", "anonymous"])
+@pytest.mark.parametrize("delivery", ["direct", "on_materialization"])
 async def test_profile_bound_clone_sends_only_admitted_credential_over_real_git(
-    tmp_path, monkeypatch, selected
+    tmp_path, monkeypatch, selected, delivery
 ) -> None:
     """#4011: real git through the production clone sends B, or nothing, never A."""
     transport_gen = start_synthetic_github(
@@ -272,14 +355,31 @@ async def test_profile_bound_clone_sends_only_admitted_credential_over_real_git(
         runtime = _runtime_for(tmp_path)
         workspace_id = _sandbox_id()
 
-        resolved = await runtime._prepare_workspace(
+        token = SELECTED_TOKEN if selected else None
+        resolve = AsyncMock(return_value=token)
+        credential = (
+            {"github_token": token}
+            if delivery == "direct"
+            else {"github_token_resolver": resolve}
+        )
+        request = dict(
             workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
             current_workflow_id="workflow-1",
             current_step_execution_id="step-1",
             repository_source="https://github.com/owner/repo.git",
             starting_branch="main",
-            github_token=SELECTED_TOKEN if selected else None,
+            **credential,
         )
+        resolved = await runtime._prepare_workspace(**request)
+        if delivery == "on_materialization":
+            resolve.assert_awaited_once_with()
+        # A completed clone remains usable when its credential is later lost.
+        (resolved / "saved-result.txt").write_text("saved progress")
+        resolve.reset_mock(side_effect=True)
+        resolve.side_effect = RuntimeError("selected credential revoked")
+        assert await runtime._prepare_workspace(**request) == resolved
+        assert (resolved / "saved-result.txt").read_text() == "saved progress"
+        resolve.assert_not_awaited()
     finally:
         transport_gen.close()
 

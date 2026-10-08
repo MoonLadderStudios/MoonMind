@@ -1372,7 +1372,21 @@ class OmnigentProfileBoundExecutionCoordinator:
                     expected_status="allocating",
                     new_status="starting",
                 )
-            github_token = await self._github_token(request)
+            github_token: str | None = None
+            github_token_resolved = False
+
+            async def resolve_github_token() -> str | None:
+                nonlocal github_token, github_token_resolved
+                if not github_token_resolved:
+                    github_token = await self._github_token(request)
+                    github_token_resolved = True
+                return github_token
+
+            # An agent-facing gh projection needs its credential at launch.
+            # Clone-only authority is acquired by the workspace owner only if
+            # materialization is needed, preserving saved work after revocation.
+            if "gh" in self._required_capabilities(request):
+                await resolve_github_token()
             current_stage = "container_start"
             await emit(current_stage, "started")
             workspace_locator_payload = (
@@ -1401,6 +1415,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 required_capabilities=self._required_capabilities(request),
                 execution_fanout_authorization=fanout_authorization,
                 github_token=github_token,
+                github_token_resolver=resolve_github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
                 # A remediation workspace is already materialized and authorized by
@@ -1544,6 +1559,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "providerProfileId": profile_id,
                     "credentialGeneration": host_lease.credential_generation,
                     "omnigentHostId": host_id,
+                    "githubCredentialExposure": preflight.get(
+                        "githubCredentialExposure", "unknown"
+                    ),
                 },
             )
             if preflight.get("mountedTools", {}).get("status") == "ready":
@@ -1861,22 +1879,26 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 runtime=provider_runtime,
                                 attempt_ordinal=self._attempts.current_attempt(),
                             ):
-                                publication = await self._workspace_publication.publish_workspace(
-                                    workspace_locator=workspace_locator_payload or {},
-                                    current_workflow_id=workflow_id,
-                                    current_step_execution_id=(
-                                        step_execution_id or request.idempotency_key
-                                    ),
-                                    publication_identity=request.idempotency_key,
-                                    publish_mode=publish_mode,
-                                    base_branch=self._starting_branch(request),
-                                    repository=str(
-                                        (request.parameters or {}).get("repository") or ""
-                                    ).strip(),
-                                    github_token=github_token,
-                                    accepted_published_head=(
-                                        request.parameters or {}
-                                    ).get("acceptedPublishedHead"),
+                                publication = (
+                                    await self._workspace_publication.publish_workspace(
+                                        workspace_locator=workspace_locator_payload
+                                        or {},
+                                        current_workflow_id=workflow_id,
+                                        current_step_execution_id=(
+                                            step_execution_id or request.idempotency_key
+                                        ),
+                                        publication_identity=request.idempotency_key,
+                                        publish_mode=publish_mode,
+                                        base_branch=self._starting_branch(request),
+                                        repository=str(
+                                            (request.parameters or {}).get("repository")
+                                            or ""
+                                        ).strip(),
+                                        github_token=await resolve_github_token(),
+                                        accepted_published_head=(
+                                            request.parameters or {}
+                                        ).get("acceptedPublishedHead"),
+                                    )
                                 )
                         except Exception as exc:
                             code = str(
@@ -3170,9 +3192,14 @@ class OmnigentProfileBoundExecutionCoordinator:
         clone_needs_credential = cls._github_repository_source(request) is not None
         if not gh_required and not clone_needs_credential:
             return None
-        if not gh_required and authored_anonymous_source(request):
-            # An explicitly anonymous read admits no repository authority, so it
-            # never looks up (or forwards) any GitHub credential (#4011).
+        if authored_anonymous_source(request):
+            # Anonymous source admission omits collaboration authority even if
+            # gh was requested; reject before looking up or projecting a PAT.
+            if gh_required:
+                raise OmnigentOAuthHostError(
+                    "anonymous repository access cannot provide authenticated gh",
+                    code="github_auth_unavailable",
+                )
             return None
         from moonmind.auth.github_credentials import GitHubCredentialSource
         from moonmind.workflows.temporal.runtime import managed_api_key_resolve
@@ -3181,7 +3208,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         # connection (see the execution-plan admission), so it reads only that
         # connection's credential. Ambient worker tokens are never consulted
         # while git-default is recorded (MoonLadderStudios/MoonMind#4011).
-        repository = str((request.parameters or {}).get("repository") or "").strip()
+        repository = cls._repository_source(request)
         resolved = await (
             managed_api_key_resolve.resolve_default_github_connection_credential(
                 repo=repository or None

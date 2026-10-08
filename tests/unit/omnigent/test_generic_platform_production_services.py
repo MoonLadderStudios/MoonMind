@@ -1220,6 +1220,8 @@ class _ProjectionBackend:
         self.calls.append((list(argv), dict(kwargs)))
         if argv[1:3] == ["volume", "create"]:
             self.existing = True
+        if argv[1:3] == ["volume", "rm"]:
+            self.existing = False
         if argv[1:3] == ["volume", "inspect"]:
             if not self.existing:
                 return 1, "", "Error: no such volume"
@@ -1349,6 +1351,172 @@ async def test_github_projection_interrupted_refresh_keeps_complete_issuance(
 
 
 @pytest.mark.asyncio
+async def test_github_projection_overlapping_writers_with_same_container_pid(
+    monkeypatch, tmp_path
+) -> None:
+    config = tmp_path / "volume"
+    backend = _ProjectionBackend(existing=True)
+    await _materialize_projection(monkeypatch, backend, "initial-token")
+    argv = _projection_writer(backend, config)
+    # Separate Docker PID namespaces both normally give the writer PID 1.
+    # Run the actual shell locally with that same expansion in both writers.
+    argv[2] = argv[2].replace("$$", "1")
+    await asyncio.to_thread(subprocess.run, argv, input=b"initial-token", check=True)
+    original = (config / "hosts.yml").read_bytes()
+    writers = []
+    try:
+        for token in (b"first-partial", b"second-partial"):
+            writer = await asyncio.to_thread(
+                subprocess.Popen,
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            writers.append(writer)
+            writer.stdin.write(token)
+            writer.stdin.flush()
+            for _ in range(200):
+                temporaries = list(config.glob(".hosts.yml.*"))
+                if any(token in path.read_bytes() for path in temporaries):
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("writer did not consume its partial token")
+            assert (config / "hosts.yml").read_bytes() == original
+
+        assert len(temporaries) == 2, "overlapping writers shared one temporary file"
+        await asyncio.to_thread(writers[0].communicate, input=b"-complete", timeout=5)
+        assert writers[0].returncode == 0
+        first_complete = (config / "hosts.yml").read_bytes()
+        assert b"oauth_token: first-partial-complete\n" in first_complete
+        assert b"second-partial" not in first_complete
+        assert len(list(config.glob(".hosts.yml.*"))) == 1
+
+        await asyncio.to_thread(writers[1].communicate, input=b"-complete", timeout=5)
+        assert writers[1].returncode == 0
+        second_complete = (config / "hosts.yml").read_bytes()
+        assert b"oauth_token: second-partial-complete\n" in second_complete
+        assert b"first-partial" not in second_complete
+        assert not list(config.glob(".hosts.yml.*"))
+        assert (config / "hosts.yml").stat().st_mode & 0o777 == 0o600
+        assert config.stat().st_mode & 0o777 == 0o700
+    finally:
+        for writer in writers:
+            if writer.poll() is None:
+                await asyncio.to_thread(writer.communicate, timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("creator", ["successful", "failed"])
+@pytest.mark.parametrize("failure", [HarnessPlatformError, asyncio.CancelledError])
+async def test_github_projection_overlapping_failure_preserves_success(
+    monkeypatch, creator, failure
+) -> None:
+    class Backend(_ProjectionBackend):
+        def __init__(self):
+            super().__init__(existing=False)
+            self.inspections = 0
+            self.both_inspected = asyncio.Event()
+            self.created = asyncio.Event()
+            self.published = asyncio.Event()
+            self.live_token = None
+
+        async def run(self, argv, **kwargs):
+            task = asyncio.current_task().get_name()
+            if argv[1:3] == ["volume", "inspect"] and self.inspections < 2:
+                self.calls.append((list(argv), dict(kwargs)))
+                self.inspections += 1
+                if self.inspections == 2:
+                    self.both_inspected.set()
+                await self.both_inspected.wait()
+                return 1, "", "Error: no such volume"
+            if argv[1:3] == ["volume", "create"]:
+                if task != creator:
+                    await self.created.wait()
+                result = await super().run(argv, **kwargs)
+                self.created.set()
+                return result
+            if kwargs.get("input_bytes"):
+                self.calls.append((list(argv), dict(kwargs)))
+                if task == "failed":
+                    await self.published.wait()
+                    if failure is asyncio.CancelledError:
+                        raise asyncio.CancelledError()
+                    raise HarnessPlatformError(
+                        "writer interrupted",
+                        code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                    )
+                self.live_token = kwargs["input_bytes"]
+                self.published.set()
+                return 0, "", ""
+            if argv[1:3] == ["volume", "rm"]:
+                self.live_token = None
+            return await super().run(argv, **kwargs)
+
+    backend = Backend()
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            asyncio.create_task(
+                _materialize_projection(monkeypatch, backend, "successful-token"),
+                name="successful",
+            ),
+            asyncio.create_task(
+                _materialize_projection(monkeypatch, backend, "failed-token"),
+                name="failed",
+            ),
+            return_exceptions=True,
+        ),
+        timeout=5,
+    )
+    assert isinstance(results[0], dict)
+    assert isinstance(results[1], failure)
+    assert backend.existing, "failed overlapping writer deleted the live volume"
+    assert backend.live_token == b"successful-token"
+    assert not any(argv[1:3] == ["volume", "rm"] for argv, _kwargs in backend.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inspection_error",
+    ["permission denied", "context deadline exceeded", "no such host: docker.invalid"],
+)
+async def test_github_projection_inspection_error_does_not_imply_absence(
+    monkeypatch, inspection_error
+) -> None:
+    class Backend(_ProjectionBackend):
+        async def run(self, argv, **kwargs):
+            if argv[1:3] == ["volume", "inspect"] and not self.calls:
+                self.calls.append((list(argv), dict(kwargs)))
+                return 1, "", inspection_error
+            return await super().run(argv, **kwargs)
+
+    backend = Backend(existing=True)
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _materialize_projection(monkeypatch, backend, "selected-token")
+    assert (
+        exc.value.code
+        == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+    )
+    assert len(backend.calls) == 1
+    assert backend.existing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [True, False])
+async def test_github_projection_rejects_foreign_volume_owner(
+    monkeypatch, existing
+) -> None:
+    backend = _ProjectionBackend(existing=existing)
+    backend.digest = "another-lease-owner"
+    with pytest.raises(HarnessPlatformError) as exc:
+        await _materialize_projection(monkeypatch, backend, "selected-token")
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT
+    assert not any(kwargs.get("input_bytes") for _argv, kwargs in backend.calls)
+    assert not any(argv[1:3] == ["volume", "rm"] for argv, _kwargs in backend.calls)
+
+
+@pytest.mark.asyncio
 async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     monkeypatch,
 ) -> None:
@@ -1360,7 +1528,22 @@ async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     fresh = _ProjectionBackend(existing=False, fail_writer=True)
     with pytest.raises(HarnessPlatformError):
         await _materialize_projection(monkeypatch, fresh, "selected-token-B")
+    assert fresh.existing
+    assert not any(argv[1:3] == ["volume", "rm"] for argv, _kwargs in fresh.calls)
+    # A same-owner retry can finish the retained preparation.
+    fresh.fail_writer = False
+    await _materialize_projection(monkeypatch, fresh, "replacement-token")
+    assert sum(argv[1:3] == ["volume", "create"] for argv, _kwargs in fresh.calls) == 1
+    # The persisted, fenced lifecycle authority reclaims failed preparations.
+    service = OmnigentGithubCredentialService(fresh)
+    await service.cleanup(
+        service.anticipated_attachment(
+            {"tools": ["gh"], "repositoryAccess": {"collaboration": True}},
+            owner_ref="lease-owner-1",
+        )
+    )
     assert fresh.calls[-1][0][1:3] == ["volume", "rm"]
+    assert not fresh.existing
 
 
 @pytest.mark.asyncio

@@ -86,11 +86,10 @@ async def load_repository_connection_for_launch(
     A database failure propagates so callers can tell an unreadable record
     from an absent one, and a deleted or disabled connection raises
     ``RepositoryRouteError``: only true absence may select the deployment
-    declaration. A recorded connection other than the default admits only a
-    ``repository`` it has a verified assignment for, and only that
-    assignment's operations. The default is the classified legacy exception:
-    it maps the deployment's pre-#4023 credential, whose scope predates
-    assignments.
+    declaration. Repository launches use the connection service's verified
+    assignment and operation policy, including its provenance-checked legacy
+    default exception. Reading the default without a repository remains
+    available to repository-independent readiness and registry consumers.
     """
 
     from api_service.db.base import async_session_maker
@@ -112,7 +111,7 @@ async def load_repository_connection_for_launch(
             principal_scope=("system", None),
         )
         if connection is not None:
-            if connection_ref == DEFAULT_GIT_CONNECTION_REF:
+            if connection_ref == DEFAULT_GIT_CONNECTION_REF and repository is None:
                 return connection
             assignment = await service.launch_assignment(connection, repository)
             return connection.model_copy(
@@ -316,7 +315,8 @@ async def resolve_default_github_connection_credential(
     #4023 migration) is authoritative: only its credential is read. Without a
     recorded connection, the deployment's declared GitHub configuration
     applies. An unreadable record or a failed selected source yields an
-    unresolved result instead of another credential.
+    unresolved result instead of another credential. When ``repo`` is named,
+    its assignment must admit the connection before the credential is read.
     """
 
     from moonmind.auth.github_credentials import (
@@ -332,7 +332,7 @@ async def resolve_default_github_connection_credential(
 
     try:
         connection = await load_repository_connection_for_launch(
-            DEFAULT_GIT_CONNECTION_REF
+            DEFAULT_GIT_CONNECTION_REF, repository=repo
         )
     except asyncio.CancelledError:
         raise
@@ -344,7 +344,7 @@ async def resolve_default_github_connection_credential(
             diagnostic=(
                 f"{exc}; MoonMind does not try another GitHub credential or "
                 "derive the default from the deployment's GitHub declaration "
-                "while that record is deleted or disabled, so select a recorded "
+                "while that record does not admit this use, so select a recorded "
                 "connection for this work."
             ),
         )

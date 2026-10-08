@@ -35,14 +35,16 @@ def github_hosts_writer_script(config_dir: str = "/config") -> str:
     Positional arguments: runtime uid, runtime gid, GitHub host; the token is
     read from stdin so it never enters argv or container metadata. The complete
     file is written beside the live one and renamed into place, so a reader
-    never observes a truncated configuration.
+    never observes a truncated configuration. Allocate a unique file even when
+    overlapping containers have the same PID in separate namespaces.
     """
 
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", config_dir) or ".." in config_dir:
         raise ValueError("GitHub config directory is unsafe")
     return (
         f"set -eu; umask 077; mkdir -p {config_dir}; "
-        f'tmp="{config_dir}/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
+        f'tmp=$(mktemp "{config_dir}/.hosts.yml.XXXXXX"); '
+        "trap 'rm -f \"$tmp\"' EXIT; "
         "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
         "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
         'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
@@ -498,28 +500,35 @@ class OmnigentGithubCredentialService:
             '{{ index .Labels "moonmind.owner_digest" }}',
             volume,
         ]
-        # A same-owner retry or refresh reuses the live projection. Its prior
-        # complete hosts.yml must survive a failed rewrite, so only a volume
-        # created by this call is removed on failure (#4011).
-        existed_code, _out, _err = await self._backend.run(owner_inspect, check=False)
-        created_here = existed_code != 0
-        await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "create",
-                "--label",
-                "moonmind.owner=generic-omnigent-github-credential",
-                "--label",
-                f"moonmind.owner_digest={attachment['ownerDigest']}",
-                volume,
-            ],
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        # Unknown inspection failures are not evidence that the volume is
+        # absent. A confirmed absence permits idempotent creation; Docker may
+        # still return a volume created by an overlapping same-owner writer.
+        code, observed_owner, error = await self._backend.run(
+            owner_inspect, check=False
         )
-        _code, observed_owner, _error = await self._backend.run(
-            owner_inspect,
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-        )
+        if code != 0:
+            if "no such volume" not in error.lower():
+                raise HarnessPlatformError(
+                    "GitHub credential volume inspection failed",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            await self._backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "create",
+                    "--label",
+                    "moonmind.owner=generic-omnigent-github-credential",
+                    "--label",
+                    f"moonmind.owner_digest={attachment['ownerDigest']}",
+                    volume,
+                ],
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+            _code, observed_owner, _error = await self._backend.run(
+                owner_inspect,
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
         if observed_owner.strip() != str(attachment["ownerDigest"]):
             raise HarnessPlatformError(
                 "GitHub credential projection is owned by another lease",
@@ -579,44 +588,41 @@ class OmnigentGithubCredentialService:
                         rcode = 1
                     if rcode != 0:
                         effective_writer = fallback
-        try:
-            await self._backend.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    # The selected host image runs workloads as the requested
-                    # runtime UID.  This isolated, networkless setup process
-                    # needs root only to initialize and hand off the credential
-                    # volume to that UID.
-                    "--user",
-                    "0:0",
-                    "--network",
-                    "none",
-                    "--mount",
-                    f"type=volume,src={volume},dst=/config",
-                    "--entrypoint",
-                    "/bin/sh",
-                    effective_writer,
-                    "-ceu",
-                    script,
-                    "--",
-                    str(runtime_uid),
-                    str(runtime_gid),
-                    str(attachment["githubHost"]),
-                ],
-                input_bytes=token.encode(),
-                failure_code=(
-                    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                ),
-            )
-        except BaseException:
-            if created_here:
-                await self._backend.run(
-                    ["docker", "volume", "rm", volume], check=False
-                )
-            raise
+        # Writer failure cannot prove this shared volume is unused, even if
+        # this invocation created it: another same-owner call may have already
+        # published successfully. Leave reclamation to the fenced lifecycle
+        # cleanup authority, persisted by host_runtime before materialization.
+        await self._backend.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                # The selected host image runs workloads as the requested
+                # runtime UID.  This isolated, networkless setup process
+                # needs root only to initialize and hand off the credential
+                # volume to that UID.
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--mount",
+                f"type=volume,src={volume},dst=/config",
+                "--entrypoint",
+                "/bin/sh",
+                effective_writer,
+                "-ceu",
+                script,
+                "--",
+                str(runtime_uid),
+                str(runtime_gid),
+                str(attachment["githubHost"]),
+            ],
+            input_bytes=token.encode(),
+            failure_code=(
+                HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+            ),
+        )
         return attachment
 
     async def cleanup(self, attachment: dict[str, Any]) -> None:
