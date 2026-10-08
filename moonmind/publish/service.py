@@ -83,6 +83,12 @@ class PublishResult:
             return f"published branch {self.branch_name}"
         return self.reason
 
+def job_branch_name(job_id: UUID) -> str:
+    """Return the candidate branch a publication job pushes by default."""
+
+    return f"moonmind-job-{str(job_id)[:8]}"
+
+
 _PUBLISH_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
 _PUBLISH_PUSH_SCAN_MAX_FILE_DIFF_CHARS = 200_000
 _PUBLISH_PUSH_SCAN_MAX_CHANGED_FILES = 200
@@ -306,7 +312,7 @@ class PublishService:
             )
 
         branch_name = str(publication_branch_name or "").strip() or (
-            f"moonmind-job-{str(job_id)[:8]}"
+            job_branch_name(job_id)
         )
         await run_command(
             [self._git_binary, "checkout", "-B", branch_name],

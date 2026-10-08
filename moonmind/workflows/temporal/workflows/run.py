@@ -7841,6 +7841,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         execution_ordinal: int,
         node_inputs: Mapping[str, Any],
         tool_name: str,
+        reconciled_save: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Return the restart basis for the successor of an interrupted attempt.
 
@@ -7863,6 +7864,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if isinstance(outputs, Mapping)
             else None
         )
+        if reconciled_save:
+            saved = reconciled_save
         if isinstance(saved, Mapping):
             archive_ref = self._bounded_story_loop_artifact_ref(
                 saved.get("archiveRef")
@@ -7893,6 +7896,64 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "work after the admitted step inputs is repeated."
             ),
         }
+
+    async def _confirm_interrupted_attempt_stopped(
+        self, execution_result: Any
+    ) -> tuple[Mapping[str, Any] | None, str | None]:
+        """Confirm an interrupted attempt stopped before its successor writes.
+
+        When the realizer could not confirm its own cleanup (a partition or a
+        lost stop acknowledgement), the failure names the runtime binding
+        whose reconciliation is unfinished. The existing janitor Activity
+        resumes that reconciliation within its bounded retries: it fences the
+        binding, stops the host and releases credentials and capacity. Returns
+        the save that reconciliation verified, or the reason no successor may
+        start. Nothing needs confirming when the realizer already confirmed it.
+        """
+
+        outputs = self._get_from_result(execution_result, "outputs")
+        unconfirmed = (
+            outputs.get("unconfirmedAttemptStop")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        if not isinstance(unconfirmed, Mapping):
+            return None, None
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "integration.omnigent.oauth_host_janitor"
+        )
+        try:
+            confirmation = await execute_typed_activity(
+                "integration.omnigent.oauth_host_janitor",
+                {
+                    "confirmAttemptStop": {
+                        "executionPlanRef": str(
+                            unconfirmed.get("executionPlanRef") or ""
+                        )[:400],
+                        "runtimeBindingRef": str(
+                            unconfirmed.get("runtimeBindingRef") or ""
+                        )[:400],
+                    }
+                },
+                **self._execute_kwargs_for_route(route),
+            )
+        except exceptions.ActivityError as exc:
+            cause = exc.cause or exc
+            return None, (
+                "The interrupted attempt's stop could not be confirmed, so no "
+                "successor attempt was started to run beside it: "
+                f"{str(cause)[:300]}"
+            )
+        if not (
+            isinstance(confirmation, Mapping)
+            and confirmation.get("stopConfirmed") is True
+        ):
+            return None, (
+                "The interrupted attempt's stop could not be confirmed, so no "
+                "successor attempt was started to run beside it."
+            )
+        saved = confirmation.get("savedWorkspaceCheckpoint")
+        return (saved if isinstance(saved, Mapping) else {}), None
 
     def _reconciled_candidate_checkpoint_ref(self) -> str | None:
         """Return the completed doc-reconciliation archive of the candidate."""
@@ -14032,6 +14093,25 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        reconciled_save: Mapping[str, Any] | None = None
+                        if (
+                            retryable
+                            and system_retries < 3
+                            and tool_type == "agent_runtime"
+                            and workflow.patched(
+                                RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH
+                            )
+                        ):
+                            (
+                                reconciled_save,
+                                unconfirmed_stop,
+                            ) = await self._confirm_interrupted_attempt_stopped(
+                                execution_result
+                            )
+                            if unconfirmed_stop is not None:
+                                retryable = False
+                                provider_failure_summary = unconfirmed_stop
+                                step_failure_summary = unconfirmed_stop
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
@@ -14063,6 +14143,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         execution_ordinal=current_step_execution,
                                         node_inputs=node_inputs,
                                         tool_name=tool_name,
+                                        reconciled_save=reconciled_save,
                                     )
                                 )
                             await self._wait_if_paused_at_safe_boundary()

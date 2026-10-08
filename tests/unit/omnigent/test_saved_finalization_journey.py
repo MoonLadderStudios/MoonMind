@@ -310,7 +310,7 @@ async def test_host_lost_successor_restores_confirmed_saved_bytes(
 
     from moonmind.omnigent.execute import OmnigentSessionHostLostError
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.realizers.generic_host import carry_confirmed_saved_work
+    from moonmind.omnigent.realizers.generic_host import carry_attempt_stop_evidence
 
     root = tmp_path / "worker"
     workspace, head = _candidate_workspace(root)
@@ -352,7 +352,7 @@ async def test_host_lost_successor_restores_confirmed_saved_bytes(
         )
         lost = OmnigentSessionHostLostError("host offline", offline_seconds=181.0)
         # Before stop is confirmed nothing is offered to a successor.
-        carry_confirmed_saved_work(lost, sink.binding)
+        carry_attempt_stop_evidence(lost, sink.binding)
         assert not hasattr(lost, "saved_workspace_checkpoint")
 
         publisher = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
@@ -369,7 +369,7 @@ async def test_host_lost_successor_restores_confirmed_saved_bytes(
         assert cleaned.state is RuntimeBindingState.cleaned
         assert "compute" not in cleaned.phaseResults
 
-        carry_confirmed_saved_work(lost, cleaned)
+        carry_attempt_stop_evidence(lost, cleaned)
         saved = lost.saved_workspace_checkpoint
         assert saved == cleaned.phaseResults["saved"]
 
@@ -414,18 +414,252 @@ async def test_host_lost_successor_restores_confirmed_saved_bytes(
 
 def test_saved_work_is_not_offered_without_confirmed_stop():
     from moonmind.omnigent.execute import OmnigentSessionHostLostError
-    from moonmind.omnigent.realizers.generic_host import carry_confirmed_saved_work
+    from moonmind.omnigent.realizers.generic_host import carry_attempt_stop_evidence
 
     saved = {"kind": "worktree_archive", "archiveRef": "artifact://art-a"}
+    identity = {"executionPlanRef": "plan-a", "bindingId": "binding-a"}
     pending = SimpleNamespace(
-        state=RuntimeBindingState.cleanup_pending, phaseResults={"saved": saved}
+        state=RuntimeBindingState.cleanup_pending,
+        phaseResults={"saved": saved},
+        **identity,
     )
     lost = OmnigentSessionHostLostError("host offline")
-    carry_confirmed_saved_work(lost, pending)
+    carry_attempt_stop_evidence(lost, pending)
     assert not hasattr(lost, "saved_workspace_checkpoint")
+    assert lost.unconfirmed_attempt_stop == {
+        "executionPlanRef": "plan-a",
+        "runtimeBindingRef": "binding-a",
+        "bindingState": "cleanup_pending",
+    }
 
     cleaned = SimpleNamespace(
-        state=RuntimeBindingState.cleaned, phaseResults={"saved": saved}
+        state=RuntimeBindingState.cleaned, phaseResults={"saved": saved}, **identity
     )
-    carry_confirmed_saved_work(lost, cleaned)
-    assert lost.saved_workspace_checkpoint == saved
+    # A cleanup error means the cleaned state was not this attempt's to trust.
+    failed_cleanup = OmnigentSessionHostLostError("host offline")
+    carry_attempt_stop_evidence(
+        failed_cleanup, cleaned, cleanup_error=RuntimeError("late")
+    )
+    assert not hasattr(failed_cleanup, "saved_workspace_checkpoint")
+    assert failed_cleanup.unconfirmed_attempt_stop["runtimeBindingRef"] == "binding-a"
+
+    confirmed = OmnigentSessionHostLostError("host offline")
+    carry_attempt_stop_evidence(confirmed, cleaned)
+    assert confirmed.saved_workspace_checkpoint == saved
+    assert not hasattr(confirmed, "unconfirmed_attempt_stop")
+
+
+class _ReclaimableCredentials(_NoCredentials):
+    async def load_cleanup_handles(self, provider_leases, runtime_handles):
+        return ()
+
+
+class _PartitionedHostRuntime:
+    """A host whose stop acknowledgement is lost until the partition heals."""
+
+    def __init__(self) -> None:
+        self.partitioned = True
+        self.stops: list[str] = []
+
+    async def cleanup(self, *, host_context, host_lease_ref, host_lease_generation):
+        if self.partitioned:
+            raise ConnectionError("host stop acknowledgement lost")
+        self.stops.append(host_lease_ref)
+        return {"stopped": True}
+
+    async def cleanup_authorities(self, refs):
+        return None
+
+
+async def _interrupted_attempt_with_unconfirmed_stop(tmp_path, monkeypatch, sessions):
+    from moonmind.omnigent.execute import OmnigentSessionHostLostError
+    from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
+    from moonmind.omnigent.realizers.generic_host import carry_attempt_stop_evidence
+
+    root = tmp_path / "worker"
+    _candidate_workspace(root)
+    gateway = TemporalOmnigentArtifactGateway(session_factory=sessions)
+    request = await _request(gateway)
+    store = InMemoryStableRuntimeBindingStore()
+    plan_ref = request.step_execution.omnigent_execution_plan.plan_ref
+    binding = await store.create_initial(
+        execution_plan_ref=plan_ref,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    host_leases = InMemoryOmnigentHostLeaseRepository()
+    lease = await host_leases.acquire(
+        execution_plan_ref=plan_ref,
+        runtime_binding_id=binding.bindingId,
+        host_class_ref="host-class:opencode",
+        launch_policy_ref="policy",
+        harness_id="opencode-native",
+        harness_implementation_ref="opencode",
+        provider_profile_refs=(),
+    )
+    lease = await host_leases.record_launch(
+        lease.leaseRef,
+        expected_generation=lease.generation,
+        cleanup_handle={"containerName": "omnigent-host-old"},
+    )
+    binding = await store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        state=RuntimeBindingState.credentials_acquired,
+        updates={"hostLeaseRef": lease.leaseRef},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase(
+        "workspace",
+        request.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude_none=True,
+            include={
+                "agent_kind",
+                "agent_id",
+                "correlation_id",
+                "idempotency_key",
+                "step_execution",
+            },
+        )
+        | {"workspaceSpec": dict(request.workspace_spec)},
+    )
+    publisher = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
+    realizer, _released = _owned_cleanup_realizer(store, publisher)
+    host_runtime = _PartitionedHostRuntime()
+    realizer._host_runtime = host_runtime
+    realizer._host_leases = host_leases
+    realizer._credentials = _ReclaimableCredentials()
+    released_from_binding: list = []
+
+    async def release_from_binding(provider_leases):
+        released_from_binding.append(provider_leases)
+
+    realizer._provider_leases = SimpleNamespace(
+        release_all=lambda acquired: _done(),
+        release_from_binding=release_from_binding,
+    )
+    lost = OmnigentSessionHostLostError("host offline", offline_seconds=181.0)
+    with pytest.raises(ConnectionError) as cleanup_error:
+        await realizer._cleanup(
+            request=request,
+            binding=sink.binding,
+            host_lease=lease,
+            host_context=None,
+            prepared=None,
+            credential_handles=(),
+            acquired=(),
+        )
+    stale = await store.get(binding.bindingId)
+    carry_attempt_stop_evidence(lost, stale, cleanup_error=cleanup_error.value)
+    return SimpleNamespace(
+        lost=lost,
+        store=store,
+        stale=stale,
+        realizer=realizer,
+        host_runtime=host_runtime,
+        host_leases=host_leases,
+        lease=lease,
+        plan_ref=plan_ref,
+    )
+
+
+@pytest.mark.asyncio
+async def test_successor_waits_for_confirmed_stop_of_partitioned_predecessor(
+    tmp_path, monkeypatch
+):
+    """A lost stop acknowledgement resumes that reconciliation, not parallel compute.
+
+    #4627 R2: when the realizer could not confirm its interrupted attempt
+    stopped, the failure offers no saved work to a successor, only the
+    binding whose reconciliation is unfinished. The existing realizer
+    reconciliation then fences the old owner, stops its host, and releases
+    its capacity before a successor may write; late old-owner writes fail.
+    """
+
+    from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    blob_root = tmp_path / "durable-artifacts"
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(blob_root)),
+    )
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        attempt = await _interrupted_attempt_with_unconfirmed_stop(
+            tmp_path, monkeypatch, sessions
+        )
+        assert attempt.stale.state is RuntimeBindingState.cleanup_pending
+        assert not hasattr(attempt.lost, "saved_workspace_checkpoint")
+        assert attempt.lost.unconfirmed_attempt_stop == {
+            "executionPlanRef": attempt.plan_ref,
+            "runtimeBindingRef": attempt.stale.bindingId,
+            "bindingState": "cleanup_pending",
+        }
+
+        owner_running = GenericOmnigentHostJanitor(
+            host_leases=attempt.host_leases,
+            runtime_bindings=attempt.store,
+            realizer=attempt.realizer,
+            owner_has_closed=lambda binding: _owner(False),
+        )
+        attempt.host_runtime.partitioned = False
+        with pytest.raises(HarnessPlatformError) as running:
+            await owner_running.confirm_attempt_stopped(
+                execution_plan_ref=attempt.plan_ref,
+                runtime_binding_ref=attempt.stale.bindingId,
+            )
+        assert running.value.code == "OMNIGENT_RUNTIME_BINDING_CONFLICT"
+        assert attempt.host_runtime.stops == []
+
+        janitor = GenericOmnigentHostJanitor(
+            host_leases=attempt.host_leases,
+            runtime_bindings=attempt.store,
+            realizer=attempt.realizer,
+            owner_has_closed=lambda binding: _owner(True),
+        )
+        confirmed = await janitor.confirm_attempt_stopped(
+            execution_plan_ref=attempt.plan_ref,
+            runtime_binding_ref=attempt.stale.bindingId,
+        )
+        cleaned = await attempt.store.get(attempt.stale.bindingId)
+        assert cleaned.state is RuntimeBindingState.cleaned
+        assert cleaned.fencingGeneration > attempt.stale.fencingGeneration
+        assert attempt.host_runtime.stops == [attempt.lease.leaseRef]
+        assert (await attempt.host_leases.get(attempt.lease.leaseRef)).status == (
+            "cleaned"
+        )
+        assert confirmed["stopConfirmed"] is True
+        assert confirmed["runtimeBindingRef"] == attempt.stale.bindingId
+        saved = confirmed["savedWorkspaceCheckpoint"]
+        assert saved == cleaned.phaseResults["saved"]
+        assert saved["archiveRef"] and saved["archiveDigest"].startswith("sha256:")
+
+        # A late write by the fenced old owner cannot change the binding.
+        with pytest.raises(HarnessPlatformError):
+            await attempt.store.update(
+                attempt.stale.bindingId,
+                expected_revision=attempt.stale.revision,
+                expected_fencing_generation=attempt.stale.fencingGeneration,
+                state=RuntimeBindingState.failed,
+            )
+        # Confirmation is idempotent for a redelivered request.
+        again = await janitor.confirm_attempt_stopped(
+            execution_plan_ref=attempt.plan_ref,
+            runtime_binding_ref=attempt.stale.bindingId,
+        )
+        assert again == confirmed
+        assert attempt.host_runtime.stops == [attempt.lease.leaseRef]
+    finally:
+        await engine.dispose()
+
+
+async def _owner(closed: bool) -> bool:
+    return closed

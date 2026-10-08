@@ -164,6 +164,19 @@ session and its resources for the replacement owner; janitors require the
 authoritative Temporal execution to be closed before taking over an active
 binding. Missing ownership evidence preserves resources and reports the gap.
 
+When an update or recreation really stops an attempt's runtime, the workflow
+does not wait for that process. A new attempt of the same logical step takes
+over once the old attempt's stop is confirmed, either by its own cleanup or by
+the bounded reconciliation the workflow requests before starting the new one.
+It keeps the step's harness, Provider Profile, model and publication intent.
+A plan compiled for it selects the installed runtime, while an attempt that
+reuses its workflow's admitted plan keeps that plan's recorded image. A
+compatible same-repository image rebuild alone does not invalidate either. An
+explicitly requested Host Class or operator image pin remains authoritative. The old attempt's records keep the image and session
+it actually ran. Its process need not survive. [Step Executions and
+Checkpointing](../Steps/StepExecutionsAndCheckpointing.md#162-interrupted-omnigent-attempts)
+owns the restore and publication rules.
+
 The runtime binding records immutable turn, compute, verification, saved-work
 and publication receipts. The resolved portable Skill owns remediation choices
 and terminal verdicts. The generic host supplies bounded same-session delivery

@@ -23,7 +23,7 @@ from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
     authored_starting_branch,
 )
-from moonmind.publish.service import PublishResult, PublishService
+from moonmind.publish.service import PublishResult, PublishService, job_branch_name
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_locator_models import (
     WORKSPACE_LOCATOR_ADAPTER,
@@ -149,6 +149,30 @@ def publication_failure_is_transient(message: str) -> bool:
     """Whether a publication failure reports a remote outage, not a rejection."""
 
     return bool(_TRANSIENT_REMOTE_FAILURE.search(message or ""))
+
+
+def logical_publication_identity(request: AgentExecutionRequest) -> str:
+    """Return the publication effect identity of the request's logical step.
+
+    Each Step Execution keys its agent request by its own ordinal, but a
+    successor of an interrupted attempt continues the same logical step and
+    its push/PR are the same logical effect (#4627). Every attempt therefore
+    publishes under the first Step Execution's key, so the first attempt keeps
+    the candidate branch it already published and a successor reconciles that
+    candidate instead of opening a second one. Requests outside the Step
+    Execution key shape keep their own identity.
+    """
+
+    launch = request.step_execution
+    if (
+        launch is None
+        or request.idempotency_key != f"{launch.step_execution_id}:agent_execute"
+    ):
+        return request.idempotency_key
+    return (
+        f"{launch.workflow_id}:{launch.run_id}:{launch.logical_step_id}"
+        ":execution:1:agent_execute"
+    )
 
 
 class OmnigentWorkspacePublicationService:
@@ -499,6 +523,98 @@ class OmnigentWorkspacePublicationService:
             "remote_verified": remote_heads == {head_sha},
         }
 
+    @staticmethod
+    async def _reconciled_published_candidate(
+        *,
+        run_command: Any,
+        command_env: Mapping[str, str],
+        workspace: Path,
+        candidate_branch: str,
+        base_branch: str,
+    ) -> PublishResult | None:
+        """Adopt the logical step's pushed candidate when it already holds this work.
+
+        An earlier attempt of the same logical step may have pushed this
+        candidate before its acknowledgement was lost (#4627). When that remote
+        head is based on the current base and its tree equals the work about to
+        be committed, the confirmed push is the result: the workspace adopts it
+        and nothing is pushed again. Anything else publishes normally, and the
+        publisher's exact-tip lease replaces the candidate with the new work.
+        """
+
+        remote_ref = f"refs/heads/{candidate_branch}"
+        listed = await run_command(
+            ["git", "ls-remote", "--heads", "origin", remote_ref], check=False
+        )
+        remote_heads = {
+            fields[0].lower()
+            for line in str(listed.stdout or "").splitlines()
+            if len(fields := line.split()) >= 2 and fields[1] == remote_ref
+        }
+        if getattr(listed, "returncode", 1) != 0 or len(remote_heads) != 1:
+            return None
+        remote_head = next(iter(remote_heads))
+        if not re.fullmatch(r"[0-9a-f]{40,64}", remote_head):
+            return None
+        await run_command(["git", "fetch", "--no-tags", "origin", remote_head])
+        based = await run_command(
+            ["git", "merge-base", "--is-ancestor", f"origin/{base_branch}", remote_head],
+            check=False,
+        )
+        if getattr(based, "returncode", 1) != 0:
+            return None
+        # Hash the would-be commit's tree in a scratch index, leaving the
+        # workspace index and files untouched.
+        index_path = (
+            await run_command(["git", "rev-parse", "--git-path", "moonmind-publish.index"])
+        ).stdout.strip()
+        scratch_index = Path(index_path)
+        if not scratch_index.is_absolute():
+            scratch_index = workspace / scratch_index
+        index_env = {**command_env, "GIT_INDEX_FILE": str(scratch_index)}
+        try:
+            await run_command(["git", "read-tree", "HEAD"], env=index_env)
+            await run_command(["git", "add", "-A"], env=index_env)
+            work_tree = (
+                await run_command(["git", "write-tree"], env=index_env)
+            ).stdout.strip()
+        finally:
+            scratch_index.unlink(missing_ok=True)
+        remote_tree = (
+            await run_command(["git", "rev-parse", f"{remote_head}^{{tree}}"])
+        ).stdout.strip()
+        if not work_tree or work_tree != remote_tree:
+            return None
+        await run_command(["git", "checkout", "-B", candidate_branch])
+        await run_command(["git", "reset", "--mixed", remote_head])
+        ahead = await run_command(
+            ["git", "rev-list", "--count", f"origin/{base_branch}..HEAD"]
+        )
+        commit_count = int(ahead.stdout.strip())
+        verified = await run_command(
+            ["git", "ls-remote", "--heads", "origin", remote_ref], check=False
+        )
+        if commit_count < 1 or {
+            fields[0].lower()
+            for line in str(verified.stdout or "").splitlines()
+            if len(fields := line.split()) >= 2 and fields[1] == remote_ref
+        } != {remote_head}:
+            raise HarnessPlatformError(
+                "reconciled candidate did not match the exact remote head",
+                code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+            )
+        return PublishResult(
+            mode="branch",
+            status="published",
+            reason="Reconciled the logical step's already-published candidate.",
+            branch_name=candidate_branch,
+            base_branch=base_branch,
+            head_sha=remote_head,
+            branch_pushed=True,
+            remote_verified=True,
+            commits_ahead_of_base=commit_count,
+        )
+
     async def publish_workspace(
         self,
         *,
@@ -732,9 +848,18 @@ class OmnigentWorkspacePublicationService:
                         remote_verified=True,
                         commits_ahead_of_base=commit_count,
                     )
+        job_id = uuid5(NAMESPACE_URL, publication_identity)
+        if published is None and normalized_mode == "pr":
+            published = await self._reconciled_published_candidate(
+                run_command=run_command,
+                command_env=command_env,
+                workspace=safe_workspace,
+                candidate_branch=job_branch_name(job_id),
+                base_branch=normalized_base,
+            )
         if published is None:
             published = await PublishService().publish(
-                job_id=uuid5(NAMESPACE_URL, publication_identity),
+                job_id=job_id,
                 instruction="Publish completed Omnigent repository work",
                 # PR creation remains owned by the durable parent workflow.
                 publish_mode="branch",
@@ -949,7 +1074,7 @@ class OmnigentWorkspacePublicationService:
                     workspace_locator=workspace_locator,
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
-                    publication_identity=request.idempotency_key,
+                    publication_identity=logical_publication_identity(request),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -964,7 +1089,7 @@ class OmnigentWorkspacePublicationService:
                 workspace_locator=workspace_locator,
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
-                publication_identity=request.idempotency_key,
+                publication_identity=logical_publication_identity(request),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,
@@ -981,5 +1106,6 @@ __all__ = [
     "OmnigentWorkspacePublicationService",
     "branch_publish_mode_for_destination",
     "compile_branch_publish_mode",
+    "logical_publication_identity",
     "publication_failure_is_transient",
 ]

@@ -114,17 +114,32 @@ def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
     }
 
 
-def carry_confirmed_saved_work(error: BaseException, binding: Any) -> None:
-    """Offer a failed attempt's saved workspace to its successor (#4627).
+def carry_attempt_stop_evidence(
+    error: BaseException,
+    binding: Any,
+    *,
+    cleanup_error: BaseException | None = None,
+) -> None:
+    """Tell a failed attempt's successor whether this attempt is stopped (#4627).
 
     Only after this realizer's cleanup confirmed the attempt stopped (its host,
     credentials and session released) can no late write follow the save, so a
     replacement Step Execution may continue from those verified bytes.
+    Otherwise the failure names the binding whose reconciliation is
+    unfinished; a successor may not write until that reconciliation confirms
+    the stop.
     """
 
-    saved = (binding.phaseResults or {}).get("saved")
-    if binding.state is RuntimeBindingState.cleaned and saved:
-        error.saved_workspace_checkpoint = dict(saved)  # type: ignore[attr-defined]
+    if binding.state is RuntimeBindingState.cleaned and cleanup_error is None:
+        saved = (binding.phaseResults or {}).get("saved")
+        if saved:
+            error.saved_workspace_checkpoint = dict(saved)  # type: ignore[attr-defined]
+        return
+    error.unconfirmed_attempt_stop = {  # type: ignore[attr-defined]
+        "executionPlanRef": binding.executionPlanRef,
+        "runtimeBindingRef": binding.bindingId,
+        "bindingState": binding.state.value,
+    }
 
 
 class GenericOmnigentHostRealizer:
@@ -754,8 +769,15 @@ class GenericOmnigentHostRealizer:
             recovery = await self._interrupted_admission_result(request, binding)
             if recovery is not None:
                 return recovery
-            if isinstance(primary_error, Exception):
-                carry_confirmed_saved_work(primary_error, binding)
+        if (
+            isinstance(primary_error, Exception)
+            and binding is not None
+            and not resume_owns_terminal_outcome
+        ):
+            # A resumed host's lifecycle already reported its own stop evidence.
+            carry_attempt_stop_evidence(
+                primary_error, binding, cleanup_error=cleanup_error
+            )
         if primary_error is not None:
             raise primary_error
         if result is None:
@@ -1013,8 +1035,10 @@ class GenericOmnigentHostRealizer:
             binding=current,
         )
         if primary_error is not None:
-            if cleanup_error is None and isinstance(primary_error, Exception):
-                carry_confirmed_saved_work(primary_error, current)
+            if isinstance(primary_error, Exception):
+                carry_attempt_stop_evidence(
+                    primary_error, current, cleanup_error=cleanup_error
+                )
             raise primary_error
         if result is None:
             raise HarnessPlatformError(
@@ -1933,4 +1957,4 @@ class GenericOmnigentHostRealizer:
         )
 
 
-__all__ = ["GenericOmnigentHostRealizer", "carry_confirmed_saved_work"]
+__all__ = ["GenericOmnigentHostRealizer", "carry_attempt_stop_evidence"]

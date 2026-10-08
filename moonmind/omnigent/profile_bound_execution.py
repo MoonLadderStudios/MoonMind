@@ -423,12 +423,34 @@ class OmnigentProfileBoundExecutionCoordinator:
         self,
         *,
         policy_snapshot: Mapping[str, Any],
-        effective_launch: Mapping[str, Any],
-    ) -> None:
+        effective_launch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return the admitted launch after proving it from the policy snapshot.
+
+        Planning reconciles a same-repository host rebuild to the installed
+        Host Class image (#4627). Applying that same deterministic
+        reconciliation to the recompiled policy launch must reproduce the
+        plan's recorded launch bytes exactly; any other difference fails.
+        """
+
         plan = self._execution_plan
         if plan is None:
-            return
+            return effective_launch
         payload = plan.payload
+        recorded_image = str(payload.hostImageRef or "")
+        if recorded_image and recorded_image != str(
+            effective_launch.get("hostImageRef") or ""
+        ):
+            from moonmind.omnigent.host_image_drift import (
+                reconcile_effective_launch_to_selected_host,
+            )
+
+            effective_launch = (
+                reconcile_effective_launch_to_selected_host(
+                    effective_launch, recorded_image
+                )
+                or effective_launch
+            )
         if (
             payload.policySnapshotDigest is None
             or payload.effectiveLaunchSnapshotDigest is None
@@ -446,6 +468,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "Codex launch authority has drifted from the admitted plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        return effective_launch
 
     async def _write_plan_runtime_evidence(
         self,
@@ -1056,7 +1079,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             # legacy coordinator may resolve mutable catalog rows only to prove
             # that they still equal that authority, and must do so before lease
             # acquisition or any host/provider mutation.
-            self._require_recorded_launch(
+            effective_launch = self._require_recorded_launch(
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
             )

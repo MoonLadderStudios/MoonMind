@@ -196,3 +196,189 @@ async def test_dispatch_still_rejects_changed_admitted_launch(
         coordinator._require_recorded_launch(
             policy_snapshot=snapshot, effective_launch=launch
         )
+
+
+async def _admit_codex_plan(monkeypatch, *, snapshot, policy, workflow_id):
+    monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        service, "_resolve_runtime_policy_snapshot", AsyncMock(return_value=snapshot)
+    )
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+    )
+    artifacts = _ArtifactService()
+    parameters = {
+        "targetRuntime": "omnigent",
+        "publishMode": "auto",
+        "model": "example/model",
+        "effort": "high",
+        "omnigent": {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": policy,
+        },
+    }
+    admitted = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=artifacts,
+        principal="user-1",
+        workflow_id=workflow_id,
+        agent_profile_snapshot=_snapshot(
+            harness="codex-native", policy=policy, provider_id="codex"
+        ),
+        provider_profile=SimpleNamespace(
+            profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+        ),
+        initial_parameters=parameters,
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+    )
+    launch = json.loads(
+        artifacts.payloads[
+            admitted.envelope.payload.effectiveLaunchSnapshotRef.removeprefix(
+                "artifact:"
+            )
+        ]
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=object(),
+        host_repository=object(),
+        host_runtime=object(),
+        run_store=object(),
+        execution_runner=AsyncMock(),
+        artifact_gateway=artifacts,
+        execution_plan=admitted.envelope,
+    )
+    return admitted.envelope, launch, coordinator
+
+
+def _dispatch_recompiled_launch(snapshot):
+    """Recompile launch authority exactly as the Codex coordinator does."""
+
+    from moonmind.omnigent.profile_bound_execution import (
+        _compile_persisted_effective_launch,
+        compile_follow_up_retrieval_policy,
+    )
+
+    return _compile_persisted_effective_launch(
+        snapshot,
+        provider_profile_id="codex",
+        follow_up_retrieval=compile_follow_up_retrieval_policy(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_attempt_after_compatible_image_update_runs_on_installed_host(
+    monkeypatch,
+):
+    """#4627 R4: a fresh Codex attempt follows the newly installed host image.
+
+    A deployment update installs a rebuilt host image from the same repository
+    while the policy snapshot (and the predecessor's admitted plan) still pin
+    the previous digest. The fresh attempt is admitted on the installed image,
+    and the legacy coordinator accepts that plan because recompiling the
+    unchanged policy plus the same deterministic reconciliation reproduces the
+    recorded launch bytes exactly. The predecessor keeps its actual image.
+    """
+
+    old_image = "ghcr.io/example/omnigent-host@sha256:" + "f" * 64
+    installed_image = "ghcr.io/example/omnigent-host@sha256:" + "e" * 64
+    policy = "codex-on-demand@16"
+    _configure_ready_host_image_pair(monkeypatch)
+    snapshot = _policy_snapshot(
+        harness="codex-native", policy=policy, host_image_ref=old_image
+    )
+
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", old_image)
+    predecessor, predecessor_launch, _ = await _admit_codex_plan(
+        monkeypatch, snapshot=snapshot, policy=policy, workflow_id="mm:before"
+    )
+    # The update installs the rebuilt image; the policy is not yet re-versioned.
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_image)
+    successor, successor_launch, coordinator = await _admit_codex_plan(
+        monkeypatch, snapshot=snapshot, policy=policy, workflow_id="mm:after"
+    )
+
+    assert predecessor.payload.hostImageRef == old_image
+    assert predecessor_launch["hostImageRef"] == old_image
+    assert successor.payload.hostImageRef == installed_image
+    assert successor_launch["hostImageRef"] == installed_image
+    assert successor_launch["boundaries"]["host"]["hostImageRef"] == installed_image
+    for field in ("harnessId", "launchPolicyRef", "executionRealizerRef"):
+        assert getattr(successor.payload, field) == getattr(predecessor.payload, field)
+    assert successor.payload.harnessId == "codex-native"
+    assert successor.payload.modelConfig == predecessor.payload.modelConfig
+    for field in (
+        "harness",
+        "executionProfileRef",
+        "launchPolicyRef",
+        "providerProfileId",
+        "repositoryMutation",
+        "agentName",
+        "hostMode",
+    ):
+        assert successor_launch.get(field) == predecessor_launch.get(field)
+
+    dispatched = coordinator._require_recorded_launch(
+        policy_snapshot=snapshot,
+        effective_launch=_dispatch_recompiled_launch(snapshot),
+    )
+    assert dispatched == successor_launch
+    assert dispatched["hostImageRef"] == installed_image
+
+
+@pytest.mark.asyncio
+async def test_codex_drift_reconciliation_rejects_any_other_launch_change(
+    monkeypatch,
+):
+    old_image = "ghcr.io/example/omnigent-host@sha256:" + "f" * 64
+    installed_image = "ghcr.io/example/omnigent-host@sha256:" + "e" * 64
+    policy = "codex-on-demand@16"
+    _configure_ready_host_image_pair(monkeypatch)
+    snapshot = _policy_snapshot(
+        harness="codex-native", policy=policy, host_image_ref=old_image
+    )
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", installed_image)
+    _plan, _launch, coordinator = await _admit_codex_plan(
+        monkeypatch, snapshot=snapshot, policy=policy, workflow_id="mm:after"
+    )
+
+    tampered = _dispatch_recompiled_launch(snapshot)
+    tampered["repositoryMutation"] = not tampered["repositoryMutation"]
+    with pytest.raises(HarnessPlatformError, match="launch authority has drifted"):
+        coordinator._require_recorded_launch(
+            policy_snapshot=snapshot, effective_launch=tampered
+        )
+    foreign = _policy_snapshot(
+        harness="codex-native",
+        policy=policy,
+        host_image_ref="ghcr.io/example/other-host@sha256:" + "f" * 64,
+    )
+    with pytest.raises(HarnessPlatformError, match="launch authority has drifted"):
+        coordinator._require_recorded_launch(
+            policy_snapshot=foreign,
+            effective_launch=_dispatch_recompiled_launch(foreign),
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_plan_still_rejects_foreign_repository_host(monkeypatch):
+    policy = "codex-on-demand@16"
+    _configure_ready_host_image_pair(monkeypatch)
+    snapshot = _policy_snapshot(
+        harness="codex-native",
+        policy=policy,
+        host_image_ref="ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/other-host@sha256:" + "e" * 64,
+    )
+    with pytest.raises(ValueError, match="effective launch host image conflicts"):
+        await _admit_codex_plan(
+            monkeypatch, snapshot=snapshot, policy=policy, workflow_id="mm:foreign"
+        )

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -6194,6 +6195,141 @@ def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:
                 observation_started_at=now + 621.0,
             )
         assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
+    finally:
+        loop.close()
+
+
+@pytest.mark.asyncio
+async def test_replaced_observer_keeps_the_host_loss_grace_it_already_spent(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Repeated worker replacement cannot reset an interrupted turn's clocks (#4627).
+
+    The observer that first saw the host offline was itself replaced by an
+    update. Its retried Activity reattaches to the same session and accepted
+    turn, posts nothing new, and continues the host-loss grace from the time
+    recorded in its last heartbeat instead of starting a fresh grace.
+    """
+
+    correlation_id = "corr-host-lost"
+    idempotency_key = "idem-host-lost"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    store = _RecordingBridgeStore()
+    store.row.omnigent_session_id = "session-1"
+    store.row.first_message_state = "posted"
+    store.row.first_message_posted_at = object()
+    pool = _RestartedOmnigentTransportPool(marker, refused_connections=0)
+    offline_since = time.time() - 120.0
+    replaced_observer_heartbeat = {
+        "omnigentSessionId": "session-1",
+        "firstMessagePosted": True,
+        "turnDispatchedAt": time.time() - 600.0,
+        "hostOfflineSince": offline_since,
+    }
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._heartbeat_details",
+        lambda: (replaced_observer_heartbeat,),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._SESSION_HOST_LOSS_GRACE_SECONDS", 60.0
+    )
+
+    token = _ACTIVITY_HEARTBEAT_STATE.set({})
+    try:
+        result = await asyncio.wait_for(
+            run_omnigent_execution(
+                AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId=correlation_id,
+                    idempotencyKey=idempotency_key,
+                    parameters={
+                        "omnigent": {
+                            "agent": {"agentName": "opencode-native-ui"},
+                            "session": {"allowEmptyWorkspace": True},
+                            "prompt": {"text": "resolve"},
+                        },
+                    },
+                ),
+                artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+                run_store=store,
+                transport_pool=pool,
+            ),
+            # Far shorter than the 60s grace: only the carried clock can fire.
+            timeout=10.0,
+        )
+    finally:
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
+        await pool.client().aclose()
+
+    assert "POST /v1/sessions" not in pool.paths, "the same session is reattached"
+    assert not [path for path in pool.paths if path.startswith("POST")], (
+        "an observer reattach must not dispatch another turn"
+    )
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+
+
+def test_turn_clocks_survive_observer_replacement_through_heartbeats() -> None:
+    """A replaced observer resumes the dispatch and host-loss clocks it recorded."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        first = _MarkedTurnStartWatchdog(
+            loop=loop,
+            timeout_seconds=300.0,
+            started_at=loop.time() - 250.0,
+            host_loss_grace_seconds=180.0,
+        )
+        marker = "current-marker"
+        unstarted = {"boundarySource": "marker", "progress": False}
+        first.observe(
+            _host_lost_snapshot(marker),
+            unstarted,
+            observation_started_at=loop.time() - 100.0,
+        )
+        recorded = first.heartbeat_fields()
+        assert recorded["turnDispatchedAt"] == pytest.approx(time.time() - 250.0, abs=2)
+        assert recorded["hostOfflineSince"] == pytest.approx(
+            time.time() - 100.0, abs=2
+        )
+
+        replacement = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, host_loss_grace_seconds=180.0
+        )
+        replacement.restore_clocks(recorded)
+        assert replacement.started_at == pytest.approx(loop.time() - 250.0, abs=2)
+        assert replacement.deadline == pytest.approx(loop.time() + 50.0, abs=2)
+        # The grace keeps counting from the original offline observation.
+        with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+            replacement.observe(
+                _host_lost_snapshot(marker),
+                {"boundarySource": "marker", "progress": True},
+                observation_started_at=loop.time() + 81.0,
+            )
+        assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
+
+        # A later dispatch time or a missing/invalid record never extends a budget.
+        later = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, started_at=loop.time() - 10.0
+        )
+        later.restore_clocks(
+            {"turnDispatchedAt": time.time() + 500.0, "hostOfflineSince": "bad"}
+        )
+        assert later.started_at == pytest.approx(loop.time() - 10.0, abs=2)
+        assert later.host_offline_since is None
     finally:
         loop.close()
 

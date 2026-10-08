@@ -369,6 +369,107 @@ async def test_generic_dispatch_carries_confirmed_saved_work_on_host_loss() -> N
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_names_attempt_whose_stop_is_unconfirmed() -> None:
+    """Host loss without a confirmed stop names the binding to reconcile (#4627)."""
+
+    from moonmind.omnigent.execute import OmnigentSessionHostLostError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+    unconfirmed = {
+        "executionPlanRef": plan.planRef,
+        "runtimeBindingRef": "binding-partitioned",
+        "bindingState": "cleanup_pending",
+    }
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            error = OmnigentSessionHostLostError(
+                "Omnigent session host went offline", offline_seconds=181.0
+            )
+            error.unconfirmed_attempt_stop = unconfirmed
+            raise error
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-host-lost",
+            idempotencyKey="step-host-lost",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.metadata["unconfirmedAttemptStop"] == unconfirmed
+    assert "savedWorkspaceCheckpoint" not in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_janitor_activity_confirms_one_interrupted_attempt_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successor's owner drives the realizer reconciliation of one binding."""
+
+    from moonmind.omnigent import generic_host_janitor, production
+    from moonmind.workflows.temporal.activities import omnigent_activities
+
+    calls: list[tuple[str, str]] = []
+
+    class Janitor:
+        def __init__(self, **kwargs):
+            assert kwargs["realizer"] == "generic-realizer"
+
+        async def confirm_attempt_stopped(
+            self, *, execution_plan_ref, runtime_binding_ref
+        ):
+            calls.append((execution_plan_ref, runtime_binding_ref))
+            return {"stopConfirmed": True, "runtimeBindingRef": runtime_binding_ref}
+
+        async def run(self):
+            raise AssertionError("a targeted confirmation does not scan")
+
+    async def no_scan(_request):
+        raise AssertionError("a targeted confirmation does not scan OAuth hosts")
+
+    monkeypatch.setattr(generic_host_janitor, "GenericOmnigentHostJanitor", Janitor)
+    monkeypatch.setattr(
+        production,
+        "build_generic_omnigent_execution_services",
+        lambda **_kwargs: SimpleNamespace(
+            host_lease_repository="host-leases",
+            runtime_binding_store="bindings",
+            generic_realizer="generic-realizer",
+        ),
+    )
+    monkeypatch.setattr(omnigent_activities, "_reconcile_oauth_hosts", no_scan)
+
+    result = await omnigent_activities.omnigent_oauth_host_janitor_activity(
+        {
+            "confirmAttemptStop": {
+                "executionPlanRef": "plan-a",
+                "runtimeBindingRef": "binding-a",
+            }
+        }
+    )
+
+    assert calls == [("plan-a", "binding-a")]
+    assert result == {"stopConfirmed": True, "runtimeBindingRef": "binding-a"}
+
+
+@pytest.mark.asyncio
 async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_service() -> (
     None
 ):

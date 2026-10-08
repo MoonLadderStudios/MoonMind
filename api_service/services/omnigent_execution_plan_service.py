@@ -1500,15 +1500,10 @@ async def compile_and_persist_execution_plan(
             reconcile_effective_launch_to_selected_host,
         )
 
-        # The retained Codex coordinator recompiles the policy snapshot, so
-        # its explicit image authority must agree before a plan is persisted.
-        # Bootstrap owns advancing that policy for a new default host image.
-        reconciled = (
-            reconcile_effective_launch_to_selected_host(
-                effective_launch, host_class.imageRef
-            )
-            if harness_id != "codex-native"
-            else None
+        # The retained Codex coordinator recompiles the policy snapshot and
+        # applies this same reconciliation, so it admits only these exact bytes.
+        reconciled = reconcile_effective_launch_to_selected_host(
+            effective_launch, host_class.imageRef
         )
         if reconciled is None:
             planned_ref = str(effective_launch.get("hostImageRef") or "")
