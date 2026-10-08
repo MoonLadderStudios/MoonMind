@@ -61,7 +61,10 @@ from moonmind.workflows.temporal.publication_recovery import (
     SavedWorkPublicationDestination,
     saved_work_publication_operation_key,
 )
-from moonmind.workflows.temporal.runtime import checkpoint_restore
+from moonmind.workflows.temporal.runtime import (
+    checkpoint_restore,
+    managed_api_key_resolve,
+)
 from moonmind.workflows.temporal.workflows import (
     publication_recovery as workflow_module,
 )
@@ -391,7 +394,17 @@ async def journey(
         async def create(self, **kwargs):
             return await provider.create(**kwargs)
 
-        monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+        async def no_ambient_credential(*_args, **_kwargs):
+            raise AssertionError(
+                "publication must use the default repository connection"
+            )
+
+        monkeypatch.setattr(
+            managed_api_key_resolve, "resolve_default_github_connection_credential", resolve
+        )
+        monkeypatch.setattr(
+            github_credentials, "resolve_github_credential", no_ambient_credential
+        )
         monkeypatch.setattr(
             checkpoint_restore, "resolve_github_token_for_launch", no_source_clone
         )
@@ -548,6 +561,60 @@ async def test_additive_pr_publishes_saved_content_with_fresh_authority_only(
             for artifact_id in await _publication_closure(state)
         }
         assert await state.use_claims() == []
+
+
+@pytest.mark.asyncio
+async def test_recorded_default_connection_publishes_instead_of_an_ambient_token(
+    tmp_path, monkeypatch
+):
+    """The ``github:repository-default`` authority is the recorded default
+    connection, never an ambient deployment token (MoonLadderStudios/MoonMind#4003).
+    """
+
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        record_repository_connections,
+    )
+
+    real_default = managed_api_key_resolve.resolve_default_github_connection_credential
+    real_ambient = github_credentials.resolve_github_credential
+    async with journey(
+        tmp_path, monkeypatch, destination_files={"README.md": "destination only\n"}
+    ) as state:
+        monkeypatch.setattr(
+            managed_api_key_resolve,
+            "resolve_default_github_connection_credential",
+            real_default,
+        )
+        monkeypatch.setattr(
+            github_credentials, "resolve_github_credential", real_ambient
+        )
+        monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+        monkeypatch.setenv("DEFAULT_CONNECTION_PAT", "default-connection-token")
+        engine = await record_repository_connections(
+            monkeypatch,
+            tmp_path,
+            github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_CONNECTION_PAT"),
+        )
+        try:
+            result = await state.run(
+                state.contract(
+                    objective="pr", baseBranch="main", strategy="additive_import"
+                )
+            )
+        finally:
+            await engine.dispose()
+
+        assert result["outcome"] == "published"
+        assert [c["github_token"] for c in state.provider.creates] == [
+            "default-connection-token"
+        ]
+        assert result["admission"]["authorityRef"].endswith(
+            f":{DEFAULT_GIT_CONNECTION_REF}"
+        )
 
 
 @pytest.mark.asyncio
