@@ -28,7 +28,8 @@ TEST_FILE = "test_exact_docker_n_way_concurrency.py"
 RECEIPT = "credential-recovery-exact-docker.json"
 JUNIT = "credential-recovery-junit.xml"
 POSTGRES_IMAGE = "postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60"
-READINESS_SCRIPT = """import os
+READINESS_SCRIPT = """import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -37,14 +38,19 @@ request = urllib.request.Request(
     'http://omnigent:8000/v1/agents',
     headers={'Authorization': 'Bearer ' + os.environ['OMNIGENT_API_TOKEN']},
 )
+# Exercise the same internal control listener used by the actual host. Set
+# the request proxy explicitly so an inherited NO_PROXY cannot bypass it.
+request.set_proxy('omnigent-egress-proxy:3129', 'http')
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     try:
         with opener.open(request, timeout=2) as response:
-            if response.status == 200:
+            payload = json.loads(response.read(1024 * 1024))
+            if (response.status == 200 and isinstance(payload, dict)
+                    and isinstance(payload.get('data'), list)):
                 break
-    except (OSError, urllib.error.URLError):
+    except (OSError, urllib.error.URLError, ValueError):
         pass
     time.sleep(2)
 else:
@@ -195,13 +201,17 @@ def _annotation(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def compose_document(source, repo_root, server_image):
+def compose_document(source, repo_root, server_image, *, moonmind_image):
     """Reuse canonical init/registration commands, replacing deployment wiring."""
-    names = ("postgres", "omnigent-db-init", "omnigent-agent-init", "omnigent")
+    names = (
+        "postgres", "omnigent-db-init", "omnigent-agent-init", "omnigent",
+        "sandbox-egress-proxy",
+    )
     services = {name: copy.deepcopy(source["services"][name]) for name in names}
     for service in services.values():
         service.pop("env_file", None)
         service.pop("profiles", None)
+        service.pop("container_name", None)
         service["networks"] = ["test"]
         service["restart"] = "no"
     services["postgres"].update(
@@ -252,6 +262,16 @@ def compose_document(source, repo_root, server_image):
         # readiness probe and actual recovery driver use this same network.
         ports=[],
         volumes=["omnigent-data:/data"],
+    )
+    # Reuse the candidate's baked policy and canonical proxy entrypoint. The
+    # fixture has only an internal network, so even allowlisted external
+    # destinations have no route; package-registry access is also disabled.
+    services["sandbox-egress-proxy"].update(
+        image=moonmind_image,
+        environment={"MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED": "false"},
+        networks={"test": {"aliases": ["omnigent-egress-proxy"]}},
+        ports=[],
+        volumes=[],
     )
     return {
         "services": services,
@@ -481,6 +501,7 @@ def main(argv=None):
             yaml.safe_load((root / "docker-compose.yaml").read_text()),
             root,
             args.server_image,
+            moonmind_image=app["Id"],
         )
         (work / "compose.json").write_text(json.dumps(document, indent=2) + "\n")
         (work / "driver").mkdir(exist_ok=True)
@@ -488,16 +509,18 @@ def main(argv=None):
             root / "tests/integration/omnigent" / TEST_FILE,
             work / "driver" / TEST_FILE,
         )
-        _command([*compose, "up", "-d", "omnigent"])
-        server_container = _command([*compose, "ps", "-q", "omnigent"]).stdout.strip()
-        server_actual = json.loads(
-            _command(["docker", "inspect", server_container]).stdout
-        )[0]
-        _require(
-            server_actual["Image"] == images["server"]["id"],
-            "running server differs from the built artifact",
-        )
-        identity["serverContainerId"] = server_actual["Id"]
+        _command([*compose, "up", "-d", "omnigent", "sandbox-egress-proxy"])
+        for service, role, expected_image in (
+            ("omnigent", "server", images["server"]["id"]),
+            ("sandbox-egress-proxy", "proxy", app["Id"]),
+        ):
+            container = _command([*compose, "ps", "-q", service]).stdout.strip()
+            actual = json.loads(_command(["docker", "inspect", container]).stdout)[0]
+            _require(
+                actual["Image"] == expected_image,
+                f"running {role} differs from the built artifact",
+            )
+            identity[f"{role}ContainerId"] = actual["Id"]
         _command(readiness_command(image=app["Id"], network=network, token=token))
         command = test_command(
             image=app["Id"],
