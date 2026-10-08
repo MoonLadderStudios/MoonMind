@@ -138,6 +138,9 @@ MERGE_AUTOMATION_REVIEW_FAILURE_SETTLEMENT_PATCH_PREFIX = (
 MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH = (
     "merge-automation-restored-review-identity-v1"
 )
+MERGE_AUTOMATION_REVIEW_REFUSAL_SETTLEMENT_PATCH_PREFIX = (
+    "merge-automation-review-refusal-settlement-v1:"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1895,6 +1898,12 @@ class MoonMindMergeAutomationWorkflow:
         )
         self._active_review_request = selected
 
+    def _review_refusal_settlement_enabled(self, observation_key: str) -> bool:
+        # Published workers used this marker before refusal receipts existed.
+        return workflow.patched(
+            MERGE_AUTOMATION_REVIEW_REFUSAL_SETTLEMENT_PATCH_PREFIX + observation_key
+        )
+
     def _review_failure_settlement_enabled(self, observation: Any) -> bool:
         if not isinstance(observation, str) or not observation.strip():
             return False
@@ -2020,6 +2029,42 @@ class MoonMindMergeAutomationWorkflow:
                 cycle["status"] = "completed"
             self._active_review_request = None
             return
+        observation = evaluation.get("readinessObservationId")
+        selected_at = _parse_review_timestamp(evaluation.get("automatedReviewRequestedAt"))
+        if (
+            isinstance(observation, str)
+            and observation.strip()
+            and cycle is not None
+            and self._active_review_cycle_matches()
+            and evaluation.get("headSha") == self._active_review_request.get("headSha")
+            and evaluation.get("automatedReviewRequestCommentId")
+            == self._active_review_request.get("requestCommentId")
+            and selected_at is not None
+            and selected_at
+            == _parse_review_timestamp(self._active_review_request.get("requestedAt"))
+            and evaluation.get("automatedReviewRequestStale") is not True
+            and any(
+                isinstance(blocker, Mapping)
+                and blocker.get("kind") == "automated_review_request_failed"
+                and blocker.get("source") == self._active_review_request.get("provider")
+                for blocker in (evaluation.get("blockers") or [])
+            )
+        ):
+            if self._review_failure_settlement_enabled(observation):
+                return ReadinessBlockerModel(
+                    kind="automated_review_request_failed",
+                    source="policy",
+                    retryable=False,
+                    summary="The provider refusal lacks the receipt required to settle this review cycle.",
+                )
+            # Reproduce only the published receipt-less worker decision. Fresh
+            # observations require the stronger receipt contract above.
+            if self._review_refusal_settlement_enabled(
+                hashlib.sha256(observation.encode("utf-8")).hexdigest()
+            ):
+                cycle["status"] = "failed"
+                self._active_review_request = None
+                return None
         if evaluation.get("automatedReviewRequestStale") is True:
             # The head moved while waiting: the pending request can no longer
             # answer for the current revision, so it is invalidated and the next
