@@ -86,10 +86,12 @@ async def load_repository_connection_for_launch(
     A database failure propagates so callers can tell an unreadable record
     from an absent one, and a deleted or disabled connection raises
     ``RepositoryRouteError``: only true absence may select the deployment
-    declaration. Repository launches use the connection service's verified
-    assignment and operation policy, including its provenance-checked legacy
-    default exception. Reading the default without a repository remains
-    available to repository-independent readiness and registry consumers.
+    declaration. A recorded connection admits only a named
+    ``repository`` it has a verified assignment for, and only that
+    assignment's operations. The connection service classifies the migrated
+    default's historical unscoped exception; its identity alone grants none.
+    A default read without a repository serves deployment operations such as
+    registry authentication, not repository admission.
     """
 
     from api_service.db.base import async_session_maker
@@ -264,17 +266,23 @@ async def select_github_access_for_launch(
     repository: str | None = None,
     connections_dir: Path | None = None,
     client_policy: Any | None = None,
+    required_operations: Iterable[str] = (),
 ) -> SelectedGitHubAccess:
     """Select a launch's Git connection and read only its credential, once.
 
     Selection raises as :func:`select_git_connection_for_launch` does. A
     selected source that fails yields an unresolved credential carrying its
-    correction, never another credential.
+    correction, never another credential. Required operations are checked
+    against the recorded connection and assignment before reading a secret.
     """
 
     from moonmind.auth.github_credentials import (
         resolve_connection_github_credential,
         resolve_deployment_github_credential,
+    )
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_CONNECTION_MISMATCH,
+        RepositoryContractError,
     )
 
     connection = await select_git_connection_for_launch(
@@ -283,6 +291,13 @@ async def select_github_access_for_launch(
         connections_dir=connections_dir,
         client_policy=client_policy,
     )
+    if connection is not None:
+        for operation in required_operations:
+            if operation not in connection.allowed_operations:
+                raise RepositoryContractError(
+                    REPOSITORY_CONNECTION_MISMATCH,
+                    f"connection does not allow operation {operation!r}",
+                )
     if connection is None:
         credential = await resolve_deployment_github_credential(repo=repository)
     else:

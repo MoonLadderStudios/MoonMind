@@ -1040,6 +1040,7 @@ class SavedWorkPublicationRequest(BaseModel):
     pullRequestTitle: str | None = Field(None, max_length=256)
     pullRequestBody: str | None = Field(None, max_length=20_000)
     commitMessage: str | None = Field(None, max_length=2_000)
+    admissionGeneration: str | None = Field(None, min_length=1, max_length=128)
 
 
 class RemediationCheckpointBranchRepairRequest(BaseModel):
@@ -20784,6 +20785,7 @@ async def _admit_saved_work_publication(
             savedWorkRef=request.savedWorkRef,
             savedWorkDigest=saved_work_digest,
             admittedPrincipal=principal,
+            admissionGeneration=request.admissionGeneration,
             destination=destination,
             githubAuthorityRef=_SAVED_WORK_AUTHORITY_REF,
             commit={
@@ -20806,6 +20808,7 @@ async def _admit_saved_work_publication(
                 saved_work_digest=saved_work_digest,
                 destination=destination,
                 github_authority_ref=_SAVED_WORK_AUTHORITY_REF,
+                admission_generation=request.admissionGeneration,
             ),
         )
     except ValueError as exc:
