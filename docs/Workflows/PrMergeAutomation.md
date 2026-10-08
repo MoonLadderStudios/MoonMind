@@ -320,7 +320,14 @@ For merge and fix-only, external scheduling reads cover PR state/current head, r
 
 Confirmed failing checks and merge conflicts are resolver-actionable. A completed
 failure can launch remediation while other checks remain queued or running;
-incomplete checks without a confirmed failure keep waiting. With the review loop
+incomplete checks without a confirmed failure keep waiting. A head that has
+reported no check runs or gating statuses has no CI evidence yet, whether CI is
+still being queued after a push or never runs for the PR's base, so the gate
+keeps waiting instead of launching a resolver that would read the same state as
+`ci_signal_degraded` and hand straight back. Only advisory status on a base
+with no required checks counts as a clean signal without gating checks. The gate
+and the Skill share this rule (`pr_resolver_core.github_checks.head_ci_reported`).
+With the review loop
 disabled, required automated review is still observed and must complete before
 that resolver dispatch, including when a failed build has a queued downstream
 check. A merge conflict
