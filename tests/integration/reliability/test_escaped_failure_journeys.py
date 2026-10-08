@@ -4111,6 +4111,53 @@ async def test_tool_output_only_omnigent_turn_continues_before_publication(
     assert runner_calls[1]["resume_session_id"] == expected["resumeSessionId"]
 
 
+async def test_codex_turn_diff_after_answer_publishes_without_continuation(
+    tmp_path: Path,
+) -> None:
+    """Replay mm:a81dd46f at the session-terminal/publication handoff."""
+
+    replay_id = "omnigent-codex-turn-diff-terminal-answer"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    inspector = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(
+            get_session=AsyncMock(
+                return_value={
+                    "status": manifest["sessionStatus"],
+                    "items": manifest["items"],
+                }
+            )
+        ),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    completion = await inspector.inspect_session_completion(expected["resumeSessionId"])
+    assert (
+        completion["terminalAssistantAfterWork"]
+        is expected["terminalAssistantAfterWork"]
+    )
+    assert completion["toolResultCount"] == expected["toolResultCount"]
+
+    runner_calls: list[dict[str, object]] = []
+
+    async def execute(_request, **kwargs):
+        runner_calls.append(dict(kwargs))
+        return AgentRunResult(
+            summary="turn complete",
+            metadata={"omnigentSessionId": expected["resumeSessionId"]},
+        )
+
+    _ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        execute,
+        completion_evidence=[completion],
+    )
+
+    assert result.failure_class is None
+    assert metadata["push_status"] == expected["pushStatus"]
+    assert metadata["repositoryContinuationCount"] == expected["continuationCount"]
+    assert len(runner_calls) == expected["runnerCallCount"]
+
+
 async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     tmp_path: Path,
 ) -> None:
