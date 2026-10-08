@@ -451,6 +451,38 @@ def test_real_codex_clean_reply_only_ends_the_loop_without_major_findings(
     assert evidence["freshReviewForHead"] is clean
 
 
+@pytest.mark.parametrize("indent", ["    ", "\t", "  \t", "   \t"])
+@pytest.mark.parametrize("quoted_part", ["whole_reply", "result", "reviewed_commit"])
+def test_indented_codex_clean_reply_is_not_completion(
+    snapshot_module, indent, quoted_part
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    body = reply["body"]
+    if quoted_part == "whole_reply":
+        body = "\n".join(indent + line if line else line for line in body.splitlines())
+    elif quoted_part == "result":
+        opening, rest = body.split("\n", 1)
+        body = indent + opening + "\n" + rest
+    else:
+        body = body.replace("**Reviewed commit:**", indent + "**Reviewed commit:**")
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize("indent", ["", " ", "  ", "   "])
+def test_non_code_indent_preserves_real_codex_clean_reply(
+    snapshot_module, indent
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    body = "\n".join(
+        indent + line if line else line for line in reply["body"].splitlines()
+    )
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionId"] == reply["commentId"]
+
+
 @pytest.mark.parametrize("state", ["PENDING", "DISMISSED", "", "FUTURE_STATE"])
 def test_unsubmitted_or_unknown_review_is_not_completion(snapshot_module, state):
     evidence = _evidence(

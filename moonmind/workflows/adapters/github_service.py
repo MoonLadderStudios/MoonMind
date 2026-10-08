@@ -67,6 +67,7 @@ class PullRequestReadinessResult(BaseModel):
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
+    checks_reported: bool | None = Field(None, alias="checksReported")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
@@ -2180,6 +2181,7 @@ class GitHubService:
         observed_base_sha: str | None = None
         pr_open: bool | None = None
         pr_merged: bool | None = None
+        checks_reported: bool | None = None
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
@@ -2268,6 +2270,7 @@ class GitHubService:
                         str(base.get("ref") or "") if isinstance(base, dict) else None
                     ),
                 )
+                checks_reported = check_evidence.get("reported")
                 checks_complete = check_evidence["complete"]
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
@@ -2334,6 +2337,7 @@ class GitHubService:
             and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
+            checksReported=checks_reported,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
@@ -2354,7 +2358,10 @@ class GitHubService:
         headers: dict[str, str],
         base_branch: str | None = None,
     ) -> dict[str, Any]:
-        from pr_resolver_core.github_checks import partition_commit_statuses
+        from pr_resolver_core.github_checks import (
+            head_ci_reported,
+            partition_commit_statuses,
+        )
 
         blockers: list[dict[str, Any]] = []
 
@@ -2376,7 +2383,6 @@ class GitHubService:
                 f"https://api.github.com/repos/{repo}/commits/{head_sha}/status?per_page=100",
                 "statuses",
             )
-            status_state = str(status_data.get("state") or "").lower()
             commit_statuses = status_data.get("statuses") or []
 
             checks_data = await fetch_collection(
@@ -2478,8 +2484,6 @@ class GitHubService:
             if str(run.get("conclusion") or "").lower()
             not in {"", "success", "neutral", "skipped"}
         ]
-        has_commit_statuses = bool(commit_statuses)
-        has_check_runs = bool(check_runs)
         status_pending = any(
             str(status.get("state") or "").lower() in {"pending", "expected"}
             for status in commit_statuses
@@ -2488,11 +2492,14 @@ class GitHubService:
             str(status.get("state") or "").lower() in {"failure", "error"}
             for status in commit_statuses
         )
-        if required_contexts is None and not has_commit_statuses and not has_check_runs:
-            status_pending = status_state in {"pending", "expected"}
-            status_failed = status_state in {"failure", "error"}
+        ci_reported = head_ci_reported(
+            check_runs, commit_statuses, advisory_statuses, required_contexts
+        )
         has_running_checks = (
-            status_pending or bool(pending_runs) or bool(missing_required)
+            status_pending
+            or bool(pending_runs)
+            or bool(missing_required)
+            or not ci_reported
         )
         has_failed_checks = status_failed or bool(failed_runs)
 
@@ -2500,7 +2507,11 @@ class GitHubService:
             blockers.append(
                 {
                     "kind": "checks_running",
-                    "summary": "Required checks are still running.",
+                    "summary": (
+                        "Required checks are still running."
+                        if ci_reported
+                        else "No checks have reported for this head yet."
+                    ),
                     "retryable": True,
                     "source": "github",
                 }
@@ -2516,6 +2527,7 @@ class GitHubService:
             )
 
         return {
+            "reported": ci_reported,
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
