@@ -360,6 +360,40 @@ def test_observe_services_accepts_completed_one_shots_but_not_failures(
     assert "--all" in commands[0]
 
 
+def test_service_observation_survives_verbose_compose_rows(controller_path, monkeypatch):
+    import json
+    import subprocess
+
+    engine = load("engine")
+    rows = [
+        {"Service": name, "State": "running", "ExitCode": 0,
+         "Labels": {"com.docker.compose.oneoff": "False"}}
+        for name in ("postgres", "temporal-worker-agent-runtime", "temporal-worker-artifacts")
+    ]
+    commands = []
+
+    def command(args, **kwargs):
+        commands.append(args)
+        formatted = args[args.index("--format") + 1]
+        payload = rows if formatted != "json" else [
+            {**row, "Command": "verbose-container-command " + "x" * 1500}
+            for row in rows
+        ]
+        return subprocess.CompletedProcess(
+            args, 0, stdout="\n".join(json.dumps(row) for row in payload), stderr="",
+        )
+
+    monkeypatch.setattr(engine.subprocess, "run", command)
+    observed = engine.observe_services(
+        engine.subprocess_runner(), ("docker", "compose"), tuple(row["Service"] for row in rows),
+    )
+    assert observed["services"] == {row["Service"]: True for row in rows}
+    assert observed["completed"] == []
+    projection = commands[0][commands[0].index("--format") + 1]
+    assert '.Label "com.docker.compose.oneoff"' in projection
+    assert ".ExitCode" in projection and ".State" in projection
+
+
 def test_observe_services_rejects_destructive_or_empty_observation(controller_path):
     import pytest
 
