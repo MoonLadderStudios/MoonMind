@@ -101,6 +101,7 @@ def _blocker_from_mapping(
             "summary": sanitize_blocker_summary(payload.get("summary")),
             "retryable": bool(payload.get("retryable", True)),
             "source": payload.get("source"),
+            "providerFailure": payload.get("providerFailure"),
         }
     )
 
