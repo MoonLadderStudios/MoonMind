@@ -1,29 +1,36 @@
 """An update replaces the worker and agent host mid-step; the step restarts (#4627).
 
 The real ``MoonMindRunWorkflow`` execution stage runs a three-step plan in a
-worker OS process that reports one installed host image. After two steps
-complete, the third step's agent host process is running and has written work
-into its workspace. The update then kills that worker process and the host
-process outright and starts a replacement worker process on a newer installed
-image.
+worker OS process. The workflow's admitted execution plan pins the host image
+installed when it started. After two steps complete, the third step's agent
+host process is running and has written work into its workspace. The update
+then records a newer installed host image in the deployment's resolved-images
+store, kills that worker process and the host process outright, and starts a
+replacement worker process. The pre-update image stays in the local image
+cache, as it does after a Compose pull.
 
 Temporal redelivers the interrupted attempt to the replacement worker. That
 observer reattaches through the real generic realizer, finds the host gone,
 and its real cleanup saves the surviving workspace through the production
 workspace publication service and artifact store before releasing the host.
 The Run workflow starts one successor Step Execution under the same logical
-step, which restores those verified bytes into its own fresh workspace after
-the old workspace was removed, runs on the new installed image, and completes
-the original workflow. The two completed steps never run again.
+step and admitted plan, which restores those verified bytes into its own fresh
+workspace after the old workspace was removed. Production selection launches
+it on the newly installed image although the plan's image is still cached, and
+it completes the original workflow. The two completed steps never run again.
 
 Real: separate worker processes and agent host processes (killed with SIGKILL),
 Temporal, the Run workflow's retry loop and restart handoff, the generic
-realizer lifecycle/cleanup/reconciliation and janitor confirmation, the
-runtime-binding and host-lease stores, git workspaces, workspace save/restore
-and the artifact store. Controlled stand-ins: the agent provider (a small
-process that writes or checks files), the host launcher that starts it instead
-of a container, the ``MoonMind.AgentRun`` child (one heartbeating Activity),
-and provider/credential leases.
+realizer lifecycle/cleanup/reconciliation and janitor confirmation, host image
+selection (the planned-host resolver's Host Class selection over the
+deployment's resolved-images store and the host launcher's image resolution),
+the runtime-binding and host-lease stores, git workspaces, workspace
+save/restore and the artifact store. Controlled stand-ins: the agent provider
+(a small process that writes or checks files), started in place of a host
+container from the image the launcher resolved, the Omnigent session transport
+that observes it, the local image cache that the launcher queries, the
+``MoonMind.AgentRun`` child (one heartbeating Activity), and provider/credential
+leases.
 """
 
 from __future__ import annotations
@@ -50,6 +57,8 @@ from temporalio.exceptions import ApplicationError
 CONFIG_ENV = "MOONMIND_INTERRUPTED_STEP_JOURNEY_CONFIG"
 IMAGE_A = "ghcr.io/example/opencode@sha256:" + "a" * 64
 IMAGE_B = "ghcr.io/example/opencode@sha256:" + "b" * 64
+BUILD_A = "sha256:" + "1" * 64
+BUILD_B = "sha256:" + "2" * 64
 STEP_IDS = ("prepare", "analyze", "implement")
 INTERRUPTED_STEP = "implement"
 SAVED_FILE = "interrupted-work.txt"
@@ -173,7 +182,6 @@ def _host_mode(config: dict[str, Any], ordinal: int) -> str:
     return "hold" if ordinal == 1 else "complete"
 
 
-
 # ---------------------------------------------------------------------------
 # Workflows hosted by the worker process
 # ---------------------------------------------------------------------------
@@ -244,6 +252,7 @@ class InterruptedStepRun:
             },
         }
 
+
 # ---------------------------------------------------------------------------
 # Worker process: real Run workflow, realizer, stores and workspaces
 # ---------------------------------------------------------------------------
@@ -270,6 +279,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
     from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
     from moonmind.omnigent.host_leases import DbOmnigentHostLeaseRepository
     from moonmind.omnigent.host_runtime import PreparedHostInputs
+    from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
     from moonmind.omnigent.workspace_publication import (
@@ -282,21 +292,21 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
     from moonmind.workflows.temporal.activities.omnigent_activities import (
         _try_generic_realizer_dispatch,
     )
+    from moonmind.workflows.temporal.data_converter import (
+        MOONMIND_TEMPORAL_DATA_CONVERTER,
+    )
     from moonmind.workflows.temporal.runtime.workspace_locators import (
         SandboxWorkspaceRecord,
         SandboxWorkspaceRecordStore,
     )
-    from moonmind.workflows.temporal.data_converter import (
-        MOONMIND_TEMPORAL_DATA_CONVERTER,
-    )
     from moonmind.workflows.temporal.workflows import run as run_module
     from tests.unit.omnigent.test_generic_platform_production_services import (
-        _exact_plan,
+        _CachedImages,
         _generic_publication_harness,
+        exact_launch_resolver,
     )
 
     queue = config["taskQueue"]
-    image = config["installedImage"]
     root = Path(config["workspaceRoot"])
     ledger = Path(config["ledger"])
     markers = Path(config["markers"])
@@ -304,7 +314,15 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
     sessions = _session_factory(config)
     gateway = TemporalOmnigentArtifactGateway(session_factory=sessions)
     publisher = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
-    plan = _exact_plan("opencode-go/model")
+    # The workflow's admitted plan and the production resolver that turns it
+    # into a Host Class from this worker's installed deployment state.
+    plan, planned_host_resolver = exact_launch_resolver(IMAGE_A, build_digest=BUILD_A)
+    # A Compose pull leaves the pre-update image in the local cache.
+    launcher = DockerOmnigentHostLauncher(
+        backend=_CachedImages(IMAGE_A, IMAGE_B),
+        runtime_scripts=object(),
+        server_url="http://omnigent:8000",
+    )
     launched: dict[int, subprocess.Popen] = {}
 
     # The workflow's own routes name deployment queues; this isolated worker
@@ -353,7 +371,10 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
 
         async def prepare(self, *, request, **kwargs):
             await kwargs["authority_sink"](
-                {"kind": "skills", "cleanupRef": "skill-cleanup:" + request.idempotency_key}
+                {
+                    "kind": "skills",
+                    "cleanupRef": "skill-cleanup:" + request.idempotency_key,
+                }
             )
             workspace = publisher.resolve_request_workspace(request)
             restore_ref = (request.workspace_spec or {}).get(
@@ -375,7 +396,6 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
                 _record(
                     ledger,
                     event="workspace-restored",
-                    image=image,
                     ordinal=request.step_execution.execution_ordinal,
                     restoreRef=restore_ref,
                     files=sorted(path.name for path in workspace.iterdir()),
@@ -401,8 +421,12 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
                 },
             )
 
-        async def realize(self, *, request, plan, prepared, **_kwargs):
+        async def realize(self, *, request, plan, prepared, host_class, **_kwargs):
             ordinal = request.step_execution.execution_ordinal
+            # The launcher's own image resolution picks what to start.
+            image = await launcher._resolve_launch_image(
+                host_class.imageRef, host_class
+            )
             workspace = Path(prepared.workspace_attachment["sourceRef"])
             ready = markers / f"host-ready-{uuid4().hex}"
             process = subprocess.Popen(
@@ -425,7 +449,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
                     {
                         "imageRef": image,
                         "architecture": plan.payload.hostArchitecture,
-                        "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                        "omnigentBuildDigest": host_class.omnigentBuildDigest,
                         "harnessId": plan.payload.harnessId,
                         "harnessImplementationRef": (
                             plan.payload.harnessImplementationRef
@@ -439,6 +463,8 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
                 event="host-launched",
                 hostPid=process.pid,
                 image=image,
+                planImage=plan.payload.hostImageRef,
+                executionPlanRef=plan.planRef,
                 step=request.step_execution.logical_step_id,
                 ordinal=ordinal,
                 ready=str(ready),
@@ -460,8 +486,10 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
 
         async def cleanup(self, *, host_context, host_lease_ref, **_kwargs):
             pid = int(str(host_context["containerName"]).rsplit("-", 1)[-1])
-            lost_ack = markers / ("stop-ack-lost-" + hashlib.sha256(
-                host_lease_ref.encode()).hexdigest()[:16])
+            lost_ack = markers / (
+                "stop-ack-lost-"
+                + hashlib.sha256(host_lease_ref.encode()).hexdigest()[:16]
+            )
             if (
                 config["scenario"] == "stop_ack_lost"
                 and pid not in launched
@@ -498,7 +526,6 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
         _record(
             ledger,
             event="observer-attached",
-            image=image,
             hostPid=pid,
             ordinal=ordinal,
             activityAttempt=activity.info().attempt,
@@ -510,7 +537,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
             alive = _process_alive(pid) if process is None else exit_code is None
             if exit_code == 0:
                 return AgentRunResult(
-                    summary=f"implemented on {image}",
+                    summary="implemented",
                     metadata={"omnigentSessionId": "session-1"},
                 )
             if not alive:
@@ -537,6 +564,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
         built._runtime_bindings = DbRuntimeBindingStore(sessions)
         built._host_leases = DbOmnigentHostLeaseRepository(sessions)
         built._host_runtime = HostRuntime()
+        built._resolve_host = planned_host_resolver
         built._session_driver = session_driver
         built._workspace_publisher = publisher
         built._artifacts = Artifacts()
@@ -661,7 +689,6 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
         _record(
             ledger,
             event="delivery",
-            image=image,
             step=identity.logical_step_id,
             ordinal=identity.execution_ordinal,
             activityAttempt=activity.info().attempt,
@@ -670,9 +697,9 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
             ),
         )
         if identity.logical_step_id != INTERRUPTED_STEP:
-            return AgentRunResult(summary=f"{identity.logical_step_id} done").model_dump(
-                by_alias=True, mode="json", exclude_none=True
-            )
+            return AgentRunResult(
+                summary=f"{identity.logical_step_id} done"
+            ).model_dump(by_alias=True, mode="json", exclude_none=True)
         bound = attempt_request(request)
         materialize_checkout(bound)
         # Like the production Activity, heartbeat the whole delivery,
@@ -686,7 +713,6 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
         _record(
             ledger,
             event="attempt-result",
-            image=image,
             ordinal=identity.execution_ordinal,
             providerErrorCode=result.provider_error_code,
             retryRecommendation=result.retry_recommendation,
@@ -707,7 +733,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
                 execution_plan_ref=confirm["executionPlanRef"],
                 runtime_binding_ref=confirm["runtimeBindingRef"],
             )
-        _record(ledger, event="stop-confirmed", image=image, **confirmation)
+        _record(ledger, event="stop-confirmed", **confirmation)
         return confirmation
 
     _WORKER_QUEUE["name"] = queue
@@ -715,7 +741,7 @@ async def _run_worker(config: dict[str, Any]) -> None:  # noqa: C901
     client = await Client.connect(
         config["temporalAddress"], data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
     )
-    _record(ledger, event="worker-started", image=image)
+    _record(ledger, event="worker-started")
     async with Worker(
         client,
         task_queue=queue,
@@ -744,9 +770,24 @@ async def _database_identity(sessions) -> tuple[str, str | None]:
     return url, schema
 
 
-def _start_worker(config: dict[str, Any], image: str) -> subprocess.Popen:
+def _install(image: str, build_digest: str) -> None:
+    """Record ``image`` as the deployment's installed host, as an update does."""
+
+    from moonmind.omnigent.bootstrap.store import save_resolved_state
+    from tests.unit.omnigent.test_generic_platform_production_services import (
+        installed_deployment_state,
+    )
+
+    save_resolved_state(installed_deployment_state(image, build_digest=build_digest))
+
+
+def _start_worker(config: dict[str, Any]) -> subprocess.Popen:
     env = dict(os.environ)
-    env[CONFIG_ENV] = json.dumps({**config, "installedImage": image})
+    env[CONFIG_ENV] = json.dumps(config)
+    # Workers read the installed host image from deployment state only.
+    env["MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH"] = config["resolvedImagesPath"]
+    for name in ("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "OMNIGENT_IMAGE_REF"):
+        env.pop(name, None)
     repository = Path(__file__).resolve().parents[3]
     env["PYTHONPATH"] = os.pathsep.join(
         [str(repository), *filter(None, [env.get("PYTHONPATH")])]
@@ -784,7 +825,7 @@ async def _wait_for(description, predicate, *, seconds: float = 120.0):
     "scenario", ["update", "stop_ack_lost", "cancelled", "exhausted"]
 )
 async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
-    tmp_path, scenario
+    tmp_path, monkeypatch, scenario
 ):
     from temporalio.client import WorkflowFailureError
 
@@ -798,7 +839,7 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
     from tests.integration.reliability.test_release_routing_journey import connect
     from tests.support.isolated_postgres import isolated_postgres
     from tests.unit.omnigent.test_generic_platform_production_services import (
-        _exact_plan,
+        exact_launch_resolver,
     )
 
     client = await connect()
@@ -809,7 +850,8 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
     blob_root = tmp_path / "durable-artifacts"
     _use_artifact_blobs(blob_root)
     async with isolated_postgres(_tables()) as sessions:
-        plan = _exact_plan("opencode-go/model")
+        # Admitted before the update: the plan pins the then-installed image.
+        plan, _resolver = exact_launch_resolver(IMAGE_A, build_digest=BUILD_A)
         await DbExecutionPlanStore(sessions).persist(plan)
         gateway = TemporalOmnigentArtifactGateway(session_factory=sessions)
         anchor = AgentExecutionRequest.model_validate(
@@ -846,11 +888,16 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
             "blobRoot": str(blob_root),
             "ledger": str(ledger),
             "markers": str(markers),
+            "resolvedImagesPath": str(tmp_path / "deployment" / "resolved-images.json"),
             "planArtifactRef": plan_ref,
             "taskInputRef": input_ref,
             "taskInputDigest": "sha256:" + hashlib.sha256(task_input).hexdigest(),
         }
-        workers = [_start_worker(config, IMAGE_A)]
+        monkeypatch.setenv(
+            "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", config["resolvedImagesPath"]
+        )
+        _install(IMAGE_A, BUILD_A)
+        workers = [_start_worker(config)]
         try:
             handle = await client.start_workflow(
                 "ReliabilityInterruptedStepRun",
@@ -862,9 +909,10 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
                 # Every attempt's host dies under it; the worker keeps running.
                 with pytest.raises(WorkflowFailureError) as failure:
                     await asyncio.wait_for(handle.result(), 360)
-                assert "OMNIGENT_SESSION_HOST_LOST" in str(
-                    failure.value.cause
-                ) or "host" in str(failure.value.cause).lower()
+                assert (
+                    "OMNIGENT_SESSION_HOST_LOST" in str(failure.value.cause)
+                    or "host" in str(failure.value.cause).lower()
+                )
                 outcome = None
             else:
                 running = await _wait_for(
@@ -886,7 +934,8 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
                 )
                 if scenario == "cancelled":
                     await handle.signal("cancel")
-                workers.append(_start_worker(config, IMAGE_B))
+                _install(IMAGE_B, BUILD_B)
+                workers.append(_start_worker(config))
                 outcome = await asyncio.wait_for(handle.result(), 360)
         finally:
             for worker in workers:
@@ -895,14 +944,20 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
         deliveries = _events(ledger, "delivery")
         attempts = [event for event in deliveries if event["step"] == INTERRUPTED_STEP]
         started = _events(ledger, "worker-started")
+        launches = _events(ledger, "host-launched")
 
         # The completed steps never run again, on either worker.
         for step_id in STEP_IDS[:-1]:
             assert [
-                (event["ordinal"], event["image"])
+                (event["ordinal"], event["pid"])
                 for event in deliveries
                 if event["step"] == step_id
-            ] == [(1, IMAGE_A)]
+            ] == [(1, started[0]["pid"])]
+        # Every attempt reused the workflow's admitted plan, which still pins
+        # the image installed when the workflow started.
+        assert {
+            (event["executionPlanRef"], event["planImage"]) for event in launches
+        } == {(plan.planRef, IMAGE_A)}
 
         bindings = DbRuntimeBindingStore(sessions)
         from sqlalchemy import select
@@ -930,6 +985,8 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
         if scenario == "exhausted":
             assert [event["ordinal"] for event in attempts] == [1, 2, 3, 4]
             assert len(recorded) == 4
+            # Without an update the installed image is the admitted one.
+            assert {event["image"] for event in launches} == {IMAGE_A}
             restores = [event["restoreRef"] for event in attempts]
             assert restores[0] is None and all(restores[1:])
             return
@@ -940,16 +997,14 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
         # Observer redelivery: the interrupted attempt reattached on the new
         # worker under the same Step Execution, without a second turn.
         first_attempt = [event for event in attempts if event["ordinal"] == 1]
-        assert [(event["image"], event["pid"]) for event in first_attempt] == [
-            (IMAGE_A, old_pid),
-            (IMAGE_B, new_pid),
-        ]
-        launches = _events(ledger, "host-launched")
-        assert [(event["ordinal"], event["image"]) for event in launches][:1] == [
-            (1, IMAGE_A)
-        ]
+        assert [event["pid"] for event in first_attempt] == [old_pid, new_pid]
+        assert [(event["ordinal"], event["image"], event["pid"]) for event in launches][
+            :1
+        ] == [(1, IMAGE_A, old_pid)]
         lost = [
-            event for event in _events(ledger, "attempt-result") if event["ordinal"] == 1
+            event
+            for event in _events(ledger, "attempt-result")
+            if event["ordinal"] == 1
         ]
         assert [event["providerErrorCode"] for event in lost] == [
             "OMNIGENT_SESSION_HOST_LOST"
@@ -980,31 +1035,30 @@ async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(
         assert outcome["cancelRequested"] is False
         assert outcome["stepExecutions"][INTERRUPTED_STEP] == 2
         successor = [event for event in attempts if event["ordinal"] == 2]
-        assert [(event["image"], event["pid"]) for event in successor] == [
-            (IMAGE_B, new_pid)
-        ]
+        assert [event["pid"] for event in successor] == [new_pid]
         assert successor[0]["restoreRef"]
         restored = _events(ledger, "workspace-restored")
         assert [event["ordinal"] for event in restored] == [2]
         assert SAVED_FILE in restored[0]["files"]
-        # The successor ran on the newly installed image; the predecessor's
-        # binding retains the image its host actually ran.
-        assert [(event["ordinal"], event["image"]) for event in launches] == [
-            (1, IMAGE_A),
-            (2, IMAGE_B),
-        ]
+        # Production selection launched the successor on the newly installed
+        # image although the admitted plan's image was still cached; the
+        # predecessor's binding retains the image its host actually ran.
+        assert [
+            (event["ordinal"], event["image"], event["pid"]) for event in launches
+        ] == [(1, IMAGE_A, old_pid), (2, IMAGE_B, new_pid)]
         by_ordinal = {}
         for binding in recorded:
             workspace = binding.phaseResults["workspace"]
             by_ordinal[workspace["stepExecution"]["executionOrdinal"]] = binding
         assert attested_image(by_ordinal[1]) == IMAGE_A
         assert attested_image(by_ordinal[2]) == IMAGE_B
+        assert {binding.executionPlanRef for binding in recorded} == {plan.planRef}
         # The successor's own verified save holds the restored predecessor
         # bytes plus its completion, read back from the durable artifact store.
-        final_workspace = next(
-            path
-            for path in (tmp_path / "worker" / "temporal_sandbox").iterdir()
-        ) / "repo"
+        final_workspace = (
+            next(path for path in (tmp_path / "worker" / "temporal_sandbox").iterdir())
+            / "repo"
+        )
         assert (final_workspace / SAVED_FILE).read_text() == (
             f"saved by attempt 1 on {IMAGE_A}\n"
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -65,6 +66,8 @@ from moonmind.omnigent.harness_platform.stores import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+logger = logging.getLogger(__name__)
 
 
 def _digest(value: Any) -> str:
@@ -1013,7 +1016,22 @@ class OmnigentPlannedHostResolver:
             "MOONMIND_OMNIGENT_HOST_ARCHITECTURE", "linux/amd64"
         )
 
-    async def __call__(self, plan: OmnigentExecutionPlanEnvelope):
+    async def __call__(
+        self,
+        plan: OmnigentExecutionPlanEnvelope,
+        *,
+        installed_runtime: bool = False,
+    ):
+        """Return the plan's Host Class and launch policy.
+
+        ``installed_runtime`` asks for the deployment's installed runtime
+        instead of the plan's recorded image. The successor of an interrupted
+        attempt reuses its workflow's admitted plan; after an update it moves
+        to the installed same-repository host image through the same Host
+        Class selection fresh admission uses, keeping every other plan
+        authority (#4627).
+        """
+
         catalog = await self._catalogs.load(plan.payload.harnessCatalogRef)
         if catalog is None:
             raise HarnessPlatformError(
@@ -1066,7 +1084,90 @@ class OmnigentPlannedHostResolver:
                 host_class=host_class,
                 launch=launch,
             )
+            if installed_runtime:
+                host_class = self._installed_host(
+                    plan=plan,
+                    harness=harness,
+                    omnigent_version=catalog.snapshot.omnigentVersion,
+                    policy=policy,
+                    exact_host=host_class,
+                    launch=launch,
+                )
         return host_class, policy
+
+    def _installed_host(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        harness: Any,
+        omnigent_version: str,
+        policy: Any,
+        exact_host: HostClass,
+        launch: Mapping[str, Any] | None,
+    ) -> HostClass:
+        """Move an exact host to the installed image of the same Host Class.
+
+        Selection reads current deployment evidence (installed image, its
+        observed build and version, operator pins) exactly as fresh admission
+        does. Only a compatible same-repository image is adopted; when nothing
+        installed qualifies, the plan's recorded image stays authoritative and
+        launch-time recovery still applies.
+        """
+
+        from moonmind.omnigent.host_image_drift import (
+            reconcile_effective_launch_to_selected_host,
+        )
+
+        try:
+            installed = self._selector.select(
+                harness=harness,
+                omnigent_version=omnigent_version,
+                integration_mode=harness.capabilities.integrationMode
+                or "native-server",
+                materializer_refs=[
+                    item.materializerRef
+                    for item in model_bindings_of(
+                        plan.payload.credentialBindings
+                    ).values()
+                ],
+                architecture=exact_host.architectures[0],
+                requested_host_mode=policy.hostMode,
+                requested_host_class_ref=plan.payload.hostClassRef,
+            )
+        except HarnessPlatformError as exc:
+            logger.info(
+                "interrupted attempt successor keeps its admitted host image: "
+                "no installed host qualifies (%s)",
+                str(exc)[:300],
+            )
+            return exact_host
+        if installed.imageRef == exact_host.imageRef:
+            return exact_host
+        if (
+            launch is None
+            or reconcile_effective_launch_to_selected_host(launch, installed.imageRef)
+            is None
+        ):
+            logger.info(
+                "interrupted attempt successor keeps its admitted host image: "
+                "installed image %s is not the same runtime as %s",
+                installed.imageRef[:120],
+                exact_host.imageRef[:120],
+            )
+            return exact_host
+        logger.info(
+            "interrupted attempt successor launches on the installed host image "
+            "(admitted=%s installed=%s)",
+            exact_host.imageRef[:120],
+            installed.imageRef[:120],
+        )
+        return HostClass.model_validate(
+            {
+                **exact_host.model_dump(mode="json", by_alias=True),
+                "imageRef": installed.imageRef,
+                "omnigentBuildDigest": installed.omnigentBuildDigest,
+            }
+        )
 
     async def _load_exact_launch(
         self,
