@@ -1045,13 +1045,50 @@ class OmnigentOAuthHostRuntime:
                     payload=launch_evidence,
                 )
                 if cleanup_authority_store is not None:
-                    await cleanup_authority_store.bind_egress_cleanup_authority(
-                        request=evidence_request,
-                        host_lease_ref=host_lease.lease_id,
-                        egress_evidence=egress_evidence,
-                        launch_evidence_ref=launch_ref,
-                        phase="attested",
-                    )
+                    try:
+                        await cleanup_authority_store.bind_egress_cleanup_authority(
+                            request=evidence_request,
+                            host_lease_ref=host_lease.lease_id,
+                            egress_evidence=egress_evidence,
+                            launch_evidence_ref=launch_ref,
+                            phase="attested",
+                        )
+                    except (Exception, asyncio.CancelledError):
+                        if retained_host:
+                            # Commit can succeed before refresh reports failure.
+                            # Reconcile once through the existing authority owner
+                            # before selecting the paired cleanup provenance.
+                            try:
+                                reconciled = await asyncio.wait_for(
+                                    cleanup_authority_store.get_egress_cleanup_authority(
+                                        host_lease_ref=host_lease.lease_id
+                                    ),
+                                    timeout=5.0,
+                                )
+                                if (
+                                    isinstance(reconciled, Mapping)
+                                    and reconciled.get("phase") == "attested"
+                                ):
+                                    reconciled_ref = (
+                                        self._validate_reused_cleanup_authority(
+                                            authority=reconciled,
+                                            launch=launch,
+                                            egress_evidence=egress_evidence,
+                                        )
+                                    )
+                                    if reconciled_ref == launch_ref:
+                                        retained_cleanup_evidence = dict(
+                                            reconciled["egressEvidence"]
+                                        )
+                                        retained_cleanup_ref = reconciled_ref
+                            except Exception:
+                                logger.warning(
+                                    "Cleanup authority readback unavailable or conflicting "
+                                    "after bind failure for host lease %s; retaining "
+                                    "last confirmed authority",
+                                    host_lease.lease_id,
+                                )
+                        raise
                     if retained_host:
                         retained_cleanup_evidence = dict(egress_evidence)
                         retained_cleanup_ref = launch_ref

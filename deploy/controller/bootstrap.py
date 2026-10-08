@@ -243,6 +243,8 @@ def cmd_ensure(args, env) -> int:
                 ):
                     return 0
             except OSError:
+                # The recreated controller may not accept connections yet;
+                # keep polling within the existing readiness deadline.
                 pass
             if time.monotonic() >= deadline:
                 raise RuntimeError(

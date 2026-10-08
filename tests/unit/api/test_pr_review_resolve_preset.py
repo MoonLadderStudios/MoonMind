@@ -227,7 +227,10 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
     assert inputs["maxIterations"] == 7
     assert inputs["returnToGate"] is True
     assert inputs["finishMode"] == "merge"
-    assert "requireFreshReview" not in inputs
+    # A disabled review loop says so explicitly rather than leaving the child to
+    # infer a review requirement from task prose (#4751).
+    assert inputs["reviewProvider"] == "none"
+    assert inputs["requireFreshReview"] is False
     runtime = child["initial_parameters"]["task"]["runtime"]
     assert runtime["executionProfileRef"] == "chosen-profile"
     assert runtime["model"] == "chosen-model"

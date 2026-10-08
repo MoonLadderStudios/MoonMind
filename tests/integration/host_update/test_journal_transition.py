@@ -68,7 +68,7 @@ def await_record(path, *, process_check=None):
         if process_check:
             process_check()
         time.sleep(0.2)
-    pytest.fail(f"Journal actor did not produce {path.name}")
+    return pytest.fail(f"Journal actor did not produce {path.name}")
 
 
 def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_path):
@@ -189,7 +189,7 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         rollback = store.begin(stack="moonmind", desired_image=old_image,
                                source_revision="legacy-contract", target=target)
         phase(rollback)
-        readback = await_record(state / "legacy-read.json", process_check=actors_healthy)
+        await_record(state / "legacy-read.json", process_check=actors_healthy)
         await_record(state / "legacy-swept.json", process_check=actors_healthy)
         # Re-read after the old sweeper has actually run, not only before it.
         read_path = state / "legacy-read.json"
