@@ -35,6 +35,11 @@ from redact import redact_text, tail_text
 PULL_TIMEOUT_SECONDS = 600
 UP_TIMEOUT_SECONDS = 900
 MAX_COMMAND_TIMEOUT_SECONDS = 900
+SERVICE_OBSERVATION_FORMAT = (
+    '{"Service":{{json .Service}},"State":{{json .State}},'
+    '"ExitCode":{{json .ExitCode}},"Labels":{'
+    '"com.docker.compose.oneoff":{{json (.Label "com.docker.compose.oneoff")}}}}'
+)
 
 PULL_FLAGS = ("pull", "--policy", "always")
 UP_FLAGS = (
@@ -264,7 +269,10 @@ def observe_services(
     targets = [s for s in services if s]
     if not targets:
         raise ValueError("Refusing a service observation with no services.")
-    command = (*base, "ps", "--all", "--format", "json", *targets)
+    # Verbose Compose JSON includes labels, commands, ports and paths. Even
+    # three services can exceed the runner's diagnostic tail and lose the
+    # first row. Select the complete readiness inputs before that boundary.
+    command = (*base, "ps", "--all", "--format", SERVICE_OBSERVATION_FORMAT, *targets)
     result = run_command(runner, command, timeout_seconds=timeout_seconds)
     if int(result.get("exit", 0)) != 0:
         raise CommandError(

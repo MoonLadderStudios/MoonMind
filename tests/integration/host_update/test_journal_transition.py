@@ -140,12 +140,27 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         env=env, cwd=tmp_path)
     sys.path.insert(0, str(ROOT / "deploy" / "controller"))
     import record
+    import redact
     store = record.OperationStore(controller_state)
+    diagnostics = ROOT / "var" / "artifacts" / "journal-transition" / project
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    phase_number = 0
 
     def phase(operation, action="finish"):
-        return run([sys.executable, "-c", CONTROLLER_PHASE, str(ROOT),
-                    str(controller_state), operation["operationId"], action],
-                   env=env, cwd=tmp_path, check=action != "crash")
+        nonlocal phase_number
+        result = run([sys.executable, "-c", CONTROLLER_PHASE, str(ROOT),
+                      str(controller_state), operation["operationId"], action],
+                     env=env, cwd=tmp_path, check=False)
+        phase_number += 1
+        (diagnostics / f"phase-{phase_number}-{action}.json").write_text(json.dumps({
+            "operationId": operation["operationId"], "returncode": result.returncode,
+            "stdout": redact.redact_text(result.stdout),
+            "stderr": redact.redact_text(result.stderr),
+            "operation": redact.redact_mapping(store.load(operation["operationId"])),
+        }, indent=2))
+        if action != "crash":
+            assert result.returncode == 0, result.stdout + result.stderr
+        return result
 
     target = {"project": project, "projectDir": str(tmp_path),
               "composeFiles": [str(compose_file)], "services": ["postgres", WRITER, SWEEPER]}
@@ -183,6 +198,13 @@ def test_live_journal_survives_partial_apply_restart_and_legacy_rollback(tmp_pat
         assert readback == {"events": 4, "status": before["status"], "providerRefsPreserved": True}
         assert store.load(rollback["operationId"])["journalTransition"]["helperImage"] in original_sources
     finally:
-        compose("logs", "--tail", "80", check=False)
+        # Preserve this disposable project's actual evidence before cleanup;
+        # the workflow's generic Compose diagnostics target another project.
+        for name, args in (("ps", ("ps", "--all", "--format", "json")),
+                           ("logs", ("logs", "--no-color", "--tail", "80"))):
+            result = compose(*args, check=False)
+            (diagnostics / f"{name}.txt").write_text(
+                redact.redact_text(result.stdout + result.stderr)
+            )
         compose("down", "--remove-orphans", "--volumes", check=False)
         run(["docker", "image", "rm", old_image], env=env, cwd=tmp_path, check=False)
