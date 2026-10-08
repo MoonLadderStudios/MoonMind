@@ -478,14 +478,17 @@ async def test_pat_connection_test_reads_only_its_assigned_repositories(
 
     monkeypatch.setattr(db_base, "async_session_maker", harness.maker)
     monkeypatch.setenv("GITHUB_TOKEN", "global-token-must-not-be-used")
-    secret_reads: list[str] = []
+    from api_service.services.secrets import SecretsService
 
-    async def _resolve(ref: str) -> str:
-        secret_reads.append(ref)
-        return TOKEN_A
+    secret_reads: list[str] = []
+    read_secret = SecretsService.get_secret_with_revision
+
+    async def _resolve(_cls, session, slug: str):
+        secret_reads.append(slug)
+        return await read_secret(session, slug)
 
     monkeypatch.setattr(
-        "moonmind.auth.github_credentials._resolve_secret_ref", _resolve
+        SecretsService, "get_secret_with_revision", classmethod(_resolve)
     )
     requests: list[httpx.Request] = []
 
