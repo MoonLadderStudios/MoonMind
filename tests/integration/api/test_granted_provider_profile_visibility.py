@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 from moonmind.workflows.temporal.workflows.run import (
     RUN_GRANTED_PROFILE_PROGRESS_PATCH,
     RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH,
+    RUN_PAUSED_AGENT_PROGRESS_PATCH,
     MoonMindUserWorkflow,
 )
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
@@ -50,6 +51,18 @@ class _ControlledGrantedAgentRun:
 
     def __init__(self) -> None:
         self.commands: list[str] = []
+        self.emitter = MoonMindAgentRun()
+
+    @workflow.signal
+    def control(self, update: str) -> None:
+        if update == "Pause":
+            self.emitter.pause()
+        else:
+            self.emitter.resume()
+
+    @workflow.query
+    def paused(self) -> bool:
+        return self.emitter._paused
 
     @workflow.signal
     def command(self, value: str) -> None:
@@ -57,7 +70,7 @@ class _ControlledGrantedAgentRun:
 
     @workflow.run
     async def run(self, _request: Any) -> dict[str, Any]:
-        emitter = MoonMindAgentRun()
+        emitter = self.emitter
         emitter._progress_step_execution_id = "step-1"
         emitter._progress_generation = workflow.info().workflow_id
         emitter._profile_snapshots = {
@@ -66,6 +79,13 @@ class _ControlledGrantedAgentRun:
         }
         parent = workflow.info().parent
         profile = "work"
+        hold_grant = bool(_request.get("holdGrant"))
+        if hold_grant:
+            await emitter._signal_parent_child_state_changed(
+                parent, "awaiting_slot", "Waiting for capacity"
+            )
+            await workflow.wait_condition(lambda: bool(self.commands))
+            assert self.commands.pop(0) == "grant"
         while True:
             emitter._assigned_profile_id = profile
             if workflow.patched(AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID):
@@ -74,7 +94,9 @@ class _ControlledGrantedAgentRun:
                 await emitter._signal_parent_child_state_changed(
                     parent, "launching", "Slot acquired for codex_cli"
                 )
-            if profile == "work":
+            if emitter._paused:
+                await workflow.wait_condition(lambda: not emitter._paused)
+            if profile == "work" and not hold_grant:
                 await emitter._signal_parent_child_state_changed(
                     parent, "awaiting_callback", "Waiting for provider callback"
                 )
@@ -109,7 +131,7 @@ def controlled_stages(monkeypatch: pytest.MonkeyPatch) -> None:
         self._active_agent_child_workflow_id = child_id
         result = await workflow.execute_child_workflow(
             "MoonMind.AgentRun",
-            {},
+            {"holdGrant": kwargs.get("parameters", {}).get("pauseGrant", False)},
             id=child_id,
             task_queue=_QUEUE,
             retry_policy=RetryPolicy(maximum_attempts=1),
@@ -303,4 +325,122 @@ async def test_granted_identity_visible_before_and_after_child_termination(
             workflow_runner=UnsandboxedWorkflowRunner(),
         )
         await replayer.replay_workflow(parent_history)
+        await replayer.replay_workflow(child_history)
+
+
+@pytest.mark.parametrize("retained", [False, True])
+async def test_paused_grant_visibility_resume_and_replay(
+    controlled_stages: None,
+    monkeypatch: pytest.MonkeyPatch,
+    retained: bool,
+) -> None:
+    original_patched = workflow.patched
+    if retained:
+        monkeypatch.setattr(
+            workflow,
+            "patched",
+            lambda name: (
+                False
+                if name == RUN_PAUSED_AGENT_PROGRESS_PATCH
+                else original_patched(name)
+            ),
+        )
+
+    # The SDK test runtime has no workflow-to-workflow update transport. Use
+    # a durable signal for that boundary; exercise the real parent controls,
+    # child pause flag/wait, progress emitter, reducer, and Visibility writes.
+    async def forward(self: MoonMindUserWorkflow, update: str) -> bool:
+        if update == "Pause":
+            # Cover a paused workflow with existing operator attention too.
+            self._attention_required = True
+        await workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        ).signal("control", update)
+        return True
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_forward_lifecycle_update_to_active_child", forward
+    )
+    async with await WorkflowEnvironment.start_local(
+        dev_server_existing_path=shutil.which("temporal")
+    ) as env:
+        await register_deployment_search_attributes(env)
+        client = env.client
+        usable = await _detect_optional_temporal_search_attributes(client)
+        owner = str(uuid4())
+        monkeypatch.setattr(
+            MoonMindUserWorkflow,
+            "_trusted_owner_metadata",
+            lambda self: ("user", owner),
+        )
+        workflow_id = f"mm:paused-grant-{uuid4().hex[:8]}"
+        parameters = {"targetRuntime": "codex_cli", "pauseGrant": True}
+        await _start(
+            TemporalClientAdapter(client),
+            workflow_id=workflow_id,
+            owner_id=owner,
+            parameters=parameters,
+            task_queue=_QUEUE,
+            input_args={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": parameters,
+            },
+        )
+        parent = client.get_workflow_handle(workflow_id)
+        child = client.get_workflow_handle(f"{workflow_id}:agent")
+
+        def worker() -> Worker:
+            return Worker(
+                client,
+                task_queue=_QUEUE,
+                workflows=[MoonMindUserWorkflow, _ControlledGrantedAgentRun],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            )
+
+        async with worker():
+            async with asyncio.timeout(30):
+                while (await parent.query("get_status"))[
+                    "waiting_reason"
+                ] != "provider_capacity":
+                    await asyncio.sleep(0.1)
+            await parent.execute_update("Pause")
+            async with asyncio.timeout(30):
+                while not await child.query("paused"):
+                    await asyncio.sleep(0.1)
+            before_grant = await parent.query("get_status")
+            await child.signal("command", "grant")
+            _count, query = _production_query(
+                [("providerProfileIdIn", "work")],
+                owner_id=owner,
+                usable_search_attributes=usable,
+            )
+            async with asyncio.timeout(30):
+                while await _listed_ids(client, query) != [workflow_id]:
+                    await asyncio.sleep(0.1)
+            assert await child.query("paused") is True
+            after_grant = await parent.query("get_status")
+            assert after_grant["paused"] is True
+            if retained:
+                assert after_grant["state"] == "executing"
+            else:
+                assert after_grant == before_grant
+
+        # Replay the buffered accepted projection on a new worker, then drain
+        # it only after Resume reaches the same child. No new child progress is
+        # emitted on resume in this retained child behavior.
+        async with worker():
+            await parent.execute_update("Resume")
+            assert (await parent.query("get_status"))["state"] == "executing"
+            assert (await parent.query("get_status"))["waiting_reason"] is None
+            assert (await (await parent.describe()).memo())["attention_required"] is False
+            await child.signal("command", "success")
+            await parent.result()
+            history = await parent.fetch_history()
+            child_history = await child.fetch_history()
+        monkeypatch.setattr(workflow, "patched", original_patched)
+        replayer = Replayer(
+            workflows=[MoonMindUserWorkflow, _ControlledGrantedAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        )
+        await replayer.replay_workflow(history)
         await replayer.replay_workflow(child_history)
