@@ -1322,6 +1322,7 @@ async def test_evaluate_pull_request_readiness_waits_for_running_checks(monkeypa
     assert isinstance(result, PullRequestReadinessResult)
     assert result.ready is False
     assert result.checks_complete is False
+    assert result.checks_reported is True
     assert result.blockers[0]["kind"] == "checks_running"
 
 
@@ -1399,6 +1400,7 @@ async def test_evaluate_pull_request_readiness_reports_checks_permission_missing
         )
 
     assert result.checks_complete is None
+    assert result.checks_reported is None
     assert result.blockers[0]["kind"] == "readiness_evidence_unavailable"
     assert result.blockers[0]["missingPermission"] == "Checks: read"
 
@@ -1708,6 +1710,7 @@ async def test_readiness_waits_until_the_head_reports_ci(
         )
     assert result.ready is expected_ready
     assert result.checks_complete is expected_ready
+    assert result.checks_reported is bool(statuses)
     if not expected_ready:
         assert [blocker["kind"] for blocker in result.blockers] == ["checks_running"]
         assert "No checks have reported" in result.blockers[0]["summary"]

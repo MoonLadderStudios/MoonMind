@@ -327,6 +327,15 @@ keeps waiting instead of launching a resolver that would read the same state as
 `ci_signal_degraded` and hand straight back. Only advisory status on a base
 with no required checks counts as a clean signal without gating checks. The gate
 and the Skill share this rule (`pr_resolver_core.github_checks.head_ci_reported`).
+A successful read explicitly records whether head CI has reported. Repeated
+confirmed absence for the same head consumes the existing
+`maxConsecutiveNoProgressCycles` budget, including when the review loop is off
+and no expiry was configured. Exhaustion returns `review_loop_no_progress` with
+a CI-trigger diagnostic without launching a resolver. A changed head or newly
+reported CI resets that missing-signal wait; queued/running checks and unavailable
+or legacy observations do not consume it. Explicit expiry remains authoritative.
+The observation-scoped Temporal patch preserves old consumer decisions during
+rolling upgrades and adopts this behavior on the next fresh observation.
 With the review loop
 disabled, required automated review is still observed and must complete before
 that resolver dispatch, including when a failed build has a queued downstream
