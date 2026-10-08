@@ -1015,10 +1015,11 @@ async def test_pre_review_loop_start_input_still_runs(
 
     assert result["status"] == "merged"
     assert "reviewLoop" not in result
-    # The legacy resolver child is launched without review-loop Skill args.
+    # Without a review loop the child is told explicitly that this gate
+    # requires no automated review, rather than inferring one from task prose.
     args = harness.child_payloads[0]["initial_parameters"]["task"]["skill"]["args"]
-    assert "reviewProvider" not in args
-    assert "requireFreshReview" not in args
+    assert args["reviewProvider"] == "none"
+    assert args["requireFreshReview"] is False
     # The readiness payload still carries the additive key with a null value.
     assert harness.readiness_payloads[0]["activeReviewRequest"] is None
     assert (

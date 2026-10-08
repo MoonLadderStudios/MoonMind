@@ -269,7 +269,7 @@ Review evidence must cover the actual admitted head; merge modes require it for 
 }
 ```
 
-Provider is neutral metadata. Trusted `pr_resolver_core.review_providers` defines the command and accepted identities. An explicit command can only restate the registered command exactly. Children cannot supply arbitrary comment text or another provider. In resolver modes, enabled loops pass reviewProvider and requireFreshReview into the pinned Skill's inputs.
+Provider is neutral metadata. Trusted `pr_resolver_core.review_providers` defines the command and accepted identities. An explicit command can only restate the registered command exactly. Children cannot supply arbitrary comment text or another provider. In resolver modes, enabled loops pass reviewProvider and requireFreshReview into the pinned Skill's inputs. Disabled loops pass reviewProvider `none` and requireFreshReview false, and the resolver prompt says the gate owns review requirements. The gate rejects a child's review request when it runs no loop, so a child that inferred a review requirement from repository or task prose would otherwise wait on every pass for a review nobody requests.
 
 ### 11.3.3 Request side effect
 
