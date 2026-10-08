@@ -41,6 +41,7 @@ from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
     resolve_launch_target_profile_selection,
 )
+from moonmind.config.settings import settings
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     model_selection_fields,
@@ -50,6 +51,9 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
     strip_absent_vector_fields,
+)
+from moonmind.workflows.executions.runtime_defaults import (
+    resolve_default_workflow_runtime,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -1354,8 +1358,15 @@ class RecurringWorkflowsService:
 
         initial_parameters = dict(definition.target.get("initialParameters") or {})
         authored_profile = resolve_launch_target_profile_selection(definition.target)
+        # MoonLadderStudios/MoonMind#3935: an omitted runtime that defaults to
+        # Omnigent is admitted like an explicit one. Otherwise the schedule
+        # would launch plan-less work into the retained session supervisor.
+        defaults_to_omnigent = (
+            not authored_profile.runtime_ids
+            and resolve_default_workflow_runtime(settings.workflow) == "omnigent"
+        )
         needs_profile_snapshot = (
-            "omnigent" in authored_profile.runtime_ids
+            ("omnigent" in authored_profile.runtime_ids or defaults_to_omnigent)
             and not initial_parameters.get("agentProfileSnapshot")
             and not initial_parameters.get("omnigentExecutionPlan")
         )
@@ -1377,6 +1388,8 @@ class RecurringWorkflowsService:
                     consumer_type="schedule", consumer_id=str(definition_id), user=actor,
                 )
             initial_parameters = dict(definition.target.get("initialParameters") or {})
+            if defaults_to_omnigent:
+                initial_parameters["targetRuntime"] = "omnigent"
             initial_parameters = compile_agent_profile_snapshot_parameters(
                 initial_parameters,
                 snapshot=snapshot,

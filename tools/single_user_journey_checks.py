@@ -243,6 +243,40 @@ def wait_for_canceled(api: Api, workflow_id: str, *, timeout: float) -> dict[str
     )
 
 
+def journey_submission(
+    *,
+    title: str,
+    repository: str,
+    scheduled_for: datetime,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """The deferred task ``populate`` submits.
+
+    MoonLadderStudios/MoonMind#3935: it uses the Workflow Create task envelope
+    and leaves the runtime and profiles to the deployment defaults, so the
+    server resolves them and persists the Omnigent execution plan before
+    scheduling, as it does for the dashboard. The unit suite posts this exact
+    payload through the production create route.
+    """
+
+    return {
+        "type": "task",
+        "payload": {
+            "repository": repository,
+            "publishMode": "none",
+            "task": {
+                "title": title,
+                "instructions": (
+                    "Single-user journey check: acknowledge this run in one "
+                    "short sentence."
+                ),
+            },
+            "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
+            "idempotencyKey": idempotency_key,
+        },
+    }
+
+
 def populate(
     api: Api,
     state: dict[str, Any],
@@ -273,20 +307,13 @@ def populate(
     # Temporal holds the start and the cancellation below is observed on the
     # workflow's first task.
     scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
-    submission = {
-        "workflowType": "MoonMind.UserWorkflow",
-        "title": f"single-user journey {label}",
-        "initialParameters": {
-            "instructions": (
-                "Single-user journey check: acknowledge this run in one short "
-                "sentence."
-            ),
-            "repository": repository,
-            "publishMode": "none",
-        },
-        "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
-        "idempotencyKey": f"single-user-journey-{label}-{uuid.uuid4().hex}",
-    }
+    title = f"single-user journey {label}"
+    submission = journey_submission(
+        title=title,
+        repository=repository,
+        scheduled_for=scheduled_for,
+        idempotency_key=f"single-user-journey-{label}-{uuid.uuid4().hex}",
+    )
     created = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
     workflow_id = created.get("workflowId") or ""
     if not workflow_id:
@@ -415,7 +442,7 @@ def populate(
     state["executions"] = [
         {
             "workflowId": workflow_id,
-            "title": submission["title"],
+            "title": title,
             "cancel": True,
             "scheduledFor": scheduled_for.isoformat(),
         },

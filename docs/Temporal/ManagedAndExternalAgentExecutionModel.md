@@ -449,14 +449,16 @@ MoonMind.AgentRun
 ```
 
 New Omnigent work has one lifecycle owner: the persisted execution plan's
-recorded realizer. Workflow Create, `moonmind workflow run`, recurring
-schedules, and Omnigent child plans all submit through the task/workflow
-envelope, which resolves the Agent Profile and persists the immutable plan
-before scheduling. A raw `workflowType`/`initialParameters` request that names
+recorded realizer. Workflow Create, `moonmind workflow run`, and Omnigent
+child plans submit through the task/workflow envelope, which resolves the Agent
+Profile and persists the immutable plan before scheduling. A raw
+`workflowType`/`initialParameters` request to `POST /api/executions` that names
 Omnigent, or omits the runtime when the deployment default is Omnigent, is
 rejected with `omnigent_product_boundary_required` instead of reaching a
-plan-less lane. Session admission returns `realizer_managed_lifecycle` for
-`generic-omnigent-host@1`, and `codex-profile-bound@1` keeps its recorded
+plan-less lane. Recurring schedule creation compiles the same plan into the
+stored target when the target names Omnigent or omits the runtime under an
+Omnigent default, so every scheduled launch carries it. Session admission
+returns `realizer_managed_lifecycle` for `generic-omnigent-host@1`, and `codex-profile-bound@1` keeps its recorded
 coordinator, so both run through the one
 `integration.omnigent.profile_bound_execute` boundary. That boundary launches
 the host and session, delivers the first turn, and owns the terminal result and

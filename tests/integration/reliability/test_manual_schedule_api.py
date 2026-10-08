@@ -55,7 +55,8 @@ async def test_run_now_http_retries_observe_one_execution_and_skip_active_overla
                 target={
                     "workflowType": "MoonMind.UserWorkflow",
                     "initialParameters": {
-                        "task": {"instructions": "Test accepted work"}
+                        "targetRuntime": "codex",
+                        "task": {"instructions": "Test accepted work"},
                     },
                 },
             )
