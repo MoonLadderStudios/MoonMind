@@ -2409,15 +2409,38 @@ class OmnigentProfileBoundExecutionCoordinator:
                 # Only current terminal evidence plus a new canonical save can
                 # release the preservation fence. A pre-recreation checkpoint
                 # cannot establish preservation after the resumed turn worked.
-                saved = await self._workspace_preservation.save_request_workspace(request)
-                terminal_ref = await self._write_plan_runtime_evidence(
-                    request=request, name="github-host-recovery-terminal.json",
-                    payload=result.model_dump(mode="json", by_alias=True),
-                )
-                await self._run_store.record_host_credential_recovery(
-                    request=request, host_lease_ref=host_lease.lease_id,
-                    phase="completed", checkpoint=saved, terminal_ref=terminal_ref,
-                )
+                reservation = preflight.get("githubProjectionReservation")
+                try:
+                    if reservation is not None:
+                        await self._run_store.validate_github_projection(
+                            request=request,
+                            host_lease_ref=host_lease.lease_id,
+                            reservation=reservation,
+                        )
+                    saved = await self._workspace_preservation.save_request_workspace(
+                        request
+                    )
+                    terminal_ref = await self._write_plan_runtime_evidence(
+                        request=request,
+                        name="github-host-recovery-terminal.json",
+                        payload=result.model_dump(mode="json", by_alias=True),
+                    )
+                    await self._run_store.record_host_credential_recovery(
+                        request=request,
+                        host_lease_ref=host_lease.lease_id,
+                        phase="completed",
+                        checkpoint=saved,
+                        terminal_ref=terminal_ref,
+                        expected_projection_reservation=reservation,
+                    )
+                except Exception as exc:
+                    # A newer retry may have completed while this delivery was
+                    # saving. Its completed receipt is never this stale actor's
+                    # permission to enter ordinary destructive cleanup.
+                    raise OmnigentOAuthHostError(
+                        "terminal recovery save lost its delivery authority; retain owned work",
+                        code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                    ) from exc
                 result.metadata["savedWorkspaceCheckpoint"] = saved
             return result
         except (Exception, asyncio.CancelledError) as exc:

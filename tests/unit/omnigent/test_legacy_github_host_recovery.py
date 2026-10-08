@@ -58,7 +58,7 @@ async def test_legacy_host_without_current_save_cannot_return_ready(
     runtime._run.assert_not_awaited()
 
 
-async def _recovery_fixture(tmp_path, monkeypatch):
+async def _recovery_fixture(tmp_path, monkeypatch, *, relative_path="repo"):
     import hashlib
     import json
     import os
@@ -79,7 +79,7 @@ async def _recovery_fixture(tmp_path, monkeypatch):
         monkeypatch.setenv(name, "example.test/host@sha256:" + "2" * 64)
     step_id = "workflow-1:run-1:implement:execution:1"
     workspace_id = hashlib.sha256(f"workflow-1:{step_id}".encode()).hexdigest()[:24]
-    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / relative_path
     _init_source_repo(workspace)
     (workspace / "README.md").write_text("current dirty work\n")
     (workspace / "untracked.txt").write_text("new saved work\n")
@@ -88,7 +88,7 @@ async def _recovery_fixture(tmp_path, monkeypatch):
             workspace_id,
             "workflow-1",
             step_id,
-            "repo",
+            relative_path,
         )
     )
     request = AgentExecutionRequest(
@@ -101,7 +101,7 @@ async def _recovery_fixture(tmp_path, monkeypatch):
             "workspaceLocator": {
                 "kind": "sandbox",
                 "workspaceId": workspace_id,
-                "relativePath": "repo",
+                "relativePath": relative_path,
             }
         },
         stepExecution={
@@ -242,6 +242,8 @@ async def _recovery_fixture(tmp_path, monkeypatch):
                 receipt["retainedCpuLimit"] = kwargs["retained_cpu_limit"]
             if checkpoint:
                 receipt["checkpoint"] = checkpoint
+            if phase == "saved" or kwargs.get("replacement_egress_pending"):
+                receipt["replacementEgressPending"] = True
             row.metadata_["githubCredentialRecovery"] = receipt
             state["events"].append(("receipt", phase))
             if state["after_save"]:
@@ -999,6 +1001,166 @@ async def test_preserved_workspace_never_restores_over_current_or_reclones_missi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["waiting", "saved"])
+@pytest.mark.parametrize("running", [False, True])
+async def test_preserved_custom_workspace_keeps_current_dirty_and_untracked_bytes(
+    tmp_path, monkeypatch, phase, running
+):
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+
+    fixture = await _recovery_fixture(
+        tmp_path, monkeypatch, relative_path="sources/current"
+    )
+    runtime = fixture.new_runtime()
+    await runtime._launch_on_demand(**fixture.args)
+    receipt = fixture.row.metadata_["githubCredentialRecovery"]
+    receipt["phase"] = phase
+    receipt["checkpoint"]["checkpointRef"] = "artifact://older-stopped-checkpoint"
+    fixture.state["running"] = running
+    (fixture.workspace / "README.md").write_text("newer tracked work\n")
+    (fixture.workspace / "untracked.txt").write_text("newer untracked work\n")
+    before = {
+        path.relative_to(fixture.workspace): path.read_bytes()
+        for path in fixture.workspace.rglob("*")
+        if path.is_file()
+    }
+    restore = AsyncMock(side_effect=AssertionError("current work must not restore"))
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService, "restore_saved_request_workspace", restore
+    )
+
+    await runtime._restore_preserved_workspace_if_missing(
+        request=fixture.request,
+        store=fixture.store,
+        artifact_gateway=fixture.artifacts,
+        host_lease=fixture.lease,
+    )
+
+    assert {
+        path.relative_to(fixture.workspace): path.read_bytes()
+        for path in fixture.workspace.rglob("*")
+        if path.is_file()
+    } == before
+    restore.assert_not_awaited()
+    workspace_id = fixture.request.workspace_spec["workspaceLocator"]["workspaceId"]
+    assert not (tmp_path / "temporal_sandbox" / workspace_id / "repo").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workspace_present", [False, True])
+@pytest.mark.parametrize(
+    "conflict", ["workflow_id", "step_execution_id", "relative_path", "workspace_id"]
+)
+async def test_preserved_workspace_owner_conflicts_never_restore_or_modify_work(
+    tmp_path, monkeypatch, workspace_present, conflict
+):
+    import json
+    import shutil
+    from dataclasses import asdict, replace
+
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.schemas.workspace_locator_models import (
+        WorkspaceLocatorResolutionError,
+    )
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecordStore,
+    )
+
+    fixture = await _recovery_fixture(
+        tmp_path, monkeypatch, relative_path="sources/current"
+    )
+    runtime = fixture.new_runtime()
+    await fixture.store.record_host_credential_recovery(
+        request=fixture.request,
+        host_lease_ref=fixture.lease.lease_id,
+        phase="saved",
+        checkpoint={"checkpointRef": "artifact://qualified-current-checkpoint"},
+    )
+    fixture.state["running"] = False
+    workspace_id = fixture.request.workspace_spec["workspaceLocator"]["workspaceId"]
+    records = SandboxWorkspaceRecordStore(tmp_path)
+    record = replace(records.load(workspace_id), **{conflict: "different-owner"})
+    record_path = records.store_root / f"{workspace_id}.json"
+    record_path.write_text(json.dumps(asdict(record)))
+    record_bytes = record_path.read_bytes()
+    if not workspace_present:
+        shutil.rmtree(fixture.workspace)
+    restore = AsyncMock(side_effect=AssertionError("conflicting work must not restore"))
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService, "restore_saved_request_workspace", restore
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as raised:
+        await runtime._restore_preserved_workspace_if_missing(
+            request=fixture.request,
+            store=fixture.store,
+            artifact_gateway=fixture.artifacts,
+            host_lease=fixture.lease,
+        )
+
+    assert raised.value.code == "WORKSPACE_IDENTITY_MISMATCH"
+    restore.assert_not_awaited()
+    assert record_path.read_bytes() == record_bytes
+    assert fixture.workspace.exists() is workspace_present
+    if workspace_present:
+        assert (fixture.workspace / "README.md").read_text() == "current dirty work\n"
+        assert (fixture.workspace / "untracked.txt").read_text() == "new saved work\n"
+
+
+@pytest.mark.asyncio
+async def test_preserved_custom_workspace_symlink_escape_never_restores(
+    tmp_path, monkeypatch
+):
+    import shutil
+
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.schemas.workspace_locator_models import (
+        WorkspaceLocatorResolutionError,
+    )
+
+    fixture = await _recovery_fixture(
+        tmp_path, monkeypatch, relative_path="sources/current"
+    )
+    runtime = fixture.new_runtime()
+    await fixture.store.record_host_credential_recovery(
+        request=fixture.request,
+        host_lease_ref=fixture.lease.lease_id,
+        phase="saved",
+        checkpoint={"checkpointRef": "artifact://qualified-current-checkpoint"},
+    )
+    fixture.state["running"] = False
+    outside = tmp_path / "other-owner"
+    outside.mkdir()
+    sentinel = outside / "current.txt"
+    sentinel.write_text("other owner's current work\n")
+    shutil.rmtree(fixture.workspace)
+    fixture.workspace.symlink_to(outside, target_is_directory=True)
+    restore = AsyncMock(side_effect=AssertionError("outside work must not restore"))
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService, "restore_saved_request_workspace", restore
+    )
+
+    with pytest.raises(WorkspaceLocatorResolutionError) as raised:
+        await runtime._restore_preserved_workspace_if_missing(
+            request=fixture.request,
+            store=fixture.store,
+            artifact_gateway=fixture.artifacts,
+            host_lease=fixture.lease,
+        )
+
+    assert raised.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+    restore.assert_not_awaited()
+    assert sentinel.read_text() == "other owner's current work\n"
+    assert fixture.workspace.is_symlink()
+
+
+@pytest.mark.asyncio
 async def test_changed_finite_cpu_authority_cannot_stop_original_host(
     tmp_path, monkeypatch
 ):
@@ -1017,8 +1179,11 @@ async def test_changed_finite_cpu_authority_cannot_stop_original_host(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase,pending", [("saved", True), ("recreated", True), ("recreated", False)]
+)
 async def test_missing_stopped_workspace_delegates_only_its_qualified_save(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, phase, pending
 ):
     import shutil
 
@@ -1032,6 +1197,7 @@ async def test_missing_stopped_workspace_delegates_only_its_qualified_save(
     fixture.state["running"] = False
     receipt = fixture.row.metadata_["githubCredentialRecovery"]
     receipt["checkpoint"]["checkpointRef"] = "artifact://qualified-current-checkpoint"
+    receipt.update(phase=phase, replacementEgressPending=pending)
     shutil.rmtree(fixture.workspace)
 
     async def restore(_self, request, saved):
@@ -1050,6 +1216,18 @@ async def test_missing_stopped_workspace_delegates_only_its_qualified_save(
     monkeypatch.setattr(
         OmnigentWorkspacePublicationService, "restore_saved_request_workspace", invoke
     )
+    if not pending:
+        with pytest.raises(
+            OmnigentOAuthHostError, match="trustworthy stopped-host save"
+        ):
+            await runtime._restore_preserved_workspace_if_missing(
+                request=fixture.request,
+                store=fixture.store,
+                artifact_gateway=fixture.artifacts,
+                host_lease=fixture.lease,
+            )
+        restore_owner.assert_not_awaited()
+        return
     await runtime._restore_preserved_workspace_if_missing(
         request=fixture.request,
         store=fixture.store,

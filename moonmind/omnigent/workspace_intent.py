@@ -255,14 +255,10 @@ def authored_repository_mutation_required(request: AgentExecutionRequest) -> boo
         return True
     if authored_publish_mode(request) not in {"", "none"}:
         return True
-    skill = parameters.get("skill")
-    if isinstance(skill, Mapping):
-        side_effect = skill.get("sideEffect")
-        if isinstance(side_effect, Mapping) and str(
-            side_effect.get("kind") or ""
-        ).strip():
-            return True
-    return False
+    # Skill side effects also describe non-repository actions such as fan-out.
+    # Reuse the canonical action reader across both Skill projections instead
+    # of treating side-effect metadata alone as a repository mutation requirement.
+    return authored_github_mutation_required(request)
 
 
 def authored_github_operations(
