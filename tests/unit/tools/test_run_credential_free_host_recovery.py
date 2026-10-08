@@ -136,18 +136,32 @@ def test_invocation_clears_old_receipt_and_cannot_pass_without_new_evidence(
 def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials():
     root = Path(__file__).resolve().parents[3]
     source = yaml.safe_load((root / "docker-compose.yaml").read_text())
-    document = driver.compose_document(source, root, "test-server@" + IMAGE_ID)
+    document = driver.compose_document(
+        source, root, "test-server@" + IMAGE_ID, moonmind_image=IMAGE_ID
+    )
     assert set(document["services"]) == {
         "postgres",
         "omnigent-db-init",
         "omnigent-agent-init",
         "omnigent",
+        "sandbox-egress-proxy",
     }
     assert document["networks"] == {"test": {"internal": True}}
-    for service in document["services"].values():
-        assert service["networks"] == ["test"]
+    for name, service in document["services"].items():
+        if name != "sandbox-egress-proxy":
+            assert service["networks"] == ["test"]
         assert "env_file" not in service
+        assert "container_name" not in service
         assert service["restart"] == "no"
+    proxy = document["services"]["sandbox-egress-proxy"]
+    canonical_proxy = source["services"]["sandbox-egress-proxy"]
+    assert proxy["image"] == IMAGE_ID
+    assert proxy["entrypoint"] == canonical_proxy["entrypoint"]
+    assert proxy["healthcheck"] == canonical_proxy["healthcheck"]
+    assert proxy["networks"] == {"test": {"aliases": ["omnigent-egress-proxy"]}}
+    assert proxy["volumes"] == []
+    assert proxy["ports"] == []
+    assert proxy["environment"] == {"MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED": "false"}
     init = document["services"]["omnigent-db-init"]
     assert init["command"] == source["services"]["omnigent-db-init"]["command"]
     agent = document["services"]["omnigent-agent-init"]
@@ -164,7 +178,7 @@ def test_compose_render_does_not_modify_canonical_document():
     root = Path(__file__).resolve().parents[3]
     source = yaml.safe_load((root / "docker-compose.yaml").read_text())
     original = copy.deepcopy(source)
-    driver.compose_document(source, root, "test-server@" + IMAGE_ID)
+    driver.compose_document(source, root, "test-server@" + IMAGE_ID, moonmind_image=IMAGE_ID)
     assert source == original
 
 
@@ -262,7 +276,7 @@ def test_readiness_uses_exact_candidate_inside_the_private_test_network():
     assert command[-1] == driver.READINESS_SCRIPT
 
 
-@pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("ready", [False, True, "invalid_json", "wrong_shape"])
 def test_actual_readiness_script_checks_authenticated_internal_http(
     monkeypatch, tmp_path, ready
 ):
@@ -283,6 +297,14 @@ def test_actual_readiness_script_checks_authenticated_internal_http(
     class Response:
         status = 200
 
+        def read(self, limit):
+            assert limit == 1024 * 1024
+            if ready == "invalid_json":
+                return b"<html>proxy status page</html>"
+            if ready == "wrong_shape":
+                return b'{"status": "ok"}'
+            return b'{"data": []}'
+
         def __enter__(self):
             return self
 
@@ -293,6 +315,8 @@ def test_actual_readiness_script_checks_authenticated_internal_http(
         requests.append(request)
         assert timeout == 2
         assert request.full_url == "http://omnigent:8000/v1/agents"
+        assert request.host == "omnigent-egress-proxy:3129"
+        assert request.selector == "http://omnigent:8000/v1/agents"
         assert request.get_header("Authorization") == "Bearer ephemeral-fixture"
         if ready and len(requests) > 1:
             return Response()
@@ -305,7 +329,7 @@ def test_actual_readiness_script_checks_authenticated_internal_http(
     monkeypatch.setattr(urllib.request, "build_opener", opener)
     script = tmp_path / "readiness.py"
     script.write_text(driver.READINESS_SCRIPT)
-    if ready:
+    if ready is True:
         runpy.run_path(str(script))
         assert len(requests) == 2
     else:
@@ -314,7 +338,58 @@ def test_actual_readiness_script_checks_authenticated_internal_http(
         assert len(requests) == 2
 
 
-def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypatch):
+def test_readiness_sends_authenticated_absolute_request_through_proxy(
+    tmp_path, monkeypatch
+):
+    import http.client
+    import http.server
+    import runpy
+    import socket
+    import threading
+
+    observed = []
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            observed.append((self.path, self.headers.get("Authorization")))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data": []}')
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def connect(connection):
+        assert connection.host == "omnigent-egress-proxy"
+        assert connection.port == 3129
+        connection.sock = socket.create_connection(server.server_address, timeout=2)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("http_proxy", "http://unused.invalid:1")
+    monkeypatch.setenv("OMNIGENT_API_TOKEN", "ephemeral-fixture")
+    script = tmp_path / "readiness.py"
+    script.write_text(driver.READINESS_SCRIPT)
+    try:
+        runpy.run_path(str(script))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    assert observed == [
+        ("http://omnigent:8000/v1/agents", "Bearer ephemeral-fixture")
+    ]
+
+
+@pytest.mark.parametrize("proxy_image_matches", [False, True])
+def test_main_checks_exact_server_then_probes_before_recovery(
+    tmp_path, monkeypatch, proxy_image_matches
+):
     from types import SimpleNamespace
 
     pin = "f" * 40
@@ -344,13 +419,20 @@ def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypa
         elif args[:2] == ["docker", "compose"]:
             assert "port" not in args
             if "ps" in args:
-                output = "server-container"
+                output = "proxy-container" if args[-1] == "sandbox-egress-proxy" else "server-container"
+            if "up" in args:
+                assert args[-2:] == ["omnigent", "sandbox-egress-proxy"]
         elif args[:2] == ["docker", "inspect"]:
-            assert args[-1] == "server-container"
-            observed.append("server-image")
-            output = json.dumps([{"Id": "server-container", "Image": IMAGE_ID}])
+            container = args[-1]
+            assert container in {"server-container", "proxy-container"}
+            observed.append("proxy-image" if container == "proxy-container" else "server-image")
+            image_id = (
+                "sha256:" + "f" * 64
+                if container == "proxy-container" and not proxy_image_matches else IMAGE_ID
+            )
+            output = json.dumps([{"Id": container, "Image": image_id}])
         elif args[-1] == driver.READINESS_SCRIPT:
-            assert observed == ["server-image"]
+            assert observed == ["server-image", "proxy-image"]
             assert IMAGE_ID in args
             assert args[args.index("--network") + 1].startswith(
                 "moonmind-test-recovery-"
@@ -359,7 +441,7 @@ def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypa
         return SimpleNamespace(stdout=output, stderr="", returncode=0)
 
     def run_test(args, _root, **_identity):
-        assert observed == ["server-image", "readiness"]
+        assert observed == ["server-image", "proxy-image", "readiness"]
         assert IMAGE_ID in args
         assert args[args.index("--network") + 1].startswith("moonmind-test-recovery-")
         observed.append("recovery")
@@ -389,9 +471,15 @@ def test_main_checks_exact_server_then_probes_before_recovery(tmp_path, monkeypa
                 str(tmp_path / "evidence"),
             ]
         )
-        == 0
+        == (0 if proxy_image_matches else 1)
     )
-    assert observed == ["server-image", "readiness", "recovery"]
+    assert observed == ["server-image", "proxy-image"] + (
+        ["readiness", "recovery"] if proxy_image_matches else []
+    )
+    if not proxy_image_matches:
+        report = json.loads((tmp_path / "evidence/credential-recovery-result.json").read_text())
+        assert report["status"] == "unavailable"
+        assert "running proxy differs from the built artifact" in report["detail"]
 
 
 def test_failed_recovery_row_reports_the_pytest_failure(tmp_path, monkeypatch):
