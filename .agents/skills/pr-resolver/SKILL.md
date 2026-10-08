@@ -257,6 +257,11 @@ metadata flag.
      including CI failures, merge conflicts, and older actionable comments.
      Terminal evidence and deferred-comment blockers still take precedence.
      Do not edit, commit, push, or start a fix Skill while it is pending.
+   - `automated_review_request_failed`: the provider's latest answer to the
+     request for this head refused it (for example a usage limit), and no
+     submitted review or clean reaction completed it. Waiting cannot produce
+     the review. Publish `manual_review` and stop without starting a fix Skill;
+     a newer request made once the provider accepts work supersedes the refusal.
    - `deferred_comments`: the comment ledger deferred or could not fix at least
      one comment that is still present. Publish `manual_review` and stop; a
      repeated remediation pass cannot clear a deferred disposition.
