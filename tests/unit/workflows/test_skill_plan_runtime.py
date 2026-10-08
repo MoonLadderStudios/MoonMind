@@ -621,3 +621,47 @@ def test_plan_executor_fail_fast_records_cancelled_in_flight_nodes():
     assert summary.status == "FAILED"
     assert "n2" in summary.failures
     assert summary.failures["n2"].error_code == "CANCELLED"
+
+
+@pytest.mark.parametrize("agent_index", [0, 1])
+def test_validate_mixed_plan_keeps_agent_runtime_out_of_tool_registry(agent_index):
+    snapshot = _snapshot(InMemoryArtifactStore())
+    payload = _plan_payload(
+        snapshot_digest=snapshot.digest, snapshot_ref=snapshot.artifact_ref
+    )
+    agent = payload["nodes"][agent_index]
+    agent.pop("skill")
+    agent["tool"] = {"type": "agent_runtime", "name": "omnigent"}
+    agent["inputs"]["instructions"] = "Use the dependency result"
+
+    validated = validate_plan_payload(payload=payload, registry_snapshot=snapshot)
+
+    assert validated.topological_order == ("n1", "n2")
+    assert validated.plan.nodes[agent_index].tool_type == "agent_runtime"
+    assert "omnigent" not in snapshot.by_key
+
+
+@pytest.mark.parametrize("agent_index", [0, 1])
+@pytest.mark.parametrize(
+    "invalid_ref", ["unknown_node", "no_dependency", "bad_pointer"]
+)
+def test_validate_mixed_plan_retains_reference_checks(agent_index, invalid_ref):
+    snapshot = _snapshot(InMemoryArtifactStore())
+    payload = _plan_payload(
+        snapshot_digest=snapshot.digest, snapshot_ref=snapshot.artifact_ref
+    )
+    agent = payload["nodes"][agent_index]
+    agent.pop("skill")
+    agent["tool"] = {"type": "agent_runtime", "name": "omnigent"}
+    reference = payload["nodes"][1]["inputs"]["patch_artifact"]["ref"]
+    if invalid_ref == "unknown_node":
+        reference["node"] = "missing"
+    elif invalid_ref == "no_dependency":
+        payload["edges"] = []
+    else:
+        reference["json_pointer"] = "outputs/test_report_artifact"
+
+    with pytest.raises(PlanValidationError) as raised:
+        validate_plan_payload(payload=payload, registry_snapshot=snapshot)
+
+    assert raised.value.code == "invalid_reference"

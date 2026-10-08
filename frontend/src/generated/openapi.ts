@@ -9751,21 +9751,24 @@ export interface components {
         };
         /**
          * GitHubTokenProbeRequest
-         * @description Targeted GitHub token validation request.
+         * @description Read-only test of one selected repository connection.
+         *
+         *     A connection is required: a missing selection never falls back to an
+         *     ambient deployment token or anonymous access.
          */
         GitHubTokenProbeRequest: {
             /** Repo */
             repo: string;
             /**
              * Mode
-             * @default indexing
+             * @default publish
              * @enum {string}
              */
-            mode: "indexing" | "publish" | "readiness" | "full_pr_automation";
+            mode: "publish" | "readiness" | "full_pr_automation";
             /** Basebranch */
             baseBranch?: string | null;
             /** Connectionid */
-            connectionId?: string | null;
+            connectionId: string;
         };
         /**
          * GpuObservation
