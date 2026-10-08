@@ -94,6 +94,9 @@ if "config" in command[:3]:
     print(json.dumps(config.get("compose_config", {"services": {"minio": {"image": "test-minio"}}})))
 elif command[:1] == ["top"]:
     print(footprint.get("top", ""))
+    if footprint.get("top_stderr"):
+        print(footprint["top_stderr"], file=sys.stderr)
+    raise SystemExit(footprint.get("top_status", 0))
 elif command[:1] == ["logs"]:
     print("cleanup sk-startup_test_secret ghp_startup_test_secret github_pat_startup_test_secret key=startup_test_secret")
 else:
@@ -398,7 +401,27 @@ COMPOSE_MODEL = {
 }
 
 
-def _footprint(workflow_rows: list[str], workflow_mib: int) -> dict[str, str]:
+def _top(workflow_rows: list[str], top_format: str) -> str:
+    if top_format == "table":
+        # Current Docker Compose v2 prints one table for every selected service.
+        return "\n".join(
+            [
+                "SERVICE                    #   UID    PID    PPID   C    STIME   TTY   TIME       CMD",
+                *(f"temporal-worker-workflow   1   {row}" for row in workflow_rows),
+            ]
+        )
+    return "\n".join(
+        [
+            "moonmind-test-startup-unit-temporal-worker-workflow-1",
+            "UID    PID    PPID   C    STIME   TTY   TIME       CMD",
+            *workflow_rows,
+        ]
+    )
+
+
+def _footprint(
+    workflow_rows: list[str], workflow_mib: int, top_format: str = "table"
+) -> dict[str, str]:
     stats = [
         {"ID": "a1", "Name": "api-1", "CPUPerc": "1.0%", "MemUsage": "300MiB / 7.7GiB", "PIDs": "20"},
         {"ID": "w1", "Name": "workflow-1", "CPUPerc": "2.0%", "MemUsage": f"{workflow_mib}MiB / 7.7GiB", "PIDs": "40"},
@@ -407,17 +430,14 @@ def _footprint(workflow_rows: list[str], workflow_mib: int) -> dict[str, str]:
     return {
         "ps": "a1\tapi\nw1\ttemporal-worker-workflow\nh1\tomnigent-host-claude",
         "stats": "\n".join(json.dumps(row) for row in stats),
-        "top": "\n".join(
-            [
-                "moonmind-test-startup-unit-temporal-worker-workflow-1",
-                "UID    PID    PPID   C    STIME   TTY   TIME       CMD",
-                *workflow_rows,
-            ]
-        ),
+        "top": _top(workflow_rows, top_format),
     }
 
 
-def test_upgrade_records_before_and_after_resource_footprint(journey: Journey) -> None:
+@pytest.mark.parametrize("top_format", ["table", "per-container"])
+def test_upgrade_records_before_and_after_resource_footprint(
+    journey: Journey, top_format: str
+) -> None:
     init = "root 1 0 0 10:00 ? 00:00:00 /sbin/docker-init -- python"
     supervisor = [
         init,
@@ -433,8 +453,8 @@ def test_upgrade_records_before_and_after_resource_footprint(journey: Journey) -
         lines=1,
         compose_config=COMPOSE_MODEL,
         footprint={
-            "source": _footprint(supervisor, 600),
-            "candidate": _footprint(single, 250),
+            "source": _footprint(supervisor, 600, top_format),
+            "candidate": _footprint(single, 250, top_format),
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -479,3 +499,30 @@ def test_unavailable_resource_footprint_never_fails_the_journey(journey: Journey
     footprint = (journey.logs / "fresh/resource-footprint-candidate.log").read_text()
     assert "footprint phase=candidate unavailable" in footprint
     journey.assert_cleaned()
+
+
+@pytest.mark.parametrize(
+    ("top", "status", "stderr"),
+    [
+        ("unexpected compose top output", 0, ""),
+        ("", 1, "service temporal-worker-workflow is not running"),
+    ],
+)
+def test_unobserved_worker_processes_are_unavailable_not_zero(
+    journey: Journey, top: str, status: int, stderr: str
+) -> None:
+    footprint = _footprint([], 250) | {"top": top, "top_status": status, "top_stderr": stderr}
+    result = journey.run(
+        candidate_statuses=[0], lines=1, compose_config=COMPOSE_MODEL,
+        footprint={"candidate": footprint},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (journey.logs / "fresh/resource-footprint-candidate.log").read_text()
+    assert (
+        "footprint phase=candidate running_containers=3 memory_mib=1574 "
+        "workflow_worker_processes=unavailable workflow_worker_python_processes=unavailable "
+        "workflow_worker_memory_mib=250"
+    ) in text
+    assert f"compose top exit_status={status}" in text
+    if stderr:
+        assert stderr in text
