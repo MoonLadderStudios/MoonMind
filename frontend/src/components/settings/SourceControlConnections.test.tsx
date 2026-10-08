@@ -224,6 +224,103 @@ describe('SourceControlConnections', () => {
     expect(bodyOf(probe[0])).toMatchObject({ connectionId: 'work-github', repo: 'acme/widgets' });
   });
 
+  it('tests an App permitted repository before assignment without contradictory guidance', async () => {
+    const state = { items: [connection({
+      credentialKind: 'github_app',
+      permittedRepositories: ['acme/widgets'],
+    })] };
+    const fetchMock = stubApi(state, {
+      'POST /api/v1/settings/github/token-probe': () =>
+        json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }),
+    });
+    renderSection();
+    await screen.findByRole('form', { name: 'Edit connection' });
+    fireEvent.change(screen.getByLabelText('Repository (owner/repo)'), { target: { value: 'acme/widgets' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await screen.findByText('Read access verified');
+
+    const panel = screen.getByRole('region', { name: 'Test connection' });
+    expect(panel.textContent).toMatch(/permitted by/i);
+    expect(panel.textContent).toMatch(/workflows cannot use it yet/i);
+    expect(panel.textContent).not.toMatch(/assign one.*first|Tests read only assigned repositories/i);
+    expect(bodyOf(calls(fetchMock, 'POST', '/api/v1/settings/github/token-probe')[0]))
+      .toMatchObject({ connectionId: 'personal-github', repo: 'acme/widgets' });
+  });
+
+  const initialAssignment = {
+    repository: 'acme/widgets', providerRepoId: '7', operations: ['read'], revision: 1, verified: true,
+  };
+  const assignmentChanges = [
+    { name: 'removal', assignments: [] },
+    { name: 'same-count replacement', assignments: [{ ...initialAssignment, repository: 'acme/other', providerRepoId: '8' }] },
+    { name: 'provider identity', assignments: [{ ...initialAssignment, providerRepoId: '8' }] },
+    { name: 'revision', assignments: [{ ...initialAssignment, revision: 2 }] },
+    { name: 'operations', assignments: [{ ...initialAssignment, operations: ['write'] }] },
+    { name: 'verification', assignments: [{ ...initialAssignment, verified: false }] },
+  ];
+
+  it.each(assignmentChanges)('invalidates displayed evidence after assignment $name', async ({ assignments }) => {
+    const state = { items: [connection({ assignments: [initialAssignment] })] };
+    stubApi(state, {
+      'POST /api/v1/settings/github/token-probe': () =>
+        json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }),
+    });
+    const { queryClient } = renderSection();
+    await screen.findByText('acme/widgets');
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await screen.findByText('Read access verified');
+
+    await act(async () => {
+      queryClient.setQueryData(SOURCE_CONTROL_QUERY_KEY, { items: [connection({ assignments })] });
+    });
+    await waitFor(() => expect(screen.queryByLabelText('Connection test result')).toBeNull());
+  });
+
+  it.each(assignmentChanges)('discards late success/error/finally after assignment $name', async ({ assignments }) => {
+    const state = { items: [connection({ assignments: [initialAssignment] })] };
+    const pending: Array<(value: unknown) => void> = [];
+    stubApi(state, {
+      'POST /api/v1/settings/github/token-probe': () => new Promise((resolve) => pending.push(resolve)),
+    });
+    const onNotice = vi.fn();
+    const { queryClient } = renderSection({ onNotice });
+    await screen.findByText('acme/widgets');
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await waitFor(() => expect(pending).toHaveLength(1));
+
+    await act(async () => {
+      queryClient.setQueryData(SOURCE_CONTROL_QUERY_KEY, { items: [connection({ assignments })] });
+    });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await waitFor(() => expect(pending).toHaveLength(2));
+    await act(async () => {
+      pending[0]?.(json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }));
+    });
+    expect(screen.queryByLabelText('Connection test result')).toBeNull();
+    expect(onNotice).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Testing…' })).toBeTruthy();
+
+    // A second assignment change also invalidates an old error and its finally handler.
+    await act(async () => {
+      queryClient.setQueryData(SOURCE_CONTROL_QUERY_KEY, { items: [connection({ assignments: [initialAssignment] })] });
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Test connection' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await waitFor(() => expect(pending).toHaveLength(3));
+    await act(async () => {
+      pending[1]?.(json({ detail: 'Old permission denied' }, 403));
+    });
+    expect(screen.queryByText('Old permission denied')).toBeNull();
+    expect(onNotice).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Testing…' })).toBeTruthy();
+    await act(async () => {
+      pending[2]?.(json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true }));
+    });
+    expect(await screen.findByText('Read access verified')).toBeTruthy();
+    expect(onNotice).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['success', () => json({ observations: { read: 'verified', write: 'untested' }, repositoryAccessible: true })],
     ['error', () => json({ detail: 'Personal denied' }, 403)],

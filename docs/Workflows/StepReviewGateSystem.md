@@ -124,7 +124,12 @@ New unavailable-review Activity results use `NO_DETERMINATION`, zero confidence,
 and explicit `blocked`, rather than manufacturing `needs_human`. A fresh valid
 inconclusive report without an action supplies `reattempt_current_step` only when
 its current-runtime recovery flag is true; otherwise it supplies `blocked`.
-Explicit valid human and blocked decisions remain intact.
+Explicit valid human and blocked decisions remain intact. An explicit
+`reattempt_current_step` on `NO_DETERMINATION` means a rerun of the verifier can
+obtain the missing controlling evidence. It reruns the verifier in a fresh
+runtime within the existing review-attempt budget, even when
+`recoverableInCurrentRuntime` is false. An example is an expired session-scoped
+capability.
 
 Missing evidence is not accepted because confidence is low or no assertion ran.
 Optional diagnostics remain optional according to the selected acceptance policy,

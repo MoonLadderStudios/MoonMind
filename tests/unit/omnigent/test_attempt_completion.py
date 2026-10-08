@@ -398,6 +398,8 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
     assert finished.provider_error_code == "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"
     assert finished.retry_recommendation == "do_not_retry"
     assert finished.summary.startswith("Agent work is saved;")
+    # The operator sees the publisher's own diagnostic, not only a code.
+    assert "remote publication unavailable" in finished.summary
     assert finished.metadata["unfinishedPhase"] == "publication"
     assert finished.metadata["workPreserved"] is True
     assert finished.metadata["savedWorkspaceCheckpoint"] == saved
@@ -408,6 +410,7 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
         "publication_failure:1",
         "publication_failure:2",
     }
+    assert stored["publication_failure:2"]["message"] == "remote publication unavailable"
     assert AgentRunResult.model_validate(stored["publication"]) == finished
     resumed = await realizer._finish_owned_execution(
         request,
@@ -416,6 +419,69 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
     )
     assert resumed == finished
     assert published == [1, 1, 1]
+
+
+@pytest.mark.asyncio
+async def test_transient_remote_publication_failure_waits_out_the_outage(monkeypatch):
+    """A git hosting outage must not discard completed work within seconds.
+
+    Reproduces mm:f2ae7fd5-...-2026-10-07T14:45:00Z: a GitHub Git Operations
+    incident rejected the push of four saved commits; all three attempts ran
+    within about three seconds and the step failed as do_not_retry.
+    """
+
+    import asyncio
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    sleeps: list[float] = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    store = InMemoryStableRuntimeBindingStore()
+    request = _finish_request(idempotency_key="publication-transient-outage")
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "d" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    saved = {"checkpointRef": "artifact://saved-checkpoint", "archiveRef": "artifact://saved"}
+    await sink.record_phase("saved", saved)
+    outage = (
+        "repository publication command failed: error: RPC failed; HTTP 503 "
+        "curl 22 The requested URL returned error: 503\n"
+        "send-pack: unexpected disconnect while reading sideband packet\n"
+        "fatal: the remote end hung up unexpectedly"
+    )
+    attempts: list[int] = []
+
+    async def publish(bound, result):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise HarnessPlatformError(
+                outage, code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED", transient=True
+            )
+        return result.model_copy(update={"summary": "remote verified"})
+
+    realizer = _finish_realizer(store, publish=publish)
+    finished = await realizer._finish_owned_execution(
+        request, sink, AgentRunResult(summary="verified compute")
+    )
+
+    assert attempts == [1, 1, 1]
+    assert finished.failure_class is None
+    assert finished.summary == "remote verified"
+    # Transient remote failures back off over minutes, not seconds.
+    assert len(sleeps) == 2
+    assert min(sleeps) >= 30
+    assert sum(sleeps) >= 180
+    stored = (await store.get(binding.bindingId)).phaseResults or {}
+    assert stored["publication_failure:0"]["message"] == outage
+    assert stored["publication_failure:0"]["transient"] is True
 
 
 @pytest.mark.asyncio

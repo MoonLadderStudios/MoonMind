@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -25,6 +26,11 @@ from moonmind.schemas.container_job_models import (
     ContainerJobWorkflowInput,
     container_job_workflow_id,
 )
+from moonmind.gates.checkpoint_compat_drain import (
+    CheckpointCompatDrainObservations,
+    collect_checkpoint_compat_drain_observations,
+)
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     RENAMED_USER_WORKFLOW_TYPE,
@@ -35,6 +41,8 @@ from moonmind.workflows.temporal.workers import (
     TemporalWorkerTopology,
     describe_configured_worker,
 )
+
+logger = logging.getLogger(__name__)
 
 # All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
 # so that drain metrics and batch signals only target our own workflows.
@@ -77,6 +85,9 @@ _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES = frozenset(
         "mm_title",
     }
 )
+# Text attributes hold space-separated opaque tokens matched as exact terms
+# (MoonLadderStudios/MoonMind#4640: recorded Provider Profile membership).
+_TEXT_SEARCH_ATTRIBUTES = frozenset({"mm_provider_profile"})
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -116,7 +127,10 @@ def _build_typed_search_attributes(
 
         # Temporal only supports lists for KeywordList. All other types must be unwrapped.
         if all(isinstance(v, str) for v in values):
-            if key in _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES:
+            if key in _TEXT_SEARCH_ATTRIBUTES:
+                key_type = SearchAttributeKey.for_text(key)
+                pairs.append(SearchAttributePair(key_type, " ".join(values)))
+            elif key in _SINGLE_VALUE_KEYWORD_LIST_SEARCH_ATTRIBUTES:
                 key_type = SearchAttributeKey.for_keyword_list(key)
                 pairs.append(SearchAttributePair(key_type, values))
             elif len(values) > 1:
@@ -312,6 +326,39 @@ async def query_workflow(
     if arg is None:
         return await handle.query(query_name)
     return await handle.query(query_name, arg)
+
+_CHECKPOINT_BRANCH_TURN_WORKFLOW_TYPE = "MoonMind.CheckpointBranchTurn"
+_CHECKPOINT_PERSISTENCE_ACTIVITY_PREFIX = "checkpoint_branch.turn."
+_ACTIVITY_CLOSE_EVENT_FIELDS = (
+    "activity_task_completed_event_attributes",
+    "activity_task_failed_event_attributes",
+    "activity_task_timed_out_event_attributes",
+    "activity_task_canceled_event_attributes",
+)
+
+
+def _old_queue_checkpoint_persistence(events: Sequence[Any]) -> tuple[int, int]:
+    """Return (scheduled, unclosed) checkpoint persistence off the artifacts queue."""
+
+    scheduled: set[int] = set()
+    closed: set[int] = set()
+    for event in events:
+        if event.HasField("activity_task_scheduled_event_attributes"):
+            attrs = event.activity_task_scheduled_event_attributes
+            if (
+                attrs.activity_type.name.startswith(
+                    _CHECKPOINT_PERSISTENCE_ACTIVITY_PREFIX
+                )
+                and attrs.task_queue.name != ARTIFACTS_TASK_QUEUE
+            ):
+                scheduled.add(event.event_id)
+            continue
+        for field_name in _ACTIVITY_CLOSE_EVENT_FIELDS:
+            if event.HasField(field_name):
+                closed.add(getattr(event, field_name).scheduled_event_id)
+                break
+    return len(scheduled), len(scheduled - closed)
+
 
 class TemporalClientAdapter:
     """Adapter for communicating with the Temporal server."""
@@ -579,6 +626,66 @@ class TemporalClientAdapter:
             "queued": 0,  # Temporal doesn't distinguish "queued" from "running"
             "stale_running": 0,
         }
+
+    # --- Checkpoint compat drain observation (MoonLadderStudios/MoonMind#3949) ---
+
+    async def observe_checkpoint_compat_drain(
+        self,
+    ) -> CheckpointCompatDrainObservations:
+        """Collect the three checkpoint compat drain dimensions from Temporal.
+
+        A ``MoonMind.CheckpointBranchTurn`` history is a compat consumer when
+        it scheduled ``checkpoint_branch.turn.*`` persistence on any queue
+        other than the artifacts queue: pre-cutover runs keep that route on
+        replay, while new runs record the cutover patch before their first
+        persistence call (so a missing marker alone is not a consumer).
+        Running consumers count as open pre-cutover histories and their
+        unclosed old-queue persistence activities as pending old-queue
+        tasks; closed consumers Visibility still returns remain resettable
+        and count as supported resets. A failed listing or unreadable
+        history leaves its dimensions ``None`` (unknown), never zero.
+        """
+
+        client = await self.get_client()
+        base_query = f'WorkflowType="{_CHECKPOINT_BRANCH_TURN_WORKFLOW_TYPE}"'
+        running = await self._scan_checkpoint_compat_consumers(
+            client, f'{base_query} AND ExecutionStatus="Running"'
+        )
+        closed = await self._scan_checkpoint_compat_consumers(
+            client, f'{base_query} AND ExecutionStatus!="Running"'
+        )
+        return collect_checkpoint_compat_drain_observations(
+            open_pre_cutover_histories=None if running is None else running[0],
+            pending_old_queue_tasks=None if running is None else running[1],
+            supported_resets_pending=None if closed is None else closed[0],
+        )
+
+    @staticmethod
+    async def _scan_checkpoint_compat_consumers(
+        client: Any, query: str
+    ) -> tuple[int, int] | None:
+        consumers = 0
+        outstanding = 0
+        try:
+            async for execution in client.list_workflows(query=query):
+                history = await client.get_workflow_handle(
+                    execution.id, run_id=execution.run_id
+                ).fetch_history()
+                scheduled, pending = _old_queue_checkpoint_persistence(
+                    history.events
+                )
+                if scheduled:
+                    consumers += 1
+                    outstanding += pending
+        except Exception:
+            logger.warning(
+                "Checkpoint compat drain observation failed for %s; "
+                "reporting the dimension as unknown",
+                query,
+                exc_info=True,
+            )
+            return None
+        return consumers, outstanding
 
     # --- Worker Pause/Resume: Batch Updates for Quiesce mode (DOC-REQ-003) ---
 

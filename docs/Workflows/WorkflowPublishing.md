@@ -175,10 +175,12 @@ For managed PR work the planner creates or obtains one stable work/head branch f
 
 The title prefix is lowercased, non-alphanumeric characters become `-`, and it is truncated to 40 characters. With no useful prefix, the UUID fragment alone is allowed. The selected head is persisted and reused on retries; a retry does not generate another branch or PR.
 
-A previous publishing step may establish a verified cumulative candidate. A later step starts from that candidate when the plan calls for it but still compares against the original authored base. The candidate branch must never become its own publication base. Candidate-only clones and restored checkpoints refresh the exact remote base through the admitted publication authority before measuring commits. Unavailable base evidence blocks publication.
+A previous publishing step may establish a verified cumulative candidate. A later step starts from that candidate when the plan calls for it but still compares against the original authored base. The candidate branch must never become its own publication base. The run-owned accepted head carries the authored base it was published over; a later PR step whose workspace is on that candidate fast-forwards the candidate itself (exact-tip lease, no overwrite of another actor's update) and reports the authored base, rather than creating a new branch stacked on the candidate. Candidate-only clones and restored checkpoints refresh the exact remote base through the admitted publication authority before measuring commits. Extension requires that the remote candidate still equals the accepted head SHA, even if a fresh clone already contains another actor’s fast-forward; that same SHA remains the push lease. Unavailable base evidence blocks publication. The authored-base request field uses its own replay patch so retained histories with the earlier accepted-head marker keep their original request payload.
 
-An unchanged saved checkout can be behind an authored base that advanced during
-execution. A zero-change result may prove the saved revision is still reachable
+When the authored base already contains the owned candidate, an unchanged later
+publication step returns canonical `no_commits` evidence against that base and
+skips PR discovery. An unchanged saved checkout can also be behind an authored
+base that advanced during execution. A zero-change result may prove the saved revision is still reachable
 from that exact advertised remote base, preserving the original checkout and
 head. This is saved-work evidence with zero publishable commits, not a new
 publication or proof of completion on the current target. It cannot discover an

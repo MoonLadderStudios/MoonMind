@@ -73,9 +73,18 @@ class HarnessPlatformFailure(StrEnum):
 class HarnessPlatformError(RuntimeError):
     """Typed platform error carrying a failure code and safe remediation."""
 
-    def __init__(self, message: str, *, code: HarnessPlatformFailure | str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: HarnessPlatformFailure | str,
+        transient: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = str(code)
+        # Set by the boundary that observed a remote outage rather than a
+        # rejection; callers that own a bounded retry may wait longer for it.
+        self.transient = transient
 
 
 _FAILURE_REMEDIATION: dict[str, str] = {

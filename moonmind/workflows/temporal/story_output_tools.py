@@ -33,10 +33,12 @@ from moonmind.workflows.skills.acceptance_contract import (
     acceptance_evidence,
     validate_completion_target,
 )
+from moonmind.workflows.skills.plan_validation import validate_json_value
 from moonmind.workflows.skills.tool_definitions import (
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
+    default_registry_tool_payload,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_attempts import (
@@ -9600,6 +9602,16 @@ async def discover_documents(
 ) -> ToolResult:
     """Discover .md, .txt, and .tex files in a directory."""
 
+    # Dependency references are resolved by the plan executor before dispatch.
+    # Validate those values at this existing effect owner, without changing
+    # enforcement for unrelated tools using retained registry snapshots.
+    validate_json_value(
+        value=inputs,
+        schema=default_registry_tool_payload(name=DOCUMENT_DISCOVER_TOOL_NAME)[
+            "inputs"
+        ]["schema"],
+        path=f"{DOCUMENT_DISCOVER_TOOL_NAME}.inputs",
+    )
     directory = _string(inputs.get("directory") or inputs.get("path"))
     if not directory:
         return ToolResult(

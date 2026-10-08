@@ -2115,6 +2115,11 @@ def _build_runtime_planner():
                     }
                     if not has_explicit_step_skill:
                         _drop_inherited_skill_context(step_node_inputs)
+                        # Drop inherited Skill arguments, but keep this Step's
+                        # own data for dependency resolution and AgentRun.
+                        authored_inputs = step_entry.get("inputs")
+                        if isinstance(authored_inputs, Mapping):
+                            step_node_inputs["inputs"] = dict(authored_inputs)
                     step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
                         step_node_inputs["runtime"] = merge_runtime_selection(

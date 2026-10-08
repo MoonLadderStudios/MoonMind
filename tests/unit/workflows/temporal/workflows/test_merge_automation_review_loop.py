@@ -1185,6 +1185,80 @@ async def test_repeated_reenter_handoff_exhausts_shared_progress_budget(
     assert not harness.request_payloads
 
 
+def _degraded_reenter_result(child_id, attempt):
+    value = _request_review_result(child_workflow_id=child_id, head_sha=HEAD_1)
+    value["mergeAutomationDisposition"] = "reenter_gate"
+    value["gatedContinuation"].update(
+        schemaVersion="gated-continuation/v1",
+        action="reenter_gate",
+        reason="ci_signal_degraded",
+        retryAfterSeconds=60,
+        progressSignature=f"{HEAD_1}|4213269206|",
+    )
+    return value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_loop", [{}, {"enabled": False}])
+async def test_reenter_progress_budget_applies_without_review_loop(
+    monkeypatch, review_loop
+):
+    """A resolver that keeps returning the same work cannot loop forever.
+
+    PR #4743 targeted a branch CI never runs for: 30 identical
+    ``ci_signal_degraded`` handoffs each launched another agent run.
+    """
+
+    def result(child_id, attempt):
+        # Bound the fixture so an unbounded gate fails instead of hanging.
+        if attempt > 10:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = review_loop
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1)],
+        child_results=result,
+    )
+
+    outcome = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert outcome["status"] == "blocked"
+    assert outcome["blockers"][0]["kind"] == "review_loop_no_progress"
+    assert "ci_signal_degraded" in outcome["summary"]
+    # The first handoff establishes the signature; two repeats exhaust the
+    # default budget.
+    assert len(harness.child_workflow_ids) == 3
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
+async def test_reenter_budget_without_review_loop_preserves_pre_patch_history(
+    monkeypatch,
+):
+    def result(child_id, attempt):
+        if attempt == 5:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return _degraded_reenter_result(child_id, attempt)
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["reviewLoop"] = {}
+    harness = _Harness(monkeypatch, readiness=[_ready(HEAD_1)], child_results=result)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: name
+        not in {
+            merge_automation_module.MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH,
+            merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
+        },
+    )
+    assert (await MoonMindMergeAutomationWorkflow().run(payload))["status"] == "merged"
+    assert len(harness.child_workflow_ids) == 5
+
+
 @pytest.mark.asyncio
 async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
     def result(child_id, attempt):

@@ -72,6 +72,7 @@ async def resolver_test_client(*, additional_search_attributes=None):
         name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
         for name in ("mm_state", "mm_entry", "mm_owner_type", "mm_owner_id", "mm_repo")
     }
+    required_attributes["mm_provider_profile"] = IndexedValueType.INDEXED_VALUE_TYPE_TEXT
     required_attributes.update(additional_search_attributes or {})
     for attempt in range(30):
         try:
@@ -146,6 +147,8 @@ def _search_attribute_probe_pair(name, kind):
         )
     if kind == IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST:
         return SearchAttributePair(SearchAttributeKey.for_keyword_list(name), ["test"])
+    if kind == IndexedValueType.INDEXED_VALUE_TYPE_TEXT:
+        return SearchAttributePair(SearchAttributeKey.for_text(name), "test")
     assert kind == IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
     return SearchAttributePair(SearchAttributeKey.for_keyword(name), "test")
 

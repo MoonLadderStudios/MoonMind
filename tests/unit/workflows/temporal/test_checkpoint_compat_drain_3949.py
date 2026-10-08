@@ -1,19 +1,23 @@
-"""Drain ownership, ordering, and least-privilege evidence (MoonMind#3949).
+"""Drain ownership, ordering and observation evidence (MoonMind#3949).
 
 The artifacts-fleet cutover (#4032) is delivered; the workflow-queue
 persistence registration stays only for pre-cutover replay/in-flight
 compatibility. These tests execute the drain-ownership gate, the
-idempotency/ownership properties behind ordering, and the behavioral
-capability inventory — without a Temporal server, database, or deployment
-probe. Fixture replay remains history-compatibility evidence only; the
-drain gate below is what authorizes removal.
+idempotency/ownership properties behind ordering, in-process checks that the
+helpers fail closed without database or artifact authority, and the
+automated drain observation route against real time-skipping Temporal
+histories. Fixture replay remains history-compatibility evidence only; the
+drain gate below is what authorizes removal, and live observation of a
+deployment stays separately owned.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
+from temporalio import workflow
 
 from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
@@ -21,6 +25,7 @@ from api_service.services.checkpoint_branch_service import (
 )
 from moonmind.gates.checkpoint_compat_drain import (
     COMPAT_DRAIN_CONTRACT,
+    COMPAT_PATCH_ID,
     CheckpointCompatDrainObservations,
     CheckpointCompatDrainUsage,
     collect_checkpoint_compat_drain_observations,
@@ -29,6 +34,7 @@ from moonmind.gates.checkpoint_compat_drain import (
     render_checkpoint_compat_drain_report,
     retention_reason,
 )
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
 
 # No explicit shard mark: tests/conftest.py owns every test under
 # tests/unit/workflows/temporal/ to the temporal-boundary shard. Do not add
@@ -550,7 +556,7 @@ def test_drain_report_names_probes_and_removal_checklist():
         ),
     )
     assert COMPAT_DRAIN_CONTRACT in report
-    assert "TaskQueue=" in report
+    assert "observe_checkpoint_compat_drain" in report
     assert "checkpoint-branch-artifact-fleet-v1" in report
     assert "Removal checklist" in report
 
@@ -713,3 +719,233 @@ async def test_rejection_persistence_fails_closed_without_db(monkeypatch):
                 "terminalPayloadDigest": "sha256:" + "a" * 64,
             }
         )
+
+
+# --- Automated drain observation route (3949-R4) -----------------------------
+#
+# ``TemporalClientAdapter.observe_checkpoint_compat_drain`` is the automated
+# counterpart of the rendered operator procedure. These tests feed it real
+# Temporal histories from a time-skipping server; only the Visibility listing
+# is a test double because the time-skipping server has no advanced
+# Visibility. Live observation of a deployment stays separately owned.
+
+@workflow.defn(name="MoonMind.CheckpointBranchTurn")
+class _DrainProbeTurn:
+    """Shapes the persistence history of pre- and post-cutover turns."""
+
+    @workflow.run
+    async def run(self, mode: str) -> None:
+        options = {}
+        if mode == "post_cutover":
+            if workflow.patched(COMPAT_PATCH_ID):
+                options = {"task_queue": ARTIFACTS_TASK_QUEUE}
+        if mode in ("pre_cutover", "post_cutover"):
+            # No activity worker polls either queue, so the persistence
+            # activity stays pending exactly like a stranded old-queue task.
+            workflow.start_activity(
+                "checkpoint_branch.turn.mark_running",
+                {"branchTurnId": mode},
+                start_to_close_timeout=timedelta(seconds=60),
+                **options,
+            )
+        await workflow.wait_condition(lambda: False)
+
+
+class _VisibilityDouble:
+    """Real client for histories; scripted Visibility for listings."""
+
+    def __init__(self, client, running, closed, *, fail_listing=False):
+        self._client = client
+        self._running = running
+        self._closed = closed
+        self._fail_listing = fail_listing
+        self.queries: list[str] = []
+
+    def list_workflows(self, query: str):
+        from types import SimpleNamespace
+
+        self.queries.append(query)
+        if self._fail_listing:
+            raise RuntimeError("visibility unavailable (drain probe)")
+        running = 'ExecutionStatus="Running"' in query
+        handles = self._running if running else self._closed
+
+        async def _iterate():
+            for handle in handles:
+                yield SimpleNamespace(id=handle.id, run_id=handle.result_run_id)
+
+        return _iterate()
+
+    def get_workflow_handle(self, workflow_id, *, run_id=None):
+        return self._client.get_workflow_handle(workflow_id, run_id=run_id)
+
+
+async def _drain_probe_executions(env, queue):
+    from uuid import uuid4
+
+    handles = {}
+    for mode in ("pre_cutover", "post_cutover", "fresh", "pre_cutover_closed"):
+        handles[mode] = await env.client.start_workflow(
+            "MoonMind.CheckpointBranchTurn",
+            "pre_cutover" if mode == "pre_cutover_closed" else mode,
+            id=f"drain-probe-{mode}-{uuid4()}",
+            task_queue=queue,
+        )
+    for mode in ("pre_cutover", "post_cutover", "pre_cutover_closed"):
+        for _attempt in range(200):
+            history = await handles[mode].fetch_history()
+            if any(
+                event.HasField("activity_task_scheduled_event_attributes")
+                for event in history.events
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError(f"{mode} never scheduled persistence")
+    await handles["pre_cutover_closed"].terminate("closed pre-cutover history")
+    return handles
+
+
+@pytest.mark.asyncio
+async def test_drain_observation_counts_old_queue_consumers_from_histories():
+    """Only histories that scheduled persistence off the artifacts queue count.
+
+    A running pre-cutover turn is one open history with one pending
+    old-queue task; a closed pre-cutover history remains a supported-reset
+    consumer while Visibility still returns it; a post-cutover turn and a
+    fresh turn that has not reached persistence yet are not consumers.
+    """
+
+    from uuid import uuid4
+
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    queue = f"drain-probe-{uuid4()}"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[_DrainProbeTurn],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handles = await _drain_probe_executions(env, queue)
+            visibility = _VisibilityDouble(
+                env.client,
+                running=[
+                    handles["pre_cutover"],
+                    handles["post_cutover"],
+                    handles["fresh"],
+                ],
+                closed=[handles["pre_cutover_closed"]],
+            )
+            adapter = TemporalClientAdapter(client=visibility)
+            observations = await adapter.observe_checkpoint_compat_drain()
+
+    assert observations == CheckpointCompatDrainObservations(
+        open_pre_cutover_histories=1,
+        pending_old_queue_tasks=1,
+        supported_resets_pending=1,
+    )
+    assert visibility.queries
+    for query in visibility.queries:
+        assert 'WorkflowType="MoonMind.CheckpointBranchTurn"' in query
+    decision = evaluate_checkpoint_compat_drain_observations(observations)
+    assert decision.may_remove_workflow_queue_handlers is False
+    assert set(decision.blocking_dimensions) == {
+        "open_pre_cutover_histories",
+        "pending_old_queue_tasks",
+        "supported_resets_pending",
+    }
+
+
+@pytest.mark.asyncio
+async def test_drain_observation_reports_drained_when_only_new_routes_exist():
+    """Post-cutover and fresh turns alone produce an observed all-zero drain."""
+
+    from uuid import uuid4
+
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    queue = f"drain-probe-{uuid4()}"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[_DrainProbeTurn],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handles = await _drain_probe_executions(env, queue)
+            visibility = _VisibilityDouble(
+                env.client,
+                running=[handles["post_cutover"], handles["fresh"]],
+                closed=[],
+            )
+            observations = await TemporalClientAdapter(
+                client=visibility
+            ).observe_checkpoint_compat_drain()
+
+    assert observations == CheckpointCompatDrainObservations(
+        open_pre_cutover_histories=0,
+        pending_old_queue_tasks=0,
+        supported_resets_pending=0,
+    )
+    assert evaluate_checkpoint_compat_drain_observations(
+        observations
+    ).may_remove_workflow_queue_handlers is True
+
+
+@pytest.mark.asyncio
+async def test_drain_observation_failed_visibility_stays_unknown():
+    """A failed listing is unknown (None), never a zero that unblocks removal."""
+
+    from types import SimpleNamespace
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    visibility = _VisibilityDouble(
+        SimpleNamespace(), running=[], closed=[], fail_listing=True
+    )
+    observations = await TemporalClientAdapter(
+        client=visibility
+    ).observe_checkpoint_compat_drain()
+
+    assert observations == CheckpointCompatDrainObservations(
+        open_pre_cutover_histories=None,
+        pending_old_queue_tasks=None,
+        supported_resets_pending=None,
+    )
+    decision = evaluate_checkpoint_compat_drain_observations(observations)
+    assert decision.may_remove_workflow_queue_handlers is False
+
+
+@pytest.mark.asyncio
+async def test_drain_observation_unreadable_history_stays_unknown():
+    """One unreadable history makes its dimensions unknown, not undercounted."""
+
+    from types import SimpleNamespace
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    class _UnreadableHandle:
+        async def fetch_history(self):
+            raise RuntimeError("history unavailable (drain probe)")
+
+    class _Client(_VisibilityDouble):
+        def get_workflow_handle(self, workflow_id, *, run_id=None):
+            return _UnreadableHandle()
+
+    listed = SimpleNamespace(id="wf-unreadable", result_run_id="run-1")
+    observations = await TemporalClientAdapter(
+        client=_Client(SimpleNamespace(), running=[listed], closed=[])
+    ).observe_checkpoint_compat_drain()
+
+    assert observations.open_pre_cutover_histories is None
+    assert observations.pending_old_queue_tasks is None
+    # The closed listing was readable and empty, so that dimension is known.
+    assert observations.supported_resets_pending == 0
