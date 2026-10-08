@@ -3,7 +3,7 @@
 **Document Class:** Imperative working document  
 **Viewpoint:** Implementation / Migration Plan  
 **Status:** Remaining implementation and bounded migration, not completion evidence  
-**Updated:** 2026-10-07  
+**Updated:** 2026-10-08  
 **Canonical Target:** [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md)  
 **Application Model:** [Single-User Application Design](../SingleUserApplicationDesign.md)  
 **Deployment Owner:** [Docker Compose Update System](../Steps/DockerComposeUpdateSystem.md)  
@@ -48,7 +48,7 @@ broker isolation.
 
 These are source observations, not newly executed regressions or live qualification. Recheck current code and PRs before implementation. Do not restore old defects or repeat landed work just because a historical issue describes them.
 
-### Status at `ef731e4dc` (2026-10-07)
+### Status at `8dc675040` (2026-10-08)
 
 Landed on main through their owners: Settings probes and connection form (#4008/#4019), typed-binding handoffs (#4009), GitHub App acquisition through the shared connection and issuer (#4022, PR #4492), capture, save-before-cleanup, and retention (#4015/#4016/#4017, including PRs #4727 and #4731), the saved-candidate publisher and Publish Saved Work producer (#4018/#1090, following #4621), Workflow Detail saved-result actions (#4020), and legacy credential migration (#4023). Publication-only recovery of saved work is admitted by default; its rollout settings now only narrow or disable it.
 
@@ -56,10 +56,10 @@ Remaining repository work, each with its existing owner:
 
 | Gap | Owner |
 | --- | --- |
-| API/tool callers still use `resolve_github_credential` instead of the admitted connection | #4010 (open PR #4733, CI failing at review) |
-| Selected credential delivery into Omnigent Git/gh processes; a selected App connection still fails closed at launch | #4011 (competing open PRs #4724/#4725, CI failing at review; consolidate before landing) |
-| Ordinary scratch admission through save and host-independent retrieval | #2615 |
-| Create-page source/publication simplification (`workflow-start.tsx` still applies `OWNER_REPO_PATTERN` to repository input) | #2619 |
+| API/tool callers still use `resolve_github_credential` instead of the admitted connection | #4010 (open PR #4733; `ci-required` passing, not yet merged) |
+| Selected credential delivery into Omnigent Git/gh processes; a selected App connection still fails closed at launch | #4011 (competing open PRs #4724/#4725, both with `ci-required` failing; consolidate before landing) |
+| Ordinary scratch admission through save and host-independent retrieval | #2615 (awaiting operator clarification) |
+| Create-page source/publication simplification (`workflow-start.tsx` still applies `OWNER_REPO_PATTERN` to repository input) | #2619 (awaiting operator clarification) |
 | First-run journey extended to generated output downloaded after cleanup, in current-candidate CI | #3938, with remaining integrated evidence in #4024 |
 
 Not observed: GitHub App behavior against a live installation (PR #4492 used synthetic provider responses) and any live deployment rollout of these paths. They remain separately authorized observations, not repository defects.
