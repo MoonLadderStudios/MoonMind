@@ -259,6 +259,7 @@ def _workflow(run_id, number, *, status="completed", conclusion="success", attem
         "workflow_id": 10,
         "path": ".github/workflows/test.yml",
         "event": "pull_request",
+        "head_branch": "feature",
         "run_number": number,
         "run_attempt": attempt,
         "status": status,
@@ -573,3 +574,23 @@ def test_requirement_change_during_inventory_cannot_authorize_completion(resolve
     result, snapshot, _ = run()
     assert result["reason"] == "snapshot_refresh_failed"
     assert not snapshot
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize("missing_index", [0, 1])
+def test_run_without_branch_cannot_clear_a_failure(resolver_cli, event, missing_index):
+    state, run = resolver_cli
+    state["checks"] = [
+        _actions_check(1, 10, "cancelled"),
+        _actions_check(2, 20, "success"),
+    ]
+    state["runs"] = [_workflow(10, 1, conclusion="cancelled"), _workflow(20, 2)]
+    for workflow in state["runs"]:
+        workflow["event"] = event
+        if event != "pull_request":
+            workflow["pull_requests"] = []
+    state["runs"][missing_index]["head_branch"] = None
+    result, snapshot, _ = run()
+    assert result["status"] != "review_clean"
+    assert not snapshot["ci"]["supersededChecks"]
+    assert snapshot["ci"]["unresolvedChecks"]
