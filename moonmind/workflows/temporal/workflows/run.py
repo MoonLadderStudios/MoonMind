@@ -1336,6 +1336,8 @@ RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
     "run-launch-provider-profile-projection-v1"
 )
+# Existing launch-result histories must retain their later upsert position.
+RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -26052,6 +26054,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 expected_step_execution_id=step_id,
             )
             self._agent_run_progress_by_child[child_id] = state
+        has_profile_fields = (
+            "providerProfileId" in payload or "providerProfileLabel" in payload
+        )
+        grant_progress_enabled = has_profile_fields and workflow.patched(
+            RUN_GRANTED_PROFILE_PROGRESS_PATCH
+        )
+        if has_profile_fields and not grant_progress_enabled:
+            # Older parents rejected these fields under extra="forbid". A new
+            # child can reach an old worker during rollout, so replay must keep
+            # ignoring that recorded signal, including ordinary state upserts.
+            return
         outcome = apply_agent_run_progress(
             state,
             payload,
@@ -26073,6 +26086,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             return
         accepted = outcome.accepted_state
+        if grant_progress_enabled:
+            # Only accepted progress crosses the child/attempt/revision fences.
+            # This records display identity, never profile lease ownership.
+            self._record_launch_provider_profile(accepted)
         self._note_issue_claim_work_started(str(accepted.get("state") or ""))
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated

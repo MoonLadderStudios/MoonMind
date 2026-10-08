@@ -1855,7 +1855,19 @@ async def test_codex_waits_for_its_profile_before_starting_execution(
     request = _omnigent_request(plan_binding=PLAN_REF).model_copy(
         update={"execution_profile_ref": "codex_openai_oauth"}
     )
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
     parent = MoonMindUserWorkflow()
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli"}
+    )
+    profile_updates = []
+    monkeypatch.setattr(agent_run_module.workflow, "upsert_memo", profile_updates.append)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "upsert_search_attributes", lambda _values: None
+    )
     monkeypatch.setattr(parent, "_get_logger", lambda: logging.getLogger(__name__))
     monkeypatch.setattr(run, "_get_logger", lambda: logging.getLogger(__name__))
     parent._active_agent_child_workflow_id = "agent-run-1"
@@ -1902,6 +1914,7 @@ async def test_codex_waits_for_its_profile_before_starting_execution(
         admit_capacity_before_activity=True,
         execution_plan_admission=True,
     )
+    assert profile_updates[-1]["providerProfile"]["profiles"][0]["id"] == "codex_openai_oauth"
     assert result["summary"] == "completed"
     assert admitted_at is not None
     assert len(run.executions) == 1

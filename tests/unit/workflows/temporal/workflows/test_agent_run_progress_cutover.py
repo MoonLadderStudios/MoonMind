@@ -559,7 +559,7 @@ def test_slot_acquired_routing_versioned_by_fresh_patch():
     source = repo_root.joinpath(
         "moonmind/workflows/temporal/workflows/agent_run.py"
     ).read_text()
-    anchor = source.index("Slot acquired for")
+    anchor = source.index("Slot acquired for", source.index("grant_progress_enabled ="))
     slot_block = source[max(0, anchor - 2000) : anchor + 800]
     assert "AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID" in slot_block
     assert "_signal_parent_child_state_changed" in slot_block
@@ -756,3 +756,131 @@ def test_rollover_lineage_survives_parent_continue_as_new(monkeypatch):
         ).disposition
         == "accepted"
     )
+
+
+def test_granted_profile_progress_is_fenced_idempotent_and_frozen(monkeypatch):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
+    parent = _install_parent(monkeypatch, True)
+    parent._started_at = _LAUNCH_NOW
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli"}
+    )
+    memo_updates, index_updates = [], []
+    monkeypatch.setattr(workflow, "upsert_memo", memo_updates.append)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", index_updates.append)
+    payload = _projection_payload(state="launching", reason_code="launching")
+    payload.update(providerProfileId="work", providerProfileLabel="Frozen work")
+    parent.agent_run_progress({**payload, "agentRunWorkflowId": "stranger"})
+    assert not memo_updates
+    parent.agent_run_progress(payload)
+    assert len(memo_updates) == len(index_updates) == 1
+    assert memo_updates[-1]["providerProfile"]["profiles"][0]["label"] == "Frozen work"
+    parent.agent_run_progress(payload)
+    parent.agent_run_progress(
+        {**payload, "projectionRevision": 2, "providerProfileLabel": "Renamed"}
+    )
+    assert len(memo_updates) == 1
+    # Same child retry on another Temporal run adds a different profile.
+    parent.agent_run_progress(
+        {**payload, "agentRunRunId": "child-run-B", "providerProfileId": "other"}
+    )
+    assert memo_updates[-1]["providerProfile"]["profileCount"] == 2
+    parent.agent_run_progress(
+        {**payload, "projectionRevision": 3, "providerProfileId": "stale"}
+    )
+    assert len(memo_updates) == 2
+    # Terminal fallback is harmless when grant progress already persisted it.
+    parent._map_agent_run_result({"metadata": {"providerProfileId": "other"}})
+    assert len(memo_updates) == 2
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+def test_granted_profile_progress_retains_old_history_and_no_backfill(
+    monkeypatch, admitted
+):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH,
+    )
+
+    patches = set(NEW_HISTORY_PATCHES) | {RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH}
+    parent = _install_parent(monkeypatch, patches if admitted else True)
+    parent._started_at = _LAUNCH_NOW
+    parent._provider_profile_projection = (
+        build_provider_profile_projection({"targetRuntime": "codex_cli"})
+        if admitted
+        else (None, None)
+    )
+    updates = []
+    monkeypatch.setattr(workflow, "upsert_memo", updates.append)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", updates.append)
+    payload = _projection_payload()
+    payload.update(providerProfileId="work", providerProfileLabel="Work")
+    parent.agent_run_progress(payload)
+    assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_grant_progress_carries_bounded_identity_before_child_completion(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    child = MoonMindAgentRun()
+    child._progress_step_execution_id = STEP_EXEC
+    child._progress_generation = CHILD_WF
+    child._assigned_profile_id = "work"
+    child._profile_snapshots = {
+        "work": {"account_label": "A" * 200, "credentialHandle": "never copied"}
+    }
+    monkeypatch.setattr(workflow, "patched", lambda _name: True)
+    monkeypatch.setattr(
+        workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id=CHILD_WF, run_id="child-run-A"),
+    )
+    delivered = []
+
+    class Parent:
+        async def signal(self, name, args):
+            delivered.append((name, args[0]))
+
+    monkeypatch.setattr(
+        workflow, "get_external_workflow_handle", lambda *args, **kwargs: Parent()
+    )
+    await child._signal_parent_granted_profile(
+        SimpleNamespace(workflow_id=PARENT_WF, run_id=PARENT_RUN), "codex_cli"
+    )
+    assert child.final_result is None
+    assert delivered[0][0] == AGENT_RUN_PROGRESS_SIGNAL_NAME
+    assert delivered[0][1]["providerProfileId"] == "work"
+    assert delivered[0][1]["providerProfileLabel"] == "A" * 120
+    assert "credentialHandle" not in delivered[0][1]
+    child._profile_snapshots["work"]["account_label"] = "Renamed"
+    await child._signal_parent_progress_projection(
+        SimpleNamespace(workflow_id=PARENT_WF, run_id=PARENT_RUN),
+        "failed",
+        "Launch failed",
+    )
+    assert delivered[-1][1]["providerProfileLabel"] == "A" * 120
+
+
+@pytest.mark.parametrize("profile_fields", [
+    {"providerProfileId": "work", "providerProfileLabel": "Work"},
+    {"providerProfileLabel": None},
+])
+def test_old_parent_rejects_new_child_schema_during_replay(monkeypatch, profile_fields):
+    """Old workers rejected the entire signal before any product-state update."""
+    parent = _install_parent(monkeypatch, NEW_HISTORY_PATCHES)
+    updates = []
+    monkeypatch.setattr(parent, "_update_memo", lambda: updates.append("memo"))
+    monkeypatch.setattr(parent, "_update_search_attributes", lambda: updates.append("index"))
+    parent.agent_run_progress({**_projection_payload(), **profile_fields})
+    assert parent._state == STATE_INITIALIZING
+    assert parent._agent_run_progress_by_child[CHILD_WF]["acceptedRevision"] == 0
+    assert updates == []
