@@ -684,3 +684,419 @@ async def test_exact_images_run_the_required_concurrency_level(tmp_path) -> None
     assert overlap.observed_peak == level
 
     publish_observed_overlap(ConcurrencyQualificationLayer.exact_docker, overlap)
+
+
+async def _credential_recovery_host_class(backend, client, image_ref):
+    """Bind this recovery row to observed build/version and canonical harness identity."""
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+
+    _, build_digest, _ = await backend.run(
+        [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            '{{index .Config.Labels "moonmind.omnigent.build_digest"}}',
+            image_ref,
+        ]
+    )
+    _, architecture, _ = await backend.run(
+        [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Os}}/{{.Architecture}}",
+            image_ref,
+        ]
+    )
+    _, version, _ = await backend.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "/opt/venv/bin/python",
+            image_ref,
+            "-c",
+            "from importlib.metadata import version; print(version('omnigent'))",
+        ]
+    )
+    raw = next(
+        (row for row in await client.list_harnesses() if row.get("id") == HARNESS_ID),
+        None,
+    )
+    assert raw is not None, "exact recovery harness catalog is unavailable"
+    harness = _normalize_harness(
+        raw,
+        omnigent_version=version.strip(),
+        omnigent_build_digest=build_digest.strip(),
+    )
+    payload = _host_class(image_ref).model_dump(mode="json", by_alias=True)
+    payload.update(
+        omnigentVersion=version.strip(),
+        omnigentBuildDigest=build_digest.strip(),
+        architectures=[architecture.strip()],
+    )
+    payload["declaredHarnessImplementations"][0]["implementationRef"] = (
+        harness.implementation.implementation_ref()
+    )
+    return HostClass.model_validate(payload)
+
+
+def _credential_recovery_container_facts(
+    raw: str, *, expected_state_volume: str
+) -> dict:
+    """Project only inspected identities required by the qualification receipt."""
+    import json
+
+    observed = json.loads(raw)
+    state = [
+        mount
+        for mount in observed["mounts"]
+        if mount.get("Destination") == "/home/app/.omnigent"
+    ]
+    assert len(state) == 1 and state[0]["Type"] == "volume"
+    assert state[0]["Name"] == expected_state_volume
+    return {
+        "containerId": observed["containerId"],
+        "hostImageId": observed["hostImageId"],
+        "stateVolume": state[0]["Name"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_host_replacement_resumes_same_session_without_provider_input(
+    tmp_path,
+):
+    """Qualify the credential-free Docker/session boundary of legacy recovery.
+
+    Use the existing pinned-image launcher and actual upstream retry owner. No
+    message or model request is submitted: this row proves runner restoration,
+    state-volume retention, current workspace save, and stable bridge/session
+    identity. The OAuth-specific launcher/cleanup-CAS paths have separate
+    deterministic boundary tests; a missing real environment is not a pass.
+    """
+    import json
+    from pathlib import Path
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    reason = _exact_docker_environment_reason()
+    if reason:
+        pytest.skip(f"exact-image credential recovery unavailable: {reason}")
+    run_ref = "credential-recovery-" + uuid.uuid4().hex[:12]
+    workflow_id = "mm:test:" + run_ref
+    step_id = workflow_id + ":run-1:preserve:execution:1"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    skills = tmp_path / "skills"
+    workspace.mkdir(parents=True)
+    skills.mkdir()
+    for command in (
+        ["git", "init", "--initial-branch=main", str(workspace)],
+        ["git", "-C", str(workspace), "config", "user.name", "Recovery Fixture"],
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "config",
+            "user.email",
+            "fixture@example.invalid",
+        ],
+    ):
+        await asyncio.to_thread(
+            subprocess.run, command, check=True, capture_output=True
+        )
+    (workspace / "tracked.txt").write_text("baseline\n")
+    await asyncio.to_thread(
+        subprocess.run, ["git", "-C", str(workspace), "add", "."], check=True
+    )
+    await asyncio.to_thread(
+        subprocess.run,
+        ["git", "-C", str(workspace), "commit", "-m", "fixture"],
+        check=True,
+        capture_output=True,
+    )
+    (workspace / "tracked.txt").write_text("current dirty work\n")
+    (workspace / "untracked.txt").write_text("current untracked work\n")
+    # The exact image runs as its declared unprivileged identity.
+    await asyncio.to_thread(
+        subprocess.run, ["chmod", "-R", "a+rwX", str(tmp_path)], check=True
+    )
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(
+            workspace_id,
+            workflow_id,
+            step_id,
+            "repo",
+        )
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=run_ref,
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            }
+        },
+        stepExecution={
+            "workflowId": workflow_id,
+            "runId": "run-1",
+            "logicalStepId": "preserve",
+            "executionOrdinal": 1,
+            "stepExecutionId": step_id,
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    )
+    image_ref = _host_image()
+    host_class = _host_class(image_ref)
+    policy = get_launch_policy(LAUNCH_POLICY_REF)
+    spec = _launch_spec(
+        run_ref=run_ref,
+        image_ref=image_ref,
+        server_url=_host_server_url(),
+        workspace_path=str(workspace),
+        skills_path=str(skills),
+        limits=dict(policy.limits),
+        runtime=dict(host_class.runtime),
+    )
+    backend = DockerCommandBackend()
+    launcher = DockerOmnigentHostLauncher(
+        backend=backend,
+        runtime_scripts=OmnigentRuntimeScriptService(),
+        server_url=_host_server_url(),
+        host_api_token=resolved_host_runner_token(),
+    )
+    spec = spec.model_copy(
+        update={
+            "controlAttachment": launcher.control_attachment(spec.hostLeaseRef),
+        }
+    )
+    client = OmnigentHttpClient(
+        base_url=resolved_server_url(), api_token=resolved_api_token()
+    )
+    registration = OmnigentHostRegistrationService(
+        client=client, expected_owner=_expected_host_owner(), backend=backend
+    )
+    cleanup = DockerOmnigentHostCleanupService(backend)
+    runtime = OmnigentOAuthHostRuntime(client=client, workspace_root=tmp_path)
+    publisher = OmnigentWorkspacePublicationService(
+        tmp_path, artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path / "saved")
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_id = None
+
+    async def container_facts():
+        _, raw, _ = await backend.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                '{"containerId":"{{.Id}}","hostImageId":"{{.Image}}","mounts":{{json .Mounts}}}',
+                spec.correlationName,
+            ]
+        )
+        return _credential_recovery_container_facts(
+            raw, expected_state_volume=spec.stateAttachment["sourceRef"]
+        )
+
+    source_commit = os.getenv("MOONMIND_CREDENTIAL_RECOVERY_SOURCE_COMMIT", "").strip()
+    if not source_commit:
+        source_commit = (
+            await asyncio.to_thread(
+                subprocess.check_output, ["git", "rev-parse", "HEAD"], text=True
+            )
+        ).strip()
+    assert len(source_commit) == 40 and all(
+        c in "0123456789abcdef" for c in source_commit
+    )
+    try:
+        await backend.run(["docker", "pull", image_ref])
+        host_class = await _credential_recovery_host_class(backend, client, image_ref)
+        agents = await client.list_agents()
+        agent = next(
+            (item for item in agents if item.get("name") == "opencode-native-ui"), None
+        )
+        assert agent is not None, "credential-free OpenCode stock agent is unavailable"
+        await launcher.launch(
+            spec=spec,
+            host_class=host_class,
+            launch_policy=policy,
+            credential_handles=[],
+        )
+        await _await_running(backend, spec.correlationName)
+        await registration.wait_for_registration(
+            correlation_name=spec.correlationName,
+            harness_id=HARNESS_ID,
+            credentialless=True,
+            expected_host_id=spec.expectedOmnigentHostId,
+        )
+        created = await client.create_session(
+            {
+                "agent_id": agent["id"],
+                "host_type": "external",
+                "host_id": spec.expectedOmnigentHostId,
+                "workspace": "/workspaces/run",
+                "harness_override": HARNESS_ID,
+                "initial_items": [],
+                "title": "MoonMind isolated credential recovery qualification",
+            }
+        )
+        session_id = created["id"]
+        receipt = {"omnigentSessionId": session_id}
+        await runtime._resume_preserved_session(
+            receipt, expected_host_id=spec.expectedOmnigentHostId
+        )
+        initial = await client.get_session(session_id)
+        initial_items = [
+            item.get("id")
+            for item in initial.get("items", [])
+            if item.get("type") == "message"
+        ]
+        store = OmnigentBridgeSessionStore(factory)
+        bridge = await store.get_or_create(
+            request=request,
+            endpoint_ref="exact-docker-test",
+            agent_id=agent["id"],
+            agent_name=agent["name"],
+            target_metadata={},
+        )
+        await store.attach_session(request.idempotency_key, session_id)
+        saved_before = await publisher.save_request_workspace(request)
+        before_facts = await container_facts()
+        before_facts.update(
+            hostId=initial["host_id"],
+            sessionId=session_id,
+            bridgeId=bridge.bridge_session_id,
+            runnerId=initial["runner_id"],
+            messageItemIds=initial_items,
+        )
+        assert before_facts["runnerId"] and not initial_items
+        _, expected_image, _ = await backend.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image_ref]
+        )
+        assert before_facts["hostImageId"] == expected_image.strip()
+        # Remove only the disposable container. The same existing launch owner
+        # reuses the state volume and every identity in the original spec.
+        await backend.run(["docker", "stop", "--time", "20", spec.correlationName])
+        saved_stopped = await publisher.save_request_workspace(request)
+        assert saved_stopped["workspaceDigest"] == saved_before["workspaceDigest"]
+        await backend.run(["docker", "rm", spec.correlationName])
+        await launcher.launch(
+            spec=spec,
+            host_class=host_class,
+            launch_policy=policy,
+            credential_handles=[],
+        )
+        await _await_running(backend, spec.correlationName)
+        await registration.wait_for_registration(
+            correlation_name=spec.correlationName,
+            harness_id=HARNESS_ID,
+            credentialless=True,
+            expected_host_id=spec.expectedOmnigentHostId,
+        )
+        after_facts = await container_facts()
+        assert after_facts["containerId"] != before_facts["containerId"]
+        assert after_facts["hostImageId"] == before_facts["hostImageId"]
+        assert after_facts["stateVolume"] == before_facts["stateVolume"]
+        await runtime._resume_preserved_session(
+            receipt, expected_host_id=spec.expectedOmnigentHostId
+        )
+        resumed = await client.get_session(session_id)
+        assert resumed["id"] == session_id
+        assert resumed["host_id"] == spec.expectedOmnigentHostId
+        assert resumed["runner_online"] is True
+        assert resumed.get("runner_id") != initial.get("runner_id")
+        assert [
+            item.get("id")
+            for item in resumed.get("items", [])
+            if item.get("type") == "message"
+        ] == initial_items
+        await engine.dispose()
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        restarted_store = OmnigentBridgeSessionStore(factory)
+        recovered_bridge = await restarted_store.get_existing(request.idempotency_key)
+        assert recovered_bridge.bridge_session_id == bridge.bridge_session_id
+        assert recovered_bridge.omnigent_session_id == session_id
+        after_facts.update(
+            hostId=resumed["host_id"],
+            sessionId=resumed["id"],
+            bridgeId=recovered_bridge.bridge_session_id,
+            runnerId=resumed["runner_id"],
+            messageItemIds=[
+                item.get("id")
+                for item in resumed.get("items", [])
+                if item.get("type") == "message"
+            ],
+        )
+        assert after_facts["runnerId"]
+        assert (workspace / "tracked.txt").read_text() == "current dirty work\n"
+        assert (workspace / "untracked.txt").read_text() == "current untracked work\n"
+        output_root = Path(
+            os.getenv("MOONMIND_OMNIGENT_CONCURRENCY_EVIDENCE_DIR", str(tmp_path))
+        )
+        output_root.mkdir(parents=True, exist_ok=True)
+        (output_root / "credential-recovery-exact-docker.json").write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "sourceCommit": source_commit,
+                    "hostImageRef": image_ref,
+                    "omnigentVersion": host_class.omnigentVersion,
+                    "omnigentBuildDigest": host_class.omnigentBuildDigest,
+                    "harnessImplementationRef": host_class.declaredHarnessImplementations[
+                        0
+                    ].implementationRef,
+                    "before": before_facts,
+                    "after": after_facts,
+                    "containerReplaced": True,
+                    "sameHost": True,
+                    "sameSession": True,
+                    "sameBridge": True,
+                    "runnerReconnected": True,
+                    "inputReplayed": False,
+                    "workspaceDigest": saved_stopped["workspaceDigest"],
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    finally:
+        try:
+            if session_id:
+                await client.delete_session(session_id, delete_branch=False)
+        finally:
+            try:
+                await cleanup.cleanup(
+                    container_name=spec.correlationName,
+                    host_lease_ref=spec.hostLeaseRef,
+                    host_lease_generation=spec.hostLeaseGeneration,
+                    state_volume_ref=spec.stateAttachment["sourceRef"],
+                    control_volume_ref=(spec.controlAttachment or {}).get("sourceRef"),
+                )
+            finally:
+                await engine.dispose()

@@ -213,3 +213,59 @@ def test_result_metadata_omits_assessment_path_when_absent(monkeypatch):
 
     assert result is not None
     assert "assessment_artifact_path" not in (result.metadata or {})
+
+
+def test_result_metadata_reports_granted_provider_profile_for_managed_launch_4640(
+    monkeypatch,
+):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run._profile_snapshots = {
+        "codex-work": {
+            "profile_id": "codex-work",
+            "account_label": "Work",
+            "provider_label": "OpenAI",
+            "secret_refs": {"OPENAI_API_KEY": "secret://codex-work"},
+        }
+    }
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        executionProfileRef="codex-work",
+        correlationId="corr-provider-profile",
+        idempotencyKey="idem-provider-profile",
+    )
+
+    result = run._enrich_result_metadata(
+        request=request,
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert result is not None
+    assert result.metadata["providerProfileId"] == "codex-work"
+    assert result.metadata["providerProfileLabel"] == "Work"
+    assert "secret://" not in str(result.metadata)
+
+
+def test_result_metadata_omits_provider_profile_without_managed_grant_4640(
+    monkeypatch,
+):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+
+    external = run._enrich_result_metadata(
+        request=_request(),
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+    unresolved = run._enrich_result_metadata(
+        request=AgentExecutionRequest(
+            agentKind="managed",
+            agentId="codex_cli",
+            correlationId="corr-unresolved",
+            idempotencyKey="idem-unresolved",
+        ),
+        result=AgentRunResult(summary="done", metadata={}),
+    )
+
+    assert external is not None and "providerProfileId" not in external.metadata
+    assert unresolved is not None and "providerProfileId" not in unresolved.metadata

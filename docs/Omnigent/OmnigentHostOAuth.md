@@ -426,6 +426,38 @@ The container uses:
 
 Retries reuse or replace the same host only through current fencing authority. An old host, old activity, or janitor cannot stop or mutate the replacement generation.
 
+An already-running host with a compatible file-backed GitHub projection refreshes
+that projection atomically. An environment-token or incompatible host instead
+uses the same preparation Activity's bounded save-and-resume owner. The bridge
+records preservation against its current request, session, host lease, and
+credential generation; the destructive cleanup claim observes that receipt
+under the host-row fence. The existing turn observer waits for a trustworthy
+inactive boundary, the canonical workspace saver verifies current archive bytes,
+and preparation rechecks the turn before stopping only the obsolete container.
+A second save after confirmed stop is authoritative for recreation. State,
+artifact, cache, workspace, session, and lease identities remain retained.
+
+Recreation uses the admitted launch limits. A historical zero CPU encoding may
+reuse only a finite quota observed on the exact owned live container and saved
+in that fenced receipt. It never supplies an unlimited or default quota; missing
+or changed authority retains the host with a retryable diagnostic. The new
+container is checked against the retained quota and receives the current
+file-backed credential. Replacement egress evidence is newly attested while the
+old evidence remains recorded. Omnigent's existing `retry_session` event owns
+runner reconnection without creating or replaying transcript input; readiness
+requires the original session and host to be observed together again.
+
+Interrupted retries capture surviving current workspace bytes again. A missing
+workspace can use the canonical restorer only from the stopped-host save under
+its original Step Execution authority, never by rolling a live workspace back or
+recloning an empty candidate. Unknown session state, failed saves, uncertain stop,
+or failed reconnection leave the existing recovery owner and preservation fence
+visible. Only a newly saved current candidate plus durable terminal evidence
+releases the fence for normal cleanup. The credential-free exact-image recovery
+row in `test_exact_docker_n_way_concurrency.py` qualifies actual replacement and
+same-session reconnection separately from the deterministic transport tests;
+missing Docker or server prerequisites do not count as successful qualification.
+
 ## 16. Exact-host readiness
 
 The on-demand compatibility launcher supplies the provider's trusted

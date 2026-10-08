@@ -695,6 +695,13 @@ async def _try_generic_realizer_dispatch(
                     return typed
             raise
         except Exception as exc:
+            if (
+                getattr(exc, "code", None)
+                == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+            ):
+                # The coordinator retained this running host and its leases.
+                # Preserve the bounded same-request Activity retry handoff.
+                raise
             # The dispatch failure projection must carry the underlying cause;
             # a bare integration_error string makes operator triage impossible.
             import logging
@@ -879,6 +886,9 @@ async def _try_generic_realizer_dispatch(
             metadata=_capacity_cleanup_receipt(exc),
         )
     except Exception as exc:
+        if getattr(exc, "code", None) == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED":
+            # Keep the same recovery contract for parameter-selected plans.
+            raise
         # Unknown implementation defects retain one generic boundary code; do
         # not copy exception text into workflow history because it may include
         # provider or infrastructure details. Known boundaries above preserve

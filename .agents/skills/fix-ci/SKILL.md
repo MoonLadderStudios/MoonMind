@@ -3,6 +3,7 @@ name: fix-ci
 description: Fix continuous integration (CI) test or build failures for the current PR branch. Inspect CI logs, use targeted reproductions for diagnosis, fix the code, and prefer CI for broader verification of the pushed revision while honoring repository and publication policy.
 metadata:
   publish:
+    githubOperations: [write, branch_write]
     mode: auto
     owner: agent
     requiresEvidence: true

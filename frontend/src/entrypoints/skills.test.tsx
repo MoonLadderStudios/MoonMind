@@ -8,7 +8,10 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
-import '../styles/dashboard.css';
+
+// No test here asserts computed styles, so the dashboard stylesheet is not
+// imported: jsdom would cascade its rules for the visibility check behind every
+// getByRole name query. The parity tests below read it as text instead.
 
 // The "Create New Skill" trigger now lives in the masthead nav (outside the
 // SkillsPage subtree these tests mount), so open the drawer the same way the

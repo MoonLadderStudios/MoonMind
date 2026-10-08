@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import urlsplit
 
 from moonmind.auth.bound_acquisition import AcquiredCredential, SelectionSnapshot
@@ -35,14 +35,16 @@ def github_hosts_writer_script(config_dir: str = "/config") -> str:
     Positional arguments: runtime uid, runtime gid, GitHub host; the token is
     read from stdin so it never enters argv or container metadata. The complete
     file is written beside the live one and renamed into place, so a reader
-    never observes a truncated configuration.
+    never observes a truncated configuration. Allocate a unique file even when
+    overlapping containers have the same PID in separate namespaces.
     """
 
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", config_dir) or ".." in config_dir:
         raise ValueError("GitHub config directory is unsafe")
     return (
         f"set -eu; umask 077; mkdir -p {config_dir}; "
-        f'tmp="{config_dir}/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
+        f'tmp=$(mktemp "{config_dir}/.hosts.yml.XXXXXX"); '
+        "trap 'rm -f \"$tmp\"' EXIT; "
         "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
         "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
         'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
@@ -132,7 +134,7 @@ class OmnigentGithubCredentialService:
 
     def __init__(
         self,
-        backend: DockerCommandBackend,
+        backend: DockerCommandBackend | None,
         *,
         session_factory: Any | None = None,
         artifact_gateway: Any | None = None,
@@ -145,10 +147,11 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> tuple[
         str, dict[str, Any], dict[str, Any], SelectionSnapshot, RepositoryIdentity
     ]:
@@ -157,6 +160,17 @@ class OmnigentGithubCredentialService:
             "collaboration": "collaboration",
             "destination_write": "destination",
         }.get(role)
+        if consumer not in {"agent", "native"}:
+            raise ValueError("repository consumer is unsupported")
+        if consumer == "native" and (
+            request is not None or role != "collaboration" or operation not in {"read", "review_request"}
+        ):
+            raise ValueError("native repository consumer only admits trusted review operations")
+        if request is None and consumer != "native":
+            raise ValueError("native repository use requires an explicit consumer")
+        binding = plan.payload.credentialBindings.get(slot) if plan is not None else None
+        if binding is not None and getattr(binding, "consumer", "agent") == "native" and consumer != "native":
+            raise ValueError("native repository authority cannot be consumed by an agent")
         access = (
             plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
             if plan is not None
@@ -166,8 +180,14 @@ class OmnigentGithubCredentialService:
             raise ValueError(
                 "repository operation requires its admitted access snapshot"
             )
-        body = await self._artifacts.read_repository_access_snapshot(
-            access["artifactRef"], request=request
+        # Native plan consumers use the gateway's explicit principal ACL;
+        # agent consumers retain their linked Step Execution authority.
+        body = (
+            await self._artifacts.read_repository_access_snapshot(
+                access["artifactRef"], request=request
+            )
+            if request is not None
+            else await self._artifacts.read_bytes(access["artifactRef"])
         )
         if (
             "repository-access-snapshot:sha256:" + hashlib.sha256(body).hexdigest()
@@ -178,6 +198,12 @@ class OmnigentGithubCredentialService:
         snapshot = SelectionSnapshot.model_validate(payload["selection"])
         identity = RepositoryIdentity.model_validate(payload["repositoryIdentity"])
         if (
+            binding is not None
+            and getattr(binding, "consumer", "agent") == "native"
+            and not set(snapshot.operations).issubset({"read", "review_request"})
+        ):
+            raise ValueError("native repository authority has unsupported operations")
+        if (
             normalize_endpoint(identity.endpoint)
             != normalize_endpoint(snapshot.endpoint)
             or identity.route_id() != snapshot.route_id
@@ -187,14 +213,22 @@ class OmnigentGithubCredentialService:
         clone_source = github_clone_source_from_identity(identity)
         # A durable schedule plan can serve several fresh execution owners.
         # Bind to the admitted plan rather than its authoring subject.
-        requested_plan_ref = request.parameters.get("executionPlanRef")
-        if request.step_execution and request.step_execution.omnigent_execution_plan:
+        requested_plan_ref = (
+            request.parameters.get("executionPlanRef") if request is not None else None
+        )
+        if (
+            request is not None
+            and request.step_execution
+            and request.step_execution.omnigent_execution_plan
+        ):
             requested_plan_ref = request.step_execution.omnigent_execution_plan.plan_ref
         if requested_plan_ref and requested_plan_ref != plan.planRef:
             raise ValueError(
                 "repository consumer conflicts with admitted execution plan"
             )
-        requested_repository = repository or github_repository_from_request(request)
+        requested_repository = repository or (
+            github_repository_from_request(request) if request is not None else ""
+        )
         direct_name = str(requested_repository or "").strip().rstrip("/")
         direct_name = direct_name.removesuffix(".git")
         if _REPOSITORY_NAME.fullmatch(direct_name):
@@ -224,10 +258,11 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None = None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> RepositoryIdentity:
         """Resolve the snapshot's target without acquiring or exposing a token."""
         _slot, _access, _payload, _snapshot, identity = (
@@ -237,6 +272,7 @@ class OmnigentGithubCredentialService:
                 role=role,
                 operation=operation,
                 repository=repository,
+                consumer=consumer,
             )
         )
         return identity
@@ -245,12 +281,13 @@ class OmnigentGithubCredentialService:
         self,
         *,
         plan: OmnigentExecutionPlanEnvelope,
-        request: AgentExecutionRequest,
+        request: AgentExecutionRequest | None,
         role: str,
         operation: str,
         repository: str | None = None,
         execution_owner: str | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        consumer: Literal["agent", "native"] = "agent",
     ) -> AcquiredCredential | None:
         """Consume the compiler's immutable selection, never current defaults."""
         from api_service.services.repository_connections import (
@@ -266,6 +303,11 @@ class OmnigentGithubCredentialService:
             revision_reader_for,
         )
 
+        if request is None and (not repository or not execution_owner):
+            raise ValueError(
+                "native repository use requires an explicit target and owner"
+            )
+        use_owner = execution_owner or request.idempotency_key
         slot, access, payload, snapshot, identity = (
             await self._verified_repository_access(
                 plan=plan,
@@ -273,6 +315,7 @@ class OmnigentGithubCredentialService:
                 role=role,
                 operation=operation,
                 repository=repository,
+                consumer=consumer,
             )
         )
         binding = plan.payload.credentialBindings.get(slot)
@@ -345,8 +388,8 @@ class OmnigentGithubCredentialService:
         acquired = await acquirer.acquire(
             AcquisitionRequest(
                 snapshot=snapshot,
-                execution_owner=execution_owner or request.idempotency_key,
-                operation_id=f"{execution_owner or request.idempotency_key}:{slot}:{operation}",
+                execution_owner=use_owner,
+                operation_id=f"{use_owner}:{slot}:{operation}",
             )
         )
         try:
@@ -498,28 +541,35 @@ class OmnigentGithubCredentialService:
             '{{ index .Labels "moonmind.owner_digest" }}',
             volume,
         ]
-        # A same-owner retry or refresh reuses the live projection. Its prior
-        # complete hosts.yml must survive a failed rewrite, so only a volume
-        # created by this call is removed on failure (#4011).
-        existed_code, _out, _err = await self._backend.run(owner_inspect, check=False)
-        created_here = existed_code != 0
-        await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "create",
-                "--label",
-                "moonmind.owner=generic-omnigent-github-credential",
-                "--label",
-                f"moonmind.owner_digest={attachment['ownerDigest']}",
-                volume,
-            ],
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        # Unknown inspection failures are not evidence that the volume is
+        # absent. A confirmed absence permits idempotent creation; Docker may
+        # still return a volume created by an overlapping same-owner writer.
+        code, observed_owner, error = await self._backend.run(
+            owner_inspect, check=False
         )
-        _code, observed_owner, _error = await self._backend.run(
-            owner_inspect,
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-        )
+        if code != 0:
+            if "no such volume" not in error.lower():
+                raise HarnessPlatformError(
+                    "GitHub credential volume inspection failed",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            await self._backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "create",
+                    "--label",
+                    "moonmind.owner=generic-omnigent-github-credential",
+                    "--label",
+                    f"moonmind.owner_digest={attachment['ownerDigest']}",
+                    volume,
+                ],
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+            _code, observed_owner, _error = await self._backend.run(
+                owner_inspect,
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
         if observed_owner.strip() != str(attachment["ownerDigest"]):
             raise HarnessPlatformError(
                 "GitHub credential projection is owned by another lease",
@@ -579,44 +629,41 @@ class OmnigentGithubCredentialService:
                         rcode = 1
                     if rcode != 0:
                         effective_writer = fallback
-        try:
-            await self._backend.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    # The selected host image runs workloads as the requested
-                    # runtime UID.  This isolated, networkless setup process
-                    # needs root only to initialize and hand off the credential
-                    # volume to that UID.
-                    "--user",
-                    "0:0",
-                    "--network",
-                    "none",
-                    "--mount",
-                    f"type=volume,src={volume},dst=/config",
-                    "--entrypoint",
-                    "/bin/sh",
-                    effective_writer,
-                    "-ceu",
-                    script,
-                    "--",
-                    str(runtime_uid),
-                    str(runtime_gid),
-                    str(attachment["githubHost"]),
-                ],
-                input_bytes=token.encode(),
-                failure_code=(
-                    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                ),
-            )
-        except BaseException:
-            if created_here:
-                await self._backend.run(
-                    ["docker", "volume", "rm", volume], check=False
-                )
-            raise
+        # Writer failure cannot prove this shared volume is unused, even if
+        # this invocation created it: another same-owner call may have already
+        # published successfully. Leave reclamation to the fenced lifecycle
+        # cleanup authority, persisted by host_runtime before materialization.
+        await self._backend.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                # The selected host image runs workloads as the requested
+                # runtime UID.  This isolated, networkless setup process
+                # needs root only to initialize and hand off the credential
+                # volume to that UID.
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--mount",
+                f"type=volume,src={volume},dst=/config",
+                "--entrypoint",
+                "/bin/sh",
+                effective_writer,
+                "-ceu",
+                script,
+                "--",
+                str(runtime_uid),
+                str(runtime_gid),
+                str(attachment["githubHost"]),
+            ],
+            input_bytes=token.encode(),
+            failure_code=(
+                HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+            ),
+        )
         return attachment
 
     async def cleanup(self, attachment: dict[str, Any]) -> None:

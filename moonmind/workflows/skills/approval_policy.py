@@ -797,7 +797,14 @@ def review_gate_retry_allowed(
     consecutive_no_progress_attempts: int,
     max_consecutive_no_progress_attempts: int,
     honor_explicit_stop: bool = True,
+    honor_explicit_evidence_rerun: bool = False,
 ) -> bool:
+    """Whether the gate may spend another bounded attempt on the current step.
+
+    ``honor_explicit_evidence_rerun`` admits an inconclusive verifier that
+    explicitly asks for ``reattempt_current_step``: its evidence is obtainable
+    by a fresh runtime even when it is not recoverable in the current one.
+    """
     normalized = str(getattr(verdict, "verdict", "") or "").strip().upper()
     if review_retry_count >= max_review_attempts:
         return False
@@ -810,8 +817,11 @@ def review_gate_retry_allowed(
         return False
     if normalized == "ADDITIONAL_WORK_NEEDED":
         return recommended_next_action == "reattempt_current_step"
-    return normalized == "NO_DETERMINATION" and bool(
-        getattr(verdict, "recoverable_in_current_runtime", False)
+    if normalized != "NO_DETERMINATION":
+        return False
+    return bool(getattr(verdict, "recoverable_in_current_runtime", False)) or (
+        honor_explicit_evidence_rerun
+        and recommended_next_action == "reattempt_current_step"
     )
 
 
