@@ -884,3 +884,250 @@ def test_old_parent_rejects_new_child_schema_during_replay(monkeypatch, profile_
     assert parent._state == STATE_INITIALIZING
     assert parent._agent_run_progress_by_child[CHILD_WF]["acceptedRevision"] == 0
     assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_paused_grant_records_identity_without_advancing_until_resume(
+    monkeypatch,
+):
+    import asyncio
+    from types import SimpleNamespace
+
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
+    parent = _install_parent(monkeypatch, True)
+    parent._state = STATE_AWAITING_SLOT
+    parent._attention_required = True
+    parent._summary = "Waiting for capacity"
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli"}
+    )
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+
+    parent._step_ledger_rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "step-1", "title": "agent step", "tool": {"name": "agent"}}
+        ],
+        dependency_map={},
+        updated_at=_LAUNCH_NOW,
+    )
+    parent._rebuild_step_ledger_index()
+    parent._mark_step_waiting(
+        "step-1",
+        status="awaiting_external",
+        updated_at=_LAUNCH_NOW,
+        waiting_reason="provider_capacity",
+        summary="Waiting for capacity",
+        attention_required=True,
+        refs={"childWorkflowId": CHILD_WF},
+    )
+    child = MoonMindAgentRun()
+    child._progress_step_execution_id = STEP_EXEC
+    child._progress_generation = CHILD_WF
+    child._assigned_profile_id = "work"
+    resume_event, grant_sent = asyncio.Event(), asyncio.Event()
+    memo_updates = []
+    monkeypatch.setattr(workflow, "upsert_memo", memo_updates.append)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda _values: None)
+    monkeypatch.setattr(
+        workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id=CHILD_WF, run_id="child-run-A"),
+    )
+
+    async def forward(update):
+        if update == "Pause":
+            child.pause()
+        else:
+            child.resume()
+            resume_event.set()
+        return True
+
+    async def operator_message(_payload):
+        return None
+
+    class ParentHandle:
+        async def signal(self, _name, args):
+            parent.agent_run_progress(args[0])
+            grant_sent.set()
+
+    monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
+    monkeypatch.setattr(
+        parent, "_forward_operator_message_to_active_child", operator_message
+    )
+    monkeypatch.setattr(
+        workflow, "get_external_workflow_handle", lambda *args, **kwargs: ParentHandle()
+    )
+    await parent.pause()
+    paused_row = dict(parent._step_ledger_row_for("step-1"))
+
+    async def blocked_launch():
+        await child._signal_parent_granted_profile(
+            SimpleNamespace(workflow_id=PARENT_WF, run_id=PARENT_RUN), "codex_cli"
+        )
+        if child._paused:
+            await resume_event.wait()
+
+    launch = asyncio.create_task(blocked_launch())
+    try:
+        await grant_sent.wait()
+        assert not launch.done()
+        assert parent._provider_profile_projection[0]["profiles"][0]["id"] == "work"
+        assert parent._state == STATE_AWAITING_SLOT
+        assert parent._waiting_reason == "Paused by user"
+        assert parent._attention_required is True
+        assert parent._started_at is None
+        assert parent._summary == "Waiting for capacity"
+        assert parent._step_ledger_row_for("step-1") == paused_row
+        await parent.resume()
+        await launch
+        assert parent._state == STATE_EXECUTING
+        assert parent._waiting_reason is None
+        assert parent._attention_required is False
+        assert parent._started_at == _LAUNCH_NOW
+        assert (
+            parent._step_ledger_row_for("step-1")["summary"]
+            == "Slot acquired for codex_cli"
+        )
+        assert len(memo_updates) == 1
+    finally:
+        launch.cancel()
+        await asyncio.gather(launch, return_exceptions=True)
+
+
+def _paused_grant_parent(monkeypatch):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
+    parent = _install_parent(monkeypatch, True)
+    parent._state = STATE_AWAITING_SLOT
+    parent._paused = True
+    parent._attention_required = True
+    parent._waiting_reason = "Paused by user"
+    parent._summary = "Paused before launch"
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli"}
+    )
+    monkeypatch.setattr(workflow, "upsert_memo", lambda _value: None)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda _value: None)
+    payload = _projection_payload(state="launching", reason_code="launching")
+    payload["providerProfileId"] = "work"
+    parent.agent_run_progress(payload)
+    return parent, payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_first", [False, True])
+async def test_resume_drains_latest_progress_only_after_acknowledgement(
+    monkeypatch, failed_first
+):
+    parent, payload = _paused_grant_parent(monkeypatch)
+    attempts = 0
+
+    async def forward(_update):
+        nonlocal attempts
+        attempts += 1
+        parent.agent_run_progress(
+            {
+                **payload,
+                "projectionRevision": 2,
+                "state": "awaiting_callback",
+                "reasonCode": "awaiting_callback",
+                "waitCode": "callback",
+                "summary": "New provider callback wait",
+            }
+        )
+        assert parent._summary == "Paused before launch"
+        assert parent._started_at is None
+        return not (failed_first and attempts == 1)
+
+    async def no_op(_payload):
+        return None
+
+    monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
+    monkeypatch.setattr(parent, "_forward_operator_message_to_active_child", no_op)
+    if failed_first:
+        with pytest.raises(RuntimeError, match="Failed to forward Resume"):
+            await parent.resume()
+        assert parent._paused is True
+        assert parent._waiting_reason == "Paused by user"
+        assert parent._attention_required is True
+        assert parent._summary == "Paused before launch"
+    await parent.resume()
+    assert parent._state == STATE_AWAITING_SLOT
+    assert parent._waiting_reason == "callback"
+    assert parent._summary == "New provider callback wait"
+    assert "pausedProductProgress" not in parent._agent_run_progress_by_child[CHILD_WF]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["terminal", "replacement"])
+async def test_resume_never_reopens_terminal_or_replaced_child(monkeypatch, changed):
+    parent, payload = _paused_grant_parent(monkeypatch)
+
+    async def forward(_update):
+        if changed == "terminal":
+            parent.agent_run_progress(
+                {
+                    **payload,
+                    "projectionRevision": 2,
+                    "state": "completed",
+                    "reasonCode": "terminal",
+                }
+            )
+        else:
+            parent._active_agent_child_workflow_id = "replacement-child"
+        return True
+
+    async def no_op(_payload):
+        return None
+
+    monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
+    monkeypatch.setattr(parent, "_forward_operator_message_to_active_child", no_op)
+    await parent.resume()
+    assert parent._state == STATE_AWAITING_SLOT
+    assert parent._summary == "Paused before launch"
+    assert parent._started_at is None
+
+
+def test_retained_paused_grant_history_keeps_prior_product_commands(monkeypatch):
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_PAUSED_AGENT_PROGRESS_PATCH,
+    )
+
+    parent = _install_parent(monkeypatch, True)
+    parent._paused = True
+    parent._waiting_reason = "Paused by user"
+    parent._attention_required = True
+    parent._started_at = _LAUNCH_NOW
+    parent._provider_profile_projection = (None, None)
+    monkeypatch.setattr(
+        workflow, "patched", lambda name: name != RUN_PAUSED_AGENT_PROGRESS_PATCH
+    )
+    payload = _projection_payload(state="launching", reason_code="launching")
+    payload["providerProfileId"] = "work"
+    parent.agent_run_progress(payload)
+    assert parent._state == STATE_EXECUTING
+    assert parent._attention_required is False
+    assert "pausedProductProgress" not in parent._agent_run_progress_by_child[CHILD_WF]
+
+
+@pytest.mark.asyncio
+async def test_failed_pause_applies_progress_after_unpaused_rollback(monkeypatch):
+    parent = _install_parent(monkeypatch, True)
+    parent._started_at = _LAUNCH_NOW
+
+    async def forward(_update):
+        parent.agent_run_progress(_projection_payload(summary="Progress during Pause"))
+        assert parent._state == STATE_INITIALIZING
+        return False
+
+    monkeypatch.setattr(parent, "_forward_lifecycle_update_to_active_child", forward)
+    with pytest.raises(RuntimeError, match="Failed to forward Pause"):
+        await parent.pause()
+    assert parent._paused is False
+    assert parent._state == STATE_EXECUTING
+    assert parent._summary == "Progress during Pause"

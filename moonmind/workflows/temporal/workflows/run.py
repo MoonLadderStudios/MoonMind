@@ -1338,6 +1338,7 @@ RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
 )
 # Existing launch-result histories must retain their later upsert position.
 RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
+RUN_PAUSED_AGENT_PROGRESS_PATCH = "run-paused-agent-progress-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -26090,6 +26091,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             # Only accepted progress crosses the child/attempt/revision fences.
             # This records display identity, never profile lease ownership.
             self._record_launch_provider_profile(accepted)
+        if (
+            str(accepted.get("state") or "") not in TERMINAL_PROGRESS_STATES
+            and (self._paused or self._pause_resume_transition_in_progress)
+            and workflow.patched(RUN_PAUSED_AGENT_PROGRESS_PATCH)
+        ):
+            # Identity remains visible immediately, but an operator pause owns
+            # product state until Resume succeeds. Reuse the accepted reducer
+            # state so older children need not emit the same grant again.
+            state["pausedProductProgress"] = accepted
+            return
+        state.pop("pausedProductProgress", None)
+        self._apply_agent_run_product_progress(child_id, accepted)
+
+    def _apply_agent_run_product_progress(
+        self, child_id: str, accepted: Mapping[str, Any]
+    ) -> None:
+        """Reflect already-fenced progress in workflow and Step product state."""
+
         self._note_issue_claim_work_started(str(accepted.get("state") or ""))
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated
@@ -26157,6 +26176,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "agent_run_progress ledger reflection skipped for %s",
                     progress_step_id,
                 )
+
+    def _apply_resumed_agent_progress(self, child_id: str | None) -> None:
+        """Drain paused progress only for the child the control update reached."""
+
+        if (
+            self._paused
+            or not child_id
+            or child_id != self._active_agent_child_workflow_id
+        ):
+            return
+        state = self._agent_run_progress_by_child.get(child_id) or {}
+        accepted = state.pop("pausedProductProgress", None)
+        if (
+            not isinstance(accepted, Mapping)
+            or self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED)
+            or state.get("terminalSealed")
+            or accepted.get("sourceGeneration") != state.get("acceptedSourceGeneration")
+            or accepted.get("agentRunRunId") != state.get("acceptedAgentRunRunId")
+            or accepted.get("projectionRevision") != state.get("acceptedRevision")
+        ):
+            return
+        previous_attention = self._attention_required
+        self._apply_agent_run_product_progress(child_id, accepted)
+        if self._attention_required != previous_attention:
+            # The ordinary reflection writes status before updating attention.
+            # Resume has no later child observation to persist that final value.
+            self._update_search_attributes()
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
@@ -26235,6 +26281,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and self._paused:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_waiting_reason = self._waiting_reason
         try:
@@ -26250,6 +26297,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @pause.validator
     def validate_pause(self, payload: dict[str, Any] | None = None) -> None:
@@ -26273,6 +26321,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and not self._paused and not self._awaiting_external:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_paused = self._paused
         previous_waiting_reason = self._waiting_reason
@@ -26292,6 +26341,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @resume.validator
     def validate_resume(self, payload: dict[str, Any] | None = None) -> None:
