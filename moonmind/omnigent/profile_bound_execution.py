@@ -309,6 +309,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         policy_authority: ExecutionPolicyAuthorityPort | None = None,
         execution_attempts: ExecutionAttemptPort | None = None,
         turn_command_service: Any | None = None,
+        planned_host_resolver: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -327,6 +328,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         )
         self._execution_plan = execution_plan
+        self._planned_host_resolver = planned_host_resolver
         # Ports, not persistence. The composition root supplies the production
         # adapters; omitting one selects the same deployment adapter rather
         # than a different execution path (see #3711 boundary contract).
@@ -469,6 +471,69 @@ class OmnigentProfileBoundExecutionCoordinator:
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
         return effective_launch
+
+    async def _installed_runtime_launch(
+        self,
+        request: AgentExecutionRequest,
+        effective_launch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Move a recovered attempt's admitted launch to the installed image.
+
+        A ``runtime_recovered`` successor reuses its workflow's admitted plan
+        but launches on the deployment's installed host image, exactly as the
+        generic realizer does (#4627). The same planned-host resolver selects
+        the installed same-repository image of the plan's Host Class, and the
+        same deterministic reconciliation changes only the launch's image.
+        An explicitly requested Host Class, a foreign image family, or no
+        qualifying installed image keeps the plan's recorded image. Static
+        hosts are Compose services outside per-attempt Host Class selection.
+        """
+
+        from moonmind.omnigent.realizers.generic_host import (
+            launches_on_installed_runtime,
+        )
+
+        plan = self._execution_plan
+        if (
+            plan is None
+            or plan.payload.hostImageRef is None
+            or not launches_on_installed_runtime(request)
+            or str(effective_launch.get("hostMode") or "")
+            not in {"on-demand", "on_demand_docker"}
+        ):
+            return effective_launch
+        resolver = self._planned_host_resolver
+        if resolver is None:
+            from moonmind.omnigent.harness_platform.catalog_service import (
+                DbHarnessCatalogRepository,
+            )
+            from moonmind.omnigent.harness_platform.planning_service import (
+                OmnigentPlannedHostResolver,
+            )
+
+            resolver = OmnigentPlannedHostResolver(
+                catalog_repository=DbHarnessCatalogRepository(self._session_factory),
+                artifact_gateway=self._artifact_gateway,
+            )
+        try:
+            host_class, _policy = await resolver(plan, installed_runtime=True)
+        except HarnessPlatformError as exc:
+            logger.info(
+                "recovered Codex attempt keeps its admitted host image: "
+                "installed host selection is unavailable (%s)",
+                str(exc)[:300],
+            )
+            return effective_launch
+        from moonmind.omnigent.host_image_drift import (
+            reconcile_effective_launch_to_selected_host,
+        )
+
+        return (
+            reconcile_effective_launch_to_selected_host(
+                effective_launch, host_class.imageRef
+            )
+            or effective_launch
+        )
 
     async def _write_plan_runtime_evidence(
         self,
@@ -1082,6 +1147,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             effective_launch = self._require_recorded_launch(
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
+            )
+            effective_launch = await self._installed_runtime_launch(
+                request, effective_launch
             )
             if (
                 self._repository_mutation_required(request)
