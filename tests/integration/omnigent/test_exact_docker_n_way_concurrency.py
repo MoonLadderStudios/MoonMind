@@ -778,7 +778,10 @@ async def _qualify_exact_image_github_projection(backend, image_ref, run_ref, ru
     ):
         volume = f"moonmind-test-gh-projection-{run_ref}-{lane}"
         mount = f"type=volume,src={volume},dst={mount_root}"
-        owner = f"test:{run_ref}:{lane}"
+        # The shared command runner redacts credential-shaped ``name: value``
+        # output. This row's run ref names "credential-recovery", so an owner
+        # built from it would be redacted out of the exact acknowledgement.
+        owner = f"test:gh-projection-{uuid.uuid4().hex[:12]}:{lane}"
         older = {"ownerRef": owner, "revision": 1, "reservationId": str(uuid.uuid4())}
         newer = {"ownerRef": owner, "revision": 2, "reservationId": str(uuid.uuid4())}
 
