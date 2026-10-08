@@ -364,6 +364,32 @@ bash -lc 'gh repo view owner/repo --json nameWithOwner'
 
 Mutation-capable workflows must also verify that the selected GitHub credential has the repository permissions required by the Skill or publish policy.
 
+For the profile-bound path, `authored_github_operations` is the canonical reader
+of these requirements. Before any bridge/host/lease mutation, a metadata-only
+check verifies the selected default connection and its repository assignment.
+Already-required agent-action credential acquisition rechecks the same narrowed
+operations before secret access, also before bridge/provider/host ownership is
+mutated. Its result populates the existing lazy credential owner without another
+source read. A grant revoked between metadata preflight and acquisition, or an
+unavailable selected secret, therefore cannot claim, release, or clean up an
+existing recovery host's ownership. A successful preflight never becomes a
+cached grant.
+
+Authenticated read-only `gh` requires only `read`. Branch publication requires
+`write` and `branch_write`; PR publication also requires `review_request`.
+Skill-owned Auto and generic actions carry explicit `githubOperations`; they do
+not infer merge permission from publication mode. The publisher checks only its
+destination operations, so a saved branch/PR publication does not reacquire
+source-read authority or imply merge permission. Prepared clone-only work still
+resolves a source credential lazily only if materialization is necessary.
+
+The four built-in Auto Skills declare their actual actions. `fix-ci` and
+`fix-merge-conflicts` require branch writes; `fix-comments` also requires review
+operations; `pr-resolver` adds merge only for its merging finish mode.
+`fix-merge-conflicts` declares both `git` and `gh`, matching its authoritative PR
+lookup and the existing lease-private Git/gh credential projection.
+
+
 If `gh` is missing, unauthenticated, or unauthorized for the target repository, MoonMind blocks before creating the Omnigent session and returns an actionable capability diagnostic.
 
 A host may contain `gh` even when a run does not require it. Mere executable presence does not cause MoonMind to inject GitHub credentials or imply permission to perform GitHub mutations.

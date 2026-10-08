@@ -199,19 +199,173 @@ def authored_repository_mutation_required(request: AgentExecutionRequest) -> boo
     return False
 
 
-def authored_github_mutation_required(request: AgentExecutionRequest) -> bool:
-    if "gh" not in authored_required_capabilities(request):
-        return False
+def authored_github_operations(
+    request: AgentExecutionRequest, *, for_publication: bool = False
+) -> tuple[str, ...]:
+    """Compile required actions, never grants, for the selected GitHub credential.
+
+    Tool availability is not write intent. Generic actions and Skill-owned auto
+    publication declare their operations explicitly; branch/PR publication has
+    an existing exact operation contract. The publisher needs only destination
+    authority, not source reads or an agent's later merge action.
+    """
+    from typing import get_args
+
+    from moonmind.workflows.executions.repository_contract import RepositoryOperation
+
+    def invalid(message: str) -> None:
+        raise WorkspaceIntentCompilationError("github_action_intent_invalid", message)
+
+    def declared(source: Mapping[str, Any]) -> tuple[str, ...]:
+        if "githubOperations" not in source:
+            return ()
+        raw = source["githubOperations"]
+        if not isinstance(raw, list) or any(
+            not isinstance(value, str) or value not in get_args(RepositoryOperation)
+            for value in raw
+        ):
+            invalid(
+                "githubOperations must be a list of supported repository operations"
+            )
+        return tuple(dict.fromkeys(raw))
+
     parameters = _parameters(request)
-    if authored_publish_mode(request) not in {"", "none"}:
-        return True
-    skill = parameters.get("skill")
-    if not isinstance(skill, Mapping):
-        return False
-    side_effect = skill.get("sideEffect")
-    return isinstance(side_effect, Mapping) and bool(
-        str(side_effect.get("kind") or "").strip()
+    # Runtime parameters are an extensible JSON mapping, not typed authoring
+    # fields. Validate before normalizing so truthy malformed values cannot
+    # mean mutation to the workspace owner but read-only credential access here.
+    mutation_required = parameters.get("repositoryMutationRequired")
+    if mutation_required is not None and not isinstance(mutation_required, bool):
+        invalid("repositoryMutationRequired must be a boolean")
+    repository_operation = parameters.get("repositoryOperation")
+    if repository_operation is not None and not isinstance(repository_operation, str):
+        invalid("repositoryOperation must be read or write")
+    repository_operation = str(repository_operation or "").strip().lower()
+    if repository_operation not in {"", "read", "write"}:
+        invalid("repositoryOperation must be read or write")
+    raw_publish_mode = parameters.get("publishMode")
+    if raw_publish_mode is not None and not isinstance(raw_publish_mode, str):
+        invalid("publishMode must be none, branch, pr, or auto")
+    publish_mode = authored_publish_mode(request)
+    if publish_mode not in {"none", "branch", "pr", "auto"}:
+        invalid("publishMode must be none, branch, pr, or auto")
+    publication = {
+        "branch": ("write", "branch_write"),
+        "pr": ("write", "branch_write", "review_request"),
+    }.get(publish_mode, ())
+    if for_publication and publication:
+        return publication
+
+    skill: dict[str, Any] = {}
+    selected_skill = ""
+    for candidate in (request.skill, parameters.get("skill")):
+        if candidate is None:
+            continue
+        if not isinstance(candidate, Mapping):
+            invalid("skill action metadata must be an object")
+        identity = candidate.get("name", candidate.get("id", ""))
+        if not isinstance(identity, str):
+            invalid("selected Skill identity must be a string")
+        identity = identity.strip().lower()
+        if identity:
+            if selected_skill and selected_skill != identity:
+                invalid("selected Skill identities conflict across request projections")
+            selected_skill = identity
+        for source_key in ("publish", "sideEffect", "inputs", "args"):
+            if source_key not in candidate or candidate[source_key] is None:
+                continue
+            if not isinstance(candidate[source_key], Mapping):
+                invalid(f"skill.{source_key} must be an object")
+            # Canonical authoring uses args; the runtime planner uses inputs.
+            # Both must retain the same finish authority at this boundary.
+            key = "inputs" if source_key == "args" else source_key
+            combined = dict(skill.get(key, {}))
+            for field, value in candidate[source_key].items():
+                if field == "githubOperations" and field in combined:
+                    combined[field] = list(
+                        dict.fromkeys((*declared(combined), *declared(candidate[source_key])))
+                    )
+                else:
+                    if (
+                        field in {"kind", "mode", "finishMode"}
+                        and field in combined
+                        and combined[field] != value
+                    ):
+                        invalid(
+                            f"skill.{key}.{field} conflicts across request projections"
+                        )
+                    combined[field] = value
+            skill[key] = combined
+    publish = skill.get("publish", {})
+    side_effect = skill.get("sideEffect", {})
+    skill_publish_mode = publish.get("mode")
+    if skill_publish_mode is not None and not isinstance(skill_publish_mode, str):
+        invalid("skill.publish.mode must be none, branch, pr, or auto")
+    skill_publish_mode = str(skill_publish_mode or "none").strip().lower() or "none"
+    if skill_publish_mode not in {"none", "branch", "pr", "auto"}:
+        invalid("skill.publish.mode must be none, branch, pr, or auto")
+    publish_operations = declared(publish)
+    parameter_operations = declared(parameters)
+    skill_operations = declared(side_effect)
+    kind = side_effect.get("kind", "")
+    if not isinstance(kind, str):
+        invalid("skill.sideEffect.kind must be a string")
+    kind = kind.strip().lower()
+
+    if kind == "merge_pull_request":
+        inputs = skill.get("inputs", {})
+        if not isinstance(inputs, Mapping):
+            invalid("merge_pull_request inputs must be an object")
+        finish_mode = inputs.get("finishMode", "merge")
+        # Match the resolved Skill's merge default for omitted, null, or blank
+        # values, without treating False, 0, or other non-strings as defaults.
+        if finish_mode is None or (
+            isinstance(finish_mode, str) and not finish_mode.strip()
+        ):
+            finish_mode = "merge"
+        if not isinstance(finish_mode, str) or finish_mode not in {"merge", "fix_only"}:
+            invalid("merge_pull_request finishMode must be merge or fix_only")
+        if finish_mode != "merge" and "merge_request" in (
+            *parameter_operations,
+            *publish_operations,
+            *skill_operations,
+        ):
+            invalid("merge_request conflicts with the selected non-merge finishMode")
+        if finish_mode == "merge":
+            skill_operations = (*skill_operations, "merge_request")
+
+    operations = tuple(
+        dict.fromkeys((*parameter_operations, *publish_operations, *skill_operations))
     )
+    gh_required = "gh" in authored_required_capabilities(request)
+    if (publish_mode == "auto" or skill_publish_mode == "auto") and not any(
+        op != "read" for op in publish_operations + parameter_operations
+    ):
+        invalid("auto publication requires explicit githubOperations")
+    if (
+        gh_required
+        and kind not in {"", "enqueue_children", "merge_pull_request"}
+        and not any(op != "read" for op in operations)
+    ):
+        invalid("GitHub side effects require explicit githubOperations")
+    generic_write = bool(mutation_required) or repository_operation == "write"
+    if (
+        gh_required
+        and generic_write
+        and not publication
+        and not any(op != "read" for op in operations)
+    ):
+        invalid("GitHub mutation requires explicit githubOperations")
+    if for_publication:
+        return tuple(dict.fromkeys((*publication, *publish_operations)))
+    # Explicit Skill/agent operations apply to authenticated git as well as gh
+    # rather than disappearing when only repository transport was declared.
+    return tuple(
+        dict.fromkeys(("read", *(publication if gh_required else ()), *operations))
+    )
+
+
+def authored_github_mutation_required(request: AgentExecutionRequest) -> bool:
+    return any(operation != "read" for operation in authored_github_operations(request))
 
 
 def _authored_saved_work_policy(request: AgentExecutionRequest) -> str | None:
@@ -436,6 +590,7 @@ __all__ = [
     "authored_attachment_refs",
     "authored_checkout_commit",
     "authored_github_mutation_required",
+    "authored_github_operations",
     "authored_publish_mode",
     "authored_repository_mutation_required",
     "authored_repository_source",

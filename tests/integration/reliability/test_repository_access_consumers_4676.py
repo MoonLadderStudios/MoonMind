@@ -158,7 +158,7 @@ async def repository_consumers(tmp_path, monkeypatch, request):
     plans = DbExecutionPlanStore(sessions)
     gateway = TemporalOmnigentArtifactGateway(sessions)
 
-    async def compile_plan(publish_mode="none"):
+    async def compile_plan(publish_mode="none", *, profile_tools=(), **parameters):
         input_ref, input_digest = await writer.persist_json_artifact(
             artifact_service=artifacts,
             principal="user-1",
@@ -177,7 +177,8 @@ async def repository_consumers(tmp_path, monkeypatch, request):
             session_factory=sessions,
             launch_policy_ref="omnigent-on-demand@1",
             workflow_id=_WORKFLOW,
-            extra_parameters={"repository": _target(), "publishMode": publish_mode},
+            profile_tools=profile_tools,
+            extra_parameters={"repository": _target(), "publishMode": publish_mode, **parameters},
             task_input_snapshot_ref=input_ref,
             task_input_snapshot_digest=input_digest,
         )
@@ -302,6 +303,70 @@ async def test_frozen_plan_delegates_only_its_snapshots_to_each_concrete_occurre
             (_WORKFLOW, "run-1"),
             ("mm:scheduled-occurrence", "new-run"),
         }
+
+
+@pytest.mark.parametrize(
+    "existing_namespace,existing_type",
+    [
+        ("default", "input.execution_plan"),
+        ("default", "input.other"),
+        ("other", "input.execution_plan"),
+    ],
+)
+async def test_repeated_native_plan_reads_do_not_duplicate_execution_links(
+    repository_consumers, existing_namespace, existing_type
+):
+    from sqlalchemy import select
+    from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+    context = repository_consumers
+    compiled = await context.compile(profile_tools=("gh",))
+    source = compiled.envelope.payload.resolvedTools["repositoryAccess"]["source"]
+    # A partial prior admission is reused; a different link type/namespace
+    # must not masquerade as this execution-plan grant.
+    async with context.sessions() as session:
+        await TemporalArtifactService(TemporalArtifactRepository(session)).link_artifact(
+            artifact_id=context.gateway._artifact_id(source["artifactRef"]),
+            principal="service:omnigent-generic-host",
+            execution_ref=ExecutionRef(
+                namespace=existing_namespace,
+                workflow_id=_WORKFLOW,
+                run_id="run-1",
+                link_type=existing_type,
+            ),
+        )
+
+    async def plan_links(run_id):
+        async with context.sessions() as session:
+            result = await session.execute(select(models.TemporalArtifactLink).where(
+                models.TemporalArtifactLink.namespace == "default",
+                models.TemporalArtifactLink.workflow_id == _WORKFLOW,
+                models.TemporalArtifactLink.run_id == run_id,
+                models.TemporalArtifactLink.link_type == "input.execution_plan",
+            ))
+            return [(row.id, row.artifact_id) for row in result.scalars()]
+
+    await reader._load_verified_execution_plan(
+        compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+    )
+    initial = await plan_links("run-1")
+    assert len(initial) == len({artifact_id for _id, artifact_id in initial}) > 1
+    for _poll in range(3):
+        await reader._load_verified_execution_plan(
+            compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+        )
+    assert set(await plan_links("run-1")) == set(initial)
+
+    # A later occurrence needs its own exact execution links.
+    await reader._load_verified_execution_plan(
+        compiled.binding, workflow_id=_WORKFLOW, run_id="run-2"
+    )
+    later = await plan_links("run-2")
+    assert {artifact_id for _id, artifact_id in later} == {
+        artifact_id for _id, artifact_id in initial
+    }
+    assert len(later) == len(initial)
+    assert set(await plan_links("run-1")) == set(initial)
 
 
 @pytest.mark.parametrize(
@@ -622,3 +687,133 @@ async def test_production_publisher_uses_destination_connection_before_remote_co
                 )
             )[1]
         )
+
+
+@pytest.fixture
+def native_review_activity(monkeypatch):
+    from temporalio import activity
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="merge-automation:review-only", workflow_run_id="review-run-1"
+        ),
+    )
+
+
+@pytest.mark.parametrize("owner_principal", ["user-1", "system"])
+@pytest.mark.parametrize(
+    "repository_consumers", ["https://github.com", "https://github.com/"], indirect=True
+)
+async def test_native_review_uses_selected_plan_authority_and_rejects_revocation(
+    repository_consumers,
+    owner_principal,
+    native_review_activity,
+):
+    from moonmind.workflows.temporal.merge_automation_repository_access import (
+        merge_automation_repository_token,
+    )
+
+    context = repository_consumers
+    compiled = await context.compile(
+        profile_tools=("gh",),
+        workflow={
+            "instructions": "Request a fresh review only.",
+            "publish": {
+                "mode": "none",
+                "mergeAutomation": {
+                    "enabled": True,
+                    "finishMode": "review_only",
+                    "reviewLoop": {"enabled": True, "provider": "codex"},
+                },
+            },
+        },
+    )
+    authority = {
+        "principal": owner_principal,
+        "executionOwner": "merge-automation:review-only",
+        "parentExecutionPlan": compiled.binding.model_dump(by_alias=True),
+    }
+    with pytest.raises(ValueError, match="executing workflow"):
+        async with merge_automation_repository_token(
+            {**authority, "executionOwner": "other-workflow"},
+            repository=_REPOSITORY,
+            operation="read",
+        ):
+            pytest.fail("a different execution acquired credentials")
+    for operation in ("read", "review_request"):
+        async with merge_automation_repository_token(
+            authority, repository=_REPOSITORY, operation=operation
+        ) as token:
+            assert token == "selected-credential-canary"
+
+    with pytest.raises(ValueError, match="target conflicts"):
+        async with merge_automation_repository_token(
+            authority, repository="Other/Repository", operation="review_request"
+        ):
+            pytest.fail("wrong target acquired credentials")
+
+    async with context.sessions() as session:
+        connection = await session.get(
+            models.RepositoryConnectionRecord, "selected-repository"
+        )
+        connection.lifecycle = "disabled"
+        await session.commit()
+    with pytest.raises(Exception, match="unavailable|disabled|ACTIVE|active|lifecycle"):
+        async with merge_automation_repository_token(
+            authority, repository=_REPOSITORY, operation="review_request"
+        ):
+            pytest.fail("revoked authority acquired credentials")
+
+
+async def test_native_review_cannot_broaden_read_only_plan(repository_consumers, native_review_activity):
+    from moonmind.workflows.temporal.merge_automation_repository_access import (
+        merge_automation_repository_token,
+    )
+
+    compiled = await repository_consumers.compile(profile_tools=("gh",))
+    authority = {
+        "principal": "user-1",
+        "executionOwner": "merge-automation:review-only",
+        "parentExecutionPlan": compiled.binding.model_dump(by_alias=True),
+    }
+    async with merge_automation_repository_token(
+        authority, repository=_REPOSITORY, operation="read"
+    ) as token:
+        assert token == "selected-credential-canary"
+    with pytest.raises(ValueError, match="operation or role is not admitted"):
+        async with merge_automation_repository_token(
+            authority, repository=_REPOSITORY, operation="review_request"
+        ):
+            pytest.fail("ordinary read-only authority acquired review permission")
+
+
+@pytest.mark.parametrize(
+    "repository_consumers", ["https://github.enterprise.test"], indirect=True
+)
+async def test_native_review_rejects_host_mismatch_before_acquisition(
+    repository_consumers, monkeypatch, native_review_activity
+):
+    from moonmind.workflows.temporal.merge_automation_repository_access import (
+        merge_automation_repository_token,
+    )
+
+    compiled = await repository_consumers.compile(profile_tools=("gh",))
+    acquire = AsyncMock(
+        side_effect=AssertionError("must validate the host before acquisition")
+    )
+    monkeypatch.setattr(
+        OmnigentGithubCredentialService, "acquire_repository_use", acquire
+    )
+    with pytest.raises(ValueError, match="target host conflicts"):
+        async with merge_automation_repository_token(
+            {
+                "principal": "user-1",
+                "executionOwner": "merge-automation:review-only",
+                "parentExecutionPlan": compiled.binding.model_dump(by_alias=True),
+            },
+            repository=_REPOSITORY,
+            operation="read",
+        ):
+            pytest.fail("different-host authority was consumed")
+    acquire.assert_not_awaited()

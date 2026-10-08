@@ -13,6 +13,7 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
+        MergeAutomationConfigModel,
         MergeAutomationReviewLoopModel,
         MergeAutomationStartInput,
         PullRequestRefModel,
@@ -55,6 +56,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 FINISH_MODE_MERGE = "merge"
 FINISH_MODE_FIX_ONLY = "fix_only"
+FINISH_MODE_REVIEW_ONLY = "review_only"
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
@@ -332,6 +334,8 @@ def build_resolver_run_request(
     finish_mode: str = FINISH_MODE_MERGE,
     legacy_capabilities: bool = False,
 ) -> dict[str, Any]:
+    if str(finish_mode or "").strip() == FINISH_MODE_REVIEW_ONLY:
+        raise ValueError("review_only cannot launch a publishing resolver")
     pr = (
         pull_request
         if isinstance(pull_request, PullRequestRefModel)
@@ -363,11 +367,23 @@ def build_resolver_run_request(
                 ]
             )
         )
-    normalized_finish_mode = (
-        FINISH_MODE_FIX_ONLY
-        if str(finish_mode or "").strip() == FINISH_MODE_FIX_ONLY
-        else FINISH_MODE_MERGE
-    )
+    # The workflow caller reads config.finish_mode from its validated
+    # MergeAutomationStartInput, so valid retained history keeps the exact
+    # merge/fix_only payload. Do not turn a malformed direct caller's value into
+    # merge authority before the runtime action check can inspect it.
+    normalized_finish = finish_mode
+    if normalized_finish is None:
+        normalized_finish = FINISH_MODE_MERGE
+    elif isinstance(normalized_finish, str):
+        normalized_finish = normalized_finish.strip() or FINISH_MODE_MERGE
+    normalized_finish_mode = MergeAutomationConfigModel.model_validate(
+        {"finishMode": normalized_finish}
+    ).finish_mode
+    # Automation may also support native-only modes. The portable pr-resolver
+    # Skill still has its own merge/fix_only contract; never expand that child
+    # just because the parent configuration accepts another finish mode.
+    if normalized_finish_mode not in {FINISH_MODE_MERGE, FINISH_MODE_FIX_ONLY}:
+        raise ValueError("portable resolver finishMode must be merge or fix_only")
     args = {
         "repo": pr.repo,
         "pr": str(pr.number),

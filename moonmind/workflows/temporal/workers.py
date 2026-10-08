@@ -332,8 +332,9 @@ def normalize_worker_fleet(fleet: str) -> str:
 def require_fleet_capability_allowed(fleet: str, capability: str) -> str:
     """Deny one capability on one fleet, failing closed.
 
-    This is the executed process-boundary check behind
-    ``_FLEET_FORBIDDEN_CAPABILITIES``: the workflow fleet refuses the
+    This is the worker-bootstrap binding check behind
+    ``_FLEET_FORBIDDEN_CAPABILITIES`` (in-process; container rights come
+    from the compose service definition): the workflow fleet refuses the
     ``artifacts`` capability through the catalog binding path, so new
     artifact writes cannot be bound there. The three checkpoint persistence
     handlers stay reachable on the workflow fleet only through the explicit

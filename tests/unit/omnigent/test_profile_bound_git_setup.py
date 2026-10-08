@@ -1,6 +1,8 @@
 """Git setup for the profile-bound Omnigent path used by PR resolver #2767."""
 
+import asyncio
 import io
+import json
 import os
 import shutil
 import stat
@@ -14,6 +16,7 @@ import pytest
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import compile_effective_launch
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from tests.helpers.git_transport import basic_authorization, start_synthetic_github
 from tests.unit.omnigent.test_gh_config_migration_suppression import (
@@ -253,9 +256,92 @@ def _ambient_worker_authority(monkeypatch, home: Path) -> bytes:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("branch", ["main", "feature"])
+async def test_profile_bound_clone_materializes_lfs_without_ambient_filters(
+    tmp_path, monkeypatch, branch
+) -> None:
+    """Real LFS clean/smudge survives isolation for clone and later checkout."""
+    if shutil.which("git-lfs") is None:
+        pytest.skip("requires Git LFS for its offline local transfer adapter")
+    system_config = tmp_path / "system.gitconfig"
+    system_config.write_text(
+        '[filter "lfs"]\n'
+        "\tclean = git-lfs clean -- %f\n"
+        "\tsmudge = git-lfs smudge -- %f\n"
+        "\tprocess = git-lfs filter-process\n"
+        "\trequired = true\n"
+        '[filter "ambient"]\n'
+        "\tsmudge = sed s/original/ambient-filter-ran/g\n"
+    )
+    source_env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_SYSTEM": str(system_config),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                *args,
+            ],
+            env=source_env,
+            capture_output=True,
+            check=True,
+        )
+
+    git("init", "--initial-branch=main")
+    (source / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n*.ambient filter=ambient\n"
+    )
+    (source / "untouched.ambient").write_text("original content\n")
+    for name in ("main", "feature"):
+        if name == "feature":
+            git("checkout", "-b", name)
+        (source / "asset.bin").write_bytes(f"{name} large-file payload\n".encode())
+        git("add", ".")
+        git("commit", "-m", name)
+        pointer = git("show", f"{name}:asset.bin").stdout
+        assert pointer.startswith(b"version https://git-lfs.github.com/spec/v1\n")
+    git("checkout", "main")
+
+    home = tmp_path / "worker-home"
+    oauth_before = _ambient_worker_authority(monkeypatch, home)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(system_config))
+    # Reusing ambient filter definitions would also let global overrides win.
+    with (home / ".gitconfig").open("a") as config:
+        config.write('[filter "lfs"]\n\tprocess = false\n')
+
+    workspace = await _runtime_for(tmp_path)._prepare_workspace(
+        workspace_locator={"kind": "sandbox", "workspaceId": _sandbox_id()},
+        current_workflow_id="workflow-1",
+        current_step_execution_id="step-1",
+        repository_source=str(source),
+        starting_branch=branch,
+    )
+
+    assert (workspace / "asset.bin").read_bytes() == (
+        f"{branch} large-file payload\n".encode()
+    )
+    assert (workspace / "untouched.ambient").read_text() == "original content\n"
+    assert (home / ".codex" / "auth.json").read_bytes() == oauth_before
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("selected", [True, False], ids=["selected-B", "anonymous"])
+@pytest.mark.parametrize("delivery", ["direct", "on_materialization"])
 async def test_profile_bound_clone_sends_only_admitted_credential_over_real_git(
-    tmp_path, monkeypatch, selected
+    tmp_path, monkeypatch, selected, delivery
 ) -> None:
     """#4011: real git through the production clone sends B, or nothing, never A."""
     transport_gen = start_synthetic_github(
@@ -272,14 +358,31 @@ async def test_profile_bound_clone_sends_only_admitted_credential_over_real_git(
         runtime = _runtime_for(tmp_path)
         workspace_id = _sandbox_id()
 
-        resolved = await runtime._prepare_workspace(
+        token = SELECTED_TOKEN if selected else None
+        resolve = AsyncMock(return_value=token)
+        credential = (
+            {"github_token": token}
+            if delivery == "direct"
+            else {"github_token_resolver": resolve}
+        )
+        request = dict(
             workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
             current_workflow_id="workflow-1",
             current_step_execution_id="step-1",
             repository_source="https://github.com/owner/repo.git",
             starting_branch="main",
-            github_token=SELECTED_TOKEN if selected else None,
+            **credential,
         )
+        resolved = await runtime._prepare_workspace(**request)
+        if delivery == "on_materialization":
+            resolve.assert_awaited_once_with()
+        # A completed clone remains usable when its credential is later lost.
+        (resolved / "saved-result.txt").write_text("saved progress")
+        resolve.reset_mock(side_effect=True)
+        resolve.side_effect = RuntimeError("selected credential revoked")
+        assert await runtime._prepare_workspace(**request) == resolved
+        assert (resolved / "saved-result.txt").read_text() == "saved progress"
+        resolve.assert_not_awaited()
     finally:
         transport_gen.close()
 
@@ -428,3 +531,227 @@ async def test_profile_bound_launch_projects_selected_gh_credential_off_metadata
     )
     assert f"password={SELECTED_TOKEN}" in credential.stdout
     assert AMBIENT_TOKEN not in credential.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cpu_millis", [1000, 0])
+async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
+    tmp_path, monkeypatch, cpu_millis
+) -> None:
+    """Run the real writer and consumers across a modeled running host retry."""
+    gh = shutil.which("gh")
+    if gh is None:
+        pytest.skip("requires GitHub CLI for its offline Git credential protocol")
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "example.test/omnigent@sha256:" + "1" * 64)
+    for name in ("OMNIGENT_HOST_IMAGE_REF", "OMNIGENT_SHARED_HOST_IMAGE_REF"):
+        monkeypatch.setenv(name, "example.test/host@sha256:" + "2" * 64)
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(), workspace_root=tmp_path
+    )
+    runtime.container_exists = AsyncMock(return_value=True)
+    lease = _host_lease()
+    container_name = "mm-host-lease-1"
+    container_owner = lease.lease_id
+    home = tmp_path / "host-home"
+    config_home = home / ".cache/moonmind-xdg"
+    environment = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(config_home),
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH": "XDG_CONFIG_HOME,GH_PROMPT_DISABLED",
+        "PATH": os.environ["PATH"],
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GH_PROMPT_DISABLED": "1",
+    }
+    mounts = [
+        {
+            "Type": "volume",
+            "Name": f"{container_name}-cache",
+            "Destination": "/home/app/.cache",
+            "RW": True,
+        }
+    ]
+    inspection_fails = False
+
+    async def run(*args, **kwargs):
+        if args[:2] == ("docker", "inspect"):
+            if "moonmind.host_lease_id" in args[3]:
+                return 0, container_owner, ""
+            assert args[3] == "{{json .Mounts}}"
+            if inspection_fails:
+                raise RuntimeError("inspection transport unavailable")
+            return 0, json.dumps(mounts), ""
+        if kwargs.get("input_bytes"):
+            assert args[:4] == ("docker", "run", "--rm", "-i")
+            script = args[args.index("-ceu") + 1].replace("/home/app", str(home))
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "/bin/sh",
+                    "-ceu",
+                    script,
+                    "--",
+                    str(os.getuid()),
+                    str(os.getgid()),
+                    "github.com",
+                ],
+                input=kwargs["input_bytes"],
+                capture_output=True,
+                check=True,
+            )
+        else:
+            # Docker itself is modeled; the read-only probe executes unchanged
+            # against the same cache and environment as both real consumers.
+            assert args[:3] == ("docker", "exec", container_name)
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [argument.replace("/home/app", str(home)) for argument in args[3:]],
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+        return result.returncode, result.stdout.decode(), result.stderr.decode()
+
+    runtime._run = AsyncMock(side_effect=run)
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    launch["limits"]["cpuMillis"] = cpu_millis
+    initial_token = "initialSelectedTokenA"
+    await runtime._project_github_credential(
+        initial_token,
+        cache_volume=f"{container_name}-cache",
+        host_image_ref=launch["hostImageRef"],
+        runtime_uid=launch["runtimeUid"],
+        runtime_gid=launch["runtimeGid"],
+    )
+    block = (
+        _static_host_github_block()
+        .replace("/home/app", str(home))
+        .replace("/opt/moonmind-tools/bin/gh", gh)
+    )
+    await asyncio.to_thread(
+        subprocess.run, ["/bin/sh", "-c", block], env=environment, check=True
+    )
+    hosts = config_home / "gh/hosts.yml"
+    preserved = [tmp_path / name for name in ("workspace", "session", "artifacts")]
+    preserved.extend([config_home / "git/config", config_home / "gh/config.yml"])
+    for path in preserved[:3]:
+        path.write_text(f"saved {path.name}\n")
+    before = {path: path.read_bytes() for path in preserved}
+
+    def assert_consumers_read(expected):
+        token = subprocess.run(
+            [gh, "auth", "token", "--hostname", "github.com"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        credential = subprocess.run(
+            ["git", "credential", "fill"],
+            env=environment,
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert token.stdout.strip() == expected
+        assert f"password={expected}" in credential.stdout
+
+    assert_consumers_read(initial_token)
+    runtime._run.reset_mock()
+    arguments = {
+        "binding": _binding(),
+        "host_lease": lease,
+        "container_name": container_name,
+        "workspace_source": tmp_path,
+        "skill_projection": tmp_path / "skills",
+        "runtime_scripts": tmp_path,
+        "current_step_execution_id": "step-1",
+        "github_token": SELECTED_TOKEN,
+        "effective_launch": launch,
+        "egress_attestation": _egress_attestation(),
+    }
+    for _ in range(2):
+        # An open reader retains the complete old document during replacement.
+        with hosts.open() as prior:
+            previous = prior.read()
+            await runtime._launch_on_demand(**arguments)
+            assert_consumers_read(SELECTED_TOKEN)
+            prior.seek(0)
+            assert prior.read() == previous
+        assert stat.S_IMODE(hosts.stat().st_mode) == 0o600
+        assert {path: path.read_bytes() for path in preserved} == before
+        assert list(hosts.parent.glob(".hosts.yml.*")) == []
+    writers = [
+        call for call in runtime._run.await_args_list if call.kwargs.get("input_bytes")
+    ]
+    assert len(writers) == 2
+    assert all(
+        call.kwargs["input_bytes"] == SELECTED_TOKEN.encode() for call in writers
+    )
+    assert all(
+        SELECTED_TOKEN not in str(call.args) for call in runtime._run.await_args_list
+    )
+
+    async def assert_refresh_deferred():
+        previous = hosts.read_bytes()
+        runtime._run.reset_mock()
+        with pytest.raises(OmnigentOAuthHostError) as raised:
+            await runtime._launch_on_demand(**arguments)
+        assert raised.value.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+        assert hosts.read_bytes() == previous
+        assert not any(
+            call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
+        )
+        assert {path: path.read_bytes() for path in preserved} == before
+
+    # Without durable save authority, incompatible hosts return the preserving
+    # retry handoff and must not proceed under their old credential.
+    for key, value in (
+        ("GH_TOKEN", "legacyToken"),
+        ("GITHUB_TOKEN", "legacyToken"),
+        ("GH_CONFIG_DIR", str(tmp_path / "other-gh")),
+        ("XDG_CONFIG_HOME", str(tmp_path / "other-xdg")),
+        ("OMNIGENT_RUNNER_ENV_PASSTHROUGH", "GH_PROMPT_DISABLED"),
+    ):
+        original = dict(environment)
+        environment[key] = value
+        await assert_refresh_deferred()
+        environment.clear()
+        environment.update(original)
+    mounts[0]["Name"] = "foreign-cache"
+    await assert_refresh_deferred()
+    mounts[0]["Name"] = f"{container_name}-cache"
+    mounts[0]["RW"] = False
+    await assert_refresh_deferred()
+    mounts[0]["RW"] = True
+    mounts.append({"Destination": "/home/app/.cache/moonmind-xdg"})
+    await assert_refresh_deferred()
+    mounts.pop()
+    inspection_fails = True
+    await assert_refresh_deferred()
+    inspection_fails = False
+    saved_hosts = hosts.with_suffix(".saved")
+    hosts.rename(saved_hosts)
+    runtime._run.reset_mock()
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(**arguments)
+    assert raised.value.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+    assert not hosts.exists()
+    assert not any(
+        call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
+    )
+    saved_hosts.rename(hosts)
+
+    # A deterministic name never authorizes replacing a foreign lease's file.
+    container_owner = "foreign-lease"
+    runtime._run.reset_mock()
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(**arguments)
+    assert raised.value.code == "OMNIGENT_HOST_OWNERSHIP_MISMATCH"
+    assert runtime._run.await_count == 1
+    assert_consumers_read(SELECTED_TOKEN)

@@ -1,0 +1,247 @@
+"""Fail-closed evidence and isolation for the hosted, provider-free recovery row."""
+
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from tools.ci import run_credential_free_host_recovery as driver
+
+SHA = "1" * 40
+IMAGE_ID = "sha256:" + "2" * 64
+HOST_REF = "127.0.0.1:5000/moonmind-test-host@" + IMAGE_ID
+
+
+def receipt():
+    before = {
+        "containerId": "a" * 64,
+        "hostImageId": IMAGE_ID,
+        "stateVolume": "mm-omnigent-state-fixture",
+        "hostId": "fixture-host",
+        "sessionId": "fixture-session",
+        "bridgeId": "fixture-bridge",
+        "runnerId": "old-runner",
+        "messageItemIds": [],
+    }
+    return {
+        "schemaVersion": 1,
+        "sourceCommit": SHA,
+        "hostImageRef": HOST_REF,
+        "before": before,
+        "after": {**before, "containerId": "b" * 64, "runnerId": "new-runner"},
+        "runnerReconnected": True,
+        "inputReplayed": False,
+        "workspaceDigest": "sha256:" + "3" * 64,
+    }
+
+
+def write_evidence(root, row=None, *, skipped=False):
+    (root / driver.RECEIPT).write_text(json.dumps(row or receipt()))
+    skip = '<skipped message="missing Docker"/>' if skipped else ""
+    (root / driver.JUNIT).write_text(
+        f'<testsuites><testsuite><testcase name="{driver.TEST_NAME}">{skip}'
+        "</testcase></testsuite></testsuites>"
+    )
+
+
+def validate(root):
+    return driver.validate_evidence(
+        root, source_commit=SHA, host_image_ref=HOST_REF, host_image_id=IMAGE_ID
+    )
+
+
+def test_real_identity_transition_is_accepted(tmp_path):
+    write_evidence(tmp_path)
+    validate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sourceCommit", "f" * 40),
+        ("hostImageRef", "other@" + IMAGE_ID),
+        ("inputReplayed", True),
+        ("runnerReconnected", False),
+        ("workspaceDigest", ""),
+    ],
+)
+def test_receipt_cannot_assert_another_candidate_or_weaken_recovery(
+    tmp_path, field, value
+):
+    row = receipt()
+    row[field] = value
+    write_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError):
+        validate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("containerId", "a" * 64),
+        ("hostImageId", "sha256:" + "f" * 64),
+        ("stateVolume", "different"),
+        ("hostId", "different"),
+        ("sessionId", "different"),
+        ("bridgeId", "different"),
+        ("runnerId", "old-runner"),
+        ("runnerId", ""),
+        ("messageItemIds", ["sent-input"]),
+    ],
+)
+def test_receipt_checks_observed_values_not_boolean_claims(tmp_path, field, value):
+    row = receipt()
+    row["after"][field] = value
+    write_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError):
+        validate(tmp_path)
+
+
+def test_skipped_row_is_not_passing_evidence(tmp_path):
+    write_evidence(tmp_path, skipped=True)
+    with pytest.raises(driver.RecoveryError, match="executed"):
+        validate(tmp_path)
+
+
+def test_missing_receipt_is_unavailable(tmp_path):
+    with pytest.raises(driver.RecoveryError, match="unavailable"):
+        validate(tmp_path)
+
+
+def test_invocation_clears_old_receipt_and_cannot_pass_without_new_evidence(
+    tmp_path, monkeypatch
+):
+    write_evidence(tmp_path)
+
+    def skip_test(command, **kwargs):
+        assert not (tmp_path / driver.RECEIPT).exists()
+        assert not (tmp_path / driver.JUNIT).exists()
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(driver.subprocess, "run", skip_test)
+    with pytest.raises(driver.RecoveryError, match="unavailable"):
+        driver.run_test(
+            ["docker", "run"],
+            tmp_path,
+            source_commit=SHA,
+            host_image_ref=HOST_REF,
+            host_image_id=IMAGE_ID,
+        )
+
+
+def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials():
+    root = Path(__file__).resolve().parents[3]
+    source = yaml.safe_load((root / "docker-compose.yaml").read_text())
+    document = driver.compose_document(source, root, "test-server@" + IMAGE_ID)
+    assert set(document["services"]) == {
+        "postgres",
+        "omnigent-db-init",
+        "omnigent-agent-init",
+        "omnigent",
+    }
+    assert document["networks"] == {"test": {"internal": True}}
+    for service in document["services"].values():
+        assert service["networks"] == ["test"]
+        assert "env_file" not in service
+        assert service["restart"] == "no"
+    init = document["services"]["omnigent-db-init"]
+    assert init["command"] == source["services"]["omnigent-db-init"]["command"]
+    agent = document["services"]["omnigent-agent-init"]
+    assert agent["command"] == source["services"]["omnigent-agent-init"]["command"]
+    server = document["services"]["omnigent"]
+    assert server["image"] == agent["image"] == "test-server@" + IMAGE_ID
+    assert server["ports"] == ["127.0.0.1::8000"]
+    assert server["environment"]["OMNIGENT_AUTH_PROVIDER"] == "header"
+    assert server["environment"]["OMNIGENT_AUTH_HEADER"] == "Authorization"
+    assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == "Bearer "
+
+
+def test_compose_render_does_not_modify_canonical_document():
+    root = Path(__file__).resolve().parents[3]
+    source = yaml.safe_load((root / "docker-compose.yaml").read_text())
+    original = copy.deepcopy(source)
+    driver.compose_document(source, root, "test-server@" + IMAGE_ID)
+    assert source == original
+
+
+def test_candidate_command_does_not_overlay_application_source(tmp_path):
+    command = driver.test_command(
+        image=IMAGE_ID,
+        network="moonmind-test-fixture_test",
+        name="moonmind-test-fixture-driver",
+        work=tmp_path,
+        dependencies=tmp_path / "deps",
+        source_commit=SHA,
+        host_image_ref=HOST_REF,
+        token="ephemeral-fixture",
+        project="moonmind-test-fixture",
+    )
+    assert command[command.index("--entrypoint") + 1] == "python"
+    assert IMAGE_ID in command
+    assert not any("dst=/app" in arg for arg in command)
+    assert not any(
+        "OPENAI_API_KEY" in arg or "ANTHROPIC_API_KEY" in arg for arg in command
+    )
+    assert "--confcutdir=/test-driver" in command
+    assert any(arg.endswith("::" + driver.TEST_NAME) for arg in command)
+
+
+def test_existing_exact_artifact_job_owns_required_recovery_invocation():
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/pytest-unit-tests.yml").read_text()
+    )
+    job = workflow["jobs"]["omnigent-exact-artifact"]
+    steps = job["steps"]
+    owning = [
+        step
+        for step in steps
+        if "tools/ci/run_credential_free_host_recovery.py" in step.get("run", "")
+    ]
+    assert len(owning) == 1
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "continue-on-error" not in owning[0]
+    assert "if" not in owning[0]
+    assert '--moonmind-image "${{ steps.digest.outputs.runnable }}"' in owning[0]["run"]
+    assert (
+        '--host-image "${{ steps.recovery-images.outputs.host }}"' in owning[0]["run"]
+    )
+    assert (
+        '--server-image "${{ steps.recovery-images.outputs.server }}"'
+        in owning[0]["run"]
+    )
+    assert "omnigent-exact-artifact" in workflow["jobs"]["ci-required"]["needs"]
+
+
+@pytest.mark.parametrize("location", ["root", "before", "after"])
+def test_raw_inspect_or_unknown_fields_are_not_accepted(tmp_path, location):
+    row = receipt()
+    target = row if location == "root" else row[location]
+    target["Config"] = {"Env": ["TOKEN=must-not-be-published"]}
+    write_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match="unrecognized"):
+        validate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools/ci/run_credential_free_host_recovery.py",
+        "tests/unit/tools/test_run_credential_free_host_recovery.py",
+        "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+        "moonmind/omnigent/oauth_host_runtime.py",
+        "moonmind/omnigent/bridge_store.py",
+        "moonmind/omnigent/workspace_publication.py",
+        "moonmind/omnigent/host_services/launcher.py",
+        "tools/register_omnigent_agent.py",
+        "services/omnigent/agents/opencode-native-ui/config.yaml",
+    ],
+)
+def test_recovery_boundary_changes_select_the_real_artifact_owner(path):
+    from tools.select_test_suites import is_exact_artifact_owned
+
+    assert is_exact_artifact_owned(path)

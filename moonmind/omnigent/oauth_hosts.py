@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     ProviderProfileSlotLease,
@@ -593,6 +594,23 @@ class OmnigentOAuthHostRepository:
             )
         now = datetime.now(UTC)
         async with self._session_factory() as session:
+            # Serialize the destructive cleanup claim with preservation saves.
+            # The same fence covers coordinator, janitor, and explicit drains.
+            await session.execute(select(OmnigentOAuthHostLeaseRecord).where(
+                OmnigentOAuthHostLeaseRecord.lease_id == lease_id
+            ).with_for_update())
+            from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
+            bridge_metadata = (await session.execute(
+                select(OmnigentBridgeSession.metadata_).where(
+                    OmnigentBridgeSession.host_lease_ref == lease_id
+                )
+            )).scalars().all()
+            if any(
+                (metadata or {}).get(HOST_CREDENTIAL_RECOVERY_KEY, {}).get("phase")
+                in {"waiting", "saved", "recreated"}
+                for metadata in bridge_metadata
+            ):
+                return None
             result = await session.execute(
                 update(OmnigentOAuthHostLeaseRecord)
                 .where(

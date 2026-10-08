@@ -192,6 +192,8 @@ def _connect_proxy_handler(
                 try:
                     tls.close()
                 except OSError:
+                    # Best-effort teardown: a disconnected client must not mask
+                    # the request outcome or fail the transport server thread.
                     pass
 
     return Proxy

@@ -965,7 +965,9 @@ Recipe:
 1. Build: `npm run ui:build` (Vite `dashboard` bundle under `api_service/static/workflow_console/dist/`).
 2. Serve the production HTML shell (`api_service/templates/react_dashboard.html`) with boot payload `{"page":"dashboard","apiBase":"/api"}` on the normal routes `/workflows` and `/workflows/{workflowId}`.
 3. Fixture: deterministic synthetic rows over the existing `/api/executions` list/detail/steps contracts, shaped like `frontend/src/entrypoints/workflow-list.test.tsx` (public repository name only; no private repositories, prompts, emails, tokens, or signed URLs). Detail capture uses the Overview tab (`/workflows/{workflowId}/overview?source=temporal`).
-4. Viewport 1280x800, default light theme; wait for the fixture text (`Docs example: README screenshot workflow`), then capture.
-5. Crop to content and PNG-optimize without changing meaning; confirm the relative asset paths resolve and the README renders with both images.
+4. Use a 1600×1000 viewport and dark mode: set `localStorage["moonmind.theme"] = "dark"` before loading the shell. Wait for the fixture rows, detail summary, and fonts to load; confirm the root has `data-theme="dark"`.
+5. Capture PNGs directly from the browser, framing the list and Overview content without excess empty space. Confirm the relative asset paths resolve and inspect both images at README display size. Do not restyle the UI or edit screenshot content.
+
+The current captures use Chromium with synthetic workflow titles such as “Refresh the setup guide,” the public `MoonLadderStudios/MoonMind` repository, and a fixed example clock. List and Overview captures are 1600×500 and 1600×880 respectively. The build and browser capture ran in a temporary, credential-free GitHub Actions job; the capture job is not a required CI gate.
 
 Refresh the images when the pictured flow materially changes. Do not add byte-identical regeneration checks, a required CI workflow, prose/alt-text unit tests, or a light/dark/mobile image matrix for these captures.

@@ -16,10 +16,11 @@ from moonmind.workflows.temporal.workflows.run import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("patched", [True, False])
+@pytest.mark.parametrize("base_patched", [True, False])
 @pytest.mark.parametrize("status", ["pushed", "no_commits", "", "future_status"])
 @pytest.mark.parametrize("repository", ["example/repository", "another/repository"])
 async def test_request_carries_only_accepted_workflow_publication(
-    tmp_path, monkeypatch, patched, status, repository
+    tmp_path, monkeypatch, patched, base_patched, status, repository
 ):
     workflow = MoonMindRunWorkflow()
     workflow._repo = "example/repository"
@@ -54,8 +55,12 @@ async def test_request_carries_only_accepted_workflow_publication(
         ),
         patch(
             "moonmind.workflows.temporal.workflows.run.workflow.patched",
-            side_effect=lambda patch_id: patched
-            and patch_id == RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH,
+            side_effect=lambda patch_id: (
+                patched and patch_id == RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH
+            )
+            or (
+                base_patched and patch_id == "run-accepted-publication-base-handoff-v1"
+            ),
         ),
     ):
         request = workflow._build_agent_execution_request(
@@ -86,6 +91,9 @@ async def test_request_carries_only_accepted_workflow_publication(
             "repository": repository,
             "branch": "candidate",
             "headSha": "a" * 40,
+            # The authored base keeps a later PR step from stacking on its
+            # own candidate.
+            **({"baseBranch": "main"} if base_patched else {}),
         }
         if patched and status == "pushed" and repository == workflow._repo
         else None

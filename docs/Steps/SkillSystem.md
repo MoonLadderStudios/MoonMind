@@ -1270,6 +1270,26 @@ capability before launch; the Skill author and operator do not manage a separate
 permission checkbox. See
 [Required Capabilities](../Workflows/RequiredCapabilities.md#75-executionfanout).
 
+GitHub action requirements are distinct from tool readiness. Skill-owned Auto
+publication declares `metadata.publish.githubOperations`; other GitHub effects
+may declare `metadata.sideEffect.githubOperations`. These lists use the existing
+repository operation vocabulary (`read`, `write`, `branch_write`, `lock`,
+`review_request`, `merge_request`). Generic agent requests use
+`parameters.githubOperations`. Requirements compose with resolved Skill metadata;
+an empty or narrower caller list cannot remove a Skill's required operation.
+Neither declaration creates or expands a connection grant.
+
+Resolved Skill entries preserve publication and side-effect metadata from the
+selected content, including deployment artifacts. Run forwards it under a replay
+gate. The known `merge_pull_request` side effect additionally requires
+`merge_request` for the Skill's `finishMode: merge` (including its documented
+default), and does not require it for `fix_only`. Invalid or contradictory
+metadata and undeclared mutation intent are rejected before binding a host.
+`enqueue_children` alone does not require a GitHub write. Older Auto snapshots
+without enough action metadata require a corrected request; they never receive
+inferred broader permissions. Retained work remains available.
+
+
 ---
 
 ## 18. Security and Trust
