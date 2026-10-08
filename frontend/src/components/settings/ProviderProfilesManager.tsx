@@ -82,6 +82,45 @@ type AuthenticationMethodCapability =
 type ProviderProfileCreationCapabilities =
   components['schemas']['ProviderProfileCreationCapabilitiesResponse'];
 
+type ProviderProfileCreationChoices =
+  components['schemas']['ProviderProfileCreationChoicesResponse'];
+
+/** Backend-projected Harness/Provider choices for creation (#4001). */
+export const PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY = [
+  'provider-profiles',
+  'creation-choices',
+] as const;
+
+const CUSTOM_PROVIDER_OPTION = '__custom_provider__';
+
+/**
+ * Suggest a reviewable Profile ID from the canonical runtime and provider IDs
+ * plus the optional account label (ProviderProfileCreation.md 4.1). Only the
+ * account label is normalized; the backend's advertised length limit is
+ * respected and the backend remains the only validator of the final ID.
+ */
+export function suggestProfileId(
+  runtimeId: string,
+  providerId: string,
+  accountLabel: string,
+  maxLength: number,
+): string {
+  const runtime = runtimeId.trim();
+  const provider = providerId.trim();
+  if (!runtime || !provider) return '';
+  const label = accountLabel
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return [runtime, provider, label]
+    .filter(Boolean)
+    .join('-')
+    .slice(0, maxLength)
+    .replace(/-+$/, '');
+}
+
 const AUTHENTICATION_METHODS: readonly AuthenticationMethod[] = [
   'oauth',
   'api_key',
@@ -1852,7 +1891,34 @@ export function ProviderProfilesManager({
   runtimeFilterOptions = [],
   onSelectRuntimeId,
 }: ProviderProfilesManagerProps) {
-  const createFormRuntimeSeed = selectedRuntimeId ?? '';
+  // MoonLadderStudios/MoonMind#4001: Harness/Provider choices come from the
+  // backend's creation declarations, never from saved profiles or launch-ready
+  // hosts, so the first profile can be created on an empty deployment.
+  const creationChoicesQuery = useQuery({
+    queryKey: PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY,
+    enabled: canWriteProviderProfiles,
+    staleTime: Infinity,
+    queryFn: async (): Promise<ProviderProfileCreationChoices> => {
+      const response = await fetch('/api/v1/provider-profiles/creation-choices', {
+        headers: { Accept: 'application/json' },
+      });
+      const payload: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          extractErrorMessage(payload, 'Harness and Provider choices could not be loaded.'),
+        );
+      }
+      return payload as ProviderProfileCreationChoices;
+    },
+  });
+  const harnessChoices = creationChoicesQuery.data?.harnesses ?? null;
+  const profileIdMaxLength = creationChoicesQuery.data?.profile_id_max_length ?? null;
+  // A Settings Harness filter seeds creation only with a permitted choice.
+  const createFormRuntimeSeed =
+    selectedRuntimeId &&
+    harnessChoices?.some((harness) => harness.runtime_id === selectedRuntimeId)
+      ? selectedRuntimeId
+      : '';
   const [form, setForm] = useState<ProviderProfileFormState>(() =>
     defaultFormState(createFormRuntimeSeed),
   );
@@ -1876,6 +1942,18 @@ export function ProviderProfilesManager({
     useState<ProviderProfileCreationCapabilities | null>(null);
   const [creationCapabilitiesError, setCreationCapabilitiesError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Local draft state, never stored on the profile: a new profile's ID follows
+  // the suggestion until the operator edits or clears it, and resumes only
+  // through "Use suggested ID". Async responses never write the ID.
+  const [profileIdSuggestionManaged, setProfileIdSuggestionManaged] = useState(true);
+  const [customProviderEntry, setCustomProviderEntry] = useState(false);
+  const profileIdInputRef = useRef<HTMLInputElement | null>(null);
+  const harnessSelectRef = useRef<HTMLSelectElement | null>(null);
+  const providerSelectRef = useRef<HTMLSelectElement | null>(null);
+  const resetIdentityDraftState = (suggestionManaged: boolean) => {
+    setProfileIdSuggestionManaged(suggestionManaged);
+    setCustomProviderEntry(false);
+  };
   const executionConfigurations = useQuery({
     queryKey: ['settings', 'profile-execution-configurations'],
     enabled: showAdvanced,
@@ -1891,7 +1969,34 @@ export function ProviderProfilesManager({
   >(null);
   const [showImportedVolume, setShowImportedVolume] = useState(false);
   const [importedVolumeRef, setImportedVolumeRef] = useState('');
-  const [importedVolumeValidated, setImportedVolumeValidated] = useState(false);
+  // MoonLadderStudios/MoonMind#4001: a validation observation belongs to the
+  // exact edit target, runtime, provider, authentication method, and volume it
+  // was requested for. Any change to those inputs, or an explicit reset, makes
+  // the observation (and any response still in flight) stale before save. The
+  // server remains authoritative when the profile is submitted.
+  const [importedVolumeObservation, setImportedVolumeObservation] = useState<string | null>(null);
+  const importedVolumeOwnerKey = JSON.stringify([
+    editingProfileId,
+    form.runtimeId.trim(),
+    form.providerId.trim(),
+    form.authenticationMethod,
+    importedVolumeRef.trim(),
+  ]);
+  const importedVolumeValidated = importedVolumeObservation === importedVolumeOwnerKey;
+  const importedVolumeOwnerRef = useRef({ key: importedVolumeOwnerKey, generation: 0 });
+  if (importedVolumeOwnerRef.current.key !== importedVolumeOwnerKey) {
+    importedVolumeOwnerRef.current = {
+      key: importedVolumeOwnerKey,
+      generation: importedVolumeOwnerRef.current.generation + 1,
+    };
+  }
+  const invalidateImportedVolume = () => {
+    importedVolumeOwnerRef.current = {
+      ...importedVolumeOwnerRef.current,
+      generation: importedVolumeOwnerRef.current.generation + 1,
+    };
+    setImportedVolumeObservation(null);
+  };
   const startOAuthFromCreationRef = useRef<(profile: ProviderProfile) => void>(() => undefined);
   // Create-time "use as runtime default" intent cannot be honored at creation:
   // guided creation stores the profile disabled with is_default=false until
@@ -2041,6 +2146,54 @@ export function ProviderProfilesManager({
   }, [runtimeFilterOptions, selectedRuntimeId]);
 
   const isEditing = editingProfileId !== null;
+  const selectedHarnessChoice =
+    harnessChoices?.find((harness) => harness.runtime_id === form.runtimeId.trim()) ?? null;
+  const suggestedProfileId =
+    profileIdMaxLength === null
+      ? ''
+      : suggestProfileId(form.runtimeId, form.providerId, form.accountLabel, profileIdMaxLength);
+  const withHarness = (
+    current: ProviderProfileFormState,
+    runtimeId: string,
+  ): ProviderProfileFormState => {
+    // Keep a Provider only when the new Harness's authoritative choices confirm it.
+    const harness = harnessChoices?.find((choice) => choice.runtime_id === runtimeId);
+    const providerConfirmed = Boolean(
+      harness?.providers.some((provider) => provider.provider_id === current.providerId.trim()),
+    );
+    return { ...current, runtimeId, providerId: providerConfirmed ? current.providerId : '' };
+  };
+  const withSuggestedProfileId = (next: ProviderProfileFormState): ProviderProfileFormState =>
+    profileIdSuggestionManaged && !isEditing && profileIdMaxLength !== null
+      ? {
+          ...next,
+          profileId: suggestProfileId(
+            next.runtimeId,
+            next.providerId,
+            next.accountLabel,
+            profileIdMaxLength,
+          ),
+        }
+      : next;
+  const reviseIdentity = (
+    revise: (current: ProviderProfileFormState) => ProviderProfileFormState,
+  ) => setForm((current) => withSuggestedProfileId(revise(current)));
+  const customProviderVisible =
+    customProviderEntry && Boolean(selectedHarnessChoice?.custom_provider_allowed);
+  const selectedProviderOffered = Boolean(
+    selectedHarnessChoice?.providers.some(
+      (provider) => provider.provider_id === form.providerId.trim(),
+    ),
+  );
+  const handleHarnessChange = (runtimeId: string) => {
+    setCustomProviderEntry(false);
+    reviseIdentity((current) => withHarness(current, runtimeId));
+  };
+  const handleProviderChange = (value: string) => {
+    const custom = value === CUSTOM_PROVIDER_OPTION;
+    setCustomProviderEntry(custom);
+    reviseIdentity((current) => ({ ...current, providerId: custom ? '' : value }));
+  };
   const editingProfile = useMemo(
     () => profiles.find((profile) => profile.profile_id === editingProfileId) ?? null,
     [editingProfileId, profiles],
@@ -2074,7 +2227,6 @@ export function ProviderProfilesManager({
     const runtimeId = form.runtimeId.trim();
     const providerId = form.providerId.trim();
     setCreationCapabilitiesError(null);
-    setImportedVolumeValidated(false);
     if (!runtimeId || !providerId) {
       setCreationCapabilities(null);
       return;
@@ -2098,6 +2250,11 @@ export function ProviderProfilesManager({
       return;
     }
 
+    // Capabilities for another identity no longer authorize authentication
+    // choices while the new identity's metadata loads.
+    setCreationCapabilities((current) =>
+      current?.runtime_id === runtimeId && current.provider_id === providerId ? current : null,
+    );
     const controller = new AbortController();
     void fetch(
       `/api/v1/provider-profiles/creation-capabilities?runtime_id=${encodeURIComponent(runtimeId)}&provider_id=${encodeURIComponent(providerId)}`,
@@ -2111,6 +2268,9 @@ export function ProviderProfilesManager({
         return response.json() as Promise<ProviderProfileCreationCapabilities>;
       })
       .then((capabilities) => {
+        // A superseded request may finish decoding after cancellation. Only
+        // the active request owns capabilities and the authentication choice.
+        if (controller.signal.aborted) return;
         setCreationCapabilities(capabilities);
         setForm((current) => {
           const methodStillSupported = capabilities.authentication_methods.some(
@@ -2162,6 +2322,7 @@ export function ProviderProfilesManager({
           return response.json() as Promise<ProviderProfileTierCapabilities>;
         })
         .then((caps) => {
+          if (controller.signal.aborted) return;
           setTierCapabilities(caps);
           if (caps.evidence?.stale) {
             setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
@@ -2174,7 +2335,9 @@ export function ProviderProfilesManager({
             error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
           );
         })
-        .finally(() => setTierCapabilitiesLoading(false));
+        .finally(() => {
+          if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+        });
       return () => controller.abort();
     }
     const runtimeId = form.runtimeId.trim();
@@ -2182,9 +2345,13 @@ export function ProviderProfilesManager({
     if (!runtimeId || !providerId) {
       setTierCapabilities(null);
       setTierCapabilitiesError(null);
+      setTierCapabilitiesLoading(false);
       return;
     }
-    if (isEditing) return;
+    if (isEditing) {
+      setTierCapabilitiesLoading(false);
+      return;
+    }
     setTierCapabilitiesLoading(true);
     setTierCapabilitiesError(null);
     const controller = new AbortController();
@@ -2200,6 +2367,7 @@ export function ProviderProfilesManager({
         return response.json() as Promise<ProviderProfileTierCapabilities>;
       })
       .then((caps) => {
+        if (controller.signal.aborted) return;
         setTierCapabilities(caps);
         if (caps.evidence?.stale) {
           setTierCapabilitiesError('Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.');
@@ -2212,7 +2380,9 @@ export function ProviderProfilesManager({
           error instanceof Error ? error.message : 'Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.',
         );
       })
-      .finally(() => setTierCapabilitiesLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setTierCapabilitiesLoading(false);
+      });
     return () => controller.abort();
   }, [isEditing, editingProfileId, form.runtimeId, form.providerId]);
 
@@ -2375,7 +2545,7 @@ export function ProviderProfilesManager({
     }
     setForm((current) =>
       current.runtimeId === '' || current.runtimeId === previousSeed
-        ? { ...current, runtimeId: createFormRuntimeSeed }
+        ? withSuggestedProfileId(withHarness(current, createFormRuntimeSeed))
         : current,
     );
     setFormBaseline((current) =>
@@ -2396,7 +2566,8 @@ export function ProviderProfilesManager({
       return;
     }
     setEditingProfileId(null);
-    const nextForm = defaultFormState(selectedRuntimeId);
+    const nextForm = defaultFormState(createFormRuntimeSeed);
+    resetIdentityDraftState(true);
     setForm(nextForm);
     setFormBaseline(nextForm);
     const initialTier = runtimeDefaultTierDraft();
@@ -2404,7 +2575,7 @@ export function ProviderProfilesManager({
     setDefaultTierClientId(initialTier.clientId);
     setTierBaseline(cloneTierDrafts([initialTier]));
     setTierBaselineDefaultId(initialTier.clientId);
-  }, [editingProfileId, form.runtimeId, selectedRuntimeId]);
+  }, [createFormRuntimeSeed, editingProfileId, form.runtimeId, selectedRuntimeId]);
 
   useEffect(() => {
     const handleProviderProfileRefresh = (event: StorageEvent) => {
@@ -2437,6 +2608,7 @@ export function ProviderProfilesManager({
   const resetForm = () => {
     setEditingProfileId(null);
     const nextForm = defaultFormState(createFormRuntimeSeed);
+    resetIdentityDraftState(true);
     setForm(nextForm);
     setFormBaseline(nextForm);
     const initialTier = runtimeDefaultTierDraft();
@@ -2456,7 +2628,7 @@ export function ProviderProfilesManager({
     setShowAdvanced(false);
     setShowImportedVolume(false);
     setImportedVolumeRef('');
-    setImportedVolumeValidated(false);
+    invalidateImportedVolume();
     onNotice(null);
   };
 
@@ -2474,6 +2646,7 @@ export function ProviderProfilesManager({
     const hasUnknownMethod = !profile.authentication_method || !selectedMethod;
     const nextForm = toFormState(profile);
     setEditingProfileId(profile.profile_id);
+    resetIdentityDraftState(false);
     setForm(nextForm);
     setFormBaseline(nextForm);
     const normalized = normalizeProviderProfileTiers(profile.model_tiers, profile.default_model_tier);
@@ -2500,7 +2673,7 @@ export function ProviderProfilesManager({
     setShowAdvanced(hasUnknownMethod || hasUnknownRole);
     setShowImportedVolume(false);
     setImportedVolumeRef(profile.volume_ref ?? '');
-    setImportedVolumeValidated(false);
+    invalidateImportedVolume();
     onNotice(null);
   };
 
@@ -3222,18 +3395,23 @@ export function ProviderProfilesManager({
   }, [opencodeEnrollment]);
 
   const importedVolumeMutation = useMutation({
-    mutationFn: async () => {
-      const volumeRef = importedVolumeRef.trim();
-      if (!volumeRef) {
+    mutationFn: async (request: {
+      ownerKey: string;
+      generation: number;
+      runtimeId: string;
+      providerId: string;
+      volumeRef: string;
+    }) => {
+      if (!request.volumeRef) {
         throw new Error('Existing credential volume is required.');
       }
       const response = await fetch('/api/v1/provider-profiles/credential-volume/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
-          runtime_id: form.runtimeId.trim(),
-          provider_id: form.providerId.trim(),
-          volume_ref: volumeRef,
+          runtime_id: request.runtimeId,
+          provider_id: request.providerId,
+          volume_ref: request.volumeRef,
         }),
       });
       const payload: unknown = await response.json().catch(() => ({}));
@@ -3245,17 +3423,20 @@ export function ProviderProfilesManager({
         volume_mount_path: string;
       };
     },
-    onSuccess: (result) => {
+    onSuccess: (result, request) => {
+      // A response for superseded inputs neither authorizes nor rewrites the draft.
+      if (request.generation !== importedVolumeOwnerRef.current.generation) return;
       setForm((current) => ({
         ...current,
         volumeRef: result.volume_ref,
         volumeMountPath: result.volume_mount_path,
       }));
-      setImportedVolumeValidated(true);
+      setImportedVolumeObservation(request.ownerKey);
       onNotice({ level: 'ok', text: 'Imported credential volume validated.' });
     },
-    onError: (error: Error) => {
-      setImportedVolumeValidated(false);
+    onError: (error: Error, request) => {
+      if (request.generation !== importedVolumeOwnerRef.current.generation) return;
+      setImportedVolumeObservation(null);
       onNotice({ level: 'error', text: error.message });
     },
   });
@@ -3449,6 +3630,7 @@ export function ProviderProfilesManager({
         // the new identity with the prior account's custom tiers.
         setEditingProfileId(null);
         const nextForm = defaultFormState(createFormRuntimeSeed);
+        resetIdentityDraftState(true);
         setForm(nextForm);
         setFormBaseline(nextForm);
         {
@@ -3466,7 +3648,7 @@ export function ProviderProfilesManager({
         setShowAdvanced(false);
         setShowImportedVolume(false);
         setImportedVolumeRef('');
-        setImportedVolumeValidated(false);
+        invalidateImportedVolume();
       }
       // Setup continuation targets the exact saved identity. Incomplete,
       // canceled, or failed enrollment offers Connect/Retry for that saved
@@ -3496,9 +3678,23 @@ export function ProviderProfilesManager({
         });
         return;
       }
-      setShowAdvanced(true);
       const targetField =
         error instanceof ProviderProfileRequestError ? error.field : null;
+      const identityControl =
+        targetField === 'profile_id'
+          ? profileIdInputRef.current
+          : targetField === 'runtime_id'
+            ? harnessSelectRef.current
+            : targetField === 'provider_id'
+              ? providerSelectRef.current
+              : null;
+      if (identityControl) {
+        // Standard identity fields stay visible: keep the whole draft and
+        // point at the field for review. Never suffix or resubmit an ID.
+        identityControl.focus();
+      } else {
+        setShowAdvanced(true);
+      }
       if (targetField && ADVANCED_DISCLOSURE_FIELDS.has(targetField)) {
         // The control is inside the region we just revealed, so the focus move
         // has to wait for that render.
@@ -3577,6 +3773,7 @@ export function ProviderProfilesManager({
       if (editingProfileId === profileId) {
         setEditingProfileId(null);
         const nextForm = defaultFormState(createFormRuntimeSeed);
+        resetIdentityDraftState(true);
         setForm(nextForm);
         setFormBaseline(nextForm);
         const initialTier = runtimeDefaultTierDraft();
@@ -4949,55 +5146,151 @@ export function ProviderProfilesManager({
               Identity <span className="font-normal text-slate-500 dark:text-slate-400">&mdash; required</span>
             </legend>
             <div className="provider-profile-identity-grid grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                  <input
+                    ref={profileIdInputRef}
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                    value={form.profileId}
+                    onChange={(event) => {
+                      setProfileIdSuggestionManaged(false);
+                      setForm((current) => ({ ...current, profileId: event.target.value }));
+                    }}
+                    disabled={isEditing}
+                    required
+                  />
+                </label>
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  {isEditing
+                    ? 'A saved Profile ID cannot be renamed.'
+                    : 'Suggested from Harness, Provider, and account label. Review it before creating; it cannot be renamed later.'}
+                </p>
+                {!isEditing && !profileIdSuggestionManaged && suggestedProfileId ? (
+                  <button
+                    type="button"
+                    className="self-start rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300"
+                    onClick={() => {
+                      setProfileIdSuggestionManaged(true);
+                      setForm((current) => ({ ...current, profileId: suggestedProfileId }));
+                    }}
+                  >
+                    Use suggested ID
+                  </button>
+                ) : null}
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Profile ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.profileId}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, profileId: event.target.value }))
-                  }
-                  disabled={isEditing}
-                  required
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Runtime ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
-                <input
+                <span>Harness <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                <select
+                  ref={harnessSelectRef}
+                  aria-label="Harness"
+                  aria-describedby="provider-profile-choices-status"
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.runtimeId}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, runtimeId: event.target.value }))
-                  }
-                  placeholder="codex_cli"
-                  disabled={isEditing}
+                  onChange={(event) => handleHarnessChange(event.target.value)}
+                  disabled={isEditing || !harnessChoices?.length}
                   required
-                />
+                >
+                  <option value="">
+                    {creationChoicesQuery.isError
+                      ? 'Harness choices unavailable'
+                      : harnessChoices === null
+                        ? 'Loading Harness choices…'
+                        : 'Select a Harness'}
+                  </option>
+                  {harnessChoices?.map((harness) => (
+                    <option key={harness.runtime_id} value={harness.runtime_id}>
+                      {harness.label}
+                    </option>
+                  ))}
+                  {form.runtimeId.trim() && !selectedHarnessChoice ? (
+                    <option value={form.runtimeId}>
+                      {isEditing ? `${form.runtimeId} (saved)` : `${form.runtimeId} (not offered for new profiles)`}
+                    </option>
+                  ) : null}
+                </select>
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
-                <span>Provider ID <span className="text-amber-600 dark:text-amber-400">*</span></span>
-                <input
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={form.providerId}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, providerId: event.target.value }))
-                  }
-                  placeholder="openai"
-                  required
-                />
-              </label>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <span>Provider <span className="text-amber-600 dark:text-amber-400">*</span></span>
+                  <select
+                    ref={providerSelectRef}
+                    aria-label="Provider"
+                    aria-describedby="provider-profile-choices-status"
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                    value={customProviderVisible ? CUSTOM_PROVIDER_OPTION : form.providerId}
+                    onChange={(event) => handleProviderChange(event.target.value)}
+                    disabled={!selectedHarnessChoice}
+                    required
+                  >
+                    <option value="">
+                      {selectedHarnessChoice ? 'Select a Provider' : 'Select a Harness first'}
+                    </option>
+                    {selectedHarnessChoice?.providers.map((provider) => (
+                      <option key={provider.provider_id} value={provider.provider_id}>
+                        {provider.label}
+                      </option>
+                    ))}
+                    {form.providerId.trim() && !customProviderVisible && !selectedProviderOffered ? (
+                      <option value={form.providerId}>
+                        {isEditing ? `${form.providerId} (saved)` : `${form.providerId} (not offered for this Harness)`}
+                      </option>
+                    ) : null}
+                    {selectedHarnessChoice?.custom_provider_allowed ? (
+                      <option value={CUSTOM_PROVIDER_OPTION}>Other provider…</option>
+                    ) : null}
+                  </select>
+                </label>
+                {customProviderVisible ? (
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span>Custom provider ID</span>
+                    <input
+                      aria-label="Custom provider ID"
+                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                      value={form.providerId}
+                      onChange={(event) =>
+                        reviseIdentity((current) => ({ ...current, providerId: event.target.value }))
+                      }
+                      required
+                    />
+                  </label>
+                ) : null}
+              </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Account label</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
                   value={form.accountLabel}
                   onChange={(event) =>
-                    setForm((current) => ({ ...current, accountLabel: event.target.value }))
+                    reviseIdentity((current) => ({ ...current, accountLabel: event.target.value }))
                   }
                   placeholder="Team account"
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">Optional friendly account identity — auto-populated from OAuth identity when available</p>
               </label>
+            </div>
+            <div
+              id="provider-profile-choices-status"
+              className="text-sm text-slate-600 dark:text-slate-400"
+              role="status"
+              aria-live="polite"
+            >
+              {creationChoicesQuery.isError ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-amber-800 dark:text-amber-300">
+                  <p>{`Harness and Provider choices could not be loaded. ${creationChoicesQuery.error.message} Your draft is kept.`}</p>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-amber-400 dark:border-amber-700 px-3 py-1 text-xs font-semibold"
+                    onClick={() => void creationChoicesQuery.refetch()}
+                  >
+                    Retry loading choices
+                  </button>
+                </div>
+              ) : harnessChoices === null ? (
+                <p>Loading Harness and Provider choices…</p>
+              ) : harnessChoices?.length === 0 ? (
+                <p>No Harness currently supports new Provider Profiles.</p>
+              ) : null}
             </div>
           </fieldset>
 
@@ -5024,7 +5317,7 @@ export function ProviderProfilesManager({
                           authenticationMethod: asAuthenticationMethod(method.id),
                         }));
                         setShowImportedVolume(false);
-                        setImportedVolumeValidated(false);
+                        invalidateImportedVolume();
                       }}
                     />
                     {method.label}
@@ -5037,7 +5330,9 @@ export function ProviderProfilesManager({
               </div>
             ) : (
               <p className="text-sm text-slate-600 dark:text-slate-400">
-                Choose a runtime and provider to load supported authentication methods.
+                {form.runtimeId.trim() && form.providerId.trim() && !creationCapabilitiesError
+                  ? 'Loading supported authentication methods…'
+                  : 'Choose a Harness and Provider to load supported authentication methods.'}
               </p>
             )}
             {hasUnknownExistingAuthenticationMethod && creationCapabilities?.authentication_methods.length ? (
@@ -5566,7 +5861,7 @@ export function ProviderProfilesManager({
                       className="rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300"
                       onClick={() => {
                         setShowImportedVolume((current) => !current);
-                        setImportedVolumeValidated(false);
+                        invalidateImportedVolume();
                       }}
                     >
                       Use an existing credential volume
@@ -5580,7 +5875,7 @@ export function ProviderProfilesManager({
                             value={importedVolumeRef}
                             onChange={(event) => {
                               setImportedVolumeRef(event.target.value);
-                              setImportedVolumeValidated(false);
+                              invalidateImportedVolume();
                             }}
                           />
                         </label>
@@ -5591,7 +5886,15 @@ export function ProviderProfilesManager({
                           type="button"
                           className="rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900"
                           disabled={importedVolumeMutation.isPending}
-                          onClick={() => importedVolumeMutation.mutate()}
+                          onClick={() =>
+                            importedVolumeMutation.mutate({
+                              ownerKey: importedVolumeOwnerKey,
+                              generation: importedVolumeOwnerRef.current.generation,
+                              runtimeId: form.runtimeId.trim(),
+                              providerId: form.providerId.trim(),
+                              volumeRef: importedVolumeRef.trim(),
+                            })
+                          }
                         >
                           Validate imported volume
                         </button>
