@@ -2473,7 +2473,7 @@ def _reader_transport(monkeypatch):
 
     def handle(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        path = request.url.path
+        path = request.url.path.removeprefix("/api/v3")
         if path == "/repos/acme/repo/pulls/7":
             return httpx.Response(
                 200,
@@ -2717,6 +2717,46 @@ async def test_untrusted_connection_endpoint_reads_nothing(monkeypatch):
 
     assert reads == []
     assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_pull_request_url_for_another_host_reads_nothing(monkeypatch):
+    """A github.com URL is never validated with facts from an Enterprise host."""
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "ghe.example.test")
+    requests = _reader_transport(monkeypatch)
+    _secrets(monkeypatch, {_PAT_B_REF: "selected-token-b"})
+
+    with pytest.raises(ValueError, match="not served by the selected repository connection"):
+        await GitHubService().read_pull_request(
+            "acme/repo",
+            _PR_URL,
+            connection=_pat_connection_b(endpointRef="https://ghe.example.test"),
+        )
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_enterprise_pull_request_url_reads_through_its_connection(monkeypatch):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "ghe.example.test")
+    requests = _reader_transport(monkeypatch)
+    _secrets(monkeypatch, {_PAT_B_REF: "selected-token-b"})
+
+    result = await GitHubService().read_pull_request(
+        "acme/repo",
+        "https://ghe.example.test/acme/repo/pull/7",
+        connection=_pat_connection_b(endpointRef="https://ghe.example.test"),
+    )
+
+    assert result["number"] == 7
+    assert [str(r.url) for r in requests] == [
+        "https://ghe.example.test/api/v3/repos/acme/repo/pulls/7"
+    ]
 
 
 @pytest.mark.parametrize(

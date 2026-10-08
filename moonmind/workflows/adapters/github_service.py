@@ -223,25 +223,37 @@ class GitHubService:
         connection: Any | None = None,
         admitted_workflow_id: str = "",
     ) -> dict[str, Any]:
-        """Read authoritative PR identity through the admitted repository reader."""
+        """Read authoritative PR identity through the admitted repository reader.
+
+        The URL's host must be the selected connection's endpoint, so a PR on
+        one host is never validated with another host's repository facts.
+        """
+        from moonmind.auth.github_app_wiring import github_api_base_for
+
         match = re.fullmatch(
-            r"https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
+            r"https://([^/@\s]+)/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
         )
-        if not match or f"{match[1]}/{match[2]}".lower() != repository.lower():
+        if not match or f"{match[2]}/{match[3]}".lower() != repository.lower():
             raise ValueError("Pull request URL does not identify the requested repository")
         api_base, headers = await self._repository_reader(
             repository, connection, admitted_workflow_id
         )
+        if github_api_base_for(f"https://{match[1]}").rstrip("/") != api_base.rstrip("/"):
+            raise ValueError(
+                "Pull request URL host is not served by the selected repository "
+                "connection"
+            )
+        pr_number = match[4]
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(
-                f"{api_base}/repos/{repository}/pulls/{match[3]}",
+                f"{api_base}/repos/{repository}/pulls/{pr_number}",
                 headers=headers,
             )
             response.raise_for_status()
             data = response.json()
         if (
             not isinstance(data, dict)
-            or data.get("number") != int(match[3])
+            or data.get("number") != int(pr_number)
             or str(((data.get("base") or {}).get("repo") or {}).get("full_name") or "").lower()
             != repository.lower()
         ):

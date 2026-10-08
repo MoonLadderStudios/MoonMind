@@ -323,11 +323,68 @@ async def _recorded_parent_workflow_id(workflow_id: str) -> str:
     return str(getattr(described, "parent_id", "") or "").strip()
 
 
+async def _planned_repository_connection(
+    session: Any, workflow_id: str, parameters: Mapping[str, Any]
+) -> str:
+    """Return the connection a routed run's frozen execution plan admitted.
+
+    Routed admission selects a concrete connection without rewriting the
+    authored parameters; the plan's repository binding records it. The
+    collaboration binding serves pull-request work, else the source binding.
+    A run without a plan, or a plan binding no repository authority, admitted
+    only the default connection. An unreadable plan raises; no other
+    connection is substituted.
+    """
+
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        repository_bindings_of,
+    )
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    raw_binding = parameters.get("omnigentExecutionPlan")
+    if not isinstance(raw_binding, Mapping):
+        return ""
+    try:
+        binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+        plan = await SessionExecutionPlanStore(session).load(binding.plan_ref)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"execution plan of run {workflow_id!r} could not be read "
+            f"({type(exc).__name__}); no other connection is substituted",
+        ) from exc
+    if plan is None:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"execution plan of run {workflow_id!r} is not recorded; no other "
+            "connection is substituted",
+        )
+    by_role = {}
+    for repository_binding in repository_bindings_of(
+        dict(plan.payload.credentialBindings)
+    ).values():
+        if isinstance(repository_binding, Mapping):
+            role = repository_binding.get("repositoryRole")
+            connection_ref = repository_binding.get("connectionRef")
+        else:
+            role = repository_binding.repositoryRole
+            connection_ref = repository_binding.connectionRef
+        by_role.setdefault(str(role or ""), str(connection_ref or "").strip())
+    return by_role.get("collaboration") or by_role.get("source_read") or ""
+
+
 async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
     """Return the ``(connectionRef, anonymous)`` a recorded run admitted.
 
     Retries, Activities, and child gates acting for a run read its canonical
-    parameters instead of carrying credentials or rediscovering authority.
+    parameters (and, for routed admission, its frozen execution plan) instead
+    of carrying credentials or rediscovering authority.
     A child workflow started by a run (an agent step, a merge gate, a resolver
     or remediation child) has no canonical record of its own; it acts with
     the nearest recorded run on its Temporal parent chain. An unrecorded or
@@ -347,10 +404,17 @@ async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
             break
         async with async_session_maker() as session:
             record = await session.get(TemporalExecutionCanonicalRecord, owner)
-        if record is not None:
-            if isinstance(record.parameters, Mapping):
-                return authored_repository_access(record.parameters)
-            break
+            if record is not None:
+                if not isinstance(record.parameters, Mapping):
+                    break
+                connection_ref, anonymous = authored_repository_access(
+                    record.parameters
+                )
+                if not connection_ref and not anonymous:
+                    connection_ref = await _planned_repository_connection(
+                        session, owner, record.parameters
+                    )
+                return connection_ref, anonymous
         owner = await _recorded_parent_workflow_id(owner)
     raise RepositoryContractError(
         "REPOSITORY_CONNECTION_UNAVAILABLE",
