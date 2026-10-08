@@ -44,6 +44,7 @@ def resolver_cli(tmp_path):
         "reviews": [],
         "runs": [],
         "jobs": [],
+        "base_sha": "c" * 40,
     }
     (transport / "replay.py").write_text(
         "import json,os\n"
@@ -58,7 +59,11 @@ def resolver_cli(tmp_path):
         "  return data.get('pr_after_inventory', data['pr']) if full_reads>1 else data['pr']\n"
         " path=target.split('?')[0].removeprefix('https://api.github.com/').removeprefix('/')\n"
         " if path=='graphql': return {'data':{'repository':{'pullRequest':{'reviewThreads':{'nodes':[], 'pageInfo':{'hasNextPage':False}}}}}}\n"
-        " if path.endswith('/branches/main'): return {'protected':False}\n"
+        " if path.endswith('/branches/main'):\n"
+        "  observed=[json.loads(line) for line in Path(os.environ['REPLAY_CALLS']).read_text().splitlines()]\n"
+        "  full_reads=sum(k=='view' and 'isDraft' in t for k,t in observed)\n"
+        "  sha=data.get('base_after_inventory',data['base_sha']) if full_reads>1 else data['base_sha']\n"
+        "  return {'protected':False,'commit':{'sha':sha}}\n"
         " if path.endswith('/check-runs'): return {'check_runs':data['checks']}\n"
         " if path.endswith('/statuses'): return data['statuses']\n"
         " if path.endswith('/actions/runs'): return {'workflow_runs':data['runs']}\n"
@@ -155,7 +160,7 @@ def test_repeated_ci_wait_skips_inventory_and_refreshes_before_remediation(
     assert result["reason"] == "ci_running"
     result, snapshot, waiting = run()
     assert result["reason"] == "ci_running"
-    assert len(waiting) == 3  # PR identity/rollup, exact-head checks, legacy statuses.
+    assert len(waiting) == 4  # PR, base commit, exact-head checks, legacy statuses.
     assert not any(kind == "http" for kind, _ in waiting)
     assert len(waiting) < len(initial)
     assert snapshot["observationOnly"] is True
@@ -188,7 +193,7 @@ def test_changed_observation_never_reuses_the_comment_inventory(resolver_cli, ch
     elif change == "base":
         # Identity changes force a full snapshot. The fixture branch transport
         # leaves requirements unknown, which must remain blocked.
-        state["pr"]["baseRefOid"] = "c" * 40
+        state["base_sha"] = "d" * 40
     elif change == "pr_updated":
         state["pr"]["updatedAt"] = "2026-10-08T02:00:00Z"
     elif change == "checks_unavailable":
@@ -277,7 +282,7 @@ def test_cli_reports_stranded_jobs_in_terminal_workflow_instead_of_waiting(
     assert run()[0]["reason"] == "ci_running"
     _, snapshot, calls = run()
     assert snapshot["observationOnly"] is True
-    assert len(calls) == 4
+    assert len(calls) == 5
     state["runs"][0].update(status="completed", conclusion="failure")
     if extra_degraded:
         state["checks"].append({"id": 3, "name": "other", "status": "completed"})
@@ -498,3 +503,32 @@ def test_other_pull_request_run_cannot_clear_the_target_failure(resolver_cli):
     result, snapshot, _ = run()
     assert result["reason"] == "ci_failures"
     assert not snapshot["ci"]["supersededChecks"]
+
+
+def test_base_advance_invalidates_an_unchanged_head_wait(resolver_cli):
+    state, run = resolver_cli
+    assert run()[0]["reason"] == "ci_running"
+    state["base_sha"] = "d" * 40
+    result, snapshot, calls = run()
+    assert result["reason"] == "ci_running"
+    assert snapshot["pr"]["baseRefOid"] == "d" * 40
+    assert snapshot.get("observationOnly") is not True
+    assert any(kind == "http" for kind, _ in calls)
+
+
+def test_base_change_during_inventory_cannot_authorize_completion(resolver_cli):
+    state, run = resolver_cli
+    state["checks"][0].update(status="completed", conclusion="success")
+    state["base_after_inventory"] = "d" * 40
+    result, snapshot, _ = run()
+    assert result["reason"] == "snapshot_refresh_failed"
+    assert not snapshot
+
+
+def test_unknown_base_commit_cannot_authorize_completion(resolver_cli):
+    state, run = resolver_cli
+    state["checks"][0].update(status="completed", conclusion="success")
+    state["base_sha"] = None
+    result, snapshot, _ = run()
+    assert result["reason"] == "snapshot_refresh_failed"
+    assert not snapshot
