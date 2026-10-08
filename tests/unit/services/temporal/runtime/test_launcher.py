@@ -5845,13 +5845,12 @@ async def test_recorded_schedule_target_reads_the_migrated_default_connection(
     )
     resolved_refs: list[str] = []
 
-    async def _fake_secret(ref: str, **_kwargs) -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> tuple[str, str]:
         resolved_refs.append(ref)
-        return "migrated-settings-token"
+        return "migrated-settings-token", "fixture-managed-revision"
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret,
     )
     recorded_schedule_target = json.loads(
