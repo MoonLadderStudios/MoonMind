@@ -2662,6 +2662,11 @@ async def test_retained_terminal_cycles_are_not_reopened(
             "_review_failure_settlement_enabled",
             lambda self, observation: False,
         )
+        monkeypatch.setattr(
+            MoonMindMergeAutomationWorkflow,
+            "_review_refusal_settlement_enabled",
+            lambda self, observation_key: False,
+        )
     result = await MoonMindMergeAutomationWorkflow().run(payload)
     historical_completion = outcome == "completion" and (
         legacy_observation or cycle_status == "completed"
