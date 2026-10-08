@@ -264,6 +264,46 @@
         "requestPending": {
           "type": "boolean"
         },
+        "requestFailed": {
+          "type": "boolean",
+          "description": "The provider refused the current-head request and no review completion superseded that refusal. Omitted by older snapshots and when the review loop is disabled."
+        },
+        "requestFailure": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Evidence for the provider's refusal, or null when the request has not failed. Omitted by older snapshots and when the review loop is disabled.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "issue_comment"
+              ]
+            },
+            "id": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "failedAt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "providerErrorClass": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Provider failure classification, such as rate_limit."
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "failedAt",
+            "providerErrorClass"
+          ]
+        },
         "requestCommentId": {
           "type": [
             "integer",
