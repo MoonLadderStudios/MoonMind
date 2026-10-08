@@ -97,6 +97,8 @@ FLEET3949_CALLS: list[tuple[str, str, int, object]] = []
 FLEET3949_FAIL_TERMINAL_ONCE = False
 FLEET3949_FAIL_TERMINAL_ALWAYS = False
 FLEET3949_HOLD_MARK_RUNNING: asyncio.Event | None = None
+FLEET3949_MARK_RUNNING_ENTERED: asyncio.Event | None = None
+FLEET3949_RELEASE_MARK_RUNNING: asyncio.Event | None = None
 
 _FLEET3949_OBSERVED = {
     "checkpoint_branch.turn.mark_running": ("mark_running", "agentRunWorkflowId"),
@@ -125,6 +127,10 @@ class _Fleet3949ActivityObserver(ActivityInboundInterceptor):
             FLEET3949_CALLS.append(
                 (kind, info.task_queue, info.attempt, payload.get(value_key))
             )
+            if kind == "mark_running" and FLEET3949_MARK_RUNNING_ENTERED is not None:
+                FLEET3949_MARK_RUNNING_ENTERED.set()
+                assert FLEET3949_RELEASE_MARK_RUNNING is not None
+                await FLEET3949_RELEASE_MARK_RUNNING.wait()
             if kind == "terminal":
                 global FLEET3949_FAIL_TERMINAL_ONCE
                 if FLEET3949_FAIL_TERMINAL_ALWAYS:
@@ -260,6 +266,7 @@ async def _run_fleet3949(
     tmp_path,
     *,
     cancel: bool = False,
+    cancel_at_activity_entry: bool = False,
     artifacts_slots: int | None = None,
 ):
     """Run one turn against the production artifacts-fleet registration.
@@ -273,8 +280,13 @@ async def _run_fleet3949(
 
     from uuid import uuid4 as _uuid4
 
+    global FLEET3949_MARK_RUNNING_ENTERED, FLEET3949_RELEASE_MARK_RUNNING
+
     FLEET3949_REFS.clear()
     FLEET3949_CALLS.clear()
+    if cancel_at_activity_entry:
+        FLEET3949_MARK_RUNNING_ENTERED = asyncio.Event()
+        FLEET3949_RELEASE_MARK_RUNNING = asyncio.Event()
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     FLEET3949_REFS.update(refs)
     queue = f"checkpoint-branch-fleet3949-{_uuid4()}"
@@ -331,16 +343,26 @@ async def _run_fleet3949(
                     task_queue=queue,
                 )
                 if cancel:
-                    for _attempt in range(100):
-                        if any(
-                            name == "mark_running" for name, *_rest in FLEET3949_CALLS
-                        ):
-                            break
-                        await asyncio.sleep(0.01)
+                    if cancel_at_activity_entry:
+                        assert FLEET3949_MARK_RUNNING_ENTERED is not None
+                        await asyncio.wait_for(
+                            FLEET3949_MARK_RUNNING_ENTERED.wait(), timeout=1
+                        )
+                    else:
+                        for _attempt in range(100):
+                            if any(
+                                name == "mark_running"
+                                for name, *_rest in FLEET3949_CALLS
+                            ):
+                                break
+                            await asyncio.sleep(0.01)
                     assert any(
                         name == "mark_running" for name, *_rest in FLEET3949_CALLS
                     )
-                    if FLEET3949_HOLD_MARK_RUNNING is None:
+                    if (
+                        not cancel_at_activity_entry
+                        and FLEET3949_HOLD_MARK_RUNNING is None
+                    ):
                         # Cancel the parent after its real persistence handoff.
                         # Racing the test server's
                         # activity completion can reject the cancel command
@@ -353,6 +375,9 @@ async def _run_fleet3949(
                             await asyncio.sleep(0.01)
                         assert state["phase"] == "running", state
                     await handle.cancel()
+                    if cancel_at_activity_entry:
+                        assert FLEET3949_RELEASE_MARK_RUNNING is not None
+                        FLEET3949_RELEASE_MARK_RUNNING.set()
                     with pytest.raises(WorkflowFailureError):
                         await handle.result()
                     for _attempt in range(200):
@@ -376,6 +401,8 @@ async def _run_fleet3949(
         return result, history, list(FLEET3949_CALLS), sessions
     finally:
         FLEET3949_REFS.clear()
+        FLEET3949_MARK_RUNNING_ENTERED = None
+        FLEET3949_RELEASE_MARK_RUNNING = None
         await engine.dispose()
 
 
@@ -478,11 +505,18 @@ async def test_new_failure_reaches_artifacts_fleet_with_real_handlers_3949(
     ).replay_workflow(history)
 
 
+@pytest.mark.parametrize(
+    "cancel_at_activity_entry", [False, True], ids=["post-handoff", "activity-entry"]
+)
 async def test_new_cancellation_reaches_artifacts_fleet_with_real_handlers_3949(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, cancel_at_activity_entry: bool
 ) -> None:
     result, history, fleet_calls, sessions = await _run_fleet3949(
-        "canceled", monkeypatch, tmp_path, cancel=True
+        "canceled",
+        monkeypatch,
+        tmp_path,
+        cancel=True,
+        cancel_at_activity_entry=cancel_at_activity_entry,
     )
 
     assert result is None
@@ -496,6 +530,11 @@ async def test_new_cancellation_reaches_artifacts_fleet_with_real_handlers_3949(
         for _name, task_queue, _attempt, _value in fleet_calls
     )
     _assert_fleet3949_operation_identity(history)
+    assert any(
+        event.HasField("workflow_execution_cancel_requested_event_attributes")
+        for event in history.events
+    )
+    assert history.events[-1].HasField("workflow_execution_canceled_event_attributes")
     async with sessions() as session:
         turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
         assert turn is not None

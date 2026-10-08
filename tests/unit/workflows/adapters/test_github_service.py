@@ -687,9 +687,9 @@ async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
         "db://github-pat",
     )
 
-    async def _fake_resolve(secret_ref: str) -> str:
+    async def _fake_resolve(secret_ref: str) -> tuple[str, str]:
         assert secret_ref == "db://github-pat"
-        return "resolved-gh-token"
+        return "resolved-gh-token", "db://github-pat:credential:1:policy:1"
 
     with (
         patch(
@@ -697,7 +697,7 @@ async def test_create_pr_uses_secret_ref_when_env_missing(monkeypatch):
             return_value=mock_client,
         ),
         patch(
-            "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+            "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
             side_effect=_fake_resolve,
         ),
     ):
@@ -1149,7 +1149,9 @@ async def test_probe_token_pat_connection_reads_assigned_repository_any_case(
 
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
     monkeypatch.setattr(
-        github_credentials, "_resolve_secret_ref", AsyncMock(return_value="token-b")
+        github_credentials,
+        "_resolve_secret_ref_with_revision",
+        AsyncMock(return_value=("token-b", "fixture-managed-revision")),
     )
     mock_client = _probe_client(
         [
