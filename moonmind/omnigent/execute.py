@@ -1186,6 +1186,48 @@ def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
     return _validated_pre_dispatch_item_ids(metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY])
 
 
+# Native Codex mirrors each turn's working-tree diff as a ``turn_diff`` call and
+# output appended after its final assistant text. The pair is evidence-only
+# instrumentation, not agent work, so it must never turn a completed response
+# back into an active tool boundary.
+_TURN_INSTRUMENTATION_TOOL_NAMES = frozenset({"turn_diff"})
+
+
+def turn_instrumentation_item_indexes(
+    items: list[Any], *, harness: str | None
+) -> frozenset[int]:
+    """Return the indexes of native evidence-only instrumentation items.
+
+    Only the provider session's canonical native Codex harness projects this
+    instrumentation. Other and unknown harnesses may have real tools with the
+    same name. Within Codex, outputs must match a recognized call id.
+    """
+
+    if harness != "codex-native":
+        return frozenset()
+
+    call_ids: set[str] = set()
+    indexes: set[int] = set()
+    for index, raw_item in enumerate(items):
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_type = str(raw_item.get("type") or "").strip()
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        call_id = str(item_data.get("call_id") or "").strip()
+        if (
+            item_type == "function_call"
+            and str(item_data.get("name") or "").strip()
+            in _TURN_INSTRUMENTATION_TOOL_NAMES
+        ):
+            indexes.add(index)
+            if call_id:
+                call_ids.add(call_id)
+        elif item_type == "function_call_output" and call_id in call_ids:
+            indexes.add(index)
+    return frozenset(indexes)
+
+
 def _marked_turn_item_state(
     snapshot: Mapping[str, Any],
     *,
@@ -1261,7 +1303,9 @@ def _marked_turn_item_state(
     progress = False
     pending_call_ids: set[str] = set()
     pending_call_names: dict[str, str] = {}
-    instrumentation_call_ids: set[str] = set()
+    instrumentation_indexes = turn_instrumentation_item_indexes(
+        raw_items, harness=snapshot.get("harness")
+    )
     anonymous_pending_calls = 0
     anonymous_pending_call_names: list[str] = []
     for index, raw_item in enumerate(
@@ -1273,16 +1317,11 @@ def _marked_turn_item_state(
         item_type = str(raw_item.get("type") or "").strip()
         data = raw_item.get("data")
         item_data = data if isinstance(data, Mapping) else {}
+        if index in instrumentation_indexes:
+            progress = True
+            continue
         if item_type == "function_call":
             progress = True
-            # Native Codex appends this evidence-only instrumentation after its
-            # final assistant text. It is not agent work and must not turn a
-            # completed response back into an active tool boundary.
-            if str(item_data.get("name") or "").strip() == "turn_diff":
-                call_id = str(item_data.get("call_id") or "").strip()
-                if call_id:
-                    instrumentation_call_ids.add(call_id)
-                continue
             last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
             tool_name = str(item_data.get("name") or "").strip()
@@ -1295,8 +1334,6 @@ def _marked_turn_item_state(
         elif item_type == "function_call_output":
             progress = True
             call_id = str(item_data.get("call_id") or "").strip()
-            if call_id and call_id in instrumentation_call_ids:
-                continue
             last_tool_index = index
             if call_id:
                 pending_call_ids.discard(call_id)
