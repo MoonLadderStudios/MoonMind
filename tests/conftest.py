@@ -224,7 +224,9 @@ def _kill_owned_temporal_servers() -> None:
                 "-P",
                 str(my_pid),
                 "-f",
-                r"temporal-test-server|temporal-sdk-python-[^ ]+ server start-dev",
+                # The SDK supports a caller-supplied CLI executable path.
+                # Match its server invocation while retaining the parent fence.
+                r"temporal-test-server|^.+ server start-dev( |$)",
             ],
             text=True,
             timeout=2,

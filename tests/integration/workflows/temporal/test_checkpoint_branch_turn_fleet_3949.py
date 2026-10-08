@@ -52,7 +52,10 @@ from api_service.services.checkpoint_branch_service import (
     CheckpointBranchService,
     build_branch_turn_launch_idempotency_key,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+)
 from moonmind.workflows import get_temporal_artifact_repository
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_catalog import (
@@ -276,10 +279,7 @@ async def _run_fleet3949(
     FLEET3949_REFS.update(refs)
     queue = f"checkpoint-branch-fleet3949-{_uuid4()}"
     try:
-        # The time-skipping server rejects cancellation when the activity
-        # completes in the same workflow task (temporalio/sdk-java#2391).
-        # Keep that real cancellation race covered against the dev server.
-        async with await WorkflowEnvironment.start_local() as env:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
             async with AsyncExitStack() as stack:
                 artifact_session = await stack.enter_async_context(sessions())
                 artifact_service = TemporalArtifactService(
@@ -340,6 +340,18 @@ async def _run_fleet3949(
                     assert any(
                         name == "mark_running" for name, *_rest in FLEET3949_CALLS
                     )
+                    if FLEET3949_HOLD_MARK_RUNNING is None:
+                        # Cancel the parent after its real persistence handoff.
+                        # Racing the test server's
+                        # activity completion can reject the cancel command
+                        # with ACTIVITY_UNKNOWN. The saturated-slot journey
+                        # retains cancellation while the handoff is pending.
+                        for _attempt in range(100):
+                            state = await handle.query("checkpoint_branch.turn.state")
+                            if state["phase"] == "running":
+                                break
+                            await asyncio.sleep(0.01)
+                        assert state["phase"] == "running", state
                     await handle.cancel()
                     with pytest.raises(WorkflowFailureError):
                         await handle.result()
