@@ -281,6 +281,11 @@ The Activity claims that key and original attempt window, rereads the PR to veri
 
 Without an active request, merge and fix-only may allow the first resolver to decide whether review is needed; review-only always requests fresh review. With an active request, only that request's result opens it: same current head, trusted provider identity, completion after requestedAt, matching review commit where supplied, and reaction on the exact request comment or the qualified unchanged-head after-request fallback. Historical results are not fallback evidence.
 
+A restored active request without a valid requestedAt must recover that time
+from its exact request comment before selecting any superseding request. An
+absent or invalid exact comment leaves the evidence unavailable; an older
+request or clean reply cannot supply freshness for the current head.
+
 A changed head invalidates the pending request. Merge and fix-only use the governed head-update/re-entry path; review-only blocks with stale_revision and preserves its pinned head. Record per-cycle provider/head, request key/comment/time, completion identity/kind/time, and outcome. Never reuse another cycle's evidence merely because it is recent.
 
 An active request owns the unchanged head until review completion. CI failures,
@@ -310,12 +315,19 @@ portable Skill read provider replies through the same
 `pr_resolver_core.review_providers` helper: a reply is either the registered
 clean result or a refusal whose opening line carries one of the provider's
 registered failure markers. Status tables, task replies, and findings stay
-non-authoritative. When the latest authoritative response is a refusal and no
-submitted review or clean reaction completes the request, the gate blocks with
+non-authoritative. When the latest authoritative response is a refusal, reaction
+collection is available, and no submitted review or clean reaction completes
+the request, the gate blocks with
 non-retryable `automated_review_request_failed`. The Skill's snapshot reports
 `requestFailed` and `requestFailure` instead of `requestPending`, and it
 classifies `automated_review_request_failed` as `manual_review`, ahead of
 remediation, rather than waiting. A newer request supersedes the refusal.
+Unavailable reaction pages take precedence over a refusal when no qualified
+alternative completion exists. Permission denial keeps its policy diagnostic;
+rate limits and transport/server outages remain retryable evidence failures.
+Malformed or incomplete pages never establish an empty reaction inventory.
+If either unavailable reaction endpoint can recover, polling remains retryable
+and retains the other endpoint's diagnostic.
 Once that head has a completed review, review-only finishes even with findings.
 Merge and fix-only also require no remaining blockers before finishing according
 to their finishMode. Completion does not request another review for the same head.
@@ -323,6 +335,13 @@ to their finishMode. Completion does not request another review for the same hea
 ### 11.3.5 No-progress and termination rules
 
 The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable or provider-refused review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
+
+Externally posted superseding requests consume the same maxCycles budget as
+gate-posted requests. Exhaustion blocks before adopting the new request or
+attributing its completion to the previous cycle. Retained workflow histories
+keep their recorded interpretation through an observation-scoped Temporal
+patch. A previously adopted request may finish after upgrade without consuming
+another cycle; a fresh superseding request still checks the existing bound.
 
 A no-op fix pass is successful only when the latest required review covers the current head and no actionable comments remain. Merge finish continues until merged/already-merged plus required tracker effects. Fix-only finishes at verified review-clean without merge. Neither changes its finish mode at runtime to make a gate green.
 
