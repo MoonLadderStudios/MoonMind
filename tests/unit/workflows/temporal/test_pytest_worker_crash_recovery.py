@@ -207,6 +207,7 @@ def _run_fixture(
                     ):
                         active_owned.append(pid)
                 except FileNotFoundError:
+                    # An exited owned server needs no further cleanup.
                     pass
         assert (
             not active_owned
@@ -285,3 +286,22 @@ def test_completed_files_do_not_leave_replacement_waiting_for_empty_work(
         record["servers"] and record["result"] == record["case"] for record in records
     )
     assert len({record["worker"] for record in records}) == 1
+
+
+def test_replacement_starts_single_test_files_while_more_work_is_queued(
+    tmp_path: Path,
+) -> None:
+    """The larger crash file runs before the single-test files under loadfile."""
+    result, records = _run_fixture(tmp_path, PENDING, completed_files=3)
+    assert result.returncode == 1, result.stdout
+    assert "1 failed, 6 passed" in result.stdout
+    assert len(records) == 7, result.stdout
+    assert {record["case"] for record in records} == {
+        "control",
+        "prelude-0",
+        "prelude-1",
+        "prelude-2",
+        "before",
+        "crash",
+        "pending",
+    }

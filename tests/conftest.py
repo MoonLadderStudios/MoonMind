@@ -269,6 +269,21 @@ def pytest_xdist_make_scheduler(config, log):
     from xdist.scheduler.loadfile import LoadFileScheduling
 
     class _CrashFinalizingLoadFileScheduling(LoadFileScheduling):
+        """Compatibility repair for the pinned xdist 3.8.0 private state.
+
+        Remove when a released dependency passes the crash-recovery subprocess
+        cases with its native scheduler; see BackendTestSelection.md.
+        """
+
+        def schedule(self):
+            restarting = self.collection is not None
+            super().schedule()
+            if restarting:
+                # Match upstream #1328: a replacement needs a next item (or
+                # shutdown) before it can execute its first queued test.
+                for node in self.nodes:
+                    self._reschedule(node)
+
         def remove_node(self, node):
             # pytest-xdist 3.8.0 LoadScopeScheduling.remove_node, with the
             # selected crash item completed before native requeue/reschedule.
