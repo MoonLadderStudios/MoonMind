@@ -190,7 +190,9 @@ Required counts are `total`, `pending`, `executing`, `completed`, and `failed`. 
 
 Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, `mm_target_skill`, and `mm_provider_profile`.
 
-`mm_provider_profile` (Text) and the memo `providerProfile` identity entries are the recorded Provider Profile projection written at admission and updated when a launch resolves a pending selection ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). The memo retains every distinct recorded association for facet discovery; facet continuation retains overflow values before advancing the workflow page. Older truncated memo coverage stays explicitly truncated. List rows expose the bounded `providerProfile` summary (`selectionState`, up to eight `{id, label, harness}` entries, `profileCount`); it never carries credentials, OAuth paths, raw provider payloads, or host/container handles.
+`mm_provider_profile` (Text) and the memo `providerProfile` identity entries are the recorded Provider Profile projection written at admission and updated when a launch resolves a pending selection ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). The memo retains every distinct recorded association for facet discovery; facet continuation retains overflow values before advancing the workflow page and deduplicates stable IDs across workflow pages. Older truncated memo coverage stays explicitly truncated through all continuation pages. List rows expose the bounded `providerProfile` summary (`selectionState`, up to eight `{id, label, harness}` entries, `profileCount`); it never carries credentials, OAuth paths, raw provider payloads, or host/container handles.
+
+`providerProfileIdIn` and `providerProfileIdNotIn` are repeated exact-ID query parameters; decoded commas, quotes, and other ID characters are literal. The legacy `providerProfileIn` and `providerProfileNotIn` CSV parameters retain their existing shared-URL/saved-view meaning and union with the corresponding exact-ID sets. Conflicting intersections are rejected, while distinct included and excluded IDs may coexist. New controls use the exact-ID parameters.
 
 Runtime/Skill facets are authoritative only after the namespace registers their `KeywordList` types. Before registration, dependent queries degrade without sending invalid Visibility queries. Unknown values are omitted rather than blank. These fields are filters, not sortable scalar strings.
 
@@ -303,7 +305,7 @@ Domain create validation uses 422 `invalid_execution_request`, with field-addres
 | --- | --- |
 | workflowType, state, ownerType, ownerId, entry, repo, integration | Optional filters |
 | targetRuntime / targetRuntimeIn | Legacy registered canonical runtime facet; never a Provider Profile alias |
-| providerProfileIn / providerProfileNotIn / providerProfileStateIn / providerProfileStateNotIn / providerProfileBlank | Recorded Provider Profile ID/state membership ([Workflows List §12.1](../UI/WorkflowsListPage.md#121-canonical-filter-encoding)); applied before count and pagination |
+| providerProfileIdIn / providerProfileIdNotIn / providerProfileIn / providerProfileNotIn / providerProfileStateIn / providerProfileStateNotIn / providerProfileBlank | Recorded Provider Profile ID/state membership ([Workflows List §12.1](../UI/WorkflowsListPage.md#121-canonical-filter-encoding)); applied before count and pagination |
 | targetSkillIn | Registered primary Skill facet |
 | pageSize | Default 50; range 1–200 |
 | nextPageToken | Opaque continuation token |

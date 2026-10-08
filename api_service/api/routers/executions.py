@@ -478,6 +478,8 @@ _optional_temporal_search_attributes_cache: dict[
 ] = {}
 _PROVIDER_PROFILE_FILTER_ALIASES = frozenset(
     {
+        "providerProfileIdIn",
+        "providerProfileIdNotIn",
         "providerProfileIn",
         "providerProfileNotIn",
         "providerProfileStateIn",
@@ -2552,14 +2554,17 @@ def _escape_temporal_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _split_temporal_values(raw: str | list[str] | None, *, alias: str) -> list[str]:
+def _split_temporal_values(
+    raw: str | list[str] | None, *, alias: str, split_csv: bool = True
+) -> list[str]:
     if not raw:
         return []
     parts = raw if isinstance(raw, list) else [raw]
     seen: set[str] = set()
     values: list[str] = []
     for item in parts:
-        for part in str(item or "").split(","):
+        components = str(item or "").split(",") if split_csv else [str(item or "")]
+        for part in components:
             value = part.strip()
             if not value or value in seen:
                 continue
@@ -3173,8 +3178,18 @@ def _append_provider_profile_temporal_filter(
     def values(alias: str) -> list[str]:
         return [] if excluded(alias) else _raw_query_values(request, alias, None)
 
-    include_ids = values("providerProfileIn")
-    exclude_ids = values("providerProfileNotIn")
+    def profile_ids(legacy_alias: str, exact_alias: str) -> list[str]:
+        # Retained CSV URLs keep their original meaning. Repeated exact-ID
+        # parameters preserve arbitrary ID contents, including commas/quotes.
+        exact = (
+            [] if excluded(exact_alias) else request.query_params.getlist(exact_alias)
+        )
+        return _split_temporal_values(
+            [*values(legacy_alias), *exact], alias=exact_alias, split_csv=False
+        )
+
+    include_ids = profile_ids("providerProfileIn", "providerProfileIdIn")
+    exclude_ids = profile_ids("providerProfileNotIn", "providerProfileIdNotIn")
     include_states = values("providerProfileStateIn")
     exclude_states = values("providerProfileStateNotIn")
     blank_raw = (
@@ -3543,19 +3558,31 @@ async def _provider_profile_facet_response(
     # Visibility cursor; never discard the remaining associations.
     workflow_token = None
     offset = 0
+    seen_tokens: set[str] = set()
+    incomplete = False
     if next_page_token:
         try:
             cursor = json.loads(_decode_execution_facet_page_token(next_page_token))
             workflow_token = _decode_execution_facet_page_token(cursor["workflowPage"])
             offset = cursor["offset"]
+            seen = cursor.get("seen", [])
+            incomplete = cursor.get("incomplete", False)
             if (
                 cursor["version"] != 1
                 or cursor["pageSize"] != page_size
                 or isinstance(offset, bool)
                 or not isinstance(offset, int)
                 or offset < 0
+                or not isinstance(incomplete, bool)
+                or not isinstance(seen, list)
+                or any(
+                    not isinstance(token, str)
+                    or not re.fullmatch(r"ppid[0-9a-f]{40}", token)
+                    for token in seen
+                )
             ):
                 raise ValueError("invalid cursor")
+            seen_tokens = set(seen)
         except (KeyError, TypeError, ValueError) as exc:
             raise TemporalExecutionValidationError(
                 "nextPageToken must be a valid Provider Profile facet page token "
@@ -3568,7 +3595,6 @@ async def _provider_profile_facet_response(
     )
     await iterator.fetch_next_page()
     labels: dict[str, str] = {}
-    incomplete = False
     needle = (search_value or "").lower()
     for workflow in iterator.current_page or []:
         recorded = provider_profile_associations_from_memo(
@@ -3580,8 +3606,10 @@ async def _provider_profile_facet_response(
         for profile in recorded["profiles"]:
             profile_id = profile["id"]
             label = profile.get("label") or profile_id
-            if profile_id in labels or (
-                needle and needle not in f"{label} {profile_id}".lower()
+            if (
+                provider_profile_id_token(profile_id) in seen_tokens
+                or profile_id in labels
+                or (needle and needle not in f"{label} {profile_id}".lower())
             ):
                 continue
             labels[profile_id] = label
@@ -3603,6 +3631,11 @@ async def _provider_profile_facet_response(
     else:
         next_offset = 0
         next_workflow_token = iterator.next_page_token
+        # Only completed workflow pages contribute to this set. The offset
+        # still applies to the current page's stable, not-yet-emitted entries.
+        seen_tokens.update(
+            provider_profile_id_token(profile_id) for profile_id in labels
+        )
     continuation = None
     if next_offset or next_workflow_token:
         continuation = base64.b64encode(
@@ -3616,6 +3649,8 @@ async def _provider_profile_facet_response(
                     ),
                     "offset": next_offset,
                     "pageSize": page_size,
+                    "seen": sorted(seen_tokens),
+                    "incomplete": incomplete,
                 },
                 separators=(",", ":"),
             ).encode("utf-8")
@@ -15271,6 +15306,16 @@ async def list_executions(
     # Recorded Provider Profile filters (#4640). The shared query builder reads
     # them from the request so repeated parameters and validation stay in one
     # owner; declaring them here publishes the typed API contract.
+    provider_profile_id_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdIn",
+        description="Repeat for each exact Provider Profile ID; commas are literal.",
+    ),
+    provider_profile_id_not_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdNotIn",
+        description="Repeat for each exact excluded Provider Profile ID; commas are literal.",
+    ),
     provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
     provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
     provider_profile_state_in: Optional[str] = Query(
@@ -15689,6 +15734,16 @@ async def get_execution_metrics(
     # Recorded Provider Profile filters (#4640). The shared query builder reads
     # them from the request so repeated parameters and validation stay in one
     # owner; declaring them here publishes the typed API contract.
+    provider_profile_id_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdIn",
+        description="Repeat for each exact Provider Profile ID; commas are literal.",
+    ),
+    provider_profile_id_not_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdNotIn",
+        description="Repeat for each exact excluded Provider Profile ID; commas are literal.",
+    ),
     provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
     provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
     provider_profile_state_in: Optional[str] = Query(
@@ -15955,6 +16010,16 @@ async def list_execution_facets(
     # Recorded Provider Profile filters (#4640). The shared query builder reads
     # them from the request so repeated parameters and validation stay in one
     # owner; declaring them here publishes the typed API contract.
+    provider_profile_id_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdIn",
+        description="Repeat for each exact Provider Profile ID; commas are literal.",
+    ),
+    provider_profile_id_not_in: Optional[list[str]] = Query(
+        None,
+        alias="providerProfileIdNotIn",
+        description="Repeat for each exact excluded Provider Profile ID; commas are literal.",
+    ),
     provider_profile_in: Optional[str] = Query(None, alias="providerProfileIn"),
     provider_profile_not_in: Optional[str] = Query(None, alias="providerProfileNotIn"),
     provider_profile_state_in: Optional[str] = Query(
@@ -15976,7 +16041,9 @@ async def list_execution_facets(
     finished_blank: Optional[str] = Query(None, alias="finishedBlank"),
     scope: Optional[str] = Query(None, alias="scope"),
     search: Optional[str] = Query(None, alias="search"),
-    page_size: int = Query(50, alias="pageSize", ge=1, le=_EXECUTION_FACET_PAGE_SIZE_LIMIT),
+    page_size: int = Query(
+        50, alias="pageSize", ge=1, le=_EXECUTION_FACET_PAGE_SIZE_LIMIT
+    ),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     source: Optional[str] = Query(None),
     user: User = Depends(get_current_user()),

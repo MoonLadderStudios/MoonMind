@@ -39,6 +39,8 @@ const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'repoExact',
   'repo',
   'integration',
+  'providerProfileIdIn',
+  'providerProfileIdNotIn',
   'providerProfileIn',
   'providerProfileNotIn',
   'providerProfileStateIn',
