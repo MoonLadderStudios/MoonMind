@@ -31,6 +31,7 @@ from pr_resolver_core.code_hosts import (  # noqa: E402
 )
 from pr_resolver_core.review_providers import (  # noqa: E402
     is_low_severity_only_finding,
+    is_review_request_comment,
     latest_review_reply,
     latest_review_request,
     resolve_automated_review_provider,
@@ -828,8 +829,12 @@ def build_automated_review_evidence(
             pr_repo=pr_repo, head_sha=normalized_head
         )
 
-    request = latest_review_request(
-        record, comments, head_sha=normalized_head, not_before=head_committed_at
+    request = (
+        latest_review_request(
+            record, comments, head_sha=normalized_head, not_before=head_committed_at
+        )
+        if head_committed_at is not None
+        else None
     )
     request_comment = request.comment if request is not None else None
     request_at = request.created_at if request is not None else None
@@ -882,6 +887,18 @@ def build_automated_review_evidence(
         completion_kind = "review"
         completion_id = fresh_review.get("id")
         completed_at = str(fresh_review.get("submitted_at") or "").strip() or None
+
+    if head_committed_at is None and (
+        fresh_review is None
+        or any(
+            is_review_request_comment(record, comment)
+            and str(comment.get("commit_id") or "").strip() in {"", normalized_head}
+            for comment in comments
+        )
+    ):
+        raise RuntimeError(
+            "Current head commit timestamp is unavailable; comment/reaction evidence cannot be bound to this head"
+        )
 
     reply = None
     if fresh_review is None and request_comment is not None:
@@ -1700,17 +1717,62 @@ def main():
         comments=comments,
     )
     if automated_review.get("freshReviewForHead") is True:
-        # GitHub publishes the review summary and inline findings separately.
-        # Fetch the full inventory after observing completion, so a snapshot
-        # collected while the review was running cannot authorize a clean exit.
-        comments_data = run_command(
-            comments_cmd, "Failed to retrieve completed review comments."
+        # Recollect after completion and reclassify that inventory. A newer
+        # request/completion gets its own refresh; changing evidence is bounded
+        # instead of authorizing a stale clean snapshot.
+        completion_keys = (
+            "requestCommentId",
+            "requestedAt",
+            "completionKind",
+            "completionId",
+            "completedAt",
         )
-        comments = (
-            comments_data.get("comments", []) if isinstance(comments_data, dict) else []
-        )
-        if not isinstance(comments, list):
-            comments = []
+        for _refresh_attempt in range(3):
+            previous_completion = tuple(
+                automated_review.get(key) for key in completion_keys
+            )
+            comments_data = run_command(
+                comments_cmd, "Failed to retrieve completed review comments."
+            )
+            comments = (
+                comments_data.get("comments")
+                if isinstance(comments_data, dict)
+                else None
+            )
+            if not isinstance(comments, list):
+                comments = []
+                automated_review = {
+                    **automated_review,
+                    "freshReviewForHead": False,
+                    "requestPending": False,
+                    "requestFailed": False,
+                    "requestFailure": None,
+                    "completionKind": None,
+                    "completionId": None,
+                    "completedAt": None,
+                    "reason": "review_inventory_unavailable",
+                }
+                break
+            automated_review = build_automated_review_evidence(
+                provider=args.review_provider,
+                require_fresh_review=bool(args.require_fresh_review),
+                pr_repo=pr_repo,
+                pr_number=pr_data.get("number"),
+                head_sha=head_sha,
+                comments=comments,
+            )
+            if (
+                not automated_review.get("freshReviewForHead")
+                or tuple(automated_review.get(key) for key in completion_keys)
+                == previous_completion
+            ):
+                break
+        else:
+            print(
+                "Review evidence changed repeatedly during collection; refresh the snapshot.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         # Comments/reactions have no reviewed commit. Revalidate the remote
         # head after completion and inventory collection before publishing them.
         completed_pr, _, _ = fetch_pr_data(args.pr)

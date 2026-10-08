@@ -124,6 +124,12 @@ MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
 MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX = (
     "merge-automation-missing-ci-wait-v1:"
 )
+MERGE_AUTOMATION_REVIEW_ADOPTION_GUARD_PATCH_PREFIX = (
+    "merge-automation-review-adoption-guard-v1:"
+)
+MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH = (
+    "merge-automation-restored-review-identity-v1"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1713,6 +1719,90 @@ class MoonMindMergeAutomationWorkflow:
         await self._write_review_cycle_artifact(cycle)
         return None
 
+    def _active_review_cycle_matches(self, *, allow_missing_time: bool = False) -> bool:
+        active = self._active_review_request
+        cycle = self._review_cycles[-1] if self._review_cycles else None
+        if (
+            not active
+            or not cycle
+            or any(
+                active.get(key) != cycle.get(key)
+                for key in ("provider", "headSha", "requestKey", "requestCommentId")
+            )
+        ):
+            return False
+        active_at = _parse_review_timestamp(active.get("requestedAt"))
+        cycle_at = _parse_review_timestamp(cycle.get("requestedAt"))
+        return active_at == cycle_at or (
+            allow_missing_time and (active_at is None or cycle_at is None)
+        )
+
+    def _review_adoption_blocker(
+        self, evaluation: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """Enforce existing request/cycle identity and budget on new observations."""
+        active = self._active_review_request
+        observation = evaluation.get("readinessObservationId")
+        selected = evaluation.get("automatedReviewRequestCommentId")
+        if (
+            not active
+            or not isinstance(observation, str)
+            or not observation.strip()
+            or selected is None
+            or evaluation.get("headSha") != active.get("headSha")
+            or evaluation.get("automatedReviewRequestStale") is True
+        ):
+            return None
+        observation_key = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+        if not workflow.patched(
+            MERGE_AUTOMATION_REVIEW_ADOPTION_GUARD_PATCH_PREFIX + observation_key
+        ):
+            return None
+        if self._review_cycles and not self._active_review_cycle_matches(
+            allow_missing_time=True
+        ):
+            return {
+                "kind": "automated_review_request_failed",
+                "summary": "The active review request does not match its retained cycle identity.",
+                "retryable": False,
+                "source": "policy",
+            }
+        active_at = _parse_review_timestamp(active.get("requestedAt"))
+        selected_at = _parse_review_timestamp(
+            evaluation.get("automatedReviewRequestedAt")
+        )
+        cycle_at = (
+            _parse_review_timestamp(self._review_cycles[-1].get("requestedAt"))
+            if self._review_cycles
+            else None
+        )
+        if (
+            selected == active.get("requestCommentId")
+            and selected_at is not None
+            and any(
+                retained is not None and retained != selected_at
+                for retained in (active_at, cycle_at)
+            )
+        ):
+            return {
+                "kind": "automated_review_request_failed",
+                "summary": "The observed request timestamp conflicts with its retained identity.",
+                "retryable": False,
+                "source": "policy",
+            }
+        cycle_count = max(1, len(self._review_cycles))
+        max_cycles = self._review_loop_config().max_cycles
+        if cycle_count > max_cycles or (
+            selected != active.get("requestCommentId") and cycle_count >= max_cycles
+        ):
+            return {
+                "kind": "review_cycle_budget_exhausted",
+                "summary": "The configured review cycle budget is exhausted; a superseding external request cannot be adopted.",
+                "retryable": False,
+                "source": "policy",
+            }
+        return None
+
     def _reconcile_selected_review_request(self, evaluation: Mapping[str, Any]) -> None:
         """Retain a superseding provider request before settling its result.
 
@@ -1731,7 +1821,6 @@ class MoonMindMergeAutomationWorkflow:
             or not isinstance(selected_id, int)
             or isinstance(selected_id, bool)
             or selected_id <= 0
-            or selected_id == active.get("requestCommentId")
             or _parse_review_timestamp(selected_at) is None
             or evaluation.get("headSha") != active.get("headSha")
             or evaluation.get("automatedReviewRequestStale") is True
@@ -1745,6 +1834,16 @@ class MoonMindMergeAutomationWorkflow:
         if not workflow.patched(
             MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_PATCH_PREFIX + observation_key
         ):
+            return
+        if selected_id == active.get("requestCommentId"):
+            if _parse_review_timestamp(active.get("requestedAt")) is None:
+                active["requestedAt"] = selected_at
+            if (
+                self._review_cycles
+                and _parse_review_timestamp(self._review_cycles[-1].get("requestedAt"))
+                is None
+            ):
+                self._review_cycles[-1]["requestedAt"] = selected_at
             return
         if not self._review_cycles:
             self._review_cycles.append({"cycle": 1, **active, "status": "requested"})
@@ -1771,11 +1870,14 @@ class MoonMindMergeAutomationWorkflow:
         )
         self._active_review_request = selected
 
-    def _settle_active_review_request(self, evaluation: Any) -> None:
+    def _settle_active_review_request(self, evaluation: Any) -> dict[str, Any] | None:
         """Bind an observed review result (or staleness) to the active request."""
 
         if not self._active_review_request or not isinstance(evaluation, Mapping):
             return
+        adoption_blocker = self._review_adoption_blocker(evaluation)
+        if adoption_blocker is not None:
+            return adoption_blocker
         self._reconcile_selected_review_request(evaluation)
         cycle = self._review_cycles[-1] if self._review_cycles else None
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
@@ -1861,9 +1963,19 @@ class MoonMindMergeAutomationWorkflow:
                 # when CI fails or conflicts are actionable. Unknown cannot
                 # release a resolver while this request still owns the head.
                 evaluation = {**evaluation, "automatedReviewComplete": False}
-            self._settle_active_review_request(
+            adoption_blocker = self._settle_active_review_request(
                 evaluation if isinstance(evaluation, Mapping) else {}
             )
+            if adoption_blocker is not None:
+                evaluation = {
+                    **evaluation,
+                    "ready": False,
+                    "automatedReviewComplete": False,
+                    "automatedReviewCompletionKind": None,
+                    "automatedReviewCompletionId": None,
+                    "automatedReviewCompletedAt": None,
+                    "blockers": [*evaluation.get("blockers", []), adoption_blocker],
+                }
         evidence = classify_readiness(
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,
@@ -1872,7 +1984,9 @@ class MoonMindMergeAutomationWorkflow:
         )
         return evaluation, evidence
 
-    def _review_only_request_is_bound(self, request: Mapping[str, Any]) -> bool:
+    def _review_only_request_is_bound(
+        self, request: Mapping[str, Any], *, require_timestamp: bool = True
+    ) -> bool:
         expected_key = build_review_request_key(
             parent_workflow_id=self._resolver_parent_workflow_id(),
             repository=self._input.pull_request.repo,
@@ -1888,7 +2002,10 @@ class MoonMindMergeAutomationWorkflow:
             and isinstance(comment_id, int)
             and not isinstance(comment_id, bool)
             and comment_id > 0
-            and _parse_review_timestamp(request.get("requestedAt")) is not None
+            and (
+                not require_timestamp
+                or _parse_review_timestamp(request.get("requestedAt")) is not None
+            )
         )
 
     async def _run_review_only(self, *, expire_at: datetime | None) -> dict[str, Any]:
@@ -1900,10 +2017,19 @@ class MoonMindMergeAutomationWorkflow:
                 blocker_kind="policy_denied",
             )
         if self._active_review_request and (
-            not self._review_only_request_is_bound(self._active_review_request)
+            not self._review_only_request_is_bound(
+                self._active_review_request,
+                require_timestamp=not workflow.patched(
+                    MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH
+                ),
+            )
             or not self._review_cycles
             or self._review_cycles[-1].get("requestKey")
             != self._active_review_request.get("requestKey")
+            or (
+                workflow.patched(MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH)
+                and not self._active_review_cycle_matches(allow_missing_time=True)
+            )
         ):
             return await self._blocked_review_summary(
                 summary="The restored review request is not bound to this owning gate.",
