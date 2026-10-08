@@ -1383,7 +1383,7 @@ h1 {
   box-shadow: var(--mm-elevation-panel);
 }
 
-.workflow-list-header-cell:nth-last-child(-n + 2) .workflow-list-column-filter-popover {
+.workflow-list-header-cell:nth-last-child(-n + 3) .workflow-list-column-filter-popover {
   left: auto;
   right: 0;
 }
@@ -2681,9 +2681,9 @@ tbody tr:hover {
   overflow: visible;
 }
 
-/* The table also inherits overflow: hidden, which clips the menu in Firefox. */
+/* The table also inherits overflow: hidden, which clips menus in Firefox. */
 .workflow-list-data-slab .queue-table-wrapper table:has(
-  .td-workflow-actions-popover
+  .td-workflow-actions-popover, .workflow-list-column-filter-popover
 ) {
   overflow: visible;
 }
@@ -2777,8 +2777,13 @@ tbody tr:hover {
   width: 18%;
 }
 
-.queue-table-column-runtime {
-  width: 10%;
+.queue-table-column-provider-profile {
+  width: 12%;
+}
+
+/* Long or equal-name recorded Provider Profiles wrap inside the column. */
+.queue-table-cell-provider-profile {
+  overflow-wrap: anywhere;
 }
 
 .queue-table-column-repository {

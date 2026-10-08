@@ -8444,9 +8444,11 @@ export interface components {
              * Facet
              * @enum {string}
              */
-            facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+            facet: "status" | "providerProfile" | "targetRuntime" | "targetSkill" | "repository" | "integration";
             /** Items */
             items?: components["schemas"]["ExecutionFacetItemModel"][];
+            /** Stateitems */
+            stateItems?: components["schemas"]["ExecutionFacetItemModel"][] | null;
             /** Blankcount */
             blankCount?: number | null;
             /**
@@ -8557,6 +8559,7 @@ export interface components {
             attentionRequired: boolean;
             /** Targetruntime */
             targetRuntime?: string | null;
+            providerProfile?: components["schemas"]["ExecutionProviderProfileSummaryModel"] | null;
             /** Targetskill */
             targetSkill?: string | null;
             /** Taskskills */
@@ -9265,6 +9268,41 @@ export interface components {
             remediation?: string | null;
             /** Cause */
             cause?: string | null;
+        };
+        /**
+         * ExecutionProviderProfileItemModel
+         * @description One recorded Provider Profile association in a list row.
+         */
+        ExecutionProviderProfileItemModel: {
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /** Harness */
+            harness?: string | null;
+        };
+        /**
+         * ExecutionProviderProfileSummaryModel
+         * @description Bounded recorded Provider Profile summary for list rows (#4640).
+         *
+         *     ``selectionState`` is ``recorded`` whenever any applicable ID is recorded;
+         *     the absence states apply only when none is. It carries stable IDs, a
+         *     display-name snapshot, and optional Harness only: never credentials, OAuth
+         *     paths, raw provider payloads, or host/container handles.
+         */
+        ExecutionProviderProfileSummaryModel: {
+            /**
+             * Selectionstate
+             * @enum {string}
+             */
+            selectionState: "recorded" | "pending" | "not_recorded" | "not_applicable";
+            /** Profiles */
+            profiles?: components["schemas"]["ExecutionProviderProfileItemModel"][];
+            /**
+             * Profilecount
+             * @default 0
+             */
+            profileCount: number;
         };
         /**
          * ExecutionRecurrenceProvenanceModel
@@ -18416,6 +18454,15 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
+                providerProfileIn?: string | null;
+                providerProfileNotIn?: string | null;
+                providerProfileStateIn?: string | null;
+                providerProfileStateNotIn?: string | null;
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
@@ -18520,6 +18567,15 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
+                providerProfileIn?: string | null;
+                providerProfileNotIn?: string | null;
+                providerProfileStateIn?: string | null;
+                providerProfileStateNotIn?: string | null;
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
@@ -18563,7 +18619,7 @@ export interface operations {
     list_execution_facets_api_executions_facets_get: {
         parameters: {
             query: {
-                facet: "status" | "targetRuntime" | "targetSkill" | "repository" | "integration";
+                facet: "status" | "providerProfile" | "targetRuntime" | "targetSkill" | "repository" | "integration";
                 workflowType?: string | null;
                 ownerType?: string | null;
                 state?: string | null;
@@ -18581,6 +18637,15 @@ export interface operations {
                 targetRuntimeNotIn?: string | null;
                 targetSkillIn?: string | null;
                 targetSkillNotIn?: string | null;
+                /** @description Repeat for each exact Provider Profile ID; commas are literal. */
+                providerProfileIdIn?: string[] | null;
+                /** @description Repeat for each exact excluded Provider Profile ID; commas are literal. */
+                providerProfileIdNotIn?: string[] | null;
+                providerProfileIn?: string | null;
+                providerProfileNotIn?: string | null;
+                providerProfileStateIn?: string | null;
+                providerProfileStateNotIn?: string | null;
+                providerProfileBlank?: string | null;
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;

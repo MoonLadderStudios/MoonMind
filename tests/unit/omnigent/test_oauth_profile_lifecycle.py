@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import hashlib
 import io
 import json
@@ -122,7 +123,11 @@ from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     EGRESS_CONFIG_DIGEST,
+    EGRESS_FILE_DIGESTS,
+    EGRESS_NETWORK_REF,
+    EGRESS_PROFILE_SET_DIGEST,
     ENFORCER_IMPLEMENTATION,
     OMNIGENT_EGRESS_PROFILE,
     EgressAttestation,
@@ -1686,9 +1691,38 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unchanged",
+        "gateway_image",
+        "pending_gateway_image",
+        "live_config",
+        "profileDigest",
+        "configDigest",
+        "backendRef",
+        "enforcerImplementation",
+        "networkRef",
+        "gatewayRef",
+        "host_label",
+        "host_image",
+        "host_network",
+        "endpointIdentity",
+        "missing_authority",
+        "missing_evidence_ref",
+        "terminal_authority",
+        "config_during_prepare",
+        "server_image",
+        "server_image_without_publisher",
+        "pending_probe_failure",
+        "pending_bind_failure",
+        "recreated_host",
+    ],
+)
 async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     tmp_path,
     monkeypatch,
+    mutation,
 ) -> None:
     payload = b"---\nname: pr-resolver\ndescription: test\n---\n"
     content_ref = "art-skill-pr-resolver"
@@ -1748,9 +1782,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     runtime._prepare_runtime_scripts = MagicMock(  # type: ignore[method-assign]
         return_value=tmp_path / "runtime-scripts"
     )
-    runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
-        return_value=_egress_attestation()
-    )
     runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
         return_value={
             "serverAttachmentIdentity": "omnigent-server-1",
@@ -1761,9 +1792,6 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="mm-host-lease-1"
-    )
-    runtime._attest_launched_workload_egress = AsyncMock(  # type: ignore[method-assign]
-        return_value=_egress_attestation().model_dump(by_alias=True, mode="json")
     )
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_host_runtime.daemon_visible_workspace_path",
@@ -1776,19 +1804,66 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "mount_fd": None,
         "launches": 0,
         "manifest_checks": 0,
+        "gateway_image": "sha256:" + "b" * 64,
+        "live_config": True,
+        "host_labels": {},
+        "host_image": None,
+        "host_network": OMNIGENT_EGRESS_PROFILE.network_ref,
     }
 
     async def run(*args, **_kwargs):
+        if args[:3] == ("docker", "network", "inspect"):
+            return 0, json.dumps({"Internal": True, "EnableIPv6": False}), ""
         if args[:2] == ("docker", "ps"):
             return (0, "", "")  # No initializer survived the previous launch.
         if args[:3] == ("docker", "inspect", "--format"):
             template = args[3]
-            if template == "{{.State.Running}}":
+            if args[-1] == OMNIGENT_EGRESS_PROFILE.gateway_ref:
                 return (
-                    (0, "true\n", "")
-                    if state["running"]
-                    else (1, "", "not found")
+                    0,
+                    json.dumps(
+                        {
+                            "labels": {
+                                "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                                "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                                "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                            },
+                            "networks": {
+                                name: {}
+                                for name in (
+                                    EGRESS_NETWORK_REF,
+                                    "moonmind_sandbox-egress-network",
+                                    OMNIGENT_EGRESS_PROFILE.network_ref,
+                                    CONTROL_PLANE_NETWORK_REF,
+                                )
+                            },
+                            "image": state["gateway_image"],
+                            "health": "healthy",
+                        }
+                    ),
+                    "",
                 )
+            if '"imageRef"' in template:
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "labels": state["host_labels"],
+                            "networks": {
+                                state["host_network"]: {
+                                    "NetworkID": "network-id",
+                                    "EndpointID": "endpoint-id",
+                                    "IPAddress": "172.31.0.7",
+                                }
+                            },
+                            "imageRef": state["host_image"],
+                            "image": "sha256:" + "c" * 64,
+                        }
+                    ),
+                    "",
+                )
+            if template == "{{.State.Running}}":
+                return (0, "true\n", "") if state["running"] else (1, "", "not found")
             if "moonmind.host_lease_id" in template:
                 return (
                     (0, "host-lease-1\n", "")
@@ -1796,7 +1871,20 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                     else (1, "", "not found")
                 )
         if args[:4] == ("docker", "image", "inspect", "--format"):
+            if args[4] == "{{json .Architecture}}":
+                return 0, '"amd64"', ""
             return (0, "PATH=/usr/local/bin:/usr/bin:/bin\n", "")
+        if args[:3] == ("docker", "exec", OMNIGENT_EGRESS_PROFILE.gateway_ref):
+            if args[3] == "sha256sum":
+                return (
+                    0,
+                    "".join(
+                        f"{EGRESS_FILE_DIGESTS[path.rsplit('/', 1)[-1]].removeprefix('sha256:') if state['live_config'] else '0' * 64}  {path}\n"
+                        for path in args[4:]
+                    ),
+                    "",
+                )
+            return 0, "", ""
         if args[:3] == ("docker", "run", "-d"):
             mount_specs = [
                 args[index + 1]
@@ -1804,8 +1892,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                 if value == "--mount"
             ]
             skill_mount = next(
-                value for value in mount_specs
-                if "dst=/opt/moonmind-skills" in value
+                value for value in mount_specs if "dst=/opt/moonmind-skills" in value
             )
             source = next(
                 field.removeprefix("src=")
@@ -1815,6 +1902,12 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             state["mount_source"] = source
             state["running"] = True
             state["launches"] += 1
+            state["host_labels"] = dict(
+                args[index + 1].split("=", 1)
+                for index, value in enumerate(args[:-1])
+                if value == "--label"
+            )
+            state["host_image"] = launch["hostImageRef"]
             return (0, "container-id\n", "")
         if args[:3] == ("docker", "run", "--rm"):
             return (0, "", "")
@@ -1858,24 +1951,27 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
             "effective_launch_snapshot": launch,
         }
     )
-    lease = _host_lease().model_copy(
-        update={"container_name": "mm-host-lease-1"}
-    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
     artifact_service = ArtifactService()
 
     class CleanupAuthorityStore:
         def __init__(self) -> None:
             self.authority = None
             self.bind_calls: list[dict] = []
+            self.fail_attested_bind = False
 
         async def get_egress_cleanup_authority(self, **_kwargs):
             return self.authority
 
         async def bind_egress_cleanup_authority(self, **kwargs):
-            self.bind_calls.append(kwargs)
+            self.bind_calls.append(copy.deepcopy(kwargs))
+            if self.fail_attested_bind and kwargs["phase"] == "attested":
+                raise OmnigentOAuthHostError(
+                    "test durable bind rejected", code="test_bind_failure"
+                )
             self.authority = {
                 "effectiveLaunch": launch,
-                "egressEvidence": kwargs["egress_evidence"],
+                "egressEvidence": copy.deepcopy(kwargs["egress_evidence"]),
                 "launchEvidenceRef": kwargs["launch_evidence_ref"],
                 "phase": kwargs["phase"],
             }
@@ -1896,34 +1992,166 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     }
 
     first = await runtime.prepare_host(**request)
+    original_authority = copy.deepcopy(cleanup_authority_store.authority)
+    state["gateway_image"] = "sha256:" + "d" * 64
+    if mutation == "unchanged":
+        state["gateway_image"] = "sha256:" + "b" * 64
+    elif mutation == "live_config":
+        state["live_config"] = False
+    elif mutation == "config_during_prepare":
+
+        async def prepare_workspace(**_kwargs):
+            state["live_config"] = False
+            return workspace
+
+        runtime._prepare_workspace = prepare_workspace  # type: ignore[method-assign]
+    elif mutation in {"server_image", "server_image_without_publisher"}:
+        runtime._attest_server_image.return_value["serverImageDigest"] = (
+            "sha256:" + "0" * 64
+        )
+        if mutation == "server_image_without_publisher":
+            request["evidence_request"] = None
+    elif mutation == "host_label":
+        state["host_labels"]["moonmind.egress.applied_rule_digest"] = (
+            "sha256:" + "0" * 64
+        )
+    elif mutation == "host_image":
+        state["host_image"] = "image@sha256:" + "0" * 64
+    elif mutation == "host_network":
+        state["host_network"] = "unapproved-network"
+    elif mutation == "missing_authority":
+        cleanup_authority_store.authority = None
+    elif mutation == "missing_evidence_ref":
+        cleanup_authority_store.authority["launchEvidenceRef"] = ""
+    elif mutation == "terminal_authority":
+        cleanup_authority_store.authority["phase"] = "terminal"
+    elif mutation in {
+        "pending_gateway_image",
+        "pending_probe_failure",
+        "pending_bind_failure",
+    }:
+        pending = cleanup_authority_store.bind_calls[0]
+        cleanup_authority_store.authority = {
+            "effectiveLaunch": launch,
+            "egressEvidence": copy.deepcopy(pending["egress_evidence"]),
+            "launchEvidenceRef": pending["launch_evidence_ref"],
+            "phase": "launched",
+        }
+        if mutation == "pending_probe_failure":
+            runtime._exec_tools_check = AsyncMock(side_effect=OmnigentOAuthHostError("test post-attestation probe rejected", code="test_probe_failure"))  # type: ignore[method-assign]
+        if mutation == "pending_bind_failure":
+            cleanup_authority_store.fail_attested_bind = True
+    elif mutation == "recreated_host":
+        state["running"] = False
+    elif mutation != "gateway_image":
+        cleanup_authority_store.authority["egressEvidence"][
+            mutation
+        ] = "changed-authority"
+    if mutation not in {"unchanged", "gateway_image", "pending_gateway_image"}:
+        retained_authority = copy.deepcopy(cleanup_authority_store.authority)
+        with pytest.raises(OmnigentOAuthHostError) as caught:
+            await runtime.prepare_host(**request)
+        assert state["launches"] == (2 if mutation == "recreated_host" else 1)
+        assert state["manifest_checks"] == (
+            2 if mutation == "pending_probe_failure" else 1
+        )
+        if mutation == "pending_probe_failure":
+            retained_authority = cleanup_authority_store.authority
+            assert retained_authority["phase"] == "attested"
+        expected_code = (
+            "test_probe_failure"
+            if mutation == "pending_probe_failure"
+            else (
+                "test_bind_failure"
+                if mutation == "pending_bind_failure"
+                else (
+                    "OMNIGENT_LAUNCH_EGRESS_UNATTESTED"
+                    if mutation
+                    in {
+                        "live_config",
+                        "config_during_prepare",
+                        "host_label",
+                        "host_image",
+                        "host_network",
+                    }
+                    else (
+                        "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID"
+                        if mutation
+                        in {
+                            "missing_authority",
+                            "missing_evidence_ref",
+                            "terminal_authority",
+                        }
+                        else "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH"
+                    )
+                )
+            )
+        )
+        assert caught.value.code == expected_code
+        assert len(cleanup_authority_store.bind_calls) == (
+            3 if mutation in {"pending_probe_failure", "pending_bind_failure"} else 2
+        )
+        if mutation == "recreated_host":
+            assert (
+                state["host_labels"]["moonmind.egress.applied_rule_digest"]
+                != original_authority["egressEvidence"]["appliedRuleDigest"]
+            )
+        if retained_authority is not None:
+            assert cleanup_authority_store.authority == retained_authority
+            if mutation not in {
+                "live_config",
+                "missing_evidence_ref",
+                "terminal_authority",
+                "recreated_host",
+            }:
+                assert (
+                    caught.value.prepared_host_evidence["egressAttestation"]
+                    == retained_authority["egressEvidence"]
+                )
+                assert (
+                    caught.value.prepared_host_evidence["egressEvidenceRef"]
+                    == retained_authority["launchEvidenceRef"]
+                )
+        return
     mount_source = state["mount_source"]
     assert isinstance(mount_source, str)
     mount_fd = os.open(mount_source, os.O_RDONLY | os.O_DIRECTORY)
     try:
         state["mount_fd"] = mount_fd
         retry = await runtime.prepare_host(**request)
+        again = await runtime.prepare_host(**request)
     finally:
         os.close(mount_fd)
 
     assert first["activeSkillsPath"] == retry["activeSkillsPath"]
-    assert first["egressAttestation"]["serverImageDigest"] == (
-        "sha256:" + "9" * 64
-    )
+    assert first["egressAttestation"]["serverImageDigest"] == ("sha256:" + "9" * 64)
     assert first["egressAttestation"]["serverArchitecture"] == "amd64"
     assert first["egressEvidenceRef"].startswith("artifact://")
     assert retry["egressEvidenceRef"] == first["egressEvidenceRef"]
-    assert [call["phase"] for call in cleanup_authority_store.bind_calls] == [
-        "launched",
-        "attested",
-    ]
+    if mutation != "pending_gateway_image":
+        assert cleanup_authority_store.authority == original_authority
+    assert again["egressEvidenceRef"] == retry["egressEvidenceRef"]
+    assert (
+        retry["egressAttestation"]["appliedRuleDigest"]
+        == first["egressAttestation"]["appliedRuleDigest"]
+    )
+    live = await runtime._attest_egress(launch)
+    if mutation in {"gateway_image", "pending_gateway_image"}:
+        assert (
+            live.applied_rule_digest != first["egressAttestation"]["appliedRuleDigest"]
+        )
+    assert [call["phase"] for call in cleanup_authority_store.bind_calls] == (
+        ["launched", "attested", "attested"]
+        if mutation == "pending_gateway_image"
+        else ["launched", "attested"]
+    )
     cleanup_call = cleanup_authority_store.bind_calls[0]
     assert cleanup_call["host_lease_ref"] == lease.lease_id
-    assert cleanup_call["launch_evidence_ref"].endswith(
-        "egress-launch-pending.json"
+    assert cleanup_call["launch_evidence_ref"].endswith("egress-launch-pending.json")
+    assert (
+        cleanup_authority_store.bind_calls[1]["launch_evidence_ref"]
+        == first["egressEvidenceRef"]
     )
-    assert cleanup_authority_store.bind_calls[1]["launch_evidence_ref"] == first[
-        "egressEvidenceRef"
-    ]
     runtime_profile_environment = runtime._prepare_runtime_scripts.call_args.kwargs[
         "runtime_environment"
     ]
@@ -1933,7 +2161,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_profile_environment
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in runtime_profile_environment
     assert state["launches"] == 1
-    assert state["manifest_checks"] == 2
+    assert state["manifest_checks"] == 3
 
 
 @pytest.mark.asyncio

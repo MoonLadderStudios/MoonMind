@@ -37,6 +37,7 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
+from api_service.services.provider_profile_projection import provider_profile_label_snapshot
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
     resolve_launch_target_profile_selection,
@@ -55,6 +56,11 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.runtime_target_selection import (
     AuthoringSurface,
     resolve_runtime_target_selection,
+)
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_MEMO_KEY,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    build_provider_profile_projection,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -632,6 +638,36 @@ class RecurringWorkflowsService:
             "mm_owner_id": str(owner_user_id),
         }
 
+    async def _workflow_start_metadata(
+        self,
+        *,
+        definition_id: UUID,
+        owner_user_id: UUID | None,
+        workflow_input: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Project the admitted schedule input through the normal list owner.
+
+        Temporal starts occurrences directly from this action, bypassing
+        create_execution. Keep memo and membership together on every action
+        writer so launch-resolved selections can extend the same projection.
+        """
+
+        parameters = workflow_input.get("initial_parameters") or {}
+        summary, search_value = build_provider_profile_projection(
+            parameters,
+            labels=await provider_profile_label_snapshot(self._session, parameters),
+        )
+        return {
+            "memo": {
+                "definitionId": str(definition_id),
+                PROVIDER_PROFILE_MEMO_KEY: summary,
+            },
+            "search_attributes": {
+                **self._owner_search_attributes(owner_user_id),
+                PROVIDER_PROFILE_SEARCH_ATTRIBUTE: search_value,
+            },
+        }
+
     def _expected_task_queue(self, workflow_type: str) -> str | None:
         resolver = getattr(self._adapter, "resolve_workflow_task_queue", None)
         if not callable(resolver):
@@ -667,8 +703,20 @@ class RecurringWorkflowsService:
         temporal_task_queue = _object_value(action, "task_queue", "taskQueue")
         expected_task_queue = self._expected_task_queue(workflow_type)
         expected_workflow_id_base = make_scheduled_workflow_id_base(definition_id)
+        memo = _object_value(action, "memo") or {}
+        typed_attributes = _object_value(action, "typed_search_attributes") or []
+        has_profile_projection = (
+            isinstance(memo, Mapping)
+            and PROVIDER_PROFILE_MEMO_KEY in memo
+            and any(
+                getattr(getattr(pair, "key", None), "name", None)
+                == PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+                for pair in typed_attributes
+            )
+        )
         return (
-            temporal_workflow_type != workflow_type
+            not has_profile_projection
+            or temporal_workflow_type != workflow_type
             or temporal_workflow_id_base != expected_workflow_id_base
             or temporal_input != workflow_input
             or (
@@ -713,9 +761,10 @@ class RecurringWorkflowsService:
             definition_id=definition.id,
             workflow_type=workflow_type,
             workflow_input=workflow_input,
-            memo={"definitionId": str(definition.id)},
-            search_attributes=self._owner_search_attributes(
-                definition.owner_user_id
+            **await self._workflow_start_metadata(
+                definition_id=definition.id,
+                owner_user_id=definition.owner_user_id,
+                workflow_input=workflow_input,
             ),
         )
 
@@ -1648,8 +1697,11 @@ class RecurringWorkflowsService:
                 note=name_text,
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
-                memo={"definitionId": str(definition_id)},
-                search_attributes=self._owner_search_attributes(owner_user_id),
+                **await self._workflow_start_metadata(
+                    definition_id=definition_id,
+                    owner_user_id=owner_user_id,
+                    workflow_input=workflow_input,
+                ),
             )
         except Exception as exc:
             logger.error(f"Failed to create temporal schedule for {definition_id}: {exc}")
@@ -1865,9 +1917,10 @@ class RecurringWorkflowsService:
                 note=name if name is not None else None,
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
-                memo={"definitionId": str(definition.id)},
-                search_attributes=self._owner_search_attributes(
-                    definition.owner_user_id
+                **await self._workflow_start_metadata(
+                    definition_id=definition.id,
+                    owner_user_id=definition.owner_user_id,
+                    workflow_input=workflow_input,
                 ),
             )
         except Exception as exc:
@@ -2101,8 +2154,11 @@ class RecurringWorkflowsService:
                 note=dfn.name or "",
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
-                memo={"definitionId": str(dfn.id)},
-                search_attributes=self._owner_search_attributes(dfn.owner_user_id),
+                **await self._workflow_start_metadata(
+                    definition_id=dfn.id,
+                    owner_user_id=dfn.owner_user_id,
+                    workflow_input=workflow_input,
+                ),
             )
         except ScheduleAlreadyExistsError:
             await self._adapter.update_schedule(
@@ -2116,8 +2172,11 @@ class RecurringWorkflowsService:
                 note=dfn.name or "",
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
-                memo={"definitionId": str(dfn.id)},
-                search_attributes=self._owner_search_attributes(dfn.owner_user_id),
+                **await self._workflow_start_metadata(
+                    definition_id=dfn.id,
+                    owner_user_id=dfn.owner_user_id,
+                    workflow_input=workflow_input,
+                ),
             )
 
     async def reconcile_schedules(self, limit: int = 100) -> int:
@@ -2253,14 +2312,15 @@ class RecurringWorkflowsService:
                         note=note,
                         workflow_type=workflow_type if action_mismatch else None,
                         workflow_input=workflow_input if action_mismatch else None,
-                        memo={"definitionId": str(dfn.id)}
-                        if action_mismatch
-                        else None,
-                        search_attributes=self._owner_search_attributes(
-                            dfn.owner_user_id
-                        )
-                        if action_mismatch
-                        else None,
+                        **(
+                            await self._workflow_start_metadata(
+                                definition_id=dfn.id,
+                                owner_user_id=dfn.owner_user_id,
+                                workflow_input=workflow_input,
+                            )
+                            if action_mismatch
+                            else {}
+                        ),
                     )
                     reconciled += 1
 
