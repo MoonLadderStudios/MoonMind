@@ -2326,56 +2326,19 @@ class GitHubService:
                             review_request=review_request,
                             observed_head_sha=observed_head_sha,
                         )
-                        if review_evidence["complete"] is True:
-                            try:
-                                verified = await client.get(
-                                    f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
-                                    headers=headers,
-                                )
-                                verified.raise_for_status()
-                                current = verified.json()
-                                if (
-                                    not isinstance(current, dict)
-                                    or not isinstance(current.get("head"), dict)
-                                    or not current["head"].get("sha")
-                                ):
-                                    raise TypeError(
-                                        "GitHub pull request head is unavailable"
-                                    )
-                                if (
-                                    current["head"]["sha"] != observed_head_sha
-                                    or current.get("state") != "open"
-                                    or current.get("merged") is True
-                                ):
-                                    review_evidence = {
-                                        **review_evidence,
-                                        "complete": False,
-                                        "stale": True,
-                                        "blockers": [
-                                            {
-                                                "kind": "automated_review_pending",
-                                                "summary": "Pull request changed during review evidence collection.",
-                                                "retryable": True,
-                                                "source": "github",
-                                            }
-                                        ],
-                                    }
-                            except (httpx.HTTPError, TypeError, ValueError) as exc:
-                                review_evidence = {
-                                    **review_evidence,
-                                    "complete": None,
-                                    "blockers": [
-                                        self._review_evidence_read_failure(
-                                            exc, source="pull_request"
-                                        )
-                                    ],
-                                }
-                            if review_evidence["complete"] is not True:
-                                review_evidence.update(
-                                    completionKind=None,
-                                    completionId=None,
-                                    completedAt=None,
-                                )
+                        if review_evidence["complete"] is True or any(
+                            item.get("kind") == "automated_review_request_failed"
+                            for item in review_evidence["blockers"]
+                        ):
+                            review_evidence = await self._revalidate_requested_review(
+                                client=client,
+                                repo=repo,
+                                pr_number=pr_number,
+                                headers=headers,
+                                provider=review_request.get("provider"),
+                                observed_head_sha=observed_head_sha,
+                                evidence=review_evidence,
+                            )
                         automated_review_complete = review_evidence["complete"]
                         automated_review_request_comment_id = review_evidence.get(
                             "requestCommentId"
@@ -2709,6 +2672,125 @@ class GitHubService:
             "summary": " ".join(dict.fromkeys(item["summary"] for item in blockers)),
         }
 
+    async def _revalidate_requested_review(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        repo: str,
+        pr_number: int,
+        headers: dict[str, str],
+        provider: Any,
+        observed_head_sha: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Accept a result only while its request and open PR still agree."""
+
+        invalidated = {
+            **evidence,
+            "completionKind": None,
+            "completionId": None,
+            "completedAt": None,
+        }
+        source = "request_comments"
+        try:
+            comments = await self._fetch_request_review_comments(
+                client=client, repo=repo, pr_number=pr_number, headers=headers
+            )
+            record = automated_review_provider_or_raise(provider)
+            selected = latest_review_request(
+                record,
+                [
+                    {
+                        "id": evidence.get("requestCommentId"),
+                        "body": record.command,
+                        "created_at": evidence.get("requestedAt"),
+                    },
+                    *comments,
+                ],
+                head_sha=observed_head_sha,
+                not_before=_parse_github_timestamp(evidence.get("requestedAt")),
+            )
+            if selected is None:
+                raise ValueError("The selected review request is unavailable")
+            source = "pull_request"
+            response = await client.get(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            current = response.json()
+            if (
+                not isinstance(current, dict)
+                or not isinstance(current.get("head"), dict)
+                or not current["head"].get("sha")
+                or current.get("state") not in {"open", "closed"}
+            ):
+                raise TypeError("GitHub pull request head or state is unavailable")
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            return {
+                **invalidated,
+                "complete": None,
+                "blockers": [self._review_evidence_read_failure(exc, source=source)],
+            }
+        stale = (
+            current["head"]["sha"] != observed_head_sha
+            or current["state"] != "open"
+            or current.get("merged") is True
+        )
+        superseded = str(selected.comment.get("id")) != str(
+            evidence.get("requestCommentId")
+        ) or selected.created_at != _parse_github_timestamp(evidence.get("requestedAt"))
+        refused = any(
+            item.get("kind") == "automated_review_request_failed"
+            for item in evidence["blockers"]
+        )
+        reply_changed = False
+        if refused or evidence.get("completionKind") == "issue_comment":
+            reply = latest_review_reply(
+                record,
+                comments,
+                requested_at=selected.created_at,
+                head_sha=observed_head_sha,
+                request_comment_id=selected.comment.get("id"),
+            )
+            reply_changed = (
+                reply is None
+                or str(reply.comment.get("id"))
+                != str(evidence.get("failureCommentId" if refused else "completionId"))
+                or bool(reply.failure_class) != refused
+            )
+        if not stale and not superseded and not reply_changed:
+            return evidence
+        return {
+            **invalidated,
+            **(
+                {
+                    "requestCommentId": selected.comment.get("id"),
+                    "requestedAt": selected.comment.get("created_at"),
+                }
+                if not stale
+                else {}
+            ),
+            "complete": False,
+            "stale": stale,
+            "blockers": [
+                {
+                    "kind": "automated_review_pending",
+                    "summary": (
+                        "Pull request changed during review evidence collection."
+                        if stale
+                        else (
+                            "A newer review request requires a fresh observation."
+                            if superseded
+                            else "The provider reply changed during evidence collection."
+                        )
+                    ),
+                    "retryable": True,
+                    "source": "github",
+                }
+            ],
+        }
+
     async def _evaluate_requested_review(
         self,
         *,
@@ -2981,6 +3063,7 @@ class GitHubService:
             return {
                 **pending,
                 "complete": None,
+                "failureCommentId": reply.comment.get("id"),
                 "blockers": [
                     {
                         "kind": "automated_review_request_failed",

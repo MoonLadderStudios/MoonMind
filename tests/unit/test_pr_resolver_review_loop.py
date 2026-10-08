@@ -1354,3 +1354,20 @@ def test_refreshed_inventory_rebinds_review_evidence(
     if new_result == "complete":
         assert len(reads) == 3
         assert result["commentsSummary"]["actionableCommentIds"] == [104]
+
+
+@pytest.mark.parametrize("comments", [[], [{"body": "Unrelated discussion"}]])
+def test_first_request_does_not_require_optional_head_timestamp(
+    snapshot_module, monkeypatch, comments
+):
+    build = snapshot_module["build_automated_review_evidence"]
+    monkeypatch.setitem(build.__globals__, "_fetch_head_commit_timestamp", lambda **kw: None)
+    evidence = _evidence(snapshot_module, head_committed_at=None, comments=comments)
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is False
+    assert evidence["requestFailed"] is False
+    assert evidence["requestCommentId"] is None
+    assert evidence["completionId"] is None
+
+    decision = classify_snapshot(normalize_portable_snapshot(_snapshot(automatedReview=evidence)))
+    assert decision.action is ResolverAction.REQUEST_REVIEW

@@ -417,6 +417,19 @@ async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
             ),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
@@ -571,6 +584,8 @@ async def test_requested_review_accepts_review_for_requested_commit(monkeypatch)
                 ],
             ),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
@@ -629,6 +644,8 @@ async def test_requested_review_follows_pagination_for_requested_commit(monkeypa
                     }
                 ],
             ),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
             _get(200, []),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
@@ -733,6 +750,26 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
             ),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            first_page,
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": (
+                            "You have reached your Codex usage limits for code "
+                            "reviews."
+                        ),
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {
+                            "login": "chatgpt-codex-connector[bot]",
+                            "type": "Bot",
+                        },
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -836,6 +873,8 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
                     }
                 ],
             ),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
@@ -1035,6 +1074,9 @@ async def test_requested_review_uses_latest_comment_across_pages(
             _get(200, [last]),
             _get(200, []),
             _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(200, [last]),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
@@ -1048,6 +1090,9 @@ async def test_requested_review_uses_latest_comment_across_pages(
         )
     assert (result.automated_review_complete is True) is latest_clean
     assert result.ready is latest_clean
+    assert [b["kind"] for b in result.blockers] == (
+        [] if latest_clean else ["automated_review_request_failed"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1169,6 +1214,18 @@ async def test_requested_review_fresh_clean_comment_completes_despite_reaction_d
             ),
             _get(403, {"message": "Resource not accessible by integration"}),
             _get(403, {"message": "Resource not accessible by integration"}),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
