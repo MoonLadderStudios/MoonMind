@@ -740,6 +740,9 @@ and the row's current refs name the open chunk. Activity retry restores the
 chunk history followed by the current pair, locates each restored event in its
 chunk, and continues in a new chunk. The terminal capture bundle publishes the
 complete journals, which then replace the chunk history as the canonical refs.
+Terminal event-index rows point to the complete normalized journal in the same
+transaction that publishes terminal status, so expired chunks can be reclaimed
+without invalidating the terminal payload locators.
 
 Current canonical refs, the chunk history of a non-terminal bridge session,
 operator pins and live artifact use claims remain protected; a non-terminal

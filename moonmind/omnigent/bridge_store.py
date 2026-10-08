@@ -2990,6 +2990,7 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            terminal_normalized_ref = None
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if row.omnigent_endpoint_ref == "embedded":
@@ -3008,6 +3009,7 @@ class OmnigentBridgeSessionStore:
                 # capture bundle instead of leaving them NULL for post-migration
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
                 canonical_refs = _canonical_ref_columns(safe_terminal_refs)
+                terminal_normalized_ref = canonical_refs.get("normalized_events_ref")
                 for column, value in canonical_refs.items():
                     setattr(row, column, value)
                 if {"raw_events_ref", "normalized_events_ref"} <= set(canonical_refs):
@@ -3036,11 +3038,28 @@ class OmnigentBridgeSessionStore:
                 for index, event in enumerate(events, start=1):
                     prepared = dict(event)
                     prepared["sequence"] = offset + index
+                    if terminal_normalized_ref:
+                        # The final journal contains every provider event. Its
+                        # locator must commit with terminal status, before old
+                        # chunks lose their active recovery protection.
+                        prepared["artifactRef"] = terminal_normalized_ref
                     provider_events.append(prepared)
                 for event_row in _build_event_rows(
                     row.bridge_session_id, provider_events
                 ):
                     session.add(event_row)
+            elif terminal_normalized_ref:
+                # Profile-bound cleanup publishes the same final journals
+                # without rebuilding the already committed provider index.
+                await session.execute(
+                    update(OmnigentBridgeSessionEvent)
+                    .where(
+                        OmnigentBridgeSessionEvent.bridge_session_id
+                        == row.bridge_session_id,
+                        OmnigentBridgeSessionEvent.direction != "moonmind_system",
+                    )
+                    .values(artifact_ref=terminal_normalized_ref)
+                )
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
@@ -3188,10 +3207,7 @@ class OmnigentBridgeSessionStore:
                 }
                 current = artifacts.get(current_id)
                 current_prefix = _journal_prefix(current) if current else None
-                if (
-                    current_prefix
-                    and current.status is TemporalArtifactStatus.COMPLETE
-                ):
+                if current_prefix and current.status is TemporalArtifactStatus.COMPLETE:
                     for event in prepared_events:
                         previous = artifacts.get(
                             _journal_artifact_id(event.get("artifactRef"))
