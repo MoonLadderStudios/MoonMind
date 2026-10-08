@@ -686,11 +686,10 @@ async def test_exact_images_run_the_required_concurrency_level(tmp_path) -> None
     publish_observed_overlap(ConcurrencyQualificationLayer.exact_docker, overlap)
 
 
-async def _credential_recovery_host_class(backend, client, image_ref):
+async def _credential_recovery_host_class(backend, image_ref):
     """Bind this recovery row to observed build/version and canonical harness identity."""
-    from api_service.services.omnigent_agent_profile_service import (
-        _synthetic_opencode_implementation,
-    )
+    import json
+
     from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
 
     _, build_digest, _ = await backend.run(
@@ -713,7 +712,10 @@ async def _credential_recovery_host_class(backend, client, image_ref):
             image_ref,
         ]
     )
-    _, version, _ = await backend.run(
+    # The server's picker catalog omits native wrappers. Observe the installed
+    # registry in the exact host image instead; a deployment overlay cannot
+    # establish that this image actually contains the selected harness.
+    _, installed, _ = await backend.run(
         [
             "docker",
             "run",
@@ -724,32 +726,34 @@ async def _credential_recovery_host_class(backend, client, image_ref):
             "/opt/venv/bin/python",
             image_ref,
             "-c",
-            "from importlib.metadata import version; print(version('omnigent'))",
+            (
+                "import json; from importlib.metadata import version; "
+                "from omnigent.harness_plugins import valid_harnesses, harness_capabilities; "
+                f"harness_id = {HARNESS_ID!r}; "
+                "capabilities = harness_capabilities().get(harness_id); "
+                "row = {'id': harness_id, 'capabilities': capabilities.as_dict()} "
+                "if harness_id in valid_harnesses() and capabilities is not None else None; "
+                "print(json.dumps({'version': version('omnigent'), 'harness': row}))"
+            ),
         ]
     )
-    raw = next(
-        (row for row in await client.list_harnesses() if row.get("id") == HARNESS_ID),
-        None,
+    observed = json.loads(installed)
+    raw = observed["harness"]
+    assert raw is not None, "installed recovery harness is unavailable"
+    version = observed["version"].strip()
+    harness = _normalize_harness(
+        raw,
+        omnigent_version=version,
+        omnigent_build_digest=build_digest.strip(),
     )
-    if raw is None:
-        # The upstream picker catalog omits native wrappers, so production
-        # publishes OpenCode through the deployment catalog overlay under its
-        # stable synthetic identity. Bind the same identity here.
-        implementation = _synthetic_opencode_implementation()
-    else:
-        implementation = _normalize_harness(
-            raw,
-            omnigent_version=version.strip(),
-            omnigent_build_digest=build_digest.strip(),
-        ).implementation
     payload = _host_class(image_ref).model_dump(mode="json", by_alias=True)
     payload.update(
-        omnigentVersion=version.strip(),
+        omnigentVersion=version,
         omnigentBuildDigest=build_digest.strip(),
         architectures=[architecture.strip()],
     )
     payload["declaredHarnessImplementations"][0]["implementationRef"] = (
-        implementation.implementation_ref()
+        harness.implementation.implementation_ref()
     )
     return HostClass.model_validate(payload)
 
@@ -943,7 +947,7 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
     )
     try:
         await backend.run(["docker", "pull", image_ref])
-        host_class = await _credential_recovery_host_class(backend, client, image_ref)
+        host_class = await _credential_recovery_host_class(backend, image_ref)
         agents = await client.list_agents()
         agent = next(
             (item for item in agents if item.get("name") == "opencode-native-ui"), None

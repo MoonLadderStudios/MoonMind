@@ -28,7 +28,8 @@ TEST_FILE = "test_exact_docker_n_way_concurrency.py"
 RECEIPT = "credential-recovery-exact-docker.json"
 JUNIT = "credential-recovery-junit.xml"
 POSTGRES_IMAGE = "postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60"
-READINESS_SCRIPT = """import os
+READINESS_SCRIPT = """import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -37,14 +38,19 @@ request = urllib.request.Request(
     'http://omnigent:8000/v1/agents',
     headers={'Authorization': 'Bearer ' + os.environ['OMNIGENT_API_TOKEN']},
 )
+# Exercise the same internal control listener used by the actual host. Set
+# the request proxy explicitly so an inherited NO_PROXY cannot bypass it.
+request.set_proxy('omnigent-egress-proxy:3129', 'http')
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 deadline = time.monotonic() + 180
 while time.monotonic() < deadline:
     try:
         with opener.open(request, timeout=2) as response:
-            if response.status == 200:
+            payload = json.loads(response.read(1024 * 1024))
+            if (response.status == 200 and isinstance(payload, dict)
+                    and isinstance(payload.get('data'), list)):
                 break
-    except (OSError, urllib.error.URLError):
+    except (OSError, urllib.error.URLError, ValueError):
         pass
     time.sleep(2)
 else:
@@ -159,25 +165,53 @@ def validate_evidence(root, *, source_commit, host_image_ref, host_image_id):
     return row
 
 
+def _junit_failure(root):
+    """Return the failing row's own message and traceback tail, if recorded."""
+    try:
+        cases = ET.parse(root / JUNIT).getroot().findall(".//testcase")
+    except (OSError, ET.ParseError):
+        return ""
+    for case in cases:
+        for kind in ("failure", "error"):
+            found = case.find(kind)
+            if found is not None:
+                message = found.get("message", "").strip()
+                trace = (found.text or "").strip()[-2000:]
+                return "\n".join(part for part in (message, trace) if part)
+    return ""
+
+
 def run_test(command, root, **identity):
     # A previous run, including a previously green receipt, cannot satisfy this
     # invocation if prerequisites fail or pytest reports a skip with exit zero.
     for name in (RECEIPT, JUNIT):
         (root / name).unlink(missing_ok=True)
     result = subprocess.run(command, check=False, timeout=600)
-    _require(
-        result.returncode == 0, f"recovery pytest failed (exit {result.returncode})"
-    )
+    if result.returncode:
+        failure = _junit_failure(root)
+        raise RecoveryError(
+            f"recovery pytest failed (exit {result.returncode})"
+            + (f": {failure}" if failure else "")
+        )
     return validate_evidence(root, **identity)
 
 
-def compose_document(source, repo_root, server_image):
+def _annotation(text):
+    """Escape a GitHub Actions workflow-command message."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def compose_document(source, repo_root, server_image, *, moonmind_image):
     """Reuse canonical init/registration commands, replacing deployment wiring."""
-    names = ("postgres", "omnigent-db-init", "omnigent-agent-init", "omnigent")
+    names = (
+        "postgres", "omnigent-db-init", "omnigent-agent-init", "omnigent",
+        "sandbox-egress-proxy",
+    )
     services = {name: copy.deepcopy(source["services"][name]) for name in names}
     for service in services.values():
         service.pop("env_file", None)
         service.pop("profiles", None)
+        service.pop("container_name", None)
         service["networks"] = ["test"]
         service["restart"] = "no"
     services["postgres"].update(
@@ -228,6 +262,16 @@ def compose_document(source, repo_root, server_image):
         # readiness probe and actual recovery driver use this same network.
         ports=[],
         volumes=["omnigent-data:/data"],
+    )
+    # Reuse the candidate's baked policy and canonical proxy entrypoint. The
+    # fixture has only an internal network, so even allowlisted external
+    # destinations have no route; package-registry access is also disabled.
+    services["sandbox-egress-proxy"].update(
+        image=moonmind_image,
+        environment={"MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED": "false"},
+        networks={"test": {"aliases": ["omnigent-egress-proxy"]}},
+        ports=[],
+        volumes=[],
     )
     return {
         "services": services,
@@ -457,6 +501,7 @@ def main(argv=None):
             yaml.safe_load((root / "docker-compose.yaml").read_text()),
             root,
             args.server_image,
+            moonmind_image=app["Id"],
         )
         (work / "compose.json").write_text(json.dumps(document, indent=2) + "\n")
         (work / "driver").mkdir(exist_ok=True)
@@ -464,16 +509,18 @@ def main(argv=None):
             root / "tests/integration/omnigent" / TEST_FILE,
             work / "driver" / TEST_FILE,
         )
-        _command([*compose, "up", "-d", "omnigent"])
-        server_container = _command([*compose, "ps", "-q", "omnigent"]).stdout.strip()
-        server_actual = json.loads(
-            _command(["docker", "inspect", server_container]).stdout
-        )[0]
-        _require(
-            server_actual["Image"] == images["server"]["id"],
-            "running server differs from the built artifact",
-        )
-        identity["serverContainerId"] = server_actual["Id"]
+        _command([*compose, "up", "-d", "omnigent", "sandbox-egress-proxy"])
+        for service, role, expected_image in (
+            ("omnigent", "server", images["server"]["id"]),
+            ("sandbox-egress-proxy", "proxy", app["Id"]),
+        ):
+            container = _command([*compose, "ps", "-q", service]).stdout.strip()
+            actual = json.loads(_command(["docker", "inspect", container]).stdout)[0]
+            _require(
+                actual["Image"] == expected_image,
+                f"running {role} differs from the built artifact",
+            )
+            identity[f"{role}ContainerId"] = actual["Id"]
         _command(readiness_command(image=app["Id"], network=network, token=token))
         command = test_command(
             image=app["Id"],
@@ -513,6 +560,14 @@ def main(argv=None):
             + "\n"
         )
         print(f"credential-free recovery {phase} failed: {detail}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # The check-run annotation keeps the cause readable where the
+            # Actions log and uploaded evidence are not.
+            print(
+                f"::error title=Credential-free recovery {phase} failed::"
+                + _annotation(detail),
+                flush=True,
+            )
         return 1
     finally:
         if shutil.which("docker"):
