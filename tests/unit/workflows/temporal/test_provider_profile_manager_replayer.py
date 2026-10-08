@@ -778,6 +778,9 @@ async def test_lease_cleanup_redrive_replays_with_outstanding_obligation() -> No
             assert assignment["profile_id"] == "test-default"
             # The live holder keeps its slot while the lease expires, so the
             # manager owes a cleanup redrive instead of a release.
+            # Event waits do not auto-skip Temporal time; advance the test
+            # server through the unchanged 60-second lease explicitly.
+            await env.sleep(timedelta(seconds=61))
             await asyncio.wait_for(activities.redriven.wait(), timeout=120)
             state = await manager.query("get_state")
             assert requester.id in state["cleanup_requested_leases"]

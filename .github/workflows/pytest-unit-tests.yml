@@ -1035,6 +1035,13 @@ jobs:
           "$journal_test_env/bin/python" -m pytest \
             --confcutdir=tests/integration/host_update \
             tests/integration/host_update/test_journal_transition.py -q
+      - name: Upload redacted journey startup timings
+        if: always() && endsWith(matrix.suite, '-journey')
+        uses: actions/upload-artifact@v7
+        with:
+          name: journey-startup-${{ matrix.suite }}
+          path: var/artifacts/first-run-3938/*/compose-startup-*.log
+          if-no-files-found: warn
       - name: Capture docker compose diagnostics
         if: failure()
         run: |

@@ -371,7 +371,27 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
         ):
-            candidate = await bootstrap_version_routing(client, spec(b))
+            routing_elapsed = 0.0
+
+            async def advance_route_death_clock(delay):
+                nonlocal routing_elapsed
+                if delay == release_routing._ROUTE_DEATH_POLL_SECONDS:
+                    routing_elapsed += float(delay)
+                    await asyncio.sleep(0)
+                else:
+                    await asyncio.sleep(delay)
+
+            # Keep poller ages and Temporal operations real; advance only
+            # this bootstrap's local route-death waiting clock.
+            with monkeypatch.context() as routing_clock:
+                routing_clock.setattr(
+                    release_routing, "_routing_sleep", advance_route_death_clock
+                )
+                routing_clock.setattr(
+                    release_routing, "_routing_monotonic", lambda: routing_elapsed
+                )
+                candidate = await bootstrap_version_routing(client, spec(b))
+            assert routing_elapsed >= release_routing._ROUTE_DEATH_TIMEOUT_SECONDS
             assert candidate["status"] == "awaiting_promotion"
             assert (
                 current_version(await routing_snapshot(client, deployment))
