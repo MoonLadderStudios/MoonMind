@@ -4282,6 +4282,36 @@ class ExecutionModel(BaseModel):
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
 
 
+class ExecutionProviderProfileItemModel(BaseModel):
+    """One recorded Provider Profile association in a list row."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    id: str = Field(..., alias="id", min_length=1, max_length=255)
+    label: Optional[str] = Field(None, alias="label", max_length=255)
+    harness: Optional[str] = Field(None, alias="harness", max_length=255)
+
+
+class ExecutionProviderProfileSummaryModel(BaseModel):
+    """Bounded recorded Provider Profile summary for list rows (#4640).
+
+    ``selectionState`` is ``recorded`` whenever any applicable ID is recorded;
+    the absence states apply only when none is. It carries stable IDs, a
+    display-name snapshot, and optional Harness only: never credentials, OAuth
+    paths, raw provider payloads, or host/container handles.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    selection_state: Literal[
+        "recorded", "pending", "not_recorded", "not_applicable"
+    ] = Field(..., alias="selectionState")
+    profiles: list[ExecutionProviderProfileItemModel] = Field(
+        default_factory=list, alias="profiles", max_length=8
+    )
+    profile_count: int = Field(0, alias="profileCount", ge=0)
+
+
 class ExecutionListItemModel(BaseModel):
     """Compact execution row returned by list APIs.
 
@@ -4333,6 +4363,9 @@ class ExecutionListItemModel(BaseModel):
     waiting_reason: Optional[str] = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    provider_profile: ExecutionProviderProfileSummaryModel | None = Field(
+        None, alias="providerProfile"
+    )
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     repository: Optional[str] = Field(None, alias="repository")
@@ -4478,12 +4511,18 @@ class ExecutionFacetResponse(BaseModel):
 
     facet: Literal[
         "status",
+        "providerProfile",
         "targetRuntime",
         "targetSkill",
         "repository",
         "integration",
     ] = Field(..., alias="facet")
     items: list[ExecutionFacetItemModel] = Field(default_factory=list, alias="items")
+    # Provider Profile absence states (pending, not_recorded, not_applicable),
+    # typed separately from profile-ID values and always listed with counts.
+    state_items: list[ExecutionFacetItemModel] | None = Field(
+        None, alias="stateItems"
+    )
     blank_count: int | None = Field(None, alias="blankCount")
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(
         "exact", alias="countMode"

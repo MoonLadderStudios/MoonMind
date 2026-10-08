@@ -1319,14 +1319,21 @@ class CheckpointBranchService:
     ) -> WorkflowCheckpointBranchTurn:
         """Record that the canonical AgentRun child is about to dispatch."""
 
-        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        turn = await self._require_turn_on_branch(
+        # Reuse finalization's branch-then-turn lock order and refresh any
+        # cached rows before checking terminal state. An unlocked read can
+        # race a terminal commit, then overwrite it when the UPDATE resumes.
+        branch, turn = await self.lock_turn_execution(
+            workflow_id=workflow_id,
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
-            relation="branchTurnId",
         )
         if turn.runtime_agent_run_id != runtime_agent_run_id:
             raise ValueError("branch turn Agent Run identity does not match claim")
+        if turn.completed_at is not None:
+            # A handoff delivered after terminal persistence (for example a
+            # retry stuck behind saturated artifacts-worker slots while the
+            # turn was canceled) must not reopen the turn or its branch.
+            return turn
         turn.status = CheckpointBranchTurnState.RUNNING.value
         turn.started_at = turn.started_at or datetime.now(UTC)
         turn.diagnostics = {

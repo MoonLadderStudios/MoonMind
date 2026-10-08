@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,19 +50,31 @@ class ContainerJobMcpClient:
         self,
         *,
         endpoint: str,
-        bearer_token: str | None = None,
+        bearer_token: str | Callable[[], str | None] | None = None,
         timeout_seconds: float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/") + "/tools/call"
-        headers = {"accept": "application/json"}
-        normalized_token = str(bearer_token or "").strip()
-        if normalized_token:
-            headers["authorization"] = f"Bearer {normalized_token}"
+        # A callable is read for every request so a capability renewed by the
+        # host while a long job runs replaces the launch-time token.
+        self._bearer_token = bearer_token
         self._client = httpx.Client(
             timeout=timeout_seconds,
             transport=transport,
-            headers=headers,
+            headers={"accept": "application/json"},
+        )
+
+    def _authorization_headers(self) -> dict[str, str]:
+        token = (
+            self._bearer_token()
+            if callable(self._bearer_token)
+            else self._bearer_token
+        )
+        normalized_token = str(token or "").strip()
+        return (
+            {"authorization": f"Bearer {normalized_token}"}
+            if normalized_token
+            else {}
         )
 
     def close(self) -> None:
@@ -75,6 +87,7 @@ class ContainerJobMcpClient:
                 response = self._client.post(
                     self._endpoint,
                     json={"tool": tool, "arguments": dict(arguments)},
+                    headers=self._authorization_headers(),
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -440,7 +453,7 @@ def run_container_job(
     owned_client = client is None
     active_client = client or ContainerJobMcpClient(
         endpoint=_mcp_endpoint(source),
-        bearer_token=_mcp_bearer_token(source),
+        bearer_token=lambda: _mcp_bearer_token(source),
     )
     try:
         accepted = active_client.call(

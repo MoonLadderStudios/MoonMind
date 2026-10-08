@@ -23,6 +23,7 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_target_runtime": "KeywordList",
     "mm_target_skill": "KeywordList",
     "mm_title": "KeywordList",
+    "mm_provider_profile": "Text",
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
     "mm_dependency_count": "Int",
@@ -41,6 +42,7 @@ LEGACY_SEARCH_ATTRIBUTES = {
         and key != "mm_has_dependencies"
         and key != "mm_started_at"
         and key != "mm_title"
+        and key != "mm_provider_profile"
         and key
         not in {
             "AgentRunId",
@@ -343,9 +345,10 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "mm_target_runtime" in result.stdout
     assert "mm_target_skill" in result.stdout
     assert "mm_title" in result.stdout
+    assert "mm_provider_profile" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 12
+    assert calls.count("search-attribute create") == 13
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():

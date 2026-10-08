@@ -90,6 +90,21 @@ def test_build_typed_search_attributes_encodes_single_title_token_as_keyword_lis
     assert typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_title")) is None
 
 
+def test_build_typed_search_attributes_encodes_provider_profile_as_text() -> None:
+    typed_search_attributes = _build_typed_search_attributes(
+        {"mm_provider_profile": ["ppstrecorded ppidabc"]}
+    )
+
+    assert typed_search_attributes is not None
+    assert typed_search_attributes.get(
+        SearchAttributeKey.for_text("mm_provider_profile")
+    ) == "ppstrecorded ppidabc"
+    assert (
+        typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_provider_profile"))
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # T010: create_schedule
 # ---------------------------------------------------------------------------

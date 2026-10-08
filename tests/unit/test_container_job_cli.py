@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from click import unstyle
@@ -294,9 +296,9 @@ def test_run_python_tests_passes_scoped_bearer_token_to_transport(
     captured: dict[str, str | None] = {}
     fake_client = _FakeClient(["succeeded"])
 
-    def client_factory(*, endpoint: str, bearer_token: str | None):
+    def client_factory(*, endpoint: str, bearer_token):
         captured["endpoint"] = endpoint
-        captured["bearer_token"] = bearer_token
+        captured["bearer_token"] = bearer_token()
         return fake_client
 
     monkeypatch.setattr(
@@ -325,9 +327,9 @@ def test_run_python_tests_reads_scoped_bearer_token_file(
     capability_file = tmp_path / "container-jobs"
     capability_file.write_text("scoped-file-token\n", encoding="utf-8")
 
-    def client_factory(*, endpoint: str, bearer_token: str | None):
+    def client_factory(*, endpoint: str, bearer_token):
         captured["endpoint"] = endpoint
-        captured["bearer_token"] = bearer_token
+        captured["bearer_token"] = bearer_token()
         return fake_client
 
     monkeypatch.setattr(
@@ -349,6 +351,53 @@ def test_run_python_tests_reads_scoped_bearer_token_file(
         "endpoint": "http://api:8000/mcp",
         "bearer_token": "scoped-file-token",
     }
+
+
+def test_running_job_uses_capability_renewed_after_submit(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job polled past a capability renewal authenticates with the new token."""
+
+    capability_file = tmp_path / "container-jobs"
+    capability_file.write_text("launch-token\n", encoding="utf-8")
+    authorizations: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tool = json.loads(request.content)["tool"]
+        authorizations.append((tool, request.headers["authorization"]))
+        if tool == "container.submit":
+            # The host renews its capability file while the job is running.
+            capability_file.write_text("renewed-token\n", encoding="utf-8")
+            return httpx.Response(
+                200, json={"result": {"jobId": "container-job:" + "1" * 32}}
+            )
+        if tool == "container.status":
+            return httpx.Response(200, json={"result": {"state": "succeeded"}})
+        return httpx.Response(200, json={"result": {"entries": []}})
+
+    real_client = ContainerJobMcpClient
+    monkeypatch.setattr(
+        "moonmind.container_job_cli.ContainerJobMcpClient",
+        lambda **kwargs: real_client(
+            **kwargs, transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    run_python_tests(
+        [],
+        env={
+            **_ENV,
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": str(capability_file),
+        },
+        poll_seconds=0.001,
+    )
+
+    assert authorizations[0] == ("container.submit", "Bearer launch-token")
+    assert len(authorizations) > 1
+    assert all(
+        header == "Bearer renewed-token" for _tool, header in authorizations[1:]
+    )
 
 
 def test_bearer_token_file_selector_fails_closed_when_empty(tmp_path) -> None:

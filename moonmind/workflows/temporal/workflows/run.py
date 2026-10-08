@@ -133,6 +133,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
     )
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        merge_resolved_provider_profile,
+    )
     from moonmind.workflows.executions.repository_contract import (
         repository_branch_from_value,
         repository_name_from_value,
@@ -956,6 +961,14 @@ RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
 RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH = (
     "run-verifier-remediation-stop-authority-v1"
 )
+# A verifier that declares NO_DETERMINATION with an explicit
+# ``reattempt_current_step`` is asking for its own rerun: the controlling
+# evidence is obtainable by a fresh verifier runtime even though it is not
+# recoverable in the current one (for example an expired container-job
+# capability). Retained histories keep their recorded control-gate stop.
+RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH = (
+    "run-verifier-explicit-evidence-rerun-v1"
+)
 # The dynamic controller replaces its durable decision while processing the
 # current verifier result. Re-read the blocking projection after that update so
 # a passing verdict cannot inherit the prior attempt's blocking reason. Keep
@@ -1103,6 +1116,11 @@ RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
 # Existing histories retain requests without this optional no-commit authority.
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
     "run-accepted-publication-head-handoff-v1"
+)
+# Histories that already handed off an accepted head omitted its authored base.
+# Preserve those request payloads even when the older head marker is present.
+RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH = (
+    "run-accepted-publication-base-handoff-v1"
 )
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
@@ -1316,6 +1334,13 @@ class GateTransitionDecision:
 # memo command require a reset/versioning cutover; see
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
+# MoonLadderStudios/MoonMind#4640: fold the Provider Profile a managed launch
+# actually used into the admitted list projection. Histories recorded before
+# this patch never upserted it, so the new memo/Search Attribute commands are
+# gated for replay.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
+    "run-launch-provider-profile-projection-v1"
+)
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -1339,6 +1364,9 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+# Preserve resolved authored data in instructions-only AgentRun requests without
+# changing the child command payload recorded by pre-patch histories.
+RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH = "run-agent-step-inputs-handoff-v1"
 RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-validation-v1"
 # PR #4557 review: deriving a stable container-job idempotency key changes the
 # submit activity arguments. Replay-gate the derivation so in-flight histories
@@ -1781,6 +1809,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Temporal's workflow start_time / execution_time, which fire as soon
         # as Temporal schedules the workflow even if it is awaiting a slot.
         self._started_at: datetime | None = None
+        # Admitted recorded Provider Profile projection (memo summary, Search
+        # Attribute value), seeded on first launch-resolved profile (#4640).
+        self._provider_profile_projection: tuple[Any, str | None] | None = None
 
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
@@ -8550,6 +8581,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 return GateTransitionDecision(
                     "retry", "retry_current_verifier", "recoverable_no_determination"
                 )
+            if next_action == "reattempt_current_step" and (
+                self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH
+                )
+            ):
+                return GateTransitionDecision(
+                    "retry",
+                    "retry_current_verifier",
+                    "verifier_requested_evidence_rerun",
+                )
             return GateTransitionDecision(
                 "accept", "stop_at_control_gate", "unrecoverable_no_determination"
             )
@@ -9767,6 +9808,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "request ready for review."
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _gate_transition_admits_evidence_rerun(
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Only a verifier gate may rerun itself to collect missing evidence.
+
+        The transition owns the verifier-role check and the replay patch, so a
+        reviewed implementation step never repeats its paid work this way.
+        """
+        return transition.reason_code == "verifier_requested_evidence_rerun"
 
     @staticmethod
     def _gate_transition_allows_review_retry(
@@ -14357,6 +14409,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         ),
                         honor_explicit_stop=workflow.patched(
                             RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                        ),
+                        honor_explicit_evidence_rerun=(
+                            self._gate_transition_admits_evidence_rerun(transition)
                         ),
                     ):
                         review_retry_count += 1
@@ -21972,6 +22027,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "branch": accepted_head[0],
                     "headSha": accepted_head[1],
                 }
+                # The base recorded with the head lets a later step extend its
+                # own candidate instead of publishing a PR stacked on it.
+                accepted_base = self._accepted_published_base_branch()
+                if (
+                    accepted_base
+                    and accepted_base != accepted_head[0]
+                    and self._workflow_patch_enabled(
+                        RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH
+                    )
+                ):
+                    parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )
@@ -22852,6 +22918,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or node_inputs.get("instructionRef")
         )
         if (
+            skill_inputs
+            and not selected_skill
+            and not branch_instruction_ref
+            and isinstance(node_inputs.get("instructions"), str)
+            and node_inputs["instructions"].strip()
+            and not node_inputs["instructions"].strip().startswith("artifact://")
+            and self._workflow_patch_enabled(RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH)
+        ):
+            # Selected Skills already carry their inputs in the skill contract.
+            # Instructions-only Steps must receive the same resolved user data
+            # as prompt content, never as runtime or authorization parameters.
+            # Opaque instruction refs remain owned by their materialization path.
+            input_data = json.dumps(
+                self._json_mapping(skill_inputs, path=f"node[{node_id}].inputs"),
+                indent=2,
+                sort_keys=True,
+            )
+            instruction = str(request_instruction_ref or "").rstrip()
+            if input_data not in instruction:
+                request_instruction_ref = (
+                    f"{instruction}\n\nResolved step inputs:\n{input_data}".lstrip()
+                )
+        if (
             branch_instruction_ref
             and agent_kind == "external"
             and _normalize_agent_runtime_id(agent_id) == "omnigent"
@@ -23731,11 +23820,64 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if isinstance(metadata, Mapping):
             for key, value in metadata.items():
                 outputs.setdefault(key, value)
+            self._record_launch_provider_profile(metadata)
 
         return {
             "status": status,
             "outputs": outputs,
         }
+
+    def _record_launch_provider_profile(self, metadata: Mapping[str, Any]) -> None:
+        """Record the Provider Profile a managed launch actually used.
+
+        Admission records ``pending`` when selection resolves at launch; this
+        folds the granted profile into the same memo summary and
+        ``mm_provider_profile`` Search Attribute that list rows, filters, and
+        facets read (MoonLadderStudios/MoonMind#4640). Workflows without an
+        admitted projection are left unchanged rather than guessed.
+        """
+
+        profile_id = str(metadata.get("providerProfileId") or "").strip()
+        if not profile_id or not workflow.patched(
+            RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH
+        ):
+            return
+        if self._provider_profile_projection is None:
+            self._provider_profile_projection = (
+                workflow.memo_value(PROVIDER_PROFILE_MEMO_KEY, default=None),
+                workflow.info().typed_search_attributes.get(
+                    SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE)
+                ),
+            )
+        summary, search_value = self._provider_profile_projection
+        merged = merge_resolved_provider_profile(
+            summary,
+            search_value,
+            profile_id,
+            label=str(metadata.get("providerProfileLabel") or "") or None,
+            retain_all_profiles=workflow.patched(
+                "provider-profile-complete-associations-v1"
+            ),
+        )
+        if merged is None:
+            return
+        self._provider_profile_projection = merged
+        merged_summary, merged_value = merged
+        try:
+            workflow.upsert_memo({PROVIDER_PROFILE_MEMO_KEY: merged_summary})
+            workflow.upsert_search_attributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
+                        merged_value,
+                    )
+                ]
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to record launch-resolved Provider Profile",
+                extra={"error": str(exc)},
+            )
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
