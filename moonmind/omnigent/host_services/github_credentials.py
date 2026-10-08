@@ -27,9 +27,11 @@ from moonmind.workflows.executions.repository_contract import (
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _TARGET_PATH = "/run/mm-credentials/github"
 # Positional arguments: runtime uid, runtime gid, GitHub host; token on stdin.
+# Overlapping writers each run as PID 1 in their own container, so the temp
+# file is allocated uniquely rather than derived from ``$$``.
 _HOSTS_WRITER_SCRIPT = (
     "set -eu; umask 077; mkdir -p /config; "
-    'tmp="/config/.hosts.yml.$$"; trap \'rm -f "$tmp"\' EXIT; '
+    'tmp=$(mktemp /config/.hosts.yml.XXXXXX); trap \'rm -f "$tmp"\' EXIT; '
     "{ printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\"; "
     "cat; printf '\\n    git_protocol: https\\n'; } > \"$tmp\"; "
     'chown "$1:$2" "$tmp"; chmod 0600 "$tmp"; '
@@ -526,26 +528,37 @@ class OmnigentGithubCredentialService:
         ]
         # A same-owner retry or refresh reuses the live projection. Its prior
         # complete hosts.yml must survive a failed rewrite, so only a volume
-        # created by this call is removed on failure (#4011).
-        existed_code, _out, _err = await self._backend.run(owner_inspect, check=False)
-        created_here = existed_code != 0
-        await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "create",
-                "--label",
-                "moonmind.owner=generic-omnigent-github-credential",
-                "--label",
-                f"moonmind.owner_digest={attachment['ownerDigest']}",
-                volume,
-            ],
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        # this call confirmed absent and created is removed on failure (#4011).
+        # An inspection failure other than absence proves nothing about a live
+        # projection, so it fails without creating or removing anything.
+        code, observed_owner, error = await self._backend.run(
+            owner_inspect, check=False
         )
-        _code, observed_owner, _error = await self._backend.run(
-            owner_inspect,
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-        )
+        created_here = False
+        if code != 0:
+            if "no such volume" not in error.lower():
+                raise HarnessPlatformError(
+                    "GitHub credential volume inspection failed",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            await self._backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "create",
+                    "--label",
+                    "moonmind.owner=generic-omnigent-github-credential",
+                    "--label",
+                    f"moonmind.owner_digest={attachment['ownerDigest']}",
+                    volume,
+                ],
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+            created_here = True
+            _code, observed_owner, _error = await self._backend.run(
+                owner_inspect,
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
         if observed_owner.strip() != str(attachment["ownerDigest"]):
             raise HarnessPlatformError(
                 "GitHub credential projection is owned by another lease",
