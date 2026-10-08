@@ -25,6 +25,7 @@ from moonmind.workflows.provider_failures import (
 from pr_resolver_core.review_providers import (
     automated_review_provider_or_raise,
     latest_review_reply,
+    latest_review_request,
     normalize_reviewer_login,
 )
 
@@ -2688,6 +2689,56 @@ class GitHubService:
                 ],
             }
 
+        try:
+            comments = await self._fetch_request_review_comments(
+                client=client, repo=repo, pr_number=pr_number, headers=headers
+            )
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            status = (
+                exc.response.status_code
+                if isinstance(exc, httpx.HTTPStatusError)
+                else None
+            )
+            return {
+                **pending,
+                "complete": None,
+                "blockers": [
+                    {
+                        "kind": "external_state_unavailable",
+                        "summary": (
+                            "GitHub review request comments could not be fetched "
+                            f"(HTTP {status})."
+                            if status is not None
+                            else "GitHub review request comment inventory is unavailable or malformed."
+                        ),
+                        "retryable": (
+                            status >= 500
+                            if status is not None
+                            else isinstance(exc, httpx.TransportError)
+                        ),
+                        "source": "github",
+                    }
+                ],
+            }
+        # Retain the known request if the collection no longer contains it.
+        # The shared selector can advance it only to a causally later explicit
+        # request for this unchanged head, never to an embedded command.
+        request_comment_id = review_request.get("requestCommentId")
+        active_request = {
+            "id": request_comment_id,
+            "body": record.command,
+            "created_at": review_request.get("requestedAt"),
+        }
+        request = latest_review_request(
+            record,
+            [active_request, *comments],
+            head_sha=requested_head_sha,
+            not_before=requested_at,
+        )
+        if request is not None:
+            requested_at = request.created_at
+            request_comment_id = request.comment.get("id")
+
         for review in reviews:
             if not isinstance(review, dict):
                 continue
@@ -2733,7 +2784,7 @@ class GitHubService:
                 pr_number=pr_number,
                 headers=headers,
                 provider=record,
-                request_comment_id=review_request.get("requestCommentId"),
+                request_comment_id=request_comment_id,
                 requested_at=requested_at,
             )
         )
@@ -2747,31 +2798,30 @@ class GitHubService:
                 "blockers": [],
             }
 
-        comment_result = await self._find_request_review_comment(
-            client=client,
-            repo=repo,
-            pr_number=pr_number,
-            headers=headers,
-            provider=record,
+        reply = latest_review_reply(
+            record,
+            comments,
             requested_at=requested_at,
             head_sha=requested_head_sha,
+            request_comment_id=request_comment_id,
         )
-        if isinstance(comment_result, dict):
+        if reply is not None and not reply.failure_class:
             return {
                 "complete": True,
                 "completionKind": "issue_comment",
-                "completionId": comment_result.get("id"),
-                "completedAt": comment_result.get("created_at"),
+                "completionId": reply.comment.get("id"),
+                "completedAt": reply.comment.get("created_at"),
                 "stale": False,
                 "blockers": [],
             }
-        provider_failure = comment_result
+        provider_failure = (
+            build_provider_failure_event(provider_error_class=reply.failure_class)
+            if reply is not None
+            else None
+        )
         if provider_failure is not None:
             summary = "Automated review provider failed to process the request."
-            if (
-                provider_failure.provider_error_class
-                == PROVIDER_ERROR_CLASS_RATE_LIMIT
-            ):
+            if provider_failure.provider_error_class == PROVIDER_ERROR_CLASS_RATE_LIMIT:
                 summary = (
                     "Automated review provider usage is unavailable because its "
                     "rate or usage limit was reached; retry after provider quota "
@@ -2798,51 +2848,30 @@ class GitHubService:
             }
         return pending
 
-    async def _find_request_review_comment(
+    async def _fetch_request_review_comments(
         self,
         *,
         client: httpx.AsyncClient,
         repo: str,
         pr_number: int,
         headers: dict[str, str],
-        provider: Any,
-        requested_at: datetime | None,
-        head_sha: str,
-    ) -> dict[str, Any] | ProviderFailureEvent | None:
-        """Read a request's clean response or sanitized provider failure.
-
-        ``pr_resolver_core`` owns how a provider reply is read, so this gate
-        and the portable Skill reach the same verdict on the same comments.
-        """
+    ) -> list[Any]:
+        """Fetch the complete request/reply inventory before accepting evidence."""
 
         comments_url: str | None = (
             f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
             "?per_page=100"
         )
         comments: list[Any] = []
-        try:
-            while comments_url:
-                response = await client.get(comments_url, headers=headers)
-                response.raise_for_status()
-                page = response.json()
-                if not isinstance(page, list):
-                    return None
-                comments.extend(page)
-                comments_url = response.links.get("next", {}).get("url")
-        except (
-            httpx.HTTPStatusError,
-            httpx.TransportError,
-            httpx.TimeoutException,
-        ):
-            return None
-        reply = latest_review_reply(
-            provider, comments, requested_at=requested_at, head_sha=head_sha
-        )
-        if reply is None:
-            return None
-        if not reply.failure_class:
-            return dict(reply.comment)
-        return build_provider_failure_event(provider_error_class=reply.failure_class)
+        while comments_url:
+            response = await client.get(comments_url, headers=headers)
+            response.raise_for_status()
+            page = response.json()
+            if not isinstance(page, list):
+                raise TypeError("GitHub issue comment collection is malformed")
+            comments.extend(page)
+            comments_url = response.links.get("next", {}).get("url")
+        return comments
 
     async def _find_request_clean_review_reaction(
         self,

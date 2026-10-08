@@ -32,6 +32,7 @@ from pr_resolver_core.code_hosts import (  # noqa: E402
 from pr_resolver_core.review_providers import (  # noqa: E402
     is_low_severity_only_finding,
     latest_review_reply,
+    latest_review_request,
     resolve_automated_review_provider,
 )
 
@@ -739,17 +740,6 @@ def apply_codex_review_grace(
     }
     return comments_summary
 
-def _normalized_comment_body(comment: dict) -> str:
-    return " ".join(str(comment.get("body") or "").strip().split())
-
-
-def _is_review_request_comment(comment: dict, *, command: str) -> bool:
-    if comment.get("type") != "issue_comment":
-        return False
-    body = _normalized_comment_body(comment).rstrip(".").strip().lower()
-    return body == command.strip().lower()
-
-
 def _fetch_head_commit_timestamp(*, pr_repo: str | None, head_sha: str) -> datetime | None:
     repo = str(pr_repo or "").strip()
     sha = str(head_sha or "").strip()
@@ -838,22 +828,11 @@ def build_automated_review_evidence(
             pr_repo=pr_repo, head_sha=normalized_head
         )
 
-    request_comment = None
-    request_at = None
-    for comment in comments:
-        if not isinstance(comment, dict):
-            continue
-        if not _is_review_request_comment(comment, command=record.command):
-            continue
-        created_at = _parse_utc_timestamp(comment.get("created_at"))
-        if created_at is None:
-            continue
-        if head_committed_at is not None and created_at < head_committed_at:
-            # A request that predates the current head cannot cover it.
-            continue
-        if request_at is None or created_at >= request_at:
-            request_comment = comment
-            request_at = created_at
+    request = latest_review_request(
+        record, comments, head_sha=normalized_head, not_before=head_committed_at
+    )
+    request_comment = request.comment if request is not None else None
+    request_at = request.created_at if request is not None else None
 
     if reviews is None:
         reviews = _fetch_pull_request_reviews(pr_repo=pr_repo, pr_number=pr_number)
@@ -915,6 +894,7 @@ def build_automated_review_evidence(
             ),
             requested_at=request_at,
             head_sha=normalized_head,
+            request_comment_id=request_comment.get("id"),
         )
         if reply is not None and not reply.failure_class:
             completion_kind = "issue_comment"

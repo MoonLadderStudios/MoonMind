@@ -32,9 +32,9 @@ class AutomatedReviewProvider:
     reviewer_logins: tuple[str, ...]
     clean_review_reactions: tuple[str, ...] = ("+1",)
     clean_review_comments: tuple[str, ...] = ()
-    # ``(failure_class, markers)`` pairs recognizing the provider's notice that
+    # ``(failure_class, openings)`` pairs recognizing the provider's notice that
     # it refused or could not perform a requested review.
-    failure_reply_markers: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    failure_reply_prefixes: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
@@ -46,8 +46,15 @@ AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
             clean_review_comments=("Codex Review: Didn't find any major issues. 🚀",),
             # "You have reached your Codex usage limits for code reviews." and
             # "Codex usage limits have been reached for code reviews."
-            failure_reply_markers=(
-                (REVIEW_FAILURE_RATE_LIMIT, ("usage limit", "rate limit")),
+            failure_reply_prefixes=(
+                (
+                    REVIEW_FAILURE_RATE_LIMIT,
+                    (
+                        "you have reached your codex usage limits for code reviews.",
+                        "codex usage limits have been reached for code reviews.",
+                        "you have reached your codex usage limits.",
+                    ),
+                ),
             ),
         ),
     }
@@ -182,12 +189,93 @@ class ReviewReply:
     failure_class: str = ""
 
 
+def _comment_time(comment: Mapping[str, Any]) -> datetime | None:
+    try:
+        value = datetime.fromisoformat(
+            str(comment.get("created_at") or "").replace("Z", "+00:00")
+        )
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else None
+
+
+def _comment_id(value: object) -> int | None:
+    # REST comment IDs share one monotonically increasing namespace. Review
+    # and reaction IDs do not, so this tie-breaker is only for issue comments.
+    text = str(value)
+    return int(text) if text.isascii() and text.isdecimal() and int(text) > 0 else None
+
+
+def _comment_is_after(
+    created_at: datetime,
+    comment_id: object,
+    earlier_at: datetime,
+    earlier_id: object,
+) -> bool:
+    if created_at != earlier_at:
+        return created_at > earlier_at
+    later = _comment_id(comment_id)
+    earlier = _comment_id(earlier_id)
+    return later is not None and earlier is not None and later > earlier
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewRequest:
+    """The latest explicit request for a provider on the unchanged head."""
+
+    comment: Mapping[str, Any]
+    created_at: datetime
+
+
+def latest_review_request(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    head_sha: str,
+    not_before: datetime | None = None,
+) -> ReviewRequest | None:
+    """Select requests once for both the portable snapshot and GitHub gate.
+
+    Hosts supply a head timestamp or the active request as the lower bound.
+    REST issue-comment collections omit ``type``; portable inventories must
+    explicitly identify any non-issue records so they cannot become requests.
+    """
+
+    latest = None
+    if not head_sha:
+        return None
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        if comment.get("type", "issue_comment") != "issue_comment":
+            continue
+        raw_body = str(comment.get("body") or "")
+        opening = next((line for line in raw_body.splitlines() if line.strip()), "")
+        if opening.startswith(("    ", "\t")):
+            continue
+        body = " ".join(raw_body.split()).rstrip(".").strip()
+        if body.lower() != provider.command.lower():
+            continue
+        created_at = _comment_time(comment)
+        if created_at is None or (not_before is not None and created_at < not_before):
+            continue
+        commit = str(comment.get("commit_id") or "").strip()
+        if commit and commit != head_sha:
+            continue
+        if latest is None or _comment_is_after(
+            created_at, comment.get("id"), latest.created_at, latest.comment.get("id")
+        ):
+            latest = ReviewRequest(comment=comment, created_at=created_at)
+    return latest
+
+
 def _request_reply_time(
     provider: AutomatedReviewProvider,
     comment: Mapping[str, Any],
     *,
     requested_at: datetime | None,
     head_sha: str,
+    request_comment_id: object = None,
 ) -> datetime | None:
     """Return when *comment* answered the request, or ``None`` if it cannot."""
 
@@ -197,13 +285,10 @@ def _request_reply_time(
         return None
     if requested_at is None or not head_sha:
         return None
-    try:
-        created_at = datetime.fromisoformat(
-            str(comment.get("created_at") or "").replace("Z", "+00:00")
-        )
-    except ValueError:
-        return None
-    if created_at.tzinfo is None or created_at <= requested_at:
+    created_at = _comment_time(comment)
+    if created_at is None or not _comment_is_after(
+        created_at, comment.get("id"), requested_at, request_comment_id
+    ):
         return None
     commit = str(comment.get("commit_id") or "").strip()
     if commit and commit != head_sha:
@@ -247,9 +332,11 @@ def _failure_class(provider: AutomatedReviewProvider, body: str) -> str:
     # line keeps a status table or task summary that merely mentions limits
     # from being mistaken for a refused request.
     opening = next((line for line in body.splitlines() if line.strip()), "")
+    if opening.startswith(("    ", "\t")):
+        return ""
     opening = opening.strip().lower()
-    for failure_class, markers in provider.failure_reply_markers:
-        if any(marker in opening for marker in markers):
+    for failure_class, openings in provider.failure_reply_prefixes:
+        if opening.startswith(openings):
             return failure_class
     return ""
 
@@ -260,6 +347,7 @@ def classify_review_reply(
     *,
     requested_at: datetime | None,
     head_sha: str,
+    request_comment_id: object = None,
 ) -> ReviewReply | None:
     """Classify one provider comment as a clean result or a refused request.
 
@@ -269,14 +357,18 @@ def classify_review_reply(
     """
 
     created_at = _request_reply_time(
-        provider, comment, requested_at=requested_at, head_sha=head_sha
+        provider,
+        comment,
+        requested_at=requested_at,
+        head_sha=head_sha,
+        request_comment_id=request_comment_id,
     )
     if created_at is None:
         return None
     body = str(comment.get("body") or "").strip()
     if _is_clean_review_body(provider, body):
         return ReviewReply(comment=comment, created_at=created_at)
-    failure_class = _failure_class(provider, body)
+    failure_class = _failure_class(provider, str(comment.get("body") or ""))
     if failure_class:
         return ReviewReply(
             comment=comment, created_at=created_at, failure_class=failure_class
@@ -290,6 +382,7 @@ def latest_review_reply(
     *,
     requested_at: datetime | None,
     head_sha: str,
+    request_comment_id: object = None,
 ) -> ReviewReply | None:
     """Return the latest authoritative reply to a request on its unchanged head.
 
@@ -302,10 +395,20 @@ def latest_review_reply(
         if not isinstance(comment, Mapping):
             continue
         reply = classify_review_reply(
-            provider, comment, requested_at=requested_at, head_sha=head_sha
+            provider,
+            comment,
+            requested_at=requested_at,
+            head_sha=head_sha,
+            request_comment_id=request_comment_id,
         )
         if reply is not None and (
-            latest is None or reply.created_at >= latest.created_at
+            latest is None
+            or _comment_is_after(
+                reply.created_at,
+                reply.comment.get("id"),
+                latest.created_at,
+                latest.comment.get("id"),
+            )
         ):
             latest = reply
     return latest

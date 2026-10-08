@@ -1098,3 +1098,116 @@ def test_review_collection_with_installed_gh():
     )
     assert completed.returncode == 0, completed.stderr
     assert '"freshReviewForHead": true' in completed.stdout
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "[P1] Preserve rate limit metadata",
+        "[P2] Handle usage limits in the dashboard",
+        "> You have reached your Codex usage limits for code reviews.",
+        '"Codex usage limits have been reached for code reviews."',
+        "Example: You have reached your Codex usage limits for code reviews.",
+        "```\nYou have reached your Codex usage limits for code reviews.\n```",
+    ],
+)
+def test_limit_mentions_are_not_refusal_openings(snapshot_module, body):
+    evidence = _evidence(
+        snapshot_module, comments=[_request_comment(), _codex_reply(body)]
+    )
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize(
+    "body", [CODEX_USAGE_LIMIT_REPLY, "Codex Review: Didn't find any major issues. 🚀"]
+)
+@pytest.mark.parametrize(
+    "reply_id,request_id,answers",
+    [
+        (102, 101, True),
+        ("102", "101", True),
+        (100, 101, False),
+        (101, 101, False),
+        (None, 101, False),
+        (102, None, False),
+        ("invalid", 101, False),
+        (True, 101, False),
+    ],
+)
+def test_same_second_reply_requires_later_comment_id(
+    snapshot_module, body, reply_id, request_id, answers
+):
+    request = _request_comment()
+    request["id"] = request_id
+    reply = _codex_reply(body, created_at=request["created_at"], comment_id=reply_id)
+    evidence = _evidence(snapshot_module, comments=[reply, request])
+    assert evidence["requestPending"] is (not answers)
+    assert evidence["requestFailed"] is (answers and body == CODEX_USAGE_LIMIT_REPLY)
+    assert evidence["freshReviewForHead"] is (
+        answers and body != CODEX_USAGE_LIMIT_REPLY
+    )
+
+
+@pytest.mark.parametrize("latest_clean", [True, False])
+def test_equal_timestamp_replies_use_ids_not_inventory_order(
+    snapshot_module, latest_clean
+):
+    clean = _codex_reply(
+        "Codex Review: Didn't find any major issues. 🚀",
+        comment_id=103 if latest_clean else 102,
+    )
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY, comment_id=102 if latest_clean else 103
+    )
+    for replies in ([clean, failure], [failure, clean]):
+        evidence = _evidence(snapshot_module, comments=[_request_comment(), *replies])
+        assert evidence["freshReviewForHead"] is latest_clean
+        assert evidence["requestFailed"] is (not latest_clean)
+
+
+def test_equal_timestamp_requests_use_ids_not_inventory_order(snapshot_module):
+    first = {**_request_comment(), "id": 101}
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY, created_at=first["created_at"], comment_id=102
+    )
+    latest = {**first, "id": 103}
+    for comments in ([latest, failure, first], [first, failure, latest]):
+        evidence = _evidence(snapshot_module, comments=comments)
+        assert evidence["requestCommentId"] == 103
+        assert evidence["requestPending"] is True
+        assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize("prefix", ["    ", "\t", "\n    "])
+def test_indented_refusal_example_is_not_a_provider_failure(snapshot_module, prefix):
+    reply = _codex_reply(prefix + CODEX_USAGE_LIMIT_REPLY)
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), reply])
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["quote", "embedded", "indented", "wrong_head", "review_comment", "invalid_time"],
+)
+def test_unrelated_request_does_not_supersede_a_refusal(snapshot_module, change):
+    retry = {**_request_comment("2026-08-24T23:00:00Z"), "id": 98766}
+    if change == "quote":
+        retry["body"] = "> @codex review"
+    elif change == "embedded":
+        retry["body"] = "Please run @codex review later"
+    elif change == "indented":
+        retry["body"] = "    @codex review"
+    elif change == "wrong_head":
+        retry["commit_id"] = OLD_HEAD
+    elif change == "review_comment":
+        retry["type"] = "review_comment"
+    else:
+        retry["created_at"] = "invalid"
+    evidence = _evidence(
+        snapshot_module,
+        comments=[retry, _request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY)],
+    )
+    assert evidence["requestCommentId"] == 98765
+    assert evidence["requestFailed"] is True
