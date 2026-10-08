@@ -87,7 +87,8 @@ curl -X POST /api/v1/settings/github/token-probe \
 Fail fast if the test cannot read the selected repository or reports a denied
 permission. The test only reads, so write access stays untested until a
 workflow publishes. A throttled or unavailable result is not a denial: wait for
-the reported `retryAfterSeconds` and test again.
+the reported `retryAfterSeconds` and test again. The delay uses GitHub’s retry
+signal when available, with MoonMind’s bounded fallback otherwise.
 
 ### 5.3 Keep repository values token-free
 

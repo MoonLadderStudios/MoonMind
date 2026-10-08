@@ -2534,6 +2534,47 @@ async def test_probe_token_throttled_branch_listing_is_unavailable_and_stops(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_probe_token_denied_branch_listing_preserves_denial(monkeypatch, status):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [
+            _mock_get_response(200, {"default_branch": "main"}),
+            _mock_get_response(404, {"message": "Branch not found"}),
+            _mock_get_response(status, {"message": "Resource not accessible"}),
+            _mock_get_response(200, []),
+            _mock_get_response(200, []),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="owner/repo", mode="full_pr_automation", base_branch="feature"
+        )
+
+    assert result["observations"]["read"] == "verified"
+    assert result["observations"]["branch"] == "denied"
+    assert result["defaultBranchAccessible"] is False
+    assert result["retryAfterSeconds"] is None
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    assert checklist["Contents"]["status"] == "failed"
+    assert checklist["Commit statuses"]["status"] == "not_checked"
+    assert checklist["Checks"]["status"] == "not_checked"
+    assert result["diagnostics"][-1]["operation"] == "branch_listing"
+    assert result["diagnostics"][-1]["httpStatus"] == status
+    assert result["diagnostics"][-1]["retryable"] is False
+    assert [call.args[0] for call in mock_client.get.call_args_list] == [
+        "https://api.github.com/repos/owner/repo",
+        "https://api.github.com/repos/owner/repo/branches/feature",
+        "https://api.github.com/repos/owner/repo/branches?per_page=1",
+        "https://api.github.com/repos/owner/repo/pulls?per_page=1",
+        "https://api.github.com/repos/owner/repo/issues?per_page=1",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_probe_token_branch_listing_outage_is_unavailable_and_stops(
     monkeypatch,
 ):

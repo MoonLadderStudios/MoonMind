@@ -12,7 +12,10 @@ const CONNECTION_A: ProbeConnection = {
   displayName: 'Personal GitHub',
   policyRevision: 1,
   credentialRevision: 1,
-  assignmentCount: 1,
+  endpoint: 'https://github.com',
+  credentialKind: 'personal_access_token',
+  allowedOperations: ['read'],
+  assignments: [{ repository: 'owner/repo', providerRepoId: '1', operations: ['read'], revision: 1, verified: true }],
   lifecycle: 'active',
 };
 
@@ -21,7 +24,10 @@ const CONNECTION_B: ProbeConnection = {
   displayName: 'Work GitHub',
   policyRevision: 3,
   credentialRevision: 2,
-  assignmentCount: 0,
+  endpoint: 'https://github.com',
+  credentialKind: 'personal_access_token',
+  allowedOperations: ['read'],
+  assignments: [],
   lifecycle: 'active',
 };
 
@@ -331,10 +337,10 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
     expect(screen.getByText(/Write access not tested/i)).toBeTruthy();
   });
 
-  it('reports a throttle with the server retry signal instead of a denial', async () => {
+  it.each([60, 90])('recommends a %s-second throttle retry without claiming its provenance', async (seconds) => {
     stubFetch({
       ...OUTAGE_RESPONSE,
-      retryAfterSeconds: 90,
+      retryAfterSeconds: seconds,
       diagnostics: [
         { operation: 'repository', httpStatus: 429, message: 'Too many requests', retryable: true },
       ],
@@ -343,7 +349,8 @@ describe('GithubTokenProbePanel (selected-connection Test connection)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Test connection/i }));
 
-    expect(await screen.findByText(/GitHub asked MoonMind to wait about 90 seconds/)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(`Wait about ${seconds} seconds before testing again`))).toBeTruthy();
+    expect(screen.queryByText(/GitHub asked/)).toBeNull();
     expect(screen.queryByText(/Read access denied/)).toBeNull();
   });
 

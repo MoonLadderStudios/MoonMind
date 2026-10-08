@@ -1128,6 +1128,12 @@ class GitHubService:
                         result["observations"]["branch"] = branch_kind
                         ref = ""
                         if branch_kind != "unavailable":
+                            if branch_kind == "denied" and permission:
+                                self._mark_probe_permission(
+                                    result["permissionChecklist"],
+                                    permission=str(permission),
+                                    success=False,
+                                )
                             continue
                         # The listing read was throttled or failed: stop.
                         unavailable = True
@@ -1245,7 +1251,7 @@ class GitHubService:
                 result, operation=operation, response=exc.response
             ):
                 return "unavailable"
-            return "not_found"
+            return "denied" if exc.response.status_code in {401, 403} else "not_found"
         except httpx.HTTPError as exc:
             result["diagnostics"].append(
                 {

@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
+import type { components } from '../../generated/openapi';
+
 type ProbeMode = 'publish' | 'readiness' | 'full_pr_automation';
 type ReadObservation = 'verified' | 'denied' | 'not_found' | 'unavailable' | 'not_checked';
 type BranchObservation =
@@ -40,14 +42,7 @@ interface Notice {
 }
 
 /** The selected connection the test runs against; never a global token. */
-export interface ProbeConnection {
-  id: string;
-  displayName: string;
-  policyRevision: number;
-  credentialRevision: number;
-  assignmentCount: number;
-  lifecycle: string;
-}
+export type ProbeConnection = components['schemas']['RepositoryConnectionView'];
 
 export interface GithubTokenProbePanelProps {
   connection: ProbeConnection;
@@ -115,7 +110,27 @@ function AccessibilityPill({
 }
 
 function connectionKey(connection: ProbeConnection): string {
-  return `${connection.id}@${connection.policyRevision}.${connection.credentialRevision}`;
+  // Assignments have their own revisions: changing admission does not rotate
+  // the connection policy or credential. Bind evidence to the complete scope.
+  return JSON.stringify([
+    connection.id,
+    connection.endpoint,
+    connection.policyRevision,
+    connection.credentialRevision,
+    connection.lifecycle,
+    connection.credentialKind,
+    [...connection.allowedOperations].sort(),
+    [...(connection.permittedRepositories ?? [])].sort(),
+    (connection.assignments ?? [])
+      .map((assignment) => JSON.stringify([
+        assignment.repository,
+        assignment.providerRepoId,
+        assignment.revision,
+        assignment.verified,
+        [...assignment.operations].sort(),
+      ]))
+      .sort(),
+  ]);
 }
 
 export function GithubTokenProbePanel({
@@ -206,6 +221,8 @@ export function GithubTokenProbePanel({
         ? 'repository empty'
         : 'not readable';
   const reportsPush = result?.reportedPermissions?.push === true;
+  const isApp = connection.credentialKind === 'github_app';
+  const hasPermittedRepositories = (connection.permittedRepositories?.length ?? 0) > 0;
 
   return (
     <section
@@ -215,7 +232,8 @@ export function GithubTokenProbePanel({
       <header className="space-y-1">
         <h4 className="text-base font-semibold text-slate-900 dark:text-white">Test connection</h4>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Reads one repository assigned to <strong>{connection.displayName}</strong>, with that
+          Reads one repository {isApp ? 'permitted by' : 'assigned to'}{' '}
+          <strong>{connection.displayName}</strong>, with that
           connection only. The test never writes, so it cannot prove publishing works, and it never
           uses another credential.
         </p>
@@ -308,8 +326,8 @@ export function GithubTokenProbePanel({
           </p>
           {typeof result.retryAfterSeconds === 'number' ? (
             <p className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200">
-              GitHub is limiting requests for this credential, so the test stopped early. GitHub asked
-              MoonMind to wait about {result.retryAfterSeconds} seconds before testing again.
+              GitHub is limiting requests for this credential, so the test stopped early. Wait about{' '}
+              {result.retryAfterSeconds} seconds before testing again.
             </p>
           ) : null}
           {branchObservation === 'empty_repository' ? (
@@ -331,10 +349,14 @@ export function GithubTokenProbePanel({
               Remote default branch: <code>{result.remoteDefaultBranch}</code>
             </p>
           ) : null}
-          {connection.assignmentCount === 0 ? (
+          {(connection.assignments?.length ?? 0) === 0 ? (
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              This connection has no assigned repositories, so workflows cannot use it yet. Tests
-              read only assigned repositories; assign one below first.
+              This connection has no assigned repositories, so workflows cannot use it yet.{' '}
+              {isApp
+                ? hasPermittedRepositories
+                  ? 'Tests can read its permitted repositories before assignment.'
+                  : 'Tests require a repository permitted by this App connection.'
+                : 'Tests read only assigned repositories; assign one first.'}
             </p>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-3">

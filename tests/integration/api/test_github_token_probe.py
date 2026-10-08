@@ -78,9 +78,7 @@ def selected_b(monkeypatch, settings_user_override):
     state = SimpleNamespace(requests=[], routes={})
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
     monkeypatch.setenv("GH_TOKEN", "ambient-token-a")
-    monkeypatch.setattr(
-        settings_router.db_base, "async_session_maker", lambda: AsyncMock()
-    )
+    monkeypatch.setattr(settings_router.db_base, "async_session_maker", AsyncMock)
 
     async def get_connection(self, connection_id, **kwargs):
         if connection_id != "connection-b":
@@ -207,6 +205,39 @@ async def test_selected_b_distinguishes_empty_repository_and_missing_branch(
     _assert_only_b_reads(selected_b)
 
 
+@pytest.mark.parametrize("status", [401, 403])
+async def test_selected_b_denied_branch_listing_is_not_a_missing_branch(
+    selected_b, status
+):
+    selected_b.routes["/repos/acme/widgets"] = httpx.Response(
+        200, json={"default_branch": "main"}
+    )
+    selected_b.routes["/repos/acme/widgets/branches/release"] = httpx.Response(
+        404, json={"message": "Branch not found"}
+    )
+    selected_b.routes["/repos/acme/widgets/branches?per_page=1"] = httpx.Response(
+        status, json={"message": "Resource not accessible"}
+    )
+
+    response = await selected_b.probe(
+        {
+            "connectionId": "connection-b",
+            "repo": "acme/widgets",
+            "baseBranch": "release",
+        }
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["observations"]["read"] == "verified"
+    assert body["observations"]["branch"] == "denied"
+    assert body["defaultBranchAccessible"] is False
+    assert body["diagnostics"][-1]["httpStatus"] == status
+    assert body["diagnostics"][-1]["retryable"] is False
+    assert len(selected_b.requests) == 4
+    _assert_only_b_reads(selected_b)
+
+
 async def test_selected_b_unknown_repository_is_not_found(selected_b):
     selected_b.routes["/repos/acme/widgets"] = httpx.Response(
         404, json={"message": "Not Found"}
@@ -223,9 +254,10 @@ async def test_selected_b_unknown_repository_is_not_found(selected_b):
     _assert_only_b_reads(selected_b)
 
 
-async def test_selected_b_throttle_is_unavailable_and_stops(selected_b):
+@pytest.mark.parametrize("headers,delay", [({"retry-after": "90"}, 90), ({}, 60)])
+async def test_selected_b_throttle_is_unavailable_and_stops(selected_b, headers, delay):
     selected_b.routes["/repos/acme/widgets"] = httpx.Response(
-        429, json={"message": "Too many requests"}, headers={"retry-after": "90"}
+        429, json={"message": "Too many requests"}, headers=headers
     )
 
     response = await selected_b.probe(
@@ -234,7 +266,7 @@ async def test_selected_b_throttle_is_unavailable_and_stops(selected_b):
 
     body = response.json()
     assert body["observations"]["read"] == "unavailable"
-    assert body["retryAfterSeconds"] == 90
+    assert body["retryAfterSeconds"] == delay
     assert body["repositoryAccessible"] is None
     assert len(selected_b.requests) == 1
     _assert_only_b_reads(selected_b)
