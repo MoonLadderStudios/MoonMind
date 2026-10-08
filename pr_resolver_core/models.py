@@ -23,6 +23,7 @@ class CanonicalPullRequestSnapshot:
     pr_url: str = ""
     head_sha: str = ""
     base_sha: str = ""
+    observation_only: bool = False
     merged: bool = False
     open: bool = True
     draft: bool = False
@@ -41,6 +42,7 @@ class CanonicalPullRequestSnapshot:
     checks_passing: bool = False
     checks_failed: bool = False
     checks_degraded: bool = False
+    checks_external_blocked: bool = False
     checks_signal_available: bool = False
     actionable_comments: bool = False
     comments_available: bool = True

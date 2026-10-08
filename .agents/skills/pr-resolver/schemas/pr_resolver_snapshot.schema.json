@@ -2,6 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "observationOnly": {
+      "type": "boolean",
+      "description": "Unchanged CI wait observation; never authorizes remediation, review_clean or merge."
+    },
+    "pollObservation": {
+      "type": "object",
+      "description": "Exact observation fingerprint and review policy used only to retain a wait."
+    },
     "pr": {
       "type": "object",
       "description": "Raw metadata output from gh pr view --json"

@@ -19,6 +19,43 @@ def snapshot_module():
     )
 
 
+def test_snapshot_fields_are_supported_by_installed_gh(snapshot_module, tmp_path):
+    """Validate CLI parsing with a fixture credential and an unreachable loopback."""
+    import os
+    import shutil
+    import subprocess
+
+    if not shutil.which("gh"):
+        pytest.skip("GitHub CLI is absent")
+    env = {**os.environ, "GH_CONFIG_DIR": str(tmp_path / "isolated-gh")}
+    for name in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+    ):
+        env.pop(name, None)
+    env.update(GH_HOST="127.0.0.1:1", GH_ENTERPRISE_TOKEN="isolated-fixture-token")
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            "1",
+            "--repo",
+            "fixture/repo",
+            "--json",
+            snapshot_module["_PR_VIEW_FIELDS"],
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert "Unknown JSON field" not in completed.stderr, completed.stderr
+
+
 def _legacy_cli_replay(tmp_path, monkeypatch, pages):
     gh = tmp_path / "gh"
     gh.write_text(

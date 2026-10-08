@@ -5,6 +5,7 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -30,8 +31,10 @@ from pr_resolver_core.code_hosts import (  # noqa: E402
     ensure_github_only_selector,
 )
 from pr_resolver_core.review_providers import (  # noqa: E402
+    AUTOMATED_REVIEW_PROVIDERS,
+    has_explicit_finding_severity,
+    is_automated_review_provider_login,
     is_clean_review_comment,
-    is_low_severity_only_finding,
     resolve_automated_review_provider,
 )
 
@@ -49,7 +52,7 @@ _FAILURE_CHECK_STATES = {
 
 _SYSTEM_PATH_FALLBACK = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _PR_VIEW_FIELDS = (
-    "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,"
+    "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,updatedAt,mergeable,"
     "mergeStateStatus,reviewDecision,statusCheckRollup"
 )
 _COMMAND_COMMENT_PATTERN = re.compile(
@@ -410,14 +413,8 @@ def _classify_comment_actionability(
 
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
-    - Ignore automated-review inline findings that carry only
-      P2/medium-or-below severity: they end the Fix and Review Loop instead
-      of triggering remediation or another review request. Only P0/critical
-      or P1/high findings keep the loop going. The threshold applies only
-      to bot-authored review comments from the latest automated review
-      round; human issue comments, review bodies, and other discussion
-      stay actionable even when they mention a low priority. Comments
-      without an explicit severity marker stay actionable.
+    - Every current inline finding requires a disposition, at any severity.
+    - Keep explicitly marked provider findings in issue/review bodies, too.
     - Ignore review comments only when explicitly marked resolved/outdated.
     - Treat issue comments and review bodies as actionable.
     - Treat review comments as actionable except resolved/outdated threads and
@@ -436,10 +433,6 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
-        if is_bot_user(comment.get("user") or "") and is_low_severity_only_finding(
-            body
-        ):
-            return False, "low_severity_finding"
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
@@ -453,6 +446,16 @@ def _classify_comment_actionability(
         )
     ):
         return False, "command_comment"
+
+    if (
+        comment_type in {"issue_comment", "review"}
+        and has_explicit_finding_severity(body)
+        and any(
+            is_automated_review_provider_login(provider, comment.get("user"))
+            for provider in AUTOMATED_REVIEW_PROVIDERS
+        )
+    ):
+        return True, "actionable"
 
     if _is_gemini_no_feedback_comment(comment, normalized_body):
         return False, "gemini_no_feedback_review"
@@ -1090,6 +1093,8 @@ def summarize_ci_checks(checks: list[dict]) -> dict:
                     "url": _check_url(check),
                 }
             )
+        elif state not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+            degraded_reasons.append("unknown_check_state")
 
     if len(checks) == 0:
         degraded_reasons.append("no_status_checks_reported")
@@ -1443,11 +1448,119 @@ def _fetch_commit_statuses(
     return list(latest.values())
 
 
+def _reconcile_ci_check_runs(
+    checks: list[dict], *, pr_repo: str | None, head_sha: str
+) -> tuple[list[dict], dict, object]:
+    from pr_resolver_core.github_checks import reconcile_check_runs
+
+    actions = [
+        check
+        for check in checks
+        if (check.get("app") or {}).get("slug") == "github-actions"
+        or _ACTIONS_JOB_URL_PATTERN.search(_check_url(check))
+    ]
+    names = [_check_name(check) for check in actions]
+    needs_runs = any(
+        _check_state(check) not in {"SUCCESS", "NEUTRAL", "SKIPPED"}
+        or names.count(_check_name(check)) > 1
+        for check in actions
+    )
+    runs = None
+    enriched = [dict(check) for check in checks]
+    if needs_runs and pr_repo and head_sha:
+        runs = run_command_optional(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{pr_repo}/actions/runs?head_sha={head_sha}&per_page=100",
+            ],
+            paginated=True,
+            records_key="workflow_runs",
+        )
+        if isinstance(runs, list):
+            for run in runs:
+                if (
+                    run.get("head_sha") != head_sha
+                    or not isinstance(run.get("run_attempt"), int)
+                    or run["run_attempt"] <= 1
+                ):
+                    continue
+                matching = [
+                    check
+                    for check in enriched
+                    if (match := _ACTIONS_JOB_URL_PATTERN.search(_check_url(check)))
+                    and str(run.get("id")) == match.group(1)
+                ]
+                if not matching:
+                    continue
+                jobs = run_command_optional(
+                    [
+                        "gh",
+                        "api",
+                        "--paginate",
+                        f"repos/{pr_repo}/actions/runs/{run['id']}/jobs?filter=all&per_page=100",
+                    ],
+                    paginated=True,
+                    records_key="jobs",
+                )
+                for check in matching:
+                    match = _ACTIONS_JOB_URL_PATTERN.search(_check_url(check))
+                    verified_jobs = [
+                        job
+                        for job in jobs or []
+                        if str(job.get("id")) == match.group(2)
+                        and job.get("run_id") == run["id"]
+                        and job.get("head_sha") == head_sha
+                        and job.get("check_run_url")
+                        == f"https://api.github.com/repos/{pr_repo}/check-runs/{check.get('id')}"
+                    ]
+                    if len(verified_jobs) == 1:
+                        check["run_attempt"] = verified_jobs[0].get("run_attempt")
+    applicable, evidence = reconcile_check_runs(enriched, runs, head_sha=head_sha)
+    return applicable, evidence, [runs, enriched]
+
+
+def _poll_fingerprint(pr: dict, checks: object, statuses: object, runs: object) -> str:
+    """Equality is only a reason to keep waiting, never evidence to act."""
+    return hashlib.sha256(
+        json.dumps([pr, checks, statuses, runs], sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _unchanged_ci_wait(
+    path: Path, *, fingerprint: str, review_provider: str, require_fresh_review: bool
+) -> dict | None:
+    from pr_resolver_core import classify_snapshot, normalize_portable_snapshot
+
+    try:
+        previous = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(previous, dict) or previous.get("pollObservation") != {
+        "fingerprint": fingerprint,
+        "reviewProvider": review_provider,
+        "requireFreshReview": require_fresh_review,
+    }:
+        return None
+    # Repeated observations retain the last full inventory, explicitly marked
+    # unusable for remediation, review-clean or merge decisions.
+    full = {**previous, "observationOnly": False}
+    if classify_snapshot(normalize_portable_snapshot(full)).reason_code != "ci_running":
+        return None
+    return {**previous, "observationOnly": True, "observedAt": _utc_now().isoformat()}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Snapshot PR state for pr-resolver skill"
     )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
+    parser.add_argument(
+        "--poll-waits",
+        action="store_true",
+        help="Reuse an unchanged CI wait; every transition still collects a full snapshot.",
+    )
     parser.add_argument(
         "--snapshot-path",
         default="var/pr_resolver/snapshot.json",
@@ -1511,10 +1624,6 @@ def main():
         for check in rollup:
             if isinstance(check, dict):
                 rollup_checks.append(check)
-    required_checks = _fetch_required_status_checks(
-        pr_repo=pr_repo, base_branch=pr_data.get("baseRefName")
-    )
-
     # Build one authoritative HEAD observation from both provider surfaces.
     # Check-runs remain gating even on an unprotected branch. Legacy statuses
     # gate when required, or when requirements could not be established.
@@ -1523,6 +1632,27 @@ def main():
     fetched_statuses = _fetch_commit_statuses(pr_repo=pr_repo, commit_sha=head_sha)
     head_check_runs = fetched_runs or []
     statuses = fetched_statuses or []
+    head_check_runs, check_evidence, run_observation = _reconcile_ci_check_runs(
+        head_check_runs, pr_repo=pr_repo, head_sha=head_sha
+    )
+    fingerprint = _poll_fingerprint(
+        pr_data, fetched_runs, fetched_statuses, run_observation
+    )
+    if args.poll_waits and fetched_runs is not None and fetched_statuses is not None:
+        waiting = _unchanged_ci_wait(
+            snapshot_path,
+            fingerprint=fingerprint,
+            review_provider=args.review_provider,
+            require_fresh_review=bool(args.require_fresh_review),
+        )
+        if waiting is not None:
+            snapshot_path.write_text(json.dumps(waiting, indent=2))
+            print("CI observation unchanged; retaining a wait-only snapshot.")
+            return
+
+    required_checks = _fetch_required_status_checks(
+        pr_repo=pr_repo, base_branch=pr_data.get("baseRefName")
+    )
     from pr_resolver_core.github_checks import (
         head_ci_reported,
         partition_commit_statuses,
@@ -1532,11 +1662,19 @@ def main():
         statuses, required_checks
     )
     ci_summary = summarize_ci_checks([*head_check_runs, *gating_statuses])
+    ci_summary.update(check_evidence)
+    if check_evidence["strandedChecks"]:
+        # GitHub has finished the workflow that owns these queued jobs. Waiting
+        # cannot start them; preserve the diagnostic for the external CI owner.
+        ci_summary["isRunning"] = False
+        ci_summary["hasFailures"] = True
     ci_summary["advisoryStatuses"] = advisory_statuses
     ci_summary["headShaVerified"] = head_sha
     head_non_sec = summarize_ci_checks(head_check_runs)["nonSecurityCheckCount"]
     ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
     degraded = list(ci_summary["degradedReasons"])
+    if check_evidence["unresolvedChecks"]:
+        degraded.append("workflow_check_identity_unavailable")
     if (
         fetched_runs is not None
         and fetched_statuses is not None
@@ -1550,7 +1688,9 @@ def main():
         degraded = [r for r in degraded if r != "no_status_checks_reported"]
         if not degraded:
             ci_summary["signalQuality"] = "ok"
-            ci_summary["hasFailures"] = bool(ci_summary["hasAuthoritativeFailures"])
+            ci_summary["hasFailures"] = bool(
+                ci_summary["hasAuthoritativeFailures"] or check_evidence["strandedChecks"]
+            )
     if fetched_runs is None or fetched_statuses is None:
         degraded.append(
             "head_checks_unavailable"
@@ -1594,10 +1734,14 @@ def main():
         ci_summary["signalQuality"] = "degraded"
         ci_summary["hasFailures"] = True
 
-    previous_sha = _fetch_previous_commit_sha(
-        pr_repo=pr_repo,
-        pr_number=pr_data.get("number"),
-        head_sha=pr_data.get("headRefOid"),
+    previous_sha = (
+        _fetch_previous_commit_sha(
+            pr_repo=pr_repo,
+            pr_number=pr_data.get("number"),
+            head_sha=pr_data.get("headRefOid"),
+        )
+        if head_non_sec == 0
+        else None
     )
     if previous_sha:
         previous_check_runs = _fetch_commit_check_runs(
@@ -1693,11 +1837,19 @@ def main():
         pr_number=pr_data.get("number"),
         head_sha=head_sha,
         comments=comments,
+        reviews=(
+            comments_data.get("reviews")
+            if isinstance(comments_data.get("reviews"), list)
+            else None
+        ),
     )
-    if automated_review.get("freshReviewForHead") is True:
-        # GitHub publishes the review summary and inline findings separately.
-        # Fetch the full inventory after observing completion, so a snapshot
-        # collected while the review was running cannot authorize a clean exit.
+    # Submitted reviews precede the rest of the inventory. Issue replies and
+    # reactions are observed later, so those completion signals still require
+    # a refresh to include review bodies that arrived after the first read.
+    if automated_review.get("freshReviewForHead") is True and not (
+        comments_data.get("review_evidence_precedes_inventory") is True
+        and automated_review.get("completionKind") == "review"
+    ):
         comments_data = run_command(
             comments_cmd, "Failed to retrieve completed review comments."
         )
@@ -1706,18 +1858,31 @@ def main():
         )
         if not isinstance(comments, list):
             comments = []
-        # Comments/reactions have no reviewed commit. Revalidate the remote
-        # head after completion and inventory collection before publishing them.
-        completed_pr, _, _ = fetch_pr_data(args.pr)
-        if (
-            not head_sha
-            or str(completed_pr.get("headRefOid") or "").strip() != head_sha
-        ):
-            print(
-                "PR head changed during review collection; refresh the snapshot.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+    # Bind every full inventory to the current target, even with the review
+    # loop disabled. A race cannot authorize fixes or a fix-only clean receipt.
+    completed_pr, _, _ = fetch_pr_data(args.pr)
+    observed_fields = (
+        "number", "url", "headRefOid", "headRefName", "baseRefName", "baseRefOid",
+        "statusCheckRollup", "updatedAt", "isDraft", "state", "mergeable",
+        "mergeStateStatus", "reviewDecision",
+    )
+    if (
+        not head_sha
+        or not isinstance(completed_pr, dict)
+        or any(completed_pr.get(key) != pr_data.get(key) for key in observed_fields)
+    ):
+        changed = (
+            [key for key in observed_fields if completed_pr.get(key) != pr_data.get(key)]
+            if isinstance(completed_pr, dict)
+            else ["metadata_unavailable"]
+        )
+        print(
+            "PR head, target or gate changed during review collection; refresh the snapshot. "
+            + "Changed fields: " + ", ".join(changed),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    pr_data = completed_pr
     addressed_ids = _load_addressed_comment_ids()
     deferred_ids = _load_deferred_comment_ids()
     comments_summary = summarize_comments(
@@ -1737,11 +1902,18 @@ def main():
     # 4. Construct Snapshot
     snapshot = {
         "repository": pr_repo or "",
+        "observationOnly": False,
+        "pollObservation": {
+            "fingerprint": fingerprint,
+            "reviewProvider": args.review_provider,
+            "requireFreshReview": bool(args.require_fresh_review),
+        },
         "pr": pr_data,
         "ci": ci_summary,
         "commentsFetch": {
             "succeeded": isinstance(comments_data, dict)
-            and isinstance(comments_data.get("comments"), list),
+            and isinstance(comments_data.get("comments"), list)
+            and comments_data.get("thread_inventory_complete") is not False,
             "source": str(comments_script),
         },
         "comments": comments,
