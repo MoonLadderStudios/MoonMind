@@ -169,9 +169,13 @@ def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials(
     server = document["services"]["omnigent"]
     assert server["image"] == agent["image"] == "test-server@" + IMAGE_ID
     assert server["ports"] == []
-    assert server["environment"]["OMNIGENT_AUTH_PROVIDER"] == "header"
-    assert server["environment"]["OMNIGENT_AUTH_HEADER"] == "Authorization"
-    assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == "Bearer "
+    # The stock upstream host cannot present the control credential, so the
+    # fixture uses the single-user owner a deployment's host registers as.
+    assert server["environment"]["OMNIGENT_AUTH_ENABLED"] == "0"
+    assert not any(
+        key.startswith("OMNIGENT_AUTH_") and key != "OMNIGENT_AUTH_ENABLED"
+        for key in server["environment"]
+    )
 
 
 def test_compose_render_does_not_modify_canonical_document():
@@ -202,6 +206,7 @@ def test_candidate_command_does_not_overlay_application_source(tmp_path):
     )
     assert "--confcutdir=/test-driver" in command
     assert any(arg.endswith("::" + driver.TEST_NAME) for arg in command)
+    assert "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=local" in command
 
 
 def test_existing_exact_artifact_job_owns_required_recovery_invocation():
