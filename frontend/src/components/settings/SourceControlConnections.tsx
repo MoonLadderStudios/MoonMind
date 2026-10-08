@@ -917,17 +917,10 @@ function ConnectionDetail({
       </section>
 
       <GithubTokenProbePanel
-        connection={{
-          id: connection.id,
-          displayName: connection.displayName,
-          policyRevision: connection.policyRevision,
-          credentialRevision: connection.credentialRevision,
-          assignmentCount: assignments.length,
-          lifecycle: connection.lifecycle,
-        }}
+        connection={connection}
         canRunProbe={canRunProbe}
         onNotice={onNotice}
-        initialRepo={assignments[0]?.repository ?? ''}
+        initialRepo={assignments[0]?.repository ?? connection.permittedRepositories?.[0] ?? ''}
       />
 
       <form aria-label="Edit connection" className="space-y-3" onSubmit={save}>
