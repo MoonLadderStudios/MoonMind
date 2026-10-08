@@ -297,7 +297,7 @@ async def test_production_capacity_wait_survives_restart_and_replays_legacy_hist
         assert result["status"] == "COMPLETED"
         assert result["outputs"]["issue"]["number"] == 3970
         assert len(probe.calls) == 3
-        assert elapsed == pytest.approx(90, abs=1)
+        assert elapsed == pytest.approx(60, abs=1)
     else:
         assert result["status"] == "FAILED"
         assert result["outputs"]["reasonCode"] == "local_capacity_unavailable"
