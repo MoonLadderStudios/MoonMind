@@ -1178,7 +1178,8 @@ class OmnigentOAuthHostRuntime:
         alone is therefore not authoritative task-completion evidence. This
         check reads only item ordering and roles; prompt text, assistant text,
         tool arguments, and tool output never cross this boundary. Native turn
-        instrumentation mirrored after the final answer is not tool work.
+        instrumentation mirrored after the final answer is not tool work only
+        when the provider snapshot identifies the canonical native Codex harness.
         """
 
         from moonmind.omnigent.execute import turn_instrumentation_item_indexes
@@ -1197,7 +1198,9 @@ class OmnigentOAuthHostRuntime:
         terminal_assistant_index = -1
         assistant_message_count = 0
         tool_result_count = 0
-        instrumentation_indexes = turn_instrumentation_item_indexes(items)
+        instrumentation_indexes = turn_instrumentation_item_indexes(
+            items, harness=snapshot.get("harness")
+        )
         for index, raw_item in enumerate(items):
             if not isinstance(raw_item, Mapping) or index in instrumentation_indexes:
                 continue

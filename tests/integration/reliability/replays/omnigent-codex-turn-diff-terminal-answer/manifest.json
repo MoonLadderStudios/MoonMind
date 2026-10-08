@@ -1,6 +1,7 @@
 {
   "incidentWorkflowId": "mm:a81dd46f-d6a2-4b70-96bf-7943dba4b846-2026-10-07T21:42:19Z",
   "failureShape": "codex-native mirrored its evidence-only turn_diff function_call/function_call_output pair after the final assistant answer; the profile-bound publication gate counted that pair as trailing tool work, so every completed turn that changed files received a same-session repository continuation until integration.omnigent.execute reached its six-hour StartToClose timeout",
+  "harness": "codex-native",
   "sessionStatus": "idle",
   "items": [
     {"id": "item-user", "type": "message", "status": "completed", "response_id": "codex_turn-1", "data": {"role": "user", "content": [{"type": "input_text", "text": "task"}]}},

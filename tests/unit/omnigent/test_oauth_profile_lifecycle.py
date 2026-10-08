@@ -4469,6 +4469,7 @@ async def _drive_authority_chain_coordinator(
     *,
     publication: dict | None = None,
     completion_evidence: list[dict] | None = None,
+    session_inspector: OmnigentOAuthHostRuntime | None = None,
     request_parameters: dict | None = None,
     session_interruption: bool = True,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
@@ -4608,6 +4609,8 @@ async def _drive_authority_chain_coordinator(
             }
 
         async def inspect_session_completion(self, _session_id):
+            if session_inspector is not None:
+                return await session_inspector.inspect_session_completion(_session_id)
             if completion_sequence:
                 return completion_sequence.pop(0)
             return {
@@ -5202,8 +5205,20 @@ async def test_runtime_completion_requires_assistant_after_latest_tool(tmp_path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "harness",
+    [
+        "codex-native",
+        "claude-native",
+        "opencode-native",
+        "custom",
+        "codex-native-ui",
+        None,
+    ],
+)
 async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
     tmp_path,
+    harness,
 ) -> None:
     def assistant(text: str) -> dict:
         return {
@@ -5239,6 +5254,7 @@ async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
             side_effect=[
                 {
                     "status": "idle",
+                    "harness": harness,
                     "items": [
                         user,
                         tool_call,
@@ -5249,6 +5265,7 @@ async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
                 },
                 {
                     "status": "idle",
+                    "harness": harness,
                     "items": [
                         user,
                         assistant("Working"),
@@ -5269,10 +5286,10 @@ async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
     answered = await runtime.inspect_session_completion("session-1")
     tool_only = await runtime.inspect_session_completion("session-1")
 
-    assert answered["terminalAssistantAfterWork"] is True
-    assert answered["toolResultCount"] == 1
+    assert answered["terminalAssistantAfterWork"] is (harness == "codex-native")
+    assert answered["toolResultCount"] == (1 if harness == "codex-native" else 2)
     assert tool_only["terminalAssistantAfterWork"] is False
-    assert tool_only["toolResultCount"] == 1
+    assert tool_only["toolResultCount"] == (1 if harness == "codex-native" else 2)
 
 
 @pytest.mark.asyncio

@@ -1172,12 +1172,18 @@ def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
 _TURN_INSTRUMENTATION_TOOL_NAMES = frozenset({"turn_diff"})
 
 
-def turn_instrumentation_item_indexes(items: list[Any]) -> frozenset[int]:
+def turn_instrumentation_item_indexes(
+    items: list[Any], *, harness: str | None
+) -> frozenset[int]:
     """Return the indexes of native evidence-only instrumentation items.
 
-    A call is recognized by its tool name and an output only by the call id of a
-    recognized call, so an ordinary tool result is never mistaken for one.
+    Only the provider session's canonical native Codex harness projects this
+    instrumentation. Other and unknown harnesses may have real tools with the
+    same name. Within Codex, outputs must match a recognized call id.
     """
+
+    if harness != "codex-native":
+        return frozenset()
 
     call_ids: set[str] = set()
     indexes: set[int] = set()
@@ -1276,7 +1282,9 @@ def _marked_turn_item_state(
     progress = False
     pending_call_ids: set[str] = set()
     pending_call_names: dict[str, str] = {}
-    instrumentation_indexes = turn_instrumentation_item_indexes(raw_items)
+    instrumentation_indexes = turn_instrumentation_item_indexes(
+        raw_items, harness=snapshot.get("harness")
+    )
     anonymous_pending_calls = 0
     anonymous_pending_call_names: list[str] = []
     for index, raw_item in enumerate(
