@@ -24,7 +24,7 @@ from moonmind.workflows.provider_failures import (
 )
 from pr_resolver_core.review_providers import (
     automated_review_provider_or_raise,
-    is_clean_review_comment,
+    latest_review_reply,
     normalize_reviewer_login,
 )
 
@@ -2797,50 +2797,25 @@ class GitHubService:
         requested_at: datetime | None,
         head_sha: str,
     ) -> dict[str, Any] | ProviderFailureEvent | None:
-        """Read a request's clean response or sanitized provider failure."""
+        """Read a request's clean response or sanitized provider failure.
+
+        ``pr_resolver_core`` owns how a provider reply is read, so this gate
+        and the portable Skill reach the same verdict on the same comments.
+        """
 
         comments_url: str | None = (
             f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
             "?per_page=100"
         )
-        latest: tuple[datetime, dict[str, Any] | ProviderFailureEvent] | None = None
+        comments: list[Any] = []
         try:
             while comments_url:
                 response = await client.get(comments_url, headers=headers)
                 response.raise_for_status()
-                comments = response.json()
-                if not isinstance(comments, list):
+                page = response.json()
+                if not isinstance(page, list):
                     return None
-                for comment in comments:
-                    if not isinstance(comment, dict):
-                        continue
-                    user = (
-                        comment.get("user")
-                        if isinstance(comment.get("user"), dict)
-                        else {}
-                    )
-                    if (
-                        normalize_reviewer_login(user.get("login"))
-                        not in provider.reviewer_logins
-                    ):
-                        continue
-                    created_at = _parse_github_timestamp(comment.get("created_at"))
-                    if created_at is None or (
-                        requested_at is not None and created_at <= requested_at
-                    ):
-                        continue
-                    if is_clean_review_comment(
-                        provider, comment, requested_at=requested_at, head_sha=head_sha
-                    ):
-                        candidate = comment
-                    else:
-                        candidate = build_provider_failure_event(
-                            reason=comment.get("body")
-                        )
-                    if candidate is not None and (
-                        latest is None or created_at >= latest[0]
-                    ):
-                        latest = (created_at, candidate)
+                comments.extend(page)
                 comments_url = response.links.get("next", {}).get("url")
         except (
             httpx.HTTPStatusError,
@@ -2848,7 +2823,14 @@ class GitHubService:
             httpx.TimeoutException,
         ):
             return None
-        return latest[1] if latest is not None else None
+        reply = latest_review_reply(
+            provider, comments, requested_at=requested_at, head_sha=head_sha
+        )
+        if reply is None:
+            return None
+        if not reply.failure_class:
+            return dict(reply.comment)
+        return build_provider_failure_event(provider_error_class=reply.failure_class)
 
     async def _find_request_clean_review_reaction(
         self,

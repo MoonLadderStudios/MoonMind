@@ -19,6 +19,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HEAD = "a" * 40
 OLD_HEAD = "b" * 40
 HEAD_COMMITTED_AT = datetime(2026, 8, 24, 22, 10, tzinfo=UTC)
+CODEX_LOGIN = "chatgpt-codex-connector[bot]"
+# Codex refusing a requested review, verbatim: MoonLadderStudios/Tactics#2788
+# (comment 6025386732, nine seconds after `@codex review` comment 6025384173)
+# and MoonLadderStudios/MoonMind#4648 (comment 5928614765).
+CODEX_USAGE_LIMIT_REPLY = (
+    "You have reached your Codex usage limits for code reviews. You can see your "
+    "limits in the [Codex usage dashboard]"
+    "(https://chatgpt.com/codex/cloud/settings/usage).\n"
+    "To continue using code reviews, add credits to your account and enable them "
+    "for code reviews in your "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
+CODEX_REPO_USAGE_LIMIT_REPLY = (
+    "Codex usage limits have been reached for code reviews. Please check with the "
+    "admins of this repo to increase the limits by adding credits.\n"
+    "Repo admins can enable using credits for code reviews in their "
+    "[settings](https://chatgpt.com/codex/cloud/settings/code-review)."
+)
 
 
 def _load_module(script_path: Path) -> dict[str, Any]:
@@ -296,6 +314,23 @@ def test_pending_review_precedes_every_remediation(blocker) -> None:
     assert decision.reason_code == "automated_review_wait"
 
 
+@pytest.mark.parametrize("blocker", ["none", "comments", "ci", "conflict"])
+def test_failed_request_stops_instead_of_waiting_or_remediating(blocker) -> None:
+    snapshot = _snapshot()
+    snapshot["automatedReview"]["requestFailed"] = True
+    if blocker == "comments":
+        snapshot["commentsSummary"]["hasActionableComments"] = True
+    elif blocker == "ci":
+        snapshot["ci"]["hasFailures"] = True
+    elif blocker == "conflict":
+        snapshot["pr"]["mergeable"] = False
+
+    decision = classify_snapshot(normalize_portable_snapshot(snapshot))
+
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+    assert decision.reason_code == "automated_review_request_failed"
+
+
 @pytest.mark.parametrize("kind", ["issue_comment", "pr_reaction"])
 def test_clean_response_finishes_without_requesting_another_review(
     snapshot_module, kind
@@ -406,6 +441,134 @@ def test_pr_reaction_requires_provider_clean_completion_after_request(
         snapshot_module, comments=[_request_comment()], reactions_for_pr=[reaction]
     )
     assert evidence["freshReviewForHead"] is False
+
+
+def _codex_reply(
+    body: str, *, created_at: str = "2026-08-24T22:20:00Z", comment_id: int = 77
+) -> dict[str, Any]:
+    return {
+        "id": comment_id,
+        "type": "issue_comment",
+        "user": CODEX_LOGIN,
+        "body": body,
+        "created_at": created_at,
+    }
+
+
+@pytest.mark.parametrize(
+    "body", [CODEX_USAGE_LIMIT_REPLY, CODEX_REPO_USAGE_LIMIT_REPLY]
+)
+def test_provider_usage_limit_reply_fails_the_request(snapshot_module, body) -> None:
+    request = _request_comment(created_at="2026-10-06T21:02:09Z")
+    request["id"] = 6025384173
+    reply = _codex_reply(
+        body, created_at="2026-10-06T21:02:18Z", comment_id=6025386732
+    )
+
+    evidence = _evidence(snapshot_module, comments=[request, reply])
+
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is False
+    assert evidence["requestFailed"] is True
+    assert evidence["requestFailure"] == {
+        "kind": "issue_comment",
+        "id": 6025386732,
+        "failedAt": "2026-10-06T21:02:18Z",
+        "providerErrorClass": "rate_limit",
+    }
+    decision = classify_snapshot(
+        normalize_portable_snapshot(_snapshot(automatedReview=evidence))
+    )
+    assert decision.action is ResolverAction.STOP_MANUAL_REVIEW
+    assert decision.reason_code == "automated_review_request_failed"
+
+
+@pytest.mark.parametrize("latest", ["clean", "failure"])
+def test_latest_provider_reply_decides_the_request(snapshot_module, latest) -> None:
+    clean = _codex_reply(
+        "Codex Review: Didn't find any major issues. 🚀",
+        created_at=(
+            "2026-08-24T22:20:00Z" if latest == "clean" else "2026-08-24T22:19:00Z"
+        ),
+        comment_id=56,
+    )
+    failure = _codex_reply(
+        CODEX_USAGE_LIMIT_REPLY,
+        created_at=(
+            "2026-08-24T22:20:00Z" if latest == "failure" else "2026-08-24T22:19:00Z"
+        ),
+        comment_id=55,
+    )
+
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), clean, failure])
+
+    assert evidence["freshReviewForHead"] is (latest == "clean")
+    assert evidence["requestFailed"] is (latest == "failure")
+    assert evidence["requestPending"] is False
+
+
+@pytest.mark.parametrize(
+    "change", ["before_request", "human", "old_head", "task_summary", "status_summary"]
+)
+def test_unrelated_reply_keeps_the_request_pending(snapshot_module, change) -> None:
+    reply = _codex_reply(CODEX_USAGE_LIMIT_REPLY)
+    if change == "before_request":
+        reply["created_at"] = "2026-08-24T22:14:00Z"
+    elif change == "human":
+        reply["user"] = "nsticco"
+    elif change == "old_head":
+        reply["commit_id"] = OLD_HEAD
+    elif change == "task_summary":
+        reply["body"] = (
+            "### Summary\n* Retried GitHub calls that hit the API rate limit and "
+            "surfaced usage limits in the dashboard."
+        )
+    else:
+        # The provider's own status comment carries short SHAs and timestamps;
+        # digits such as `4290` are not an HTTP status.
+        reply["body"] = (
+            "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+            "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+            "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |"
+        )
+
+    evidence = _evidence(snapshot_module, comments=[_request_comment(), reply])
+
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
+    assert evidence["requestFailure"] is None
+
+
+def test_clean_reaction_completes_despite_a_failure_reply(snapshot_module) -> None:
+    evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY)],
+        reactions_for_request=[
+            {
+                "id": 58,
+                "content": "+1",
+                "created_at": "2026-08-24T22:21:00Z",
+                "user": {"login": CODEX_LOGIN},
+            }
+        ],
+    )
+
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["requestFailed"] is False
+
+
+def test_new_request_after_a_failure_is_pending(snapshot_module) -> None:
+    retried = _request_comment(created_at="2026-08-24T23:00:00Z")
+    retried["id"] = 98766
+
+    evidence = _evidence(
+        snapshot_module,
+        comments=[_request_comment(), _codex_reply(CODEX_USAGE_LIMIT_REPLY), retried],
+    )
+
+    assert evidence["requestCommentId"] == 98766
+    assert evidence["requestPending"] is True
+    assert evidence["requestFailed"] is False
 
 
 @pytest.mark.parametrize(
@@ -719,6 +882,71 @@ def test_finalize_writes_a_request_review_result(tmp_path, monkeypatch) -> None:
     assert payload["mergeAutomationDisposition"] == "request_review"
     assert payload["gatedContinuation"]["action"] == "request_review"
     assert payload["gatedContinuation"]["provider"] == "codex"
+
+
+def test_finalize_stops_on_a_refused_review_request(
+    tmp_path, monkeypatch, contract_module
+) -> None:
+    finalize_module = _load_module(
+        REPO_ROOT / ".agents" / "skills" / "pr-resolver" / "bin" / "pr_resolve_finalize.py"
+    )
+    main = finalize_module["main"]
+    snapshot = _snapshot()
+    snapshot["automatedReview"].update(
+        {
+            "requestFailed": True,
+            "requestFailure": {
+                "kind": "issue_comment",
+                "id": 6025386732,
+                "failedAt": "2026-10-06T21:02:18Z",
+                "providerErrorClass": "rate_limit",
+            },
+        }
+    )
+
+    def _write_snapshot(
+        _snapshot_script: Path, _pr: str | None, snapshot_path: Path, **_: Any
+    ) -> None:
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    monkeypatch.setitem(main.__globals__, "_run_snapshot", _write_snapshot)
+    result_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "350",
+            "--snapshot-path",
+            str(tmp_path / "snapshot.json"),
+            "--result-path",
+            str(result_path),
+            "--review-provider",
+            "codex",
+            "--require-fresh-review",
+            "--strict-exit-codes",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main()
+
+    assert excinfo.value.code == finalize_module["EXIT_CODE_BLOCKED"]
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["final_reason"] == "automated_review_request_failed"
+    assert payload["next_step"] == "manual_review"
+    assert payload["mergeAutomationDisposition"] == "manual_review"
+    assert "gatedContinuation" not in payload
+    assert "rate or usage limit" in payload["decision"]
+    # A standalone orchestrator stops instead of retrying finalize.
+    assert (
+        contract_module["classify_retry_action"](
+            payload["final_reason"], merge_not_ready_grace_remaining=5
+        )
+        == "stop"
+    )
 
 
 @pytest.mark.parametrize(
