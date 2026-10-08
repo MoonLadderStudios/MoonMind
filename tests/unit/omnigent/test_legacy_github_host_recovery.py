@@ -227,6 +227,15 @@ async def _recovery_fixture(tmp_path, monkeypatch):
             assert kwargs["request"] is request
             assert kwargs["host_lease_ref"] == lease.lease_id
             receipt = dict(row.metadata_.get("githubCredentialRecovery") or {})
+            claim = kwargs.get("recovery_claim")
+            if claim is None and phase == "waiting":
+                receipt["recoveryClaim"] = receipt.get("recoveryClaim", 0) + 1
+            elif claim is not None and claim != receipt.get("recoveryClaim"):
+                from moonmind.omnigent.bridge_store import OmnigentIdempotencyError
+
+                raise OmnigentIdempotencyError(
+                    "credential recovery attempt was superseded"
+                )
             receipt.update(
                 phase=phase,
                 hostLeaseRef=lease.lease_id,
@@ -626,6 +635,28 @@ async def test_durable_receipt_fences_janitor_until_current_terminal_save(
         assert persisted_receipt["retainedCpuLimit"] == valid_cpu
         assert persisted_receipt["sourceContainerId"] == "a" * 64
         assert "debugEnv" not in persisted_receipt["checkpoint"]
+        # A timed-out preservation attempt that keeps running beside its
+        # retry cannot move the retry's durable progress backward.
+        assert persisted_receipt["recoveryClaim"] > receipt["recoveryClaim"]
+        with pytest.raises(OmnigentIdempotencyError, match="superseded"):
+            await store.record_host_credential_recovery(
+                request=fixture.request,
+                host_lease_ref=lease.lease_id,
+                phase="waiting",
+                recovery_claim=receipt["recoveryClaim"],
+            )
+        assert (
+            await store.get_existing(fixture.request.idempotency_key)
+        ).metadata_["githubCredentialRecovery"] == persisted_receipt
+        assert (
+            await store.record_host_credential_recovery(
+                request=fixture.request,
+                host_lease_ref=lease.lease_id,
+                phase="saved",
+                checkpoint=saved,
+                recovery_claim=persisted_receipt["recoveryClaim"],
+            )
+        )["recoveryClaim"] == persisted_receipt["recoveryClaim"]
         await store.record_lifecycle_event(
             fixture.request.idempotency_key, event_type="terminal", status="waiting"
         )
@@ -996,6 +1027,84 @@ async def test_preserved_workspace_never_restores_over_current_or_reclones_missi
             host_lease=fixture.lease,
         )
     assert not fixture.workspace.exists()
+
+
+@pytest.mark.asyncio
+async def test_preserved_workspace_check_follows_custom_admitted_locator(
+    tmp_path, monkeypatch
+):
+    from moonmind.omnigent.workspace_publication import (
+        OmnigentWorkspacePublicationService,
+    )
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+    runtime = fixture.new_runtime()
+    await runtime._launch_on_demand(**fixture.args)
+    locator = fixture.request.workspace_spec["workspaceLocator"]
+    records = SandboxWorkspaceRecordStore(tmp_path)
+    records._record_path(locator["workspaceId"]).unlink()
+    records.ensure(
+        SandboxWorkspaceRecord(
+            locator["workspaceId"],
+            "workflow-1",
+            "workflow-1:run-1:implement:execution:1",
+            "custom",
+        )
+    )
+    custom = fixture.workspace.parent / "custom"
+    fixture.workspace.rename(custom)
+    request = fixture.request.model_copy(
+        update={
+            "workspace_spec": {
+                **fixture.request.workspace_spec,
+                "workspaceLocator": {**locator, "relativePath": "custom"},
+            }
+        }
+    )
+    restore_owner = AsyncMock()
+    monkeypatch.setattr(
+        OmnigentWorkspacePublicationService,
+        "restore_saved_request_workspace",
+        restore_owner,
+    )
+
+    await runtime._restore_preserved_workspace_if_missing(
+        request=request,
+        store=fixture.store,
+        artifact_gateway=fixture.artifacts,
+        host_lease=fixture.lease,
+    )
+
+    restore_owner.assert_not_awaited()
+    assert (custom / "untracked.txt").read_text() == "new saved work\n"
+
+
+@pytest.mark.asyncio
+async def test_superseded_preservation_attempt_cannot_stop_or_rewrite_progress(
+    tmp_path, monkeypatch
+):
+    fixture = await _recovery_fixture(tmp_path, monkeypatch)
+
+    async def newer_attempt(phase, checkpoint):
+        receipt = fixture.row.metadata_["githubCredentialRecovery"]
+        if phase == "waiting" and receipt["recoveryClaim"] == 1:
+            fixture.row.metadata_["githubCredentialRecovery"] = {
+                **receipt,
+                "recoveryClaim": 2,
+                "phase": "saved",
+            }
+
+    fixture.state["after_save"] = newer_attempt
+    with pytest.raises(OmnigentOAuthHostError, match="retained current work"):
+        await fixture.new_runtime()._launch_on_demand(**fixture.args)
+    assert fixture.state["running"]
+    assert ("docker", "stop") not in fixture.state["events"]
+    receipt = fixture.row.metadata_["githubCredentialRecovery"]
+    assert (receipt["recoveryClaim"], receipt["phase"]) == (2, "saved")
 
 
 @pytest.mark.asyncio

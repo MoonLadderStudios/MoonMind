@@ -1437,11 +1437,15 @@ class OmnigentBridgeSessionStore:
         terminal_ref: str | None = None,
         retained_cpu_limit: Mapping[str, Any] | None = None,
         source_container_id: str | None = None,
+        recovery_claim: int | None = None,
     ) -> dict[str, Any]:
         """Keep credential replacement under the existing bridge and lease fence.
 
         The host row lock serializes preservation with the cleanup CAS. A save
         is an immutable receipt, never permission to restore over current work.
+        A ``waiting`` write without ``recovery_claim`` starts a preservation
+        attempt with the next ordered claim; that attempt's later writes pass
+        its claim, so a superseded attempt cannot rewrite newer progress.
         """
         from api_service.db.models import OmnigentOAuthHostLeaseRecord
         from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
@@ -1480,6 +1484,21 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError("preserved host authority changed")
             if previous and previous.get("phase") == "completed":
                 raise OmnigentIdempotencyError("credential recovery already settled")
+            previous_claim = previous.get("recoveryClaim")
+            if previous_claim is not None and (
+                type(previous_claim) is not int or previous_claim < 1
+            ):
+                raise OmnigentIdempotencyError("credential recovery claim is invalid")
+            if recovery_claim is not None:
+                if recovery_claim != previous_claim:
+                    raise OmnigentIdempotencyError(
+                        "credential recovery attempt was superseded"
+                    )
+                claim = recovery_claim
+            elif phase == "waiting":
+                claim = (previous_claim or 0) + 1
+            else:
+                claim = previous_claim
             checkpoint_fields = {
                 "kind", "baseCommit", "headCommit", "archiveRef", "archiveDigest",
                 "manifestRef", "manifestDigest", "workspaceDigest",
@@ -1496,6 +1515,8 @@ class OmnigentBridgeSessionStore:
                 "recoveryOwner": "integration.omnigent.execute",
                 "recoveryAction": "save_and_resume_same_host",
             }
+            if claim is not None:
+                receipt["recoveryClaim"] = claim
             if "replacementEgressPending" in previous:
                 if type(previous["replacementEgressPending"]) is not bool:
                     raise OmnigentIdempotencyError("credential recovery egress receipt is invalid")
