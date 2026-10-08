@@ -10,6 +10,7 @@ import copy
 from datetime import datetime, timezone
 import json
 import subprocess
+from unittest.mock import AsyncMock
 from urllib.parse import unquote
 
 import httpx
@@ -483,6 +484,7 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
 ):
     from moonmind.schemas.temporal_models import MergeAutomationStartInput
     from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
     from moonmind.workflows.temporal.workflows import merge_automation as merge_module
 
     repo, _, _ = candidate
@@ -495,6 +497,13 @@ async def test_post_merge_activity_validates_real_merge_before_github_completion
     parent._repo = "example/repo"
     parent._publish_context.update(branch="feature", baseRef=target)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    # This historical fixture has no frozen execution-plan repository snapshot;
+    # the acquisition owner therefore delegates to its recorded default binding.
+    monkeypatch.setattr(
+        managed_api_key_resolve,
+        "acquire_admitted_repository_use",
+        AsyncMock(return_value=(None, None)),
+    )
     completion_target = "refs/heads/feature" if defect == "configured-target" else "refs/heads/release" if target == "release" else ""
     payload = parent._build_merge_gate_start_payload(
         parameters={"publishMode": "pr", "mergeAutomation": {"enabled": True},
