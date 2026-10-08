@@ -911,12 +911,17 @@ async def omnigent_execute_activity(
 
 
 def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
+    receipt: dict[str, Any] = {}
     completed = getattr(exc, "admitted_provider_capacity_cleanup_completed", None)
-    return (
-        {"admittedProviderCapacityCleanupCompleted": completed}
-        if isinstance(completed, bool)
-        else {}
-    )
+    if isinstance(completed, bool):
+        receipt["admittedProviderCapacityCleanupCompleted"] = completed
+    # The realizer attaches this only after it confirmed the attempt stopped;
+    # a successor Step Execution restores it instead of starting empty.
+    saved = getattr(exc, "saved_workspace_checkpoint", None)
+    if isinstance(saved, dict) and saved:
+        receipt["savedWorkspaceCheckpoint"] = saved
+        receipt["workPreserved"] = True
+    return receipt
 
 
 def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:

@@ -114,6 +114,19 @@ def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
     }
 
 
+def carry_confirmed_saved_work(error: BaseException, binding: Any) -> None:
+    """Offer a failed attempt's saved workspace to its successor (#4627).
+
+    Only after this realizer's cleanup confirmed the attempt stopped (its host,
+    credentials and session released) can no late write follow the save, so a
+    replacement Step Execution may continue from those verified bytes.
+    """
+
+    saved = (binding.phaseResults or {}).get("saved")
+    if binding.state is RuntimeBindingState.cleaned and saved:
+        error.saved_workspace_checkpoint = dict(saved)  # type: ignore[attr-defined]
+
+
 class GenericOmnigentHostRealizer:
     ref = "generic-omnigent-host@1"
     authority_kinds = ("model", "repository")
@@ -741,6 +754,8 @@ class GenericOmnigentHostRealizer:
             recovery = await self._interrupted_admission_result(request, binding)
             if recovery is not None:
                 return recovery
+            if isinstance(primary_error, Exception):
+                carry_confirmed_saved_work(primary_error, binding)
         if primary_error is not None:
             raise primary_error
         if result is None:
@@ -998,6 +1013,8 @@ class GenericOmnigentHostRealizer:
             binding=current,
         )
         if primary_error is not None:
+            if cleanup_error is None and isinstance(primary_error, Exception):
+                carry_confirmed_saved_work(primary_error, current)
             raise primary_error
         if result is None:
             raise HarnessPlatformError(
@@ -1916,4 +1933,4 @@ class GenericOmnigentHostRealizer:
         )
 
 
-__all__ = ["GenericOmnigentHostRealizer"]
+__all__ = ["GenericOmnigentHostRealizer", "carry_confirmed_saved_work"]

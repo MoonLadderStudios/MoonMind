@@ -313,6 +313,62 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_carries_confirmed_saved_work_on_host_loss() -> None:
+    """Host loss reports the stopped attempt's verified save for its successor.
+
+    Issue #4627: the realizer's own cleanup confirmed the predecessor stopped
+    and saved its surviving workspace; the retryable failure carries that
+    receipt so the next Step Execution restores it instead of starting empty.
+    """
+
+    from moonmind.omnigent.execute import OmnigentSessionHostLostError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+    saved = {
+        "kind": "worktree_archive",
+        "archiveRef": "artifact://art-saved-archive",
+        "archiveDigest": "sha256:" + "a" * 64,
+        "checkpointRef": "artifact://art-saved-checkpoint",
+    }
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            return plan
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            error = OmnigentSessionHostLostError(
+                "Omnigent session host went offline", offline_seconds=181.0
+            )
+            error.saved_workspace_checkpoint = saved
+            raise error
+
+    class Registry:
+        def require(self, ref):
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-host-lost",
+            idempotencyKey="step-host-lost",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.metadata["savedWorkspaceCheckpoint"] == saved
+    assert result.metadata["workPreserved"] is True
+
+
+@pytest.mark.asyncio
 async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_service() -> (
     None
 ):
