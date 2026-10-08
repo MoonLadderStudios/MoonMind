@@ -298,6 +298,115 @@ async def test_creation_preset_exposes_only_backend_supported_authentication_met
 
 
 @pytest.mark.asyncio
+async def test_creation_choices_project_backend_declarations_for_first_profile(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """MoonLadderStudios/MoonMind#4001: first-profile Harness/Provider choices.
+
+    Choices come from the trusted creation declarations, not saved profiles or
+    live hosts, so a deployment without any profile still offers every
+    supported pair.
+    """
+
+    _override_current_user()
+    session_maker = db_base.async_session_maker
+    db_base.async_session_maker = None  # any profile or host lookup would fail
+    try:
+        async with client_app as client:
+            response = await client.get("/api/v1/provider-profiles/creation-choices")
+            payload = response.json()
+            # Every projected pair agrees with the creation-capability authority.
+            for harness in payload["harnesses"]:
+                for provider in harness["providers"]:
+                    capabilities = await client.get(
+                        "/api/v1/provider-profiles/creation-capabilities",
+                        params={
+                            "runtime_id": harness["runtime_id"],
+                            "provider_id": provider["provider_id"],
+                        },
+                    )
+                    assert capabilities.json()["supported"] is True, (
+                        harness["runtime_id"],
+                        provider["provider_id"],
+                    )
+    finally:
+        db_base.async_session_maker = session_maker
+
+    assert response.status_code == 200
+    assert payload["version"] == "provider-profile-creation-v1"
+    assert payload["profile_id_max_length"] == (
+        ProviderProfileCreate.model_fields["profile_id"].metadata[0].max_length
+    )
+    harnesses = {harness["runtime_id"]: harness for harness in payload["harnesses"]}
+    assert "omnigent" not in harnesses
+    assert harnesses["codex_cli"]["label"] == "Codex CLI"
+    assert harnesses["claude_code"]["label"] == "Claude Code"
+    assert harnesses["opencode"]["label"] == "OpenCode"
+    providers = {
+        runtime_id: {
+            provider["provider_id"]: provider["label"]
+            for provider in harness["providers"]
+        }
+        for runtime_id, harness in harnesses.items()
+    }
+    assert providers["codex_cli"] == {
+        "openai": "OpenAI",
+        "minimax": "MiniMax",
+        "openrouter": "OpenRouter",
+    }
+    assert providers["claude_code"] == {"anthropic": "Anthropic", "minimax": "MiniMax"}
+    assert providers["opencode"] == {
+        "opencode": "OpenCode",
+        "opencode-go": "OpenCode Go",
+    }
+    # Only the open-ended OpenCode API-key strategy advertises other providers.
+    assert harnesses["opencode"]["custom_provider_allowed"] is True
+    assert harnesses["codex_cli"]["custom_provider_allowed"] is False
+    assert harnesses["claude_code"]["custom_provider_allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_creation_choices_require_provider_profile_read_permission(
+    client_app: AsyncClient, _module_db
+) -> None:
+    _override_current_user(settings_permissions=set())
+
+    async with client_app as client:
+        response = await client.get("/api/v1/provider-profiles/creation-choices")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_duplicate_profile_id_identifies_profile_id_field(
+    client_app: AsyncClient, _module_db
+) -> None:
+    """A conflict names the Profile ID field instead of suggesting a suffix."""
+
+    _override_current_user()
+    profile_id = "mm4001-duplicate-codex-openai"
+    body = {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "authentication_method": "api_key",
+        "preset_version": CODEX_OPENAI_API_KEY_PRESET_VERSION,
+    }
+
+    async with client_app as client:
+        first = await client.post("/api/v1/provider-profiles", json=body)
+        second = await client.post("/api/v1/provider-profiles", json=body)
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert second.json()["detail"] == {
+        "code": "provider_profile_id_conflict",
+        "field": "profile_id",
+        "message": "Profile already exists",
+    }
+
+
+@pytest.mark.asyncio
 async def test_guided_api_key_creation_uses_backend_preset_and_stays_disabled(
     client_app: AsyncClient, _module_db
 ) -> None:

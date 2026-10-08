@@ -1347,6 +1347,9 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+# Preserve resolved authored data in instructions-only AgentRun requests without
+# changing the child command payload recorded by pre-patch histories.
+RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH = "run-agent-step-inputs-handoff-v1"
 RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-validation-v1"
 # PR #4557 review: deriving a stable container-job idempotency key changes the
 # submit activity arguments. Replay-gate the derivation so in-flight histories
@@ -22883,6 +22886,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or node_inputs.get("instructions")
             or node_inputs.get("instructionRef")
         )
+        if (
+            skill_inputs
+            and not selected_skill
+            and not branch_instruction_ref
+            and isinstance(node_inputs.get("instructions"), str)
+            and node_inputs["instructions"].strip()
+            and not node_inputs["instructions"].strip().startswith("artifact://")
+            and self._workflow_patch_enabled(RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH)
+        ):
+            # Selected Skills already carry their inputs in the skill contract.
+            # Instructions-only Steps must receive the same resolved user data
+            # as prompt content, never as runtime or authorization parameters.
+            # Opaque instruction refs remain owned by their materialization path.
+            input_data = json.dumps(
+                self._json_mapping(skill_inputs, path=f"node[{node_id}].inputs"),
+                indent=2,
+                sort_keys=True,
+            )
+            instruction = str(request_instruction_ref or "").rstrip()
+            if input_data not in instruction:
+                request_instruction_ref = (
+                    f"{instruction}\n\nResolved step inputs:\n{input_data}".lstrip()
+                )
         if (
             branch_instruction_ref
             and agent_kind == "external"

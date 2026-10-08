@@ -2922,6 +2922,71 @@ async def test_ordinary_auto_child_still_cannot_broaden_read_only_parent_authori
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("finish_mode", ["merge", "fix_only"])
+async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
+    monkeypatch, tmp_path, finish_mode
+) -> None:
+    """A publish-None existing-PR coordinator donates its resolver's authority.
+
+    The pr-review-resolve preset compiles its own publication to None while
+    merge automation launches a pr-resolver child with Auto publication. The
+    child re-admits against this parent, so the parent scope must hold the
+    push authority its resolver needs (fix_only still pushes).
+    """
+    repository, engine, sessions = await _configure_github_repository_plan_test(
+        monkeypatch, tmp_path
+    )
+    artifacts = _ReadableRepositoryPlanArtifacts()
+    try:
+        parent = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters={
+                "repository": repository,
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Resolve the existing pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "finishMode": finish_mode,
+                        },
+                    },
+                },
+            },
+            workflow_id="mm:existing-pr-parent",
+        )
+        child = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=_PlanStore(object()),
+            session_factory=sessions,
+            profile_tools=("gh",),
+            extra_parameters={"repository": repository, "publishMode": "auto"},
+            workflow_id="mm:existing-pr-resolver-child",
+            parent_repository_plan=parent.envelope,
+        )
+        access = child.envelope.payload.resolvedTools["repositoryAccess"]
+        artifact_id = access["collaboration"]["artifactRef"].removeprefix("artifact:")
+        selection = json.loads(artifacts.payloads[artifact_id])["selection"]
+        assert selection["operations"] == [
+            "read",
+            "write",
+            "branch_write",
+            "review_request",
+        ]
+        assert "destination" not in access
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "review_config",
     [

@@ -123,13 +123,19 @@ def _validate_schema_shape(schema: Mapping[str, Any], *, path: str) -> None:
         if isinstance(items, Mapping):
             _validate_schema_shape(items, path=f"{path}/items")
 
-def _validate_json_value(
+def validate_json_value(
     *,
     value: Any,
     schema: Mapping[str, Any],
     path: str,
-    allow_refs: bool,
+    allow_refs: bool = False,
 ) -> None:
+    """Validate a value with the schema rules shared by admission and tool owners.
+
+    Only plan admission may defer validation of dependency references. Tool
+    handlers validate resolved values with the default ``allow_refs=False``.
+    """
+
     if allow_refs and _is_ref_object(value):
         return
 
@@ -164,7 +170,7 @@ def _validate_json_value(
         if isinstance(properties, Mapping):
             for key, child_schema in properties.items():
                 if key in value and isinstance(child_schema, Mapping):
-                    _validate_json_value(
+                    validate_json_value(
                         value=value[key],
                         schema=child_schema,
                         path=f"{path}/{key}",
@@ -189,7 +195,7 @@ def _validate_json_value(
         item_schema = schema.get("items")
         if isinstance(item_schema, Mapping):
             for index, item in enumerate(value):
-                _validate_json_value(
+                validate_json_value(
                     value=item,
                     schema=item_schema,
                     path=f"{path}/{index}",
@@ -333,21 +339,23 @@ def validate_plan(
 
     registry_skills: dict[str, SkillDefinition] = registry_snapshot.by_key
     for node in plan.nodes:
-        definition = registry_skills.get(node.skill_key)
-        if definition is None:
-            raise PlanValidationError(
-                "invalid_plan",
-                f"Plan node '{node.id}' references unknown tool '{node.skill_name}'",
-            )
+        if node.tool_type != "agent_runtime":
+            definition = registry_skills.get(node.skill_key)
+            if definition is None:
+                raise PlanValidationError(
+                    "invalid_plan",
+                    f"Plan node '{node.id}' references unknown tool "
+                    f"'{node.skill_name}'",
+                )
 
-        _validate_schema_shape(definition.input_schema, path=f"{node.id}.inputs")
-        _validate_schema_shape(definition.output_schema, path=f"{node.id}.outputs")
-        _validate_json_value(
-            value=node.inputs,
-            schema=definition.input_schema,
-            path=f"{node.id}.inputs",
-            allow_refs=True,
-        )
+            _validate_schema_shape(definition.input_schema, path=f"{node.id}.inputs")
+            _validate_schema_shape(definition.output_schema, path=f"{node.id}.outputs")
+            validate_json_value(
+                value=node.inputs,
+                schema=definition.input_schema,
+                path=f"{node.id}.inputs",
+                allow_refs=True,
+            )
 
         refs = _collect_refs(node.inputs)
         for ref_node, pointer, ref_path in refs:
@@ -378,7 +386,14 @@ def validate_plan(
                     f"Reference at {node.id}{ref_path} requires dependency path {ref_node} -> {node.id}",
                 )
 
-            referenced_skill = registry_skills[node_map[ref_node].skill_key]
+            referenced_node = node_map[ref_node]
+            if referenced_node.tool_type == "agent_runtime":
+                # AgentRun owns its result contract. Validate pointer syntax now;
+                # the resolver checks the path against the recorded result.
+                _json_pointer_tokens(pointer)
+                continue
+
+            referenced_skill = registry_skills[referenced_node.skill_key]
             result_schema = {
                 "type": "object",
                 "properties": {
@@ -408,6 +423,7 @@ def validate_plan_payload(
 __all__ = [
     "PlanValidationError",
     "ValidatedPlan",
+    "validate_json_value",
     "validate_plan",
     "validate_plan_payload",
 ]
