@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .models import CanonicalPullRequestSnapshot, ResolverAction, ResolverDecision
 
-
 _REMEDIATIONS = {
     "actionable_comments": "fix-comments",
     "ci_failures": "fix-ci",
@@ -34,6 +33,16 @@ def classify_snapshot(
     known_ci_failures_precede_degraded: bool = True,
     pending_review_precedes_remediation: bool = True,
 ) -> ResolverDecision:
+    if snapshot.observation_only:
+        # A cheap poll deliberately has no refreshed comment/review inventory.
+        # It can only retain the wait; no state in it authorizes an action.
+        if snapshot.checks_signal_available and not snapshot.checks_complete:
+            return _decision("ci_running", "ci_running", ResolverAction.WAIT)
+        return _decision(
+            "manual_review",
+            "snapshot_observation_only",
+            ResolverAction.STOP_MANUAL_REVIEW,
+        )
     if snapshot.merged:
         return _decision(
             "already_merged",
@@ -73,6 +82,10 @@ def classify_snapshot(
             "manual_review",
             "comment_policy_not_enforced",
             ResolverAction.STOP_MANUAL_REVIEW,
+        )
+    if snapshot.checks_external_blocked:
+        return _decision(
+            "manual_review", "ci_workflow_terminal", ResolverAction.STOP_MANUAL_REVIEW
         )
     if snapshot.checks_degraded and (
         not snapshot.checks_failed or not known_ci_failures_precede_degraded
