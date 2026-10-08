@@ -53,6 +53,9 @@ class CanonicalPullRequestSnapshot:
     automated_review_provider: str = ""
     fresh_automated_review: bool = False
     automated_review_requested: bool = False
+    # The provider answered the outstanding request for this head by refusing
+    # it (for example a usage limit). Waiting cannot produce a review.
+    automated_review_request_failed: bool = False
     deferred_comments: bool = False
     progress_signature: str = ""
     publish_available: bool = True

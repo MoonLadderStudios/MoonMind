@@ -173,6 +173,29 @@ def _infrastructure_summary(snapshot: dict[str, Any], *, exhausted: bool) -> str
     return f"GitHub Actions infrastructure failure on {head}: {details} ({attempts})"
 
 
+def _review_request_failure_summary(snapshot: dict[str, Any]) -> str:
+    review = (
+        snapshot.get("automatedReview")
+        if isinstance(snapshot.get("automatedReview"), dict)
+        else {}
+    )
+    failure = (
+        review.get("requestFailure")
+        if isinstance(review.get("requestFailure"), dict)
+        else {}
+    )
+    provider = normalize_text(review.get("provider")) or "automated review"
+    if normalize_text(failure.get("providerErrorClass")) == "rate_limit":
+        cause = "its rate or usage limit was reached"
+    else:
+        cause = "it could not perform the review"
+    reply = f" (comment {failure['id']})" if failure.get("id") else ""
+    return (
+        f"The {provider} provider refused the review request for this head"
+        f"{reply}: {cause}. Request a new review once the provider accepts it."
+    )
+
+
 def plan_infrastructure_reruns(
     snapshot: dict[str, Any], *, now: datetime
 ) -> dict[str, Any]:
@@ -711,14 +734,16 @@ def main() -> None:
             print(f"Blocked: {reason}: {summary}")
             sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
 
+        if reason == "ci_infra_rerun_exhausted":
+            blocked_summary = _infrastructure_summary(snapshot, exhausted=True)
+        elif reason == "automated_review_request_failed":
+            blocked_summary = _review_request_failure_summary(snapshot)
+        else:
+            blocked_summary = "blocked"
         _write_result(
             result_path,
             snapshot=snapshot,
-            decision=(
-                _infrastructure_summary(snapshot, exhausted=True)
-                if reason == "ci_infra_rerun_exhausted"
-                else "blocked"
-            ),
+            decision=blocked_summary,
             merge_outcome="blocked",
             status="blocked",
             reason=reason,
