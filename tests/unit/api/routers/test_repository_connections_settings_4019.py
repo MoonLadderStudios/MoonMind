@@ -451,6 +451,97 @@ async def test_selected_connection_probe_uses_only_that_connection(
         assert missing.status_code == 404
 
 
+async def test_pat_connection_test_reads_only_its_assigned_repositories(
+    harness, monkeypatch
+):
+    """MoonLadderStudios/MoonMind#4008: the PAT can see other repositories,
+    but Test connection reads only the ones saved on this connection."""
+
+    from api_service.api.routers import settings as settings_router
+    from api_service.db import base as db_base
+
+    client = harness.client
+    await client.post(
+        "/api/v1/repository-connections/pat",
+        json=_create_body("Personal GitHub", "personal-github", "req-1", TOKEN_A),
+    )
+
+    async def _observe(connection, repository):
+        return {"id": "101", "fullName": "Acme/Widgets"}
+
+    monkeypatch.setattr(router_module, "observe_github_repository", _observe)
+    assigned = await client.post(
+        "/api/v1/repository-connections/personal-github/assignments",
+        json={"requestId": "req-assign", "repository": "acme/widgets"},
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    monkeypatch.setattr(db_base, "async_session_maker", harness.maker)
+    monkeypatch.setenv("GITHUB_TOKEN", "global-token-must-not-be-used")
+    secret_reads: list[str] = []
+
+    async def _resolve(ref: str) -> str:
+        secret_reads.append(ref)
+        return TOKEN_A
+
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref", _resolve
+    )
+    requests: list[httpx.Request] = []
+
+    def _github(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/repos/acme/widgets":
+            return httpx.Response(200, json={"default_branch": "main"})
+        return httpx.Response(200, json={"name": "main"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(_github)),
+    )
+    app = FastAPI()
+    app.include_router(settings_router.router, prefix="/api/v1")
+    app.dependency_overrides[settings_router.SETTINGS_CURRENT_USER_DEP] = (
+        lambda: SimpleNamespace(
+            id=harness.principal["id"],
+            is_superuser=False,
+            settings_permissions={"settings.effective.read"},
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as settings_client:
+        refused = await settings_client.post(
+            "/api/v1/settings/github/token-probe",
+            json={"connectionId": "personal-github", "repo": "other/unassigned"},
+        )
+        assert refused.status_code == 200, refused.text
+        body = refused.json()
+        assert body["observations"]["read"] == "not_checked"
+        assert body["diagnostics"][0]["operation"] == "repository_assignment"
+        assert requests == []
+        assert secret_reads == []
+
+        tested = await settings_client.post(
+            "/api/v1/settings/github/token-probe",
+            json={"connectionId": "personal-github", "repo": "acme/widgets"},
+        )
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["observations"]["read"] == "verified"
+    assert requests and {request.method for request in requests} == {"GET"}
+    assert {request.headers["Authorization"] for request in requests} == {
+        f"Bearer {TOKEN_A}"
+    }
+    assert len(secret_reads) == 1
+    _assert_no_secret_material(tested.text)
+    # Refusing a test never changes the saved assignments.
+    current = await client.get("/api/v1/repository-connections/personal-github")
+    assert [item["repository"] for item in current.json()["assignments"]] == [
+        "Acme/Widgets"
+    ]
+
+
 @pytest.mark.parametrize("display_name", [" ", "\t\n"])
 async def test_blank_display_names_rejected_without_mutating_connections(
     harness, display_name
