@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from contextlib import suppress
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
@@ -59,6 +59,21 @@ _GENERIC_HOST_CLEANUP_OWNER = "omnigent_generic_host"
 #: Distinguishes "this owner lost the shared cleanup claim" from "no control
 #: plane is wired", which must stay runnable in unit harnesses.
 _CLEANUP_NOT_OWNED = object()
+
+#: Waits between the three publication attempts. A git hosting outage is
+#: partial and lasts minutes, so a remote-side failure waits it out before the
+#: saved work is reported unpublished; other failures keep the short schedule.
+_PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
+_TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
+
+
+@dataclass(frozen=True)
+class _CapabilityRenewalSchedule:
+    """When a live host's lease-scoped capabilities are next re-minted."""
+
+    renew: Callable[[], Awaitable[tuple[str, ...]]]
+    interval_seconds: float
+    due_at: float
 
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
@@ -581,6 +596,11 @@ class GenericOmnigentHostRealizer:
                     "materializedInputPaths": dict(
                         host_context.get("materializedInputPaths") or {}
                     ),
+                    **(
+                        {"capabilityRenewal": host_context["capabilityRenewal"]}
+                        if host_context.get("capabilityRenewal")
+                        else {}
+                    ),
                 },
             )
             attestations = {
@@ -621,6 +641,13 @@ class GenericOmnigentHostRealizer:
                     sink=sink,
                     host_lease=host_lease,
                     plan=plan,
+                    capability_renewal=self._capability_renewal_schedule(
+                        request=request,
+                        plan=plan,
+                        host_lease_ref=host_lease.leaseRef,
+                        host_context=host_context,
+                        renew_first=False,
+                    ),
                 )
             finally:
                 binding = sink.binding
@@ -908,6 +935,15 @@ class GenericOmnigentHostRealizer:
                         sink=sink,
                         host_lease=host_lease,
                         plan=plan,
+                        # A retry cannot tell how much of the launched
+                        # capability lifetime remains, so renew at once.
+                        capability_renewal=self._capability_renewal_schedule(
+                            request=request,
+                            plan=plan,
+                            host_lease_ref=host_lease.leaseRef,
+                            host_context=host_context,
+                            renew_first=True,
+                        ),
                     )
                 finally:
                     current = sink.binding
@@ -1122,6 +1158,8 @@ class GenericOmnigentHostRealizer:
                 **(result.metadata or {}), "savedWorkspaceCheckpoint": saved, "workPreserved": True,
             }})
         if result.failure_class is None:
+            from moonmind.utils.logging import redact_sensitive_text
+
             # Only retry this unfinished boundary. The publisher reconciles
             # remote branch/PR state and verifies the exact head on every call.
             for attempt in range(3):
@@ -1136,18 +1174,36 @@ class GenericOmnigentHostRealizer:
                         "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
                     }:
                         raise
-                    await sink.record_phase(f"publication_failure:{attempt}", {"code": str(exc.code)})
+                    message = redact_sensitive_text(str(exc))[:1024]
+                    transient = exc.transient
+                    await sink.record_phase(
+                        f"publication_failure:{attempt}",
+                        {"code": str(exc.code), "message": message, "transient": transient},
+                    )
+                    logger.warning(
+                        "Repository publication attempt %s/3 failed (transient=%s): %s",
+                        attempt + 1, transient, message,
+                    )
                     if attempt < 2:
-                        await asyncio.sleep(2 ** attempt)
+                        delays = (
+                            _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
+                            if transient
+                            else _PUBLICATION_RETRY_DELAYS_SECONDS
+                        )
+                        await asyncio.sleep(delays[attempt])
             else:
+                last_failure = (sink.binding.phaseResults or {})["publication_failure:2"]
+                summary = "Agent work is saved; repository publication exhausted its retry budget"
                 result = result.model_copy(
                     update={
                         "failure_class": "integration_error",
-                        "provider_error_code": (sink.binding.phaseResults or {})[
-                            "publication_failure:2"
-                        ]["code"],
+                        "provider_error_code": last_failure["code"],
                         "retry_recommendation": "do_not_retry",
-                        "summary": "Agent work is saved; repository publication exhausted its retry budget.",
+                        "summary": (
+                            f"{summary}: {last_failure['message']}"
+                            if last_failure.get("message")
+                            else f"{summary}."
+                        ),
                         "metadata": {
                             **(result.metadata or {}),
                             "unfinishedPhase": "publication",
@@ -1431,6 +1487,62 @@ class GenericOmnigentHostRealizer:
             updates=updates,
         )
 
+    def _capability_renewal_schedule(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_lease_ref: str,
+        host_context: dict[str, Any],
+        renew_first: bool,
+    ) -> _CapabilityRenewalSchedule | None:
+        """Renew capabilities at half their lifetime while the host is live.
+
+        Capabilities are minted for the launch timeout, while the session runs
+        until its activity deadline as long as it makes progress.
+        """
+
+        renewal = host_context.get("capabilityRenewal")
+        if not isinstance(renewal, dict) or not host_context.get("controlVolumeRef"):
+            return None
+
+        async def renew() -> tuple[str, ...]:
+            return await self._host_runtime.renew_runtime_capabilities(
+                request=request,
+                plan=plan,
+                host_lease_ref=host_lease_ref,
+                host_context=host_context,
+            )
+
+        interval = float(renewal["lifetimeSeconds"]) / 2
+        return _CapabilityRenewalSchedule(
+            renew=renew,
+            interval_seconds=interval,
+            due_at=time.monotonic() + (0.0 if renew_first else interval),
+        )
+
+    async def _renew_capabilities(
+        self,
+        schedule: _CapabilityRenewalSchedule,
+    ) -> _CapabilityRenewalSchedule | None:
+        try:
+            renewed = await schedule.renew()
+        except Exception as exc:
+            # A failed renewal must not end the session; try again after one
+            # heartbeat interval while the current capability remains valid.
+            logger.warning(
+                "generic host capability renewal failed; retrying in %ss: %s: %s",
+                self._heartbeat_interval,
+                type(exc).__name__,
+                exc,
+            )
+            return replace(
+                schedule, due_at=time.monotonic() + self._heartbeat_interval
+            )
+        if not renewed:
+            return None
+        return replace(schedule, due_at=time.monotonic() + schedule.interval_seconds)
+
     async def _drive_session(
         self,
         *,
@@ -1438,6 +1550,7 @@ class GenericOmnigentHostRealizer:
         sink: RuntimeBindingSessionAuthoritySink,
         host_lease: Any,
         plan: OmnigentExecutionPlanEnvelope,
+        capability_renewal: _CapabilityRenewalSchedule | None = None,
     ) -> AgentRunResult:
         """Keep both durable ownership leases fresh while a turn is active."""
 
@@ -1471,6 +1584,21 @@ class GenericOmnigentHostRealizer:
                         expected_generation=host_lease.generation,
                         ttl_seconds=self._heartbeat_ttl,
                     )
+
+        async def renewal_loop(
+            schedule: _CapabilityRenewalSchedule | None,
+        ) -> None:
+            # Separate from the ownership heartbeats so a slow Docker command
+            # during renewal can never let the leases lapse.
+            while schedule is not None:
+                try:
+                    await asyncio.wait_for(
+                        stop.wait(),
+                        timeout=max(0.0, schedule.due_at - time.monotonic()),
+                    )
+                    return
+                except TimeoutError:
+                    schedule = await self._renew_capabilities(schedule)
 
         async def deliver_continuation(ordinal, instruction, recorded_result):
             from moonmind.omnigent.control_plane.turn_sources import TurnSource
@@ -1521,8 +1649,14 @@ class GenericOmnigentHostRealizer:
                 await sink.record_phase("compute", result.model_dump(by_alias=True, mode="json", exclude_none=True))
             return await self._finish_execution(request, sink, result)
 
+        renewal = capability_renewal
+        if renewal is not None and time.monotonic() >= renewal.due_at:
+            # A resumed agent may call `moonmind container` at once, so an
+            # already-due renewal completes before the session is driven.
+            renewal = await self._renew_capabilities(renewal)
         driver_task = asyncio.create_task(complete_attempt())
         heartbeat_task = asyncio.create_task(heartbeat_loop())
+        renewal_task = asyncio.create_task(renewal_loop(renewal))
         try:
             done, _pending = await asyncio.wait(
                 {driver_task, heartbeat_task},
@@ -1543,7 +1677,7 @@ class GenericOmnigentHostRealizer:
             return result
         finally:
             stop.set()
-            for task in (driver_task, heartbeat_task):
+            for task in (driver_task, heartbeat_task, renewal_task):
                 if not task.done():
                     task.cancel()
                     with suppress(asyncio.CancelledError):

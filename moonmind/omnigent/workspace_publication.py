@@ -127,6 +127,28 @@ _PRE_CONNECTION_FAILURE = re.compile(
     r"\Afatal: unable to access '[^'\n]+': "
     r"(?:Could not resolve (?:host|proxy): [^\n]+|Failed to connect to [^\n]+)\s*\Z"
 )
+# Remote-side and transport diagnostics a git hosting outage produces on any
+# remote command, including push. This only selects a longer backoff inside the
+# already-bounded publication retry; authentication, permission, rule, and
+# ref-update rejections stay on the short schedule.
+_TRANSIENT_REMOTE_FAILURE = re.compile(
+    r"The requested URL returned error: 5\d\d"
+    r"|RPC failed; (?:HTTP 5\d\d|curl (?:18|52|55|56|92)\b)"
+    r"|the remote end hung up unexpectedly"
+    r"|unexpected disconnect while reading sideband packet"
+    r"|\bearly EOF\b"
+    r"|remote: Internal Server Error"
+    r"|Could not resolve (?:host|proxy): "
+    r"|Failed to connect to "
+    r"|Connection reset by peer"
+    r"|(?:Connection|Operation) timed out"
+)
+
+
+def publication_failure_is_transient(message: str) -> bool:
+    """Whether a publication failure reports a remote outage, not a rejection."""
+
+    return bool(_TRANSIENT_REMOTE_FAILURE.search(message or ""))
 
 
 class OmnigentWorkspacePublicationService:
@@ -403,6 +425,7 @@ class OmnigentWorkspacePublicationService:
             raise HarnessPlatformError(
                 f"repository publication command failed: {detail[:512]}",
                 code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                transient=publication_failure_is_transient(detail),
             )
         return code, output, error
 
@@ -593,6 +616,7 @@ class OmnigentWorkspacePublicationService:
                 raise HarnessPlatformError(
                     f"repository publication command failed: {detail[:512]}",
                     code="OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                    transient=publication_failure_is_transient(detail),
                 )
             return SimpleNamespace(
                 stdout=stdout,
@@ -957,4 +981,5 @@ __all__ = [
     "OmnigentWorkspacePublicationService",
     "branch_publish_mode_for_destination",
     "compile_branch_publish_mode",
+    "publication_failure_is_transient",
 ]

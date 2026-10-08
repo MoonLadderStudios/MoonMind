@@ -511,6 +511,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/creation-choices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Creation Choices
+         * @description Supported Harness/Provider choices for the creation form (#4001).
+         */
+        get: operations["get_creation_choices_api_v1_provider_profiles_creation_choices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}/capabilities": {
         parameters: {
             query?: never;
@@ -11400,6 +11420,15 @@ export interface components {
             /** Diagnostics */
             diagnostics: string[];
         };
+        /** ProviderProfileCreationChoicesResponse */
+        ProviderProfileCreationChoicesResponse: {
+            /** Version */
+            version: string;
+            /** Harnesses */
+            harnesses: components["schemas"]["ProviderProfileCreationHarnessChoice"][];
+            /** Profile Id Max Length */
+            profile_id_max_length: number;
+        };
         /** ProviderProfileCreationField */
         ProviderProfileCreationField: {
             /** Value */
@@ -11410,6 +11439,20 @@ export interface components {
             editable: boolean;
             /** Lock Reason */
             lock_reason: string;
+        };
+        /** ProviderProfileCreationHarnessChoice */
+        ProviderProfileCreationHarnessChoice: {
+            /** Runtime Id */
+            runtime_id: string;
+            /** Label */
+            label: string;
+            /** Providers */
+            providers: components["schemas"]["ProviderProfileCreationProviderChoice"][];
+            /**
+             * Custom Provider Allowed
+             * @default false
+             */
+            custom_provider_allowed: boolean;
         };
         /** ProviderProfileCreationPresetDiagnostic */
         ProviderProfileCreationPresetDiagnostic: {
@@ -11461,6 +11504,13 @@ export interface components {
             manual_creation_allowed: boolean;
             /** Required Manual Fields */
             required_manual_fields?: string[];
+        };
+        /** ProviderProfileCreationProviderChoice */
+        ProviderProfileCreationProviderChoice: {
+            /** Provider Id */
+            provider_id: string;
+            /** Label */
+            label: string;
         };
         /** ProviderProfileImportedVolumeCapability */
         ProviderProfileImportedVolumeCapability: {
@@ -15632,6 +15682,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_creation_choices_api_v1_provider_profiles_creation_choices_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderProfileCreationChoicesResponse"];
                 };
             };
         };
