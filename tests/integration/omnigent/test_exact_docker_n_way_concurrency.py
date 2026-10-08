@@ -758,6 +758,31 @@ async def _credential_recovery_host_class(backend, image_ref):
     return HostClass.model_validate(payload)
 
 
+def _credential_recovery_receipt(
+    *, source_commit, image_ref, host_class, before_facts, after_facts, workspace_digest
+):
+    """Build the existing receipt shared by the real journey and validator tests."""
+    return {
+        "schemaVersion": 1,
+        "sourceCommit": source_commit,
+        "hostImageRef": image_ref,
+        "omnigentVersion": host_class.omnigentVersion,
+        "omnigentBuildDigest": host_class.omnigentBuildDigest,
+        "harnessImplementationRef": host_class.declaredHarnessImplementations[
+            0
+        ].implementationRef,
+        "before": before_facts,
+        "after": after_facts,
+        "containerReplaced": True,
+        "sameHost": True,
+        "sameSession": True,
+        "sameBridge": True,
+        "runnerReconnected": True,
+        "inputReplayed": False,
+        "workspaceDigest": workspace_digest,
+    }
+
+
 def _credential_recovery_container_facts(
     raw: str, *, expected_state_volume: str
 ) -> dict:
@@ -1074,25 +1099,11 @@ async def test_exact_host_replacement_resumes_same_session_without_provider_inpu
         output_root.mkdir(parents=True, exist_ok=True)
         (output_root / "credential-recovery-exact-docker.json").write_text(
             json.dumps(
-                {
-                    "schemaVersion": 1,
-                    "sourceCommit": source_commit,
-                    "hostImageRef": image_ref,
-                    "omnigentVersion": host_class.omnigentVersion,
-                    "omnigentBuildDigest": host_class.omnigentBuildDigest,
-                    "harnessImplementationRef": host_class.declaredHarnessImplementations[
-                        0
-                    ].implementationRef,
-                    "before": before_facts,
-                    "after": after_facts,
-                    "containerReplaced": True,
-                    "sameHost": True,
-                    "sameSession": True,
-                    "sameBridge": True,
-                    "runnerReconnected": True,
-                    "inputReplayed": False,
-                    "workspaceDigest": saved_stopped["workspaceDigest"],
-                },
+                _credential_recovery_receipt(
+                    source_commit=source_commit, image_ref=image_ref, host_class=host_class,
+                    before_facts=before_facts, after_facts=after_facts,
+                    workspace_digest=saved_stopped["workspaceDigest"],
+                ),
                 sort_keys=True,
             )
             + "\n"

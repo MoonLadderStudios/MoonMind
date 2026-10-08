@@ -5,18 +5,32 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
 from tools.ci import run_credential_free_host_recovery as driver
 
 SHA = "1" * 40
 IMAGE_ID = "sha256:" + "2" * 64
 HOST_REF = "127.0.0.1:5000/moonmind-test-host@" + IMAGE_ID
+HARNESS_IDENTITY = {
+    "omnigentVersion": "1.2.3",
+    "omnigentBuildDigest": "sha256:" + "4" * 64,
+    "harnessImplementationRef": _normalize_harness(
+        {"id": "opencode-native", "capabilities": {}},
+        omnigent_version="1.2.3", omnigent_build_digest="sha256:" + "4" * 64,
+    ).implementation.implementation_ref(),
+}
 
 
 def receipt():
+    from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
+        _credential_recovery_receipt,
+    )
+
     before = {
         "containerId": "a" * 64,
         "hostImageId": IMAGE_ID,
@@ -27,16 +41,22 @@ def receipt():
         "runnerId": "old-runner",
         "messageItemIds": [],
     }
-    return {
-        "schemaVersion": 1,
-        "sourceCommit": SHA,
-        "hostImageRef": HOST_REF,
-        "before": before,
-        "after": {**before, "containerId": "b" * 64, "runnerId": "new-runner"},
-        "runnerReconnected": True,
-        "inputReplayed": False,
-        "workspaceDigest": "sha256:" + "3" * 64,
-    }
+    return _credential_recovery_receipt(
+        source_commit=SHA,
+        image_ref=HOST_REF,
+        host_class=SimpleNamespace(
+            omnigentVersion=HARNESS_IDENTITY["omnigentVersion"],
+            omnigentBuildDigest=HARNESS_IDENTITY["omnigentBuildDigest"],
+            declaredHarnessImplementations=[
+                SimpleNamespace(
+                    implementationRef=HARNESS_IDENTITY["harnessImplementationRef"],
+                )
+            ],
+        ),
+        before_facts=before,
+        after_facts={**before, "containerId": "b" * 64, "runnerId": "new-runner"},
+        workspace_digest="sha256:" + "3" * 64,
+    )
 
 
 def write_evidence(root, row=None, *, skipped=False):
@@ -50,13 +70,101 @@ def write_evidence(root, row=None, *, skipped=False):
 
 def validate(root):
     return driver.validate_evidence(
-        root, source_commit=SHA, host_image_ref=HOST_REF, host_image_id=IMAGE_ID
+        root,
+        source_commit=SHA,
+        host_image_ref=HOST_REF,
+        host_image_id=IMAGE_ID,
+        expected_harness_identity=HARNESS_IDENTITY,
     )
 
 
 def test_real_identity_transition_is_accepted(tmp_path):
     write_evidence(tmp_path)
     validate(tmp_path)
+
+
+@pytest.mark.parametrize("field", list(HARNESS_IDENTITY))
+@pytest.mark.parametrize("value", [None, "", [], "unverified credential metadata"])
+def test_receipt_metadata_is_required_and_typed(tmp_path, field, value):
+    row = receipt()
+    if value is None:
+        row.pop(field)
+    else:
+        row[field] = value
+    write_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match="selected host artifact/harness"):
+        validate(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("omnigentVersion", "9.8.7"),
+        ("omnigentBuildDigest", "sha256:" + "f" * 64),
+        (
+            "harnessImplementationRef",
+            "omnigent-harness-implementation:sha256:" + "f" * 64,
+        ),
+    ],
+)
+def test_well_formed_metadata_must_match_expected_artifact(tmp_path, field, value):
+    row = receipt()
+    row[field] = value
+    write_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match="selected host artifact/harness"):
+        validate(tmp_path)
+
+
+@pytest.mark.parametrize("native_available", [False, True])
+def test_expected_harness_identity_is_observed_from_exact_image_offline(
+    monkeypatch, tmp_path, native_available
+):
+    import contextlib
+    import importlib.metadata
+    import io
+    import runpy
+    import sys
+    from types import ModuleType
+
+    registry = ModuleType("omnigent.harness_plugins")
+    registry.valid_harnesses = lambda: {"opencode-native"} if native_available else set()
+    registry.harness_capabilities = lambda: {
+        "opencode-native": SimpleNamespace(as_dict=dict)
+    }
+    monkeypatch.setitem(sys.modules, "omnigent.harness_plugins", registry)
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.2.3")
+
+    def command(args):
+        assert args[:6] == [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+        ]
+        assert args[7] == IMAGE_ID
+        assert not {"--env", "--mount", "--publish", "--privileged"}.intersection(args)
+        probe = tmp_path / "artifact-probe.py"
+        probe.write_text(args[-1])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            runpy.run_path(str(probe), run_name="__main__")
+        return SimpleNamespace(stdout=output.getvalue())
+
+    monkeypatch.setattr(driver, "_command", command)
+    if not native_available:
+        with pytest.raises(driver.RecoveryError, match="native recovery harness"):
+            driver.observe_harness_identity(
+                IMAGE_ID, HARNESS_IDENTITY["omnigentBuildDigest"]
+            )
+    else:
+        assert (
+            driver.observe_harness_identity(
+                IMAGE_ID, HARNESS_IDENTITY["omnigentBuildDigest"]
+            )
+            == HARNESS_IDENTITY
+        )
 
 
 @pytest.mark.parametrize(
@@ -130,6 +238,7 @@ def test_invocation_clears_old_receipt_and_cannot_pass_without_new_evidence(
             source_commit=SHA,
             host_image_ref=HOST_REF,
             host_image_id=IMAGE_ID,
+            expected_harness_identity=HARNESS_IDENTITY,
         )
 
 
@@ -498,6 +607,9 @@ def test_main_checks_exact_server_then_probes_before_recovery(
                         SHA if ref == IMAGE_ID else pin
                     ),
                     "moonmind.source.revision": SHA,
+                    "moonmind.omnigent.build_digest": HARNESS_IDENTITY[
+                        "omnigentBuildDigest"
+                    ],
                 }
             },
         }
@@ -511,16 +623,23 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         elif args[:2] == ["docker", "compose"]:
             assert "port" not in args
             if "ps" in args:
-                output = "proxy-container" if args[-1] == "sandbox-egress-proxy" else "server-container"
+                output = (
+                    "proxy-container"
+                    if args[-1] == "sandbox-egress-proxy"
+                    else "server-container"
+                )
             if "up" in args:
                 assert args[-2:] == ["omnigent", "sandbox-egress-proxy"]
         elif args[:2] == ["docker", "inspect"]:
             container = args[-1]
             assert container in {"server-container", "proxy-container"}
-            observed.append("proxy-image" if container == "proxy-container" else "server-image")
+            observed.append(
+                "proxy-image" if container == "proxy-container" else "server-image"
+            )
             image_id = (
                 "sha256:" + "f" * 64
-                if container == "proxy-container" and not proxy_image_matches else IMAGE_ID
+                if container == "proxy-container" and not proxy_image_matches
+                else IMAGE_ID
             )
             output = json.dumps([{"Id": container, "Image": image_id}])
         elif args[-1] == driver.READINESS_SCRIPT:
@@ -530,12 +649,22 @@ def test_main_checks_exact_server_then_probes_before_recovery(
                 "moonmind-test-recovery-"
             )
             observed.append("readiness")
+        elif args[:6] == ["docker", "run", "--rm", "--network", "none", "--entrypoint"]:
+            assert args[7] == IMAGE_ID
+            assert args[args.index("--network") + 1] == "none"
+            output = json.dumps(
+                {
+                    "version": "1.2.3",
+                    "harness": {"id": "opencode-native", "capabilities": {}},
+                }
+            )
         return SimpleNamespace(stdout=output, stderr="", returncode=0)
 
     def run_test(args, _root, **_identity):
         assert observed == ["server-image", "proxy-image", "readiness"]
         assert IMAGE_ID in args
         assert args[args.index("--network") + 1].startswith("moonmind-test-recovery-")
+        assert _identity["expected_harness_identity"] == HARNESS_IDENTITY
         observed.append("recovery")
         return receipt()
 
@@ -544,32 +673,31 @@ def test_main_checks_exact_server_then_probes_before_recovery(
     monkeypatch.setattr(driver, "_command", command)
     monkeypatch.setattr(driver, "run_test", run_test)
     monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
-    assert (
-        driver.main(
-            [
-                "--moonmind-image",
-                IMAGE_ID,
-                "--server-image",
-                server_ref,
-                "--host-image",
-                HOST_REF,
-                "--pr-head",
-                SHA,
-                "--base-commit",
-                SHA,
-                "--dependencies",
-                str(tmp_path / "deps"),
-                "--output-dir",
-                str(tmp_path / "evidence"),
-            ]
-        )
-        == (0 if proxy_image_matches else 1)
-    )
+    assert driver.main(
+        [
+            "--moonmind-image",
+            IMAGE_ID,
+            "--server-image",
+            server_ref,
+            "--host-image",
+            HOST_REF,
+            "--pr-head",
+            SHA,
+            "--base-commit",
+            SHA,
+            "--dependencies",
+            str(tmp_path / "deps"),
+            "--output-dir",
+            str(tmp_path / "evidence"),
+        ]
+    ) == (0 if proxy_image_matches else 1)
     assert observed == ["server-image", "proxy-image"] + (
         ["readiness", "recovery"] if proxy_image_matches else []
     )
     if not proxy_image_matches:
-        report = json.loads((tmp_path / "evidence/credential-recovery-result.json").read_text())
+        report = json.loads(
+            (tmp_path / "evidence/credential-recovery-result.json").read_text()
+        )
         assert report["status"] == "unavailable"
         assert "running proxy differs from the built artifact" in report["detail"]
 
@@ -592,6 +720,7 @@ def test_failed_recovery_row_reports_the_pytest_failure(tmp_path, monkeypatch):
             source_commit=SHA,
             host_image_ref=HOST_REF,
             host_image_id=IMAGE_ID,
+            expected_harness_identity=HARNESS_IDENTITY,
         )
     assert "exit 1" in str(raised.value)
     assert "runner did not reconnect" in str(raised.value)
