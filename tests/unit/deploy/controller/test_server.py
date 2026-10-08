@@ -557,12 +557,13 @@ def test_journal_preparation_uses_installed_source_for_rollback_and_restart(
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": "writer\nsweeper"}
             assert args[:2] == ("docker", "inspect")
-            return {"exit": 0, "output": json.dumps([
+            return {"exit": 0, "output": "\n".join(json.dumps(
                 {"Image": "sha256:installed-new", "Config": {"Env": [], "Labels": {
                     "com.docker.compose.project": target["project"],
                     "com.docker.compose.service": name}}}
+                )
                 for name in target["services"]
-            ])}
+            )}
 
     def helper(store, operation, **kwargs):
         calls.append((kwargs["helper_image"], kwargs["phase"]))
@@ -578,6 +579,59 @@ def test_journal_preparation_uses_installed_source_for_rollback_and_restart(
 
     server.prepare_controller_journals(store, op, runner=UnavailableRunner(), overlay="overlay")
     assert calls == [("sha256:installed-new", "journal-prepare")] * 2
+
+
+def test_journal_inventory_survives_bounded_subprocess_diagnostics(
+    controller_path, tmp_path, monkeypatch
+):
+    import subprocess
+
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    target = {"project": "moonmind-test", "services": [
+        "custom-agent", "custom-artifacts",
+    ]}
+    operation = _begin_op(record, store, target)
+    rows = [{"Image": f"sha256:installed-{fleet}", "Config": {
+        "Env": [f"TEMPORAL_WORKER_FLEET={fleet}"], "Labels": {
+            "com.docker.compose.project": target["project"],
+            "com.docker.compose.service": service,
+        },
+    }} for fleet, service in zip(("agent_runtime", "artifacts"), target["services"])]
+    captured = []
+
+    def command(args, **kwargs):
+        args = tuple(args)
+        captured.append(args)
+        if args[:2] == ("docker", "ps"):
+            output = "writer\nsweeper\n"
+        else:
+            assert args[:2] == ("docker", "inspect")
+            if "--format" in args:
+                # Docker projects only requested fields before the command
+                # runner bounds and redacts the diagnostic stream.
+                output = "\n".join(json.dumps(row) for row in rows)
+            else:
+                output = json.dumps([
+                    {**row, "Mounts": [{"Source": "/large/" + "x" * 5000}]}
+                    for row in rows
+                ])
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(server.engine.subprocess, "run", command)
+    monkeypatch.setattr(server, "run_omnigent_step", lambda *args, **kwargs: {
+        "status": "prepared", "compacted": 1,
+    })
+    result = server.prepare_controller_journals(
+        store, operation, runner=server.engine.subprocess_runner(), overlay="overlay"
+    )
+    assert result["compacted"] == 1
+    assert store.load(operation["operationId"])["journalTransition"]["sourceImages"] == [
+        row["Image"] for row in rows
+    ]
+    inspection = next(args for args in captured if args[:2] == ("docker", "inspect"))
+    assert "--format" in inspection
 
 
 def test_journal_preparation_falls_back_to_capable_staged_target(
