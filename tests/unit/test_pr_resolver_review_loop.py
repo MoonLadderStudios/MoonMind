@@ -360,6 +360,97 @@ def test_clean_comment_cannot_complete_an_unrelated_review(
     assert _evidence(snapshot_module, comments=comments)["freshReviewForHead"] is False
 
 
+# Real chatgpt-codex-connector clean replies, one per observed flair, with the
+# full SHA of the commit each one reviewed.
+CODEX_CLEAN_REPLIES = json.loads(
+    (REPO_ROOT / "tests/fixtures/pr_resolver/codex_clean_replies.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+def _codex_reply_evidence(
+    snapshot_module,
+    reply: dict[str, Any],
+    *,
+    head_sha: str | None = None,
+    body: str | None = None,
+) -> dict[str, Any]:
+    comment = {
+        "id": reply["commentId"],
+        "type": "issue_comment",
+        "user": "chatgpt-codex-connector[bot]",
+        "body": reply["body"] if body is None else body,
+        "created_at": reply["createdAt"],
+    }
+    return _evidence(
+        snapshot_module,
+        comments=[_request_comment(), comment],
+        head_sha=head_sha or reply["headSha"],
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    CODEX_CLEAN_REPLIES,
+    ids=[reply["body"].splitlines()[0] for reply in CODEX_CLEAN_REPLIES],
+)
+def test_real_codex_clean_reply_completes_its_reviewed_head(
+    snapshot_module, reply
+) -> None:
+    evidence = _codex_reply_evidence(snapshot_module, reply)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionKind"] == "issue_comment"
+    assert evidence["completionId"] == reply["commentId"]
+
+
+def test_real_codex_clean_reply_for_another_commit_does_not_complete_the_head(
+    snapshot_module,
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    evidence = _codex_reply_evidence(
+        snapshot_module, reply, head_sha=CODEX_CLEAN_REPLIES[0]["headSha"]
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+
+
+@pytest.mark.parametrize(
+    ("change", "clean"),
+    [
+        ("low_severity_findings", True),
+        ("high_severity_findings", False),
+        ("high_severity_flair", False),
+        ("findings_after_footer", False),
+        ("unmarked_feedback", False),
+        ("unreadable_reviewed_commit", False),
+        ("quoted", False),
+        ("embedded", False),
+    ],
+)
+def test_real_codex_clean_reply_only_ends_the_loop_without_major_findings(
+    snapshot_module, change, clean
+) -> None:
+    reply = CODEX_CLEAN_REPLIES[-1]
+    result, rest = reply["body"].split("\n\n", 1)
+    body = {
+        "low_severity_findings": f"{result}\n\n[P2] Rename the helper.\n\n{rest}",
+        "high_severity_findings": (
+            f"{result}\n\n[P1] Fix the authorization bug.\n\n{rest}"
+        ),
+        "high_severity_flair": f"{result} [P1] Fix the authorization bug.\n\n{rest}",
+        "findings_after_footer": f"{reply['body']}\n\n[P1] Fix the authorization bug.",
+        "unmarked_feedback": f"{result}\n\nAlso handle the empty list.\n\n{rest}",
+        "unreadable_reviewed_commit": reply["body"].replace(
+            reply["headSha"][:10], "HEAD"
+        ),
+        "quoted": "> " + reply["body"],
+        "embedded": "Earlier on another PR: " + reply["body"],
+    }[change]
+    evidence = _codex_reply_evidence(snapshot_module, reply, body=body)
+    assert evidence["freshReviewForHead"] is clean
+
+
 @pytest.mark.parametrize("state", ["PENDING", "DISMISSED", "", "FUTURE_STATE"])
 def test_unsubmitted_or_unknown_review_is_not_completion(snapshot_module, state):
     evidence = _evidence(
