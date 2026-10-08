@@ -810,6 +810,11 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
     # unrecorded here, so the deployment declaration supplies the fixture token.
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "acquire_admitted_repository_use",
+        AsyncMock(return_value=(None, None)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
         "load_admitted_repository_access",
         AsyncMock(return_value=("", False)),
     )
