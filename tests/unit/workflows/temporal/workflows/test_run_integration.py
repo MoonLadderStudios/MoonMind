@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 from datetime import datetime, timezone, timedelta
+from collections.abc import Mapping
 from typing import Any, Callable
 from unittest.mock import AsyncMock
 
@@ -54,6 +55,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH,
     RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+    RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH,
+    RUN_STEP_EXECUTION_MANIFEST_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -1704,6 +1707,231 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         assert ("terminal", 1, "retryable") in manifests
     else:
         assert all(disposition != "retryable" for _, _, disposition in manifests)
+
+
+_INTERRUPTED_SAVED_WORK = {
+    "kind": "worktree_archive",
+    "baseCommit": "a" * 40,
+    "archiveRef": "artifact://art-interrupted-archive",
+    "archiveDigest": "sha256:" + "b" * 64,
+    "manifestRef": "artifact://art-interrupted-manifest",
+    "manifestDigest": "sha256:" + "c" * 64,
+    "checkpointRef": "artifact://art-interrupted-checkpoint",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("restore_patch_enabled", "first_saved"),
+    [(True, True), (True, False), (False, True)],
+    ids=["saved-work", "no-saved-work", "previous-history"],
+)
+async def test_run_execution_stage_restores_interrupted_attempt_saved_work(
+    monkeypatch: pytest.MonkeyPatch,
+    restore_patch_enabled: bool,
+    first_saved: bool,
+) -> None:
+    """A host-lost successor continues from its predecessor's saved bytes.
+
+    Issue #4627: the replacement attempt runs under the same workflow and
+    logical step, restores the latest verified saved workspace (kept when a
+    later attempt saved nothing), and otherwise records that it restarted
+    from the admitted step inputs.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    start_executions: list[tuple[int, dict[str, Any]]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    def host_lost(saved: Mapping[str, Any] | None) -> AgentRunResult:
+        return AgentRunResult(
+            summary="Omnigent dispatch failed (OMNIGENT_SESSION_HOST_LOST).",
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+            retryRecommendation="retry_step_execution",
+            metadata=(
+                {"savedWorkspaceCheckpoint": dict(saved), "workPreserved": True}
+                if saved
+                else {}
+            ),
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_requests.append(request)
+        if len(child_requests) == 1:
+            return host_lost(_INTERRUPTED_SAVED_WORK if first_saved else None)
+        if len(child_requests) == 2:
+            # The successor was interrupted again before it saved anything.
+            return host_lost(None)
+        return AgentRunResult(summary="Completed on the installed runtime.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    async def fake_record_step_execution_manifest(
+        logical_step_id: str,
+        **kwargs: Any,
+    ) -> None:
+        if kwargs["phase"] == "start":
+            start_executions.append(
+                (
+                    workflow._step_execution_for(logical_step_id) or 0,
+                    dict(kwargs.get("execution") or {}),
+                )
+            )
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_STEP_EXECUTION_MANIFEST_PATCH,
+    }
+    if restore_patch_enabled:
+        enabled_patches.add(RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-interrupted-restore",
+            "run_id": "run-interrupted-restore",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    assert len(child_requests) == 3
+    assert [
+        request.step_execution.execution_ordinal
+        for request in child_requests
+        if request.step_execution is not None
+    ] == [1, 2, 3]
+    assert {
+        request.step_execution.logical_step_id
+        for request in child_requests
+        if request.step_execution is not None
+    } == {"omnigent-turn"}
+    restore_refs = [
+        request.workspace_spec.get("workspaceCheckpointRestoreRef")
+        for request in child_requests
+    ]
+    restored = restore_patch_enabled and first_saved
+    expected_ref = _INTERRUPTED_SAVED_WORK["archiveRef"] if restored else None
+    # The first attempt starts from admitted inputs; every successor restores
+    # the latest verified save, even after an attempt that saved nothing.
+    assert restore_refs == [None, expected_ref, expected_ref]
+
+    restarts = {
+        ordinal: execution.get("interruptedAttemptRestart")
+        for ordinal, execution in start_executions
+    }
+    if not restore_patch_enabled:
+        assert all(value is None for value in restarts.values())
+        return
+    assert restarts[1] is None
+    if restored:
+        expected_restart = {
+            "basis": "saved_workspace_checkpoint",
+            "checkpointRef": _INTERRUPTED_SAVED_WORK["checkpointRef"],
+            "archiveRef": _INTERRUPTED_SAVED_WORK["archiveRef"],
+            "archiveDigest": _INTERRUPTED_SAVED_WORK["archiveDigest"],
+            "savedByExecutionOrdinal": 1,
+        }
+    else:
+        expected_restart = {
+            "basis": "admitted_step_inputs",
+            "limitation": (
+                "The interrupted attempt left no verified saved workspace; "
+                "work after the admitted step inputs is repeated."
+            ),
+        }
+    assert restarts[2] == expected_restart
+    assert restarts[3] == expected_restart
 
 
 @pytest.mark.asyncio

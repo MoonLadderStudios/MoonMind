@@ -1153,6 +1153,14 @@ Suggested values:
 
 For managed sessions, Ralph-style clean context should usually mean `fresh_agent_run` plus `reuse_session_new_epoch` or equivalent `clear_session` semantics. Runtime-specific bindings may implement that reset with a new thread, a cleared Claude Code context, or a replacement container when required. External or coordinated agents may have weaker runtime control; in that mode, MoonMind should still record attempt identity, context refs, known side effects, and checkpoint evidence where available. Features that require direct workspace restoration may be unavailable or require a different policy.
 
+### 16.2 Interrupted Omnigent attempts
+
+When an update or recreation of its agent runtime interrupts an Omnigent attempt, `MoonMind.UserWorkflow` starts a successor. A host loss returns `retryRecommendation: retry_step_execution`, and the successor is a new Step Execution (`runtime_recovered`) under the same workflow and logical step. It counts against the step's existing bounded system-retry budget. The successor gets its own workspace, so a late write by the old attempt cannot change it.
+
+Before it reports the failure, the generic realizer runs its normal cleanup. That cleanup drains the session, saves the surviving workspace and remotely verifies the saved bytes, then releases the host, credentials and provider capacity. The failure carries `savedWorkspaceCheckpoint` only when the runtime binding reached `cleaned`, which confirms the predecessor stopped. The workflow passes that archive as the successor's `workspaceCheckpointRestoreRef`, and launch materialization applies it over the fresh checkout. The predecessor's unpublished commits come back as working-tree content, not as preserved history.
+
+If a later attempt saves nothing, the successor still restores the latest verified save. When no attempt saved a workspace, the successor restarts from the admitted step inputs. The start manifest records which basis was used in `execution.interruptedAttemptRestart`: `saved_workspace_checkpoint` or `admitted_step_inputs`. Work after the last durable boundary may be repeated.
+
 ---
 
 ## 17. Operator and API Surfaces

@@ -1082,6 +1082,15 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# A step attempt interrupted by host loss (an update or recreation of its agent
+# runtime) is retried as a fresh Step Execution with its own empty workspace.
+# Restore the latest saved workspace that the realizer verified after it
+# confirmed the predecessor stopped, and otherwise record that the successor
+# restarted from the admitted step inputs. Older histories retain their recorded
+# clean-checkout successor commands.
+RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH = (
+    "run-interrupted-step-saved-work-restore-v1"
+)
 # GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
 # and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
 # candidate into doc reconciliation, then publish that reconciled archive (or
@@ -7824,6 +7833,67 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._omnigent_reconciled_candidate_step_id = node_id
         return restore_ref
 
+    def _interrupted_attempt_restart(
+        self,
+        execution_result: Any,
+        *,
+        previous: Mapping[str, Any] | None,
+        execution_ordinal: int,
+        node_inputs: Mapping[str, Any],
+        tool_name: str,
+    ) -> dict[str, Any] | None:
+        """Return the restart basis for the successor of an interrupted attempt.
+
+        Only Omnigent attempts get a fresh workspace per Step Execution. Its
+        realizer reports ``savedWorkspaceCheckpoint`` only after it confirmed
+        the predecessor stopped and verified the saved bytes remotely. A later
+        attempt that saved nothing keeps the latest verified boundary; without
+        any, the successor honestly restarts from the admitted step inputs.
+        """
+
+        agent_id = self._agent_id_from_runtime_inputs(
+            node_inputs=node_inputs,
+            fallback_name=tool_name,
+        )
+        if _normalize_agent_runtime_id(agent_id) != "omnigent":
+            return None
+        outputs = self._get_from_result(execution_result, "outputs")
+        saved = (
+            outputs.get("savedWorkspaceCheckpoint")
+            if isinstance(outputs, Mapping)
+            else None
+        )
+        if isinstance(saved, Mapping):
+            archive_ref = self._bounded_story_loop_artifact_ref(
+                saved.get("archiveRef")
+            )
+            checkpoint_ref = self._bounded_story_loop_artifact_ref(
+                saved.get("checkpointRef")
+            )
+            archive_digest = str(saved.get("archiveDigest") or "").strip()
+            if (
+                str(saved.get("kind") or "").strip() == "worktree_archive"
+                and archive_ref
+                and checkpoint_ref
+                and archive_digest.startswith("sha256:")
+            ):
+                return {
+                    "basis": "saved_workspace_checkpoint",
+                    "checkpointRef": checkpoint_ref,
+                    "archiveRef": archive_ref,
+                    "archiveDigest": archive_digest[:80],
+                    "savedByExecutionOrdinal": execution_ordinal,
+                }
+        if previous is not None and previous.get("archiveRef"):
+            return dict(previous)
+        return {
+            "basis": "admitted_step_inputs",
+            "limitation": (
+                "The interrupted attempt left no verified saved workspace; "
+                "work after the admitted step inputs is repeated."
+            ),
+        }
+
     def _reconciled_candidate_checkpoint_ref(self) -> str | None:
         """Return the completed doc-reconciliation archive of the candidate."""
 
@@ -13106,6 +13176,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
 
                 system_retries = 0
+                interrupted_attempt_restart: dict[str, Any] | None = None
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
@@ -13252,6 +13323,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
+                            if (
+                                trusted_remediation_checkpoint_restore_ref is None
+                                and interrupted_attempt_restart is not None
+                            ):
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    interrupted_attempt_restart.get("archiveRef")
+                                )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
@@ -13326,6 +13404,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                             logical_step_id=node_id,
                                             execution_ordinal=current_step_execution,
                                             operation="execute",
+                                        ),
+                                        **(
+                                            {
+                                                "interruptedAttemptRestart": dict(
+                                                    interrupted_attempt_restart
+                                                )
+                                            }
+                                            if interrupted_attempt_restart
+                                            else {}
                                         ),
                                     },
                                     budget=(
@@ -13966,6 +14053,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 f"Retrying plan node {node_id} after {failure_message} "
                                 f"(attempt {system_retries} of 3)"
                             )
+                            if tool_type == "agent_runtime" and workflow.patched(
+                                RUN_INTERRUPTED_STEP_SAVED_WORK_RESTORE_PATCH
+                            ):
+                                interrupted_attempt_restart = (
+                                    self._interrupted_attempt_restart(
+                                        execution_result,
+                                        previous=interrupted_attempt_restart,
+                                        execution_ordinal=current_step_execution,
+                                        node_inputs=node_inputs,
+                                        tool_name=tool_name,
+                                    )
+                                )
                             await self._wait_if_paused_at_safe_boundary()
                             if self._cancel_requested:
                                 return
