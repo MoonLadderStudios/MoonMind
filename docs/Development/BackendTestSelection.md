@@ -202,7 +202,9 @@ single-test files. When updating the declared xdist dependency, run these cases
 against the native scheduler; remove the override once a released version
 preserves the failed exit, runs each survivor once, and finishes those cases.
 The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
-cleans only Temporal servers directly owned by that worker. Neither mechanism
+cleans only SDK time-skipping and local dev-server children directly owned by
+that worker. The image-build cache owner materializes both SDK-selected binaries
+before hermetic runtime execution. Neither mechanism
 fixes the test that caused the original worker failure.
 
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
