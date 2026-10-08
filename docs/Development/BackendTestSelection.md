@@ -202,7 +202,13 @@ single-test files. When updating the declared xdist dependency, run these cases
 against the native scheduler; remove the override once a released version
 preserves the failed exit, runs each survivor once, and finishes those cases.
 The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
-cleans only Temporal servers directly owned by that worker. Neither mechanism
+cleans only SDK time-skipping and local dev-server children directly owned by
+that worker. CLI cleanup recognizes `server start-dev` for both SDK-cached and
+caller-supplied executable paths, while retaining the direct-parent boundary.
+Real subprocess cases retain an independently owned control server during a
+fatal worker timeout and debugger suppression. The image-build cache owner
+materializes both SDK-selected binaries before hermetic runtime execution;
+cached-startup coverage disables SDK download egress. Neither mechanism
 fixes the test that caused the original worker failure.
 
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
