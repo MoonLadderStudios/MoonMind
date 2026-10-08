@@ -138,6 +138,13 @@ async def test_resolver_merged_revision_crosses_parent_and_issue_boundary(
         "load_repository_connection_for_launch",
         AsyncMock(return_value=None),
     )
+    # This historical fixture has no frozen execution-plan repository snapshot;
+    # the acquisition owner therefore delegates to its recorded default binding.
+    monkeypatch.setattr(
+        managed_api_key_resolve,
+        "acquire_admitted_repository_use",
+        AsyncMock(return_value=(None, None)),
+    )
     # The merge gate acts with its owning run's admitted (default) connection.
     monkeypatch.setattr(
         managed_api_key_resolve,
