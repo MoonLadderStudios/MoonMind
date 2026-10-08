@@ -733,6 +733,18 @@ class OmnigentWorkspacePublicationService:
             else None
         )
         if authored_base is not None:
+            accepted_sha = str(accepted_published_head.get("headSha") or "").strip()
+            candidate_tip = await run_command(
+                ["git", "rev-parse", f"origin/{normalized_base}"]
+            )
+            if (
+                re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", accepted_sha) is None
+                or candidate_tip.stdout.strip() != accepted_sha
+            ):
+                raise HarnessPlatformError(
+                    "accepted publication candidate no longer matches its remote head",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                )
             await run_command(["git", "check-ref-format", "--branch", authored_base])
             await run_command(
                 [
@@ -746,8 +758,8 @@ class OmnigentWorkspacePublicationService:
             extended = await PublishService().publish(
                 job_id=uuid5(NAMESPACE_URL, publication_identity),
                 instruction="Publish completed Omnigent repository work",
-                # Branch mode verifies fast-forward ancestry and leases the
-                # exact remote candidate tip, so another actor's update fails.
+                # Retain the accepted SHA through the publisher's remote read
+                # and lease, including a move after the admission check above.
                 publish_mode="branch",
                 publish_base_branch=normalized_base,
                 publication_branch_name=normalized_base,
@@ -759,6 +771,7 @@ class OmnigentWorkspacePublicationService:
                 bound_credential=bound_credential,
                 publish_existing_commits=True,
                 verify_remote=True,
+                expected_remote_head_sha=accepted_sha,
             )
             if extended is not None and extended.status == "skipped":
                 # Unchanged candidate: reuse requires the exact remote tip.
@@ -780,6 +793,15 @@ class OmnigentWorkspacePublicationService:
             ahead = await run_command(
                 ["git", "rev-list", "--count", f"origin/{authored_base}..HEAD"]
             )
+            if int(ahead.stdout.strip()) == 0:
+                # The authored base has integrated this candidate. Verify that
+                # saved revision against the current base without granting it
+                # a new candidate or attempting to rediscover the merged PR.
+                return await self._verified_no_commit_publication(
+                    run_command=run_command,
+                    base_branch=authored_base,
+                    allow_base_advance=True,
+                )
             published = PublishResult(
                 mode="branch",
                 status="published",

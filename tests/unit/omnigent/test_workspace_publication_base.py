@@ -474,7 +474,19 @@ async def test_unchanged_shared_base_cannot_supply_an_unrelated_pr(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "change", ["uncommitted", "committed", "unchanged", "diverged"]
+    "change",
+    [
+        "uncommitted",
+        "committed",
+        "unchanged",
+        "diverged",
+        "foreign_before_clone",
+        "foreign_before_lease",
+        "foreign_before_push",
+        "integrated",
+        "base_advanced",
+        "missing_accepted_sha",
+    ],
 )
 async def test_owned_candidate_is_extended_not_stacked(
     tmp_path: Path,
@@ -508,6 +520,27 @@ async def test_owned_candidate_is_extended_not_stacked(
     candidate_sha = git("rev-parse", "HEAD", cwd=source)
     git("push", "origin", candidate, cwd=source)
 
+    if change in {
+        "foreign_before_clone",
+        "foreign_before_lease",
+        "foreign_before_push",
+    }:
+        (source / "foreign.txt").write_text("foreign actor\n")
+        git("add", ".", cwd=source)
+        git("commit", "-m", "foreign actor", cwd=source)
+        foreign_sha = git("rev-parse", "HEAD", cwd=source)
+        if change == "foreign_before_clone":
+            git("push", "origin", candidate, cwd=source)
+    if change in {"integrated", "base_advanced"}:
+        git("push", "origin", "HEAD:refs/heads/main", cwd=source)
+        if change == "base_advanced":
+            git("checkout", "main", cwd=source)
+            git("merge", "--ff-only", candidate, cwd=source)
+            (source / "new-main.txt").write_text("unrelated later change\n")
+            git("add", ".", cwd=source)
+            git("commit", "-m", "advance authored base", cwd=source)
+            git("push", "origin", "main", cwd=source)
+
     workflow_id, step_id = "workflow", "publish-09"
     workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
     workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
@@ -521,7 +554,19 @@ async def test_owned_candidate_is_extended_not_stacked(
         str(workspace),
         cwd=tmp_path,
     )
-    if change in {"uncommitted", "committed"}:
+    if change in {"foreign_before_lease", "foreign_before_push"}:
+        # The foreign commit is locally available, but its remote publication
+        # races after admission and before PublishService takes its lease.
+        git("fetch", str(source), candidate, cwd=workspace)
+        git("merge", "--ff-only", "FETCH_HEAD", cwd=workspace)
+    if change in {
+        "uncommitted",
+        "committed",
+        "foreign_before_clone",
+        "foreign_before_lease",
+        "foreign_before_push",
+        "missing_accepted_sha",
+    }:
         (workspace / "later.txt").write_text("later step\n")
     if change == "committed":
         git("add", ".", cwd=workspace)
@@ -572,10 +617,47 @@ async def test_owned_candidate_is_extended_not_stacked(
     )
     publisher = OmnigentWorkspacePublicationService(tmp_path)
 
-    if change == "diverged":
+    if change == "missing_accepted_sha":
+        args["accepted_published_head"].pop("headSha")
+    if change in {"foreign_before_lease", "foreign_before_push"}:
+        original_run = publisher._run
+
+        async def race_before_lease(*command, **kwargs):
+            if (
+                change == "foreign_before_lease"
+                and "ls-remote" in command
+                and command[-1] == f"refs/heads/{candidate}"
+            ) or (change == "foreign_before_push" and "push" in command):
+                git("push", "origin", candidate, cwd=source)
+            return await original_run(*command, **kwargs)
+
+        monkeypatch.setattr(publisher, "_run", race_before_lease)
+        remote_before = foreign_sha
+
+    if change in {
+        "diverged",
+        "foreign_before_clone",
+        "foreign_before_lease",
+        "foreign_before_push",
+        "missing_accepted_sha",
+    }:
         with pytest.raises((HarnessPlatformError, RuntimeError)):
             await publisher.publish_workspace(**args)
         assert git("rev-parse", f"refs/heads/{candidate}", cwd=origin) == remote_before
+        resolve_pr.assert_not_awaited()
+        assert (workspace / "later.txt").read_text() == "later step\n"
+    elif change in {"integrated", "base_advanced"}:
+        evidence = await publisher.publish_workspace(**args)
+        assert evidence == {
+            "push_status": "no_commits",
+            "push_branch": "main",
+            "push_base_branch": "main",
+            "push_head_sha": candidate_sha,
+            "push_commit_count": 0,
+            "remote_verified": change == "integrated",
+        }
+        assert git("rev-parse", "HEAD", cwd=workspace) == candidate_sha
+        assert git("rev-parse", f"refs/heads/{candidate}", cwd=origin) == candidate_sha
         resolve_pr.assert_not_awaited()
     else:
         evidence = await publisher.publish_workspace(**args)

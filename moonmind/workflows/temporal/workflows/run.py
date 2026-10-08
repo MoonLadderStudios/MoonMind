@@ -1112,6 +1112,11 @@ RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
     "run-accepted-publication-head-handoff-v1"
 )
+# Histories that already handed off an accepted head omitted its authored base.
+# Preserve those request payloads even when the older head marker is present.
+RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH = (
+    "run-accepted-publication-base-handoff-v1"
+)
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
 # workflow-owned, remote-verified published branch instead. This changes both
@@ -22010,7 +22015,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 # The base recorded with the head lets a later step extend its
                 # own candidate instead of publishing a PR stacked on it.
                 accepted_base = self._accepted_published_base_branch()
-                if accepted_base and accepted_base != accepted_head[0]:
+                if (
+                    accepted_base
+                    and accepted_base != accepted_head[0]
+                    and self._workflow_patch_enabled(
+                        RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH
+                    )
+                ):
                     parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
