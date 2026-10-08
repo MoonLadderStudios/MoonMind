@@ -77,6 +77,11 @@ def _reset_callback_rate_limiter():
 
 @pytest.fixture(autouse=True)
 def _stub_temporal_adapter(monkeypatch: pytest.MonkeyPatch):
+    # These callback/history tests stub the managed execution transport, not
+    # Omnigent plan admission. Keep their fixture independent of the product
+    # default and of runtime settings changed by other tests.
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+
     async def _start_workflow(self, **kwargs):
         workflow_id = str(kwargs["workflow_id"])
         return WorkflowStartResult(workflow_id=workflow_id, run_id=f"{workflow_id}-run")
