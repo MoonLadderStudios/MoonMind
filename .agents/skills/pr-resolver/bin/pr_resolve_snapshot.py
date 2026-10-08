@@ -1713,23 +1713,26 @@ def main():
         head_sha=head_sha,
         comments=comments,
     )
-    if automated_review.get("freshReviewForHead") is True:
-        # Recollect after completion and reclassify that inventory. A newer
-        # request/completion gets its own refresh; changing evidence is bounded
-        # instead of authorizing a stale clean snapshot.
-        completion_keys = (
+    if str(pr_data.get("state") or "").upper() not in {"CLOSED", "MERGED"} and (
+        automated_review.get("freshReviewForHead") or automated_review.get("requestFailed")
+    ):
+        # Both terminal outcomes need a stable request/result inventory. A
+        # superseding request or reply gets the same bounded reclassification.
+        result_keys = (
             "requestCommentId",
             "requestedAt",
             "completionKind",
             "completionId",
             "completedAt",
+            "requestFailed",
+            "requestFailure",
         )
         for _refresh_attempt in range(3):
-            previous_completion = tuple(
-                automated_review.get(key) for key in completion_keys
+            previous_result = tuple(
+                automated_review.get(key) for key in result_keys
             )
             comments_data = run_command(
-                comments_cmd, "Failed to retrieve completed review comments."
+                comments_cmd, "Failed to retrieve terminal review comments."
             )
             comments = (
                 comments_data.get("comments")
@@ -1759,9 +1762,9 @@ def main():
                 comments=comments,
             )
             if (
-                not automated_review.get("freshReviewForHead")
-                or tuple(automated_review.get(key) for key in completion_keys)
-                == previous_completion
+                not (automated_review.get("freshReviewForHead") or automated_review.get("requestFailed"))
+                or tuple(automated_review.get(key) for key in result_keys)
+                == previous_result
             ):
                 break
         else:
@@ -1771,14 +1774,16 @@ def main():
             )
             sys.exit(1)
         # Comments/reactions have no reviewed commit. Revalidate the remote
-        # head after completion and inventory collection before publishing them.
+        # head and open state after either outcome before publishing it.
         completed_pr, _, _ = fetch_pr_data(args.pr)
         if (
             not head_sha
+            or not isinstance(completed_pr, dict)
             or str(completed_pr.get("headRefOid") or "").strip() != head_sha
+            or str(completed_pr.get("state") or "").upper() != "OPEN"
         ):
             print(
-                "PR head changed during review collection; refresh the snapshot.",
+                "PR head or open state changed during review collection; refresh the snapshot.",
                 file=sys.stderr,
             )
             sys.exit(1)

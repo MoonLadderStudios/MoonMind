@@ -55,6 +55,16 @@ class _BeforeFailureMetadata(MoonMindMergeAutomationWorkflow):
         return await super().run(payload)
 
 
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _BeforeFailureSettlement(MoonMindMergeAutomationWorkflow):
+    def _review_failure_settlement_enabled(self, observation):
+        return False
+
+    @workflow.run
+    async def run(self, payload):
+        return await super().run(payload)
+
+
 def _payload():
     first = {
         "provider": "codex",
@@ -154,12 +164,20 @@ def test_failure_metadata_is_compact_canonical_and_survives_continuation():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("quota_status", [403, 429])
-@pytest.mark.parametrize("finish", ["refusal", "expiry"])
+@pytest.mark.parametrize(
+    "quota_status,finish",
+    [
+        (403, "refusal"),
+        (429, "refusal"),
+        (403, "expiry"),
+        (429, "expiry"),
+        (429, "legacy_refusal"),
+    ],
+)
 async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
     tmp_path, monkeypatch, quota_status, finish
 ):
-    state = {"refusal": False}
+    state = {"refusal": finish == "legacy_refusal"}
     observations = []
     integration = TemporalIntegrationActivities()
 
@@ -259,20 +277,57 @@ async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
                             return history
                         await asyncio.sleep(0.01)
 
+            old_workflow = (
+                _BeforeFailureSettlement
+                if finish == "legacy_refusal"
+                else _BeforeFailureMetadata
+            )
             async with Worker(
                 env.client,
                 task_queue=queue,
-                workflows=[_BeforeFailureMetadata],
+                workflows=[old_workflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
                 max_cached_workflows=0,
             ):
                 handle = await env.client.start_workflow(
-                    _BeforeFailureMetadata.run, payload, id=queue, task_queue=queue
+                    old_workflow.run, payload, id=queue, task_queue=queue
                 )
-                old_history = await wait_for_timer(1)
+                if finish == "legacy_refusal":
+                    old_result = await asyncio.wait_for(handle.result(), timeout=30)
+                    old_history = await handle.fetch_history()
+                else:
+                    old_history = await wait_for_timer(1)
                 old_pending = await handle.query(
                     MoonMindMergeAutomationWorkflow.summary
                 )
+            if finish == "legacy_refusal":
+                assert old_result["status"] == "blocked"
+                assert old_result["reviewLoop"]["activeRequest"] is not None
+                assert (
+                    old_result["reviewLoop"]["cycleRecords"][0]["status"] == "requested"
+                )
+                assert observations[0]["automatedReviewRequestFailure"]["id"] == 101
+                old_saved = json.loads(
+                    await artifacts.read(old_result["artifactRefs"]["summary"])
+                )
+                assert old_saved["reviewLoop"] == old_result["reviewLoop"]
+                await Replayer(
+                    data_converter=pydantic_data_converter,
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(old_history)
+                async with Worker(
+                    env.client,
+                    task_queue=queue,
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    max_cached_workflows=0,
+                ):
+                    replayed = await handle.query(
+                        MoonMindMergeAutomationWorkflow.summary
+                    )
+                assert replayed["reviewLoop"] == old_result["reviewLoop"]
+                return
             assert "providerFailure" in observations[0]["blockers"][0]
             assert "providerFailure" not in old_pending["blockers"][0]
             old_snapshot = json.loads(
@@ -313,6 +368,24 @@ async def test_review_failure_survives_artifact_persistence_and_worker_upgrade(
         assert metadata["retryRecommendation"] == "retry_after_cooldown"
         if finish == "expiry":
             assert metadata["retryAfterSeconds"] == 23
+            assert result["reviewLoop"]["activeRequest"] is not None
+            assert result["reviewLoop"]["cycleRecords"][-1]["status"] == "requested"
+        else:
+            assert result["reviewLoop"]["activeRequest"] is None
+            cycle = result["reviewLoop"]["cycleRecords"][-1]
+            assert cycle["status"] == "failed"
+            assert cycle["completionId"] is None
+            assert cycle["requestFailure"] == {
+                "kind": "issue_comment",
+                "id": 101,
+                "failedAt": "2026-08-24T22:01:00Z",
+                "providerErrorClass": "rate_limit",
+            }
+            assert saved["reviewLoop"]["cycleRecords"] == [cycle]
+            restored = MergeAutomationStartInput.model_validate(
+                {**_payload(), "activeReviewRequest": None, "reviewCycles": [cycle]}
+            )
+            assert restored.model_dump(by_alias=True)["reviewCycles"][0] == cycle
         assert "private raw quota response" not in json.dumps(saved)
         await Replayer(
             data_converter=pydantic_data_converter,

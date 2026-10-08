@@ -14,8 +14,10 @@ from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from pr_resolver_core.review_providers import review_comment_is_after
     from moonmind.config.settings import settings
     from moonmind.schemas.temporal_models import (
+        AutomatedReviewFailureModel,
         MergeAutomationStartInput,
         ReadinessBlockerModel,
     )
@@ -129,6 +131,9 @@ MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_CYCLE_BUDGET_PATCH_PREFIX = (
 )
 MERGE_AUTOMATION_REVIEW_ADOPTION_GUARD_PATCH_PREFIX = (
     "merge-automation-review-adoption-guard-v1:"
+)
+MERGE_AUTOMATION_REVIEW_FAILURE_SETTLEMENT_PATCH_PREFIX = (
+    "merge-automation-review-failure-settlement-v1:"
 )
 MERGE_AUTOMATION_RESTORED_REVIEW_IDENTITY_PATCH = (
     "merge-automation-restored-review-identity-v1"
@@ -1890,6 +1895,15 @@ class MoonMindMergeAutomationWorkflow:
         )
         self._active_review_request = selected
 
+    def _review_failure_settlement_enabled(self, observation: Any) -> bool:
+        if not isinstance(observation, str) or not observation.strip():
+            return False
+        observation_key = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+        return workflow.patched(
+            MERGE_AUTOMATION_REVIEW_FAILURE_SETTLEMENT_PATCH_PREFIX + observation_key
+        )
+
+
     def _settle_active_review_request(
         self, evaluation: Any
     ) -> ReadinessBlockerModel | None:
@@ -1912,8 +1926,7 @@ class MoonMindMergeAutomationWorkflow:
                 evaluation.get("headSha") != self._input.pull_request.head_sha
                 or evaluation.get("automatedReviewRequestStale") is True
                 or cycle is None
-                or cycle.get("requestKey")
-                != self._active_review_request.get("requestKey")
+                or cycle.get("requestKey") != self._active_review_request.get("requestKey")
             ):
                 return
             if evaluation.get("automatedReviewComplete") is True:
@@ -1924,11 +1937,69 @@ class MoonMindMergeAutomationWorkflow:
                     completion_id=evaluation.get("automatedReviewCompletionId"),
                 ):
                     return
+        failure_payload = evaluation.get("automatedReviewRequestFailure")
+        if failure_payload is not None and self._review_failure_settlement_enabled(
+            evaluation.get("readinessObservationId")
+        ):
+            invalid_failure = ReadinessBlockerModel(
+                kind="automated_review_request_failed",
+                source="policy",
+                retryable=False,
+                summary="The refusal does not prove a terminal result for the active review request.",
+            )
+            try:
+                failure = AutomatedReviewFailureModel.model_validate(failure_payload)
+            except ValueError:
+                return invalid_failure
+            requested_at = _parse_review_timestamp(
+                self._active_review_request.get("requestedAt")
+            )
+            failed_at = _parse_review_timestamp(failure.failed_at)
+            provider_refusal = any(
+                isinstance(blocker, Mapping)
+                and blocker.get("kind") == "automated_review_request_failed"
+                and blocker.get("source") == self._active_review_request.get("provider")
+                and isinstance(blocker.get("providerFailure"), Mapping)
+                and blocker["providerFailure"].get("providerErrorClass")
+                == failure.provider_error_class
+                for blocker in (evaluation.get("blockers") or [])
+            )
+            active_comment_id = self._active_review_request.get("requestCommentId")
+            selected_comment_id = evaluation.get("automatedReviewRequestCommentId")
+            if (
+                not isinstance(active_comment_id, int)
+                or isinstance(active_comment_id, bool)
+                or active_comment_id <= 0
+                or not isinstance(selected_comment_id, int)
+                or isinstance(selected_comment_id, bool)
+                or evaluation.get("automatedReviewComplete") is True
+                or evaluation.get("automatedReviewRequestStale") is True
+                or evaluation.get("headSha") != self._active_review_request.get("headSha")
+                or evaluation.get("pullRequestOpen") is not True
+                or evaluation.get("pullRequestMerged") is True
+                or evaluation.get("automatedReviewRequestCommentId")
+                != self._active_review_request.get("requestCommentId")
+                or _parse_review_timestamp(evaluation.get("automatedReviewRequestedAt"))
+                != requested_at
+                or not self._active_review_cycle_matches()
+                or not provider_refusal
+                or requested_at is None
+                or failed_at is None
+                or not review_comment_is_after(
+                    failed_at,
+                    failure.id,
+                    requested_at,
+                    self._active_review_request.get("requestCommentId"),
+                )
+            ):
+                return invalid_failure
+            cycle["status"] = "failed"
+            cycle["requestFailure"] = failure.model_dump(by_alias=True, mode="json")
+            self._active_review_request = None
+            return None
         if evaluation.get("automatedReviewComplete") is True:
             if cycle is not None:
-                cycle["completionKind"] = evaluation.get(
-                    "automatedReviewCompletionKind"
-                )
+                cycle["completionKind"] = evaluation.get("automatedReviewCompletionKind")
                 cycle["completionId"] = evaluation.get("automatedReviewCompletionId")
                 cycle["completedAt"] = evaluation.get("automatedReviewCompletedAt")
                 cycle["status"] = "completed"
@@ -1943,6 +2014,7 @@ class MoonMindMergeAutomationWorkflow:
             self._active_review_request = None
             self._refresh_tracked_head_sha_on_next_evaluation = True
 
+
     async def _evaluate_readiness_once(
         self,
     ) -> tuple[Any, Any, dict[str, Any] | None]:
@@ -1954,9 +2026,7 @@ class MoonMindMergeAutomationWorkflow:
                     evaluation,
                     tracked_head_sha="",
                     actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
-                    actionable_ci_failures=self._actionable_ci_failures_enabled(
-                        evaluation
-                    ),
+                    actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
                 ),
                 None,
             )
@@ -1964,12 +2034,12 @@ class MoonMindMergeAutomationWorkflow:
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
             # Review completion is independent of CI, including unavailable
             # check APIs under a deliberately limited repository connection.
-            readiness_payload["mergeAutomationConfig"]["gate"]["github"][
-                "checks"
-            ] = "disabled"
-            readiness_payload["mergeAutomationConfig"]["gate"]["jira"][
-                "status"
-            ] = "disabled"
+            readiness_payload["mergeAutomationConfig"]["gate"]["github"]["checks"] = (
+                "disabled"
+            )
+            readiness_payload["mergeAutomationConfig"]["gate"]["jira"]["status"] = (
+                "disabled"
+            )
         # Always publish the *live* request state so a restored input can never
         # make a settled request look active again.
         readiness_payload["activeReviewRequest"] = (
@@ -1983,6 +2053,41 @@ class MoonMindMergeAutomationWorkflow:
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
+        receipt_rejected = False
+        if (
+            isinstance(evaluation, Mapping)
+            and evaluation.get("automatedReviewRequestFailure") is not None
+        ):
+            evaluation = dict(evaluation)
+            if not self._review_failure_settlement_enabled(
+                evaluation.get("readinessObservationId")
+            ):
+                # Older consumers did not interpret this new receipt. Drop it
+                # before typed reconstruction while replaying their observation.
+                evaluation.pop("automatedReviewRequestFailure", None)
+            else:
+                try:
+                    AutomatedReviewFailureModel.model_validate(
+                        evaluation["automatedReviewRequestFailure"]
+                    )
+                except ValueError:
+                    receipt_rejected = True
+                    evaluation.pop("automatedReviewRequestFailure", None)
+                    evaluation.update(
+                        automatedReviewComplete=None,
+                        automatedReviewCompletionKind=None,
+                        automatedReviewCompletionId=None,
+                        automatedReviewCompletedAt=None,
+                    )
+                    evaluation["blockers"] = [
+                        *(evaluation.get("blockers") or []),
+                        {
+                            "kind": "automated_review_request_failed",
+                            "source": "policy",
+                            "retryable": False,
+                            "summary": "The malformed refusal receipt does not prove a terminal result for the active review request.",
+                        },
+                    ]
         budget_blocker = None
         if self._review_loop_active():
             if (
@@ -1996,9 +2101,16 @@ class MoonMindMergeAutomationWorkflow:
                 # when CI fails or conflicts are actionable. Unknown cannot
                 # release a resolver while this request still owns the head.
                 evaluation = {**evaluation, "automatedReviewComplete": False}
-            budget_blocker = self._settle_active_review_request(
-                evaluation if isinstance(evaluation, Mapping) else {}
-            )
+            if not receipt_rejected:
+                budget_blocker = self._settle_active_review_request(
+                    evaluation if isinstance(evaluation, Mapping) else {}
+                )
+        if budget_blocker is not None and isinstance(evaluation, Mapping):
+            # Rejected or malformed receipts are not admitted cycle evidence.
+            # Keep their bounded blocker, without passing corrupt data into
+            # the typed readiness projection or changing retained history.
+            evaluation = dict(evaluation)
+            evaluation.pop("automatedReviewRequestFailure", None)
         evidence = classify_readiness(
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,

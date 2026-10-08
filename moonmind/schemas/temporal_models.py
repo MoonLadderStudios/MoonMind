@@ -2157,6 +2157,30 @@ class ReadinessBlockerModel(BaseModel):
             raise ValueError("summary must be a non-empty string")
         return candidate[:500]
 
+class AutomatedReviewFailureModel(BaseModel):
+    """Compact identity of a provider refusal, separate from review completion."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["issue_comment"] = Field(..., alias="kind")
+    id: int = Field(..., alias="id", gt=0, strict=True)
+    failed_at: str = Field(..., alias="failedAt")
+    provider_error_class: str = Field(
+        ...,
+        alias="providerErrorClass",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+    @field_validator("failed_at")
+    @classmethod
+    def _aware_failure_timestamp(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("failedAt must carry a timezone")
+        return value
+
 class ReadinessEvidenceModel(BaseModel):
     """Compact result of evaluating external PR readiness."""
 
@@ -2186,6 +2210,9 @@ class ReadinessEvidenceModel(BaseModel):
     )
     automated_review_completed_at: str | None = Field(
         None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="automatedReviewRequestFailure", exclude_if=lambda value: value is None
     )
     automated_review_request_stale: bool | None = Field(
         None, alias="automatedReviewRequestStale"
@@ -2245,6 +2272,9 @@ class AutomatedReviewCycleModel(BaseModel):
     completion_kind: str | None = Field(None, alias="completionKind")
     completion_id: int | None = Field(None, alias="completionId")
     completed_at: str | None = Field(None, alias="completedAt")
+    request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="requestFailure", exclude_if=lambda value: value is None
+    )
     status: str = Field("requested", alias="status")
     progress_signature: str | None = Field(None, alias="progressSignature")
 
