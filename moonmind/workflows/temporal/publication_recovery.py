@@ -574,6 +574,7 @@ def saved_work_publication_operation_key(
     saved_work_digest: str,
     destination: SavedWorkPublicationDestination,
     github_authority_ref: str,
+    admission_generation: str | None = None,
 ) -> str:
     """Identity for one saved result, admitted destination, strategy, and branch."""
 
@@ -585,6 +586,13 @@ def saved_work_publication_operation_key(
         },
         "savedWork": _required_text(saved_work_digest, "savedWorkDigest"),
     }
+    # Retained requests without a generation keep their exact historical key.
+    # A new explicit admission can preserve the same requested output while
+    # leaving the fenced operation and its immutable receipts available.
+    if admission_generation is not None:
+        identity["admissionGeneration"] = _required_text(
+            admission_generation, "admissionGeneration"
+        )
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -616,6 +624,14 @@ class SavedWorkPublicationContract(BaseModel):
     pull_request_title: str | None = Field(None, alias="pullRequestTitle")
     pull_request_body: str | None = Field(None, alias="pullRequestBody")
     publication_idempotency_key: str = Field(..., alias="publicationIdempotencyKey")
+    admission_generation: str | None = Field(
+        None, alias="admissionGeneration", min_length=1, max_length=128
+    )
+
+    @field_validator("admission_generation")
+    @classmethod
+    def _generation(cls, value: str | None) -> str | None:
+        return None if value is None else _required_text(value, "admissionGeneration")
 
     @field_validator(
         "source_workflow_id",
@@ -651,6 +667,7 @@ class SavedWorkPublicationContract(BaseModel):
             saved_work_digest=self.saved_work_digest,
             destination=self.destination,
             github_authority_ref=self.github_authority_ref,
+            admission_generation=self.admission_generation,
         )
         if self.publication_idempotency_key != expected_key:
             raise PublicationRecoveryError(

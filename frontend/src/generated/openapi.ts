@@ -11025,7 +11025,7 @@ export interface components {
             /** Alias */
             alias?: string | null;
             /** Scope */
-            scope?: ("global" | "personal") | null;
+            scope?: ("personal" | "global") | null;
             /** Inputmapping */
             inputMapping?: {
                 [key: string]: unknown;
@@ -13320,6 +13320,8 @@ export interface components {
             pullRequestBody?: string | null;
             /** Commitmessage */
             commitMessage?: string | null;
+            /** Admissiongeneration */
+            admissionGeneration?: string | null;
         };
         /**
          * ScheduleCreatedResponse
