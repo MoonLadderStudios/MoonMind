@@ -85,7 +85,8 @@ class _ControlledGrantedAgentRun:
                 parent, "awaiting_slot", "Waiting for capacity"
             )
             await workflow.wait_condition(lambda: bool(self.commands))
-            assert self.commands.pop(0) == "grant"
+            command = self.commands.pop(0)
+            assert command == "grant"
         while True:
             emitter._assigned_profile_id = profile
             if workflow.patched(AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID):
