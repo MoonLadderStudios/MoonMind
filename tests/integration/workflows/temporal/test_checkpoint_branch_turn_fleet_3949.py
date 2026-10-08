@@ -654,7 +654,8 @@ async def test_overlapping_running_claim_preserves_terminal_commit_3949(
                 async with asyncio.timeout(10):
                     while True:
                         if handoff.done():
-                            await handoff
+                            # Propagate a completed task's exception before failing.
+                            handoff.result()
                             pytest.fail("running handoff escaped the terminal row lock")
                         blockers = await observer.scalar(
                             text("SELECT pg_blocking_pids(:pid)"), {"pid": running_pid}
