@@ -97,6 +97,8 @@ FLEET3949_CALLS: list[tuple[str, str, int, object]] = []
 FLEET3949_FAIL_TERMINAL_ONCE = False
 FLEET3949_FAIL_TERMINAL_ALWAYS = False
 FLEET3949_HOLD_MARK_RUNNING: asyncio.Event | None = None
+FLEET3949_MARK_RUNNING_ENTERED: asyncio.Event | None = None
+FLEET3949_RELEASE_MARK_RUNNING: asyncio.Event | None = None
 
 _FLEET3949_OBSERVED = {
     "checkpoint_branch.turn.mark_running": ("mark_running", "agentRunWorkflowId"),
@@ -125,6 +127,10 @@ class _Fleet3949ActivityObserver(ActivityInboundInterceptor):
             FLEET3949_CALLS.append(
                 (kind, info.task_queue, info.attempt, payload.get(value_key))
             )
+            if kind == "mark_running" and FLEET3949_MARK_RUNNING_ENTERED is not None:
+                FLEET3949_MARK_RUNNING_ENTERED.set()
+                assert FLEET3949_RELEASE_MARK_RUNNING is not None
+                await FLEET3949_RELEASE_MARK_RUNNING.wait()
             if kind == "terminal":
                 global FLEET3949_FAIL_TERMINAL_ONCE
                 if FLEET3949_FAIL_TERMINAL_ALWAYS:
@@ -274,22 +280,18 @@ async def _run_fleet3949(
 
     from uuid import uuid4 as _uuid4
 
+    global FLEET3949_MARK_RUNNING_ENTERED, FLEET3949_RELEASE_MARK_RUNNING
+
     FLEET3949_REFS.clear()
     FLEET3949_CALLS.clear()
+    if cancel_at_activity_entry:
+        FLEET3949_MARK_RUNNING_ENTERED = asyncio.Event()
+        FLEET3949_RELEASE_MARK_RUNNING = asyncio.Event()
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     FLEET3949_REFS.update(refs)
     queue = f"checkpoint-branch-fleet3949-{_uuid4()}"
-    # The time-skipping server can reject cancellation racing activity
-    # completion with ACTIVITY_UNKNOWN (temporalio/sdk-java#2391). Keep that
-    # activity-entry boundary on the cached CLI server; other journeys retain
-    # the established time-skipping environment and post-handoff observation.
-    start_environment = (
-        WorkflowEnvironment.start_local
-        if cancel_at_activity_entry
-        else WorkflowEnvironment.start_time_skipping
-    )
     try:
-        async with await start_environment() as env:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
             async with AsyncExitStack() as stack:
                 artifact_session = await stack.enter_async_context(sessions())
                 artifact_service = TemporalArtifactService(
@@ -341,12 +343,19 @@ async def _run_fleet3949(
                     task_queue=queue,
                 )
                 if cancel:
-                    for _attempt in range(100):
-                        if any(
-                            name == "mark_running" for name, *_rest in FLEET3949_CALLS
-                        ):
-                            break
-                        await asyncio.sleep(0.01)
+                    if cancel_at_activity_entry:
+                        assert FLEET3949_MARK_RUNNING_ENTERED is not None
+                        await asyncio.wait_for(
+                            FLEET3949_MARK_RUNNING_ENTERED.wait(), timeout=1
+                        )
+                    else:
+                        for _attempt in range(100):
+                            if any(
+                                name == "mark_running"
+                                for name, *_rest in FLEET3949_CALLS
+                            ):
+                                break
+                            await asyncio.sleep(0.01)
                     assert any(
                         name == "mark_running" for name, *_rest in FLEET3949_CALLS
                     )
@@ -366,6 +375,9 @@ async def _run_fleet3949(
                             await asyncio.sleep(0.01)
                         assert state["phase"] == "running", state
                     await handle.cancel()
+                    if cancel_at_activity_entry:
+                        assert FLEET3949_RELEASE_MARK_RUNNING is not None
+                        FLEET3949_RELEASE_MARK_RUNNING.set()
                     with pytest.raises(WorkflowFailureError):
                         await handle.result()
                     for _attempt in range(200):
@@ -389,6 +401,8 @@ async def _run_fleet3949(
         return result, history, list(FLEET3949_CALLS), sessions
     finally:
         FLEET3949_REFS.clear()
+        FLEET3949_MARK_RUNNING_ENTERED = None
+        FLEET3949_RELEASE_MARK_RUNNING = None
         await engine.dispose()
 
 
