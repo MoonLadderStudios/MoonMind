@@ -1,5 +1,6 @@
 """Journal rotation preserves the durable replacement before reclaiming copies."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -53,7 +54,7 @@ async def journals(tmp_path, monkeypatch):
         target_metadata={},
     )
 
-    async def publish(count, *, complete=True, embedded=False, chunk=None):
+    async def publish(count, *, complete=True, embedded=False, chunk=None, events=None):
         refs = []
         async with sessions() as session:
             artifacts = service(session)
@@ -81,7 +82,13 @@ async def journals(tmp_path, monkeypatch):
                     await artifacts.write_complete(
                         artifact_id=artifact.artifact_id,
                         principal="service:omnigent-generic-host",
-                        payload=b"event\n" * count,
+                        payload=(
+                            "".join(
+                                json.dumps(event) + "\n" for event in events
+                            ).encode()
+                            if events is not None
+                            else b"event\n" * count
+                        ),
                         content_type="application/x-ndjson",
                     )
                 refs.append(f"artifact:{artifact.artifact_id}")
@@ -559,3 +566,111 @@ async def test_complete_terminal_journals_replace_chunk_history(journals):
     row = await store.get_bridge_session(session_id)
     assert (row.raw_events_ref, row.normalized_events_ref) == final
     assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY not in (row.metadata_ or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt_commit", [False, True])
+@pytest.mark.parametrize("rebuild_events", [False, True])
+async def test_terminal_event_payloads_survive_expired_chunk_cleanup(
+    journals, monkeypatch, interrupt_commit, rebuild_events
+):
+    store, session_id, sessions, service, blobs, publish = journals
+    events = [
+        {
+            "sequence": index + 1,
+            "eventType": "response.delta",
+            "textPreview": f"token-{index}",
+            "deduplicationKey": f"event-{index}",
+        }
+        for index in range(3)
+    ]
+    chunks = []
+    for start, chunk_events in ((0, events[:2]), (2, events[2:])):
+        refs = await publish(len(chunk_events), chunk=start, events=chunk_events)
+        chunks.extend(refs)
+        await store.attach_active_journal_refs(
+            session_id, raw_ref=refs[0], normalized_ref=refs[1], new_chunk=True
+        )
+        for event in chunk_events:
+            event["artifactRef"] = refs[1]
+        await store.append_events(session_id, chunk_events)
+
+    # An old session can outlive the troubleshooting retention of every chunk.
+    async with sessions() as session:
+        artifacts = service(session)
+        for ref in chunks:
+            artifact = await artifacts._repository.get_artifact(
+                ref.removeprefix("artifact:")
+            )
+            artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+
+    final = await publish(len(events), events=events)
+    terminal_refs = {
+        "metadataRefs": {
+            "rawSseStreamRef": final[0],
+            "normalizedEventStreamRef": final[1],
+        }
+    }
+    if interrupt_commit:
+
+        async def fail_commit(_session):
+            raise RuntimeError("worker lost before terminal commit")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(AsyncSession, "commit", fail_commit)
+            with pytest.raises(RuntimeError, match="before terminal commit"):
+                await store.mark_terminal(
+                    "journal-test",
+                    status="completed",
+                    terminal_refs=terminal_refs,
+                    events=events if rebuild_events else None,
+                )
+        # Reattachment sees the previous durable index and protected chunks.
+        store = bridge_store.OmnigentBridgeSessionStore(sessions)
+        row = await store.get_bridge_session(session_id)
+        assert row.first_message_state != bridge_store.FIRST_MESSAGE_TERMINAL
+        assert bridge_store.SEALED_JOURNAL_CHUNKS_KEY in row.metadata_
+        assert [
+            event.artifact_ref for event in await store.list_events(session_id)
+        ] == [event["artifactRef"] for event in events]
+
+    async with sessions() as session:
+        result = await service(session).sweep_lifecycle(
+            principal="service:storage-maintenance"
+        )
+        assert result.soft_deleted_count == 0
+
+    await store.mark_terminal(
+        "journal-test",
+        status="completed",
+        terminal_refs=terminal_refs,
+        events=events if rebuild_events else None,
+    )
+    async with sessions() as session:
+        result = await service(session).sweep_lifecycle(
+            principal="service:storage-maintenance"
+        )
+        assert result.soft_deleted_count == len(chunks)
+        for ref in chunks:
+            await service(session).hard_delete(
+                artifact_id=ref.removeprefix("artifact:"),
+                principal="service:storage-maintenance",
+            )
+
+    # Reopen the store after cleanup and read each payload via its index locator.
+    store = bridge_store.OmnigentBridgeSessionStore(sessions)
+    indexed = (await store.list_event_page(session_id)).rows
+    assert [event.sequence for event in indexed] == [1, 2, 3]
+    assert [event.deduplication_key for event in indexed] == [
+        event["deduplicationKey"] for event in events
+    ]
+    for event in indexed:
+        artifact = await _artifact(sessions, service, event.artifact_ref)
+        assert artifact.status is TemporalArtifactStatus.COMPLETE
+        payload = [
+            json.loads(line)
+            for line in blobs.read_bytes(artifact.storage_key).splitlines()
+        ]
+        assert payload[event.sequence - 1]["textPreview"] == event.text_preview
+        assert event.artifact_ref == final[1]
