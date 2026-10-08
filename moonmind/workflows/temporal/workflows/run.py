@@ -23781,6 +23781,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             search_value,
             profile_id,
             label=str(metadata.get("providerProfileLabel") or "") or None,
+            retain_all_profiles=workflow.patched(
+                "provider-profile-complete-associations-v1"
+            ),
         )
         if merged is None:
             return

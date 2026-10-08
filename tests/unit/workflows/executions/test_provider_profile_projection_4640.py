@@ -129,7 +129,9 @@ def test_profiles_beyond_display_bound_stay_indexed() -> None:
         {"targetRuntime": "omnigent", "task": {"steps": steps}}
     )
 
-    assert len(summary["profiles"]) == 8
+    assert len(summary["profiles"]) == 12
+    row = provider_profile_summary_from_memo({PROVIDER_PROFILE_MEMO_KEY: summary})
+    assert len(row["profiles"]) == 8
     assert summary["profileCount"] == 12
     assert provider_profile_id_token("profile-11") in search_value.split()
 
@@ -237,7 +239,9 @@ def test_launch_resolution_beyond_display_bound_uses_indexed_membership() -> Non
     assert merge_resolved_provider_profile(summary, value, "profile-11") is None
     merged = merge_resolved_provider_profile(summary, value, "profile-new")
     assert merged is not None
-    assert len(merged[0]["profiles"]) == 8
+    assert len(merged[0]["profiles"]) == 13
+    row = provider_profile_summary_from_memo({PROVIDER_PROFILE_MEMO_KEY: merged[0]})
+    assert len(row["profiles"]) == 8
     assert merged[0]["profileCount"] == 13
     assert provider_profile_id_token("profile-new") in merged[1].split()
     assert provider_profile_id_token("profile-11") in merged[1].split()
@@ -248,3 +252,59 @@ def test_launch_resolution_never_invents_a_missing_admission_projection() -> Non
     assert merge_resolved_provider_profile({"title": "Old run"}, None, "acct-1") is None
     pending, value = build_provider_profile_projection({"targetRuntime": "codex_cli"})
     assert merge_resolved_provider_profile(pending, value, "  ") is None
+
+
+def test_legacy_launch_projection_patch_keeps_replayed_memo_shape() -> None:
+    recorded = {
+        "selectionState": "recorded",
+        "profiles": [{"id": f"acct-{index}"} for index in range(8)],
+        "profileCount": 8,
+    }
+    value = " ".join(
+        [
+            provider_profile_state_token("recorded"),
+            *[provider_profile_id_token(entry["id"]) for entry in recorded["profiles"]],
+        ]
+    )
+    legacy = merge_resolved_provider_profile(
+        recorded,
+        value,
+        "acct-9",
+        retain_all_profiles=False,
+    )
+    current = merge_resolved_provider_profile(recorded, value, "acct-9")
+    assert legacy[0]["profiles"] == recorded["profiles"]
+    assert legacy[0]["profileCount"] == 9
+    assert current[0]["profiles"][-1] == {"id": "acct-9"}
+    assert legacy[1] == current[1]
+
+
+def test_launch_recovers_a_known_association_omitted_by_old_display_bound() -> None:
+    summary, value = build_provider_profile_projection(
+        {
+            "task": {
+                "steps": [
+                    {"runtime": {"providerProfileRef": f"acct-{index}"}}
+                    for index in range(9)
+                ]
+            }
+        }
+    )
+    summary["profiles"] = summary["profiles"][:8]
+    assert (
+        merge_resolved_provider_profile(
+            summary,
+            value,
+            "acct-8",
+            label="Recorded grant",
+            retain_all_profiles=False,
+        )
+        is None
+    )
+    recovered = merge_resolved_provider_profile(
+        summary, value, "acct-8", label="Recorded grant"
+    )
+    assert recovered is not None
+    assert recovered[0]["profiles"][-1] == {"id": "acct-8", "label": "Recorded grant"}
+    assert recovered[0]["profileCount"] == 9
+    assert recovered[1] == value
