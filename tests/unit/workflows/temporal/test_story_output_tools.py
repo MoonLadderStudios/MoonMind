@@ -5966,7 +5966,15 @@ async def test_child_started_workflow_reads_handoff_with_owning_run_connection(
         await engine.dispose()
 
     assert reason is None
-    # Each of the three reads resolves the owner; none caches authority.
-    assert client.described == [remediation, resolver] * 3
+    # Each provider read resolves only through the recorded parent chain. The
+    # credential acquirer may perform a second bounded authority read before
+    # falling back to a historical connection, so do not freeze that internal
+    # lookup count here.
+    assert len(client.described) >= 6
+    assert len(client.described) % 2 == 0
+    assert all(
+        pair == (remediation, resolver)
+        for pair in zip(client.described[::2], client.described[1::2])
+    )
     assert [r.url.path.split("/")[4] for r in requests] == ["pulls", "commits", "compare"]
     assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
