@@ -3666,9 +3666,9 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
             captured_env.update(env)
         return _FakeProcess()
 
-    async def _fake_secret(ref: str, **_kwargs) -> str:
+    async def _fake_secret(ref: str, **_kwargs) -> tuple[str, str]:
         assert ref == "db://GITHUB_TOKEN"
-        return "resolved-from-managed-secrets-table"
+        return "resolved-from-managed-secrets-table", "fixture-managed-revision"
 
     from moonmind.config.settings import settings as app_settings
 
@@ -3695,7 +3695,7 @@ async def test_launch_keeps_direct_github_env_for_codex_cli_managed_runs(
         lambda command: "/usr/bin/gh" if command == "gh" else None,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret,
     )
 
