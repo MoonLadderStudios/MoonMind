@@ -688,6 +688,9 @@ async def test_exact_images_run_the_required_concurrency_level(tmp_path) -> None
 
 async def _credential_recovery_host_class(backend, client, image_ref):
     """Bind this recovery row to observed build/version and canonical harness identity."""
+    from api_service.services.omnigent_agent_profile_service import (
+        _synthetic_opencode_implementation,
+    )
     from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
 
     _, build_digest, _ = await backend.run(
@@ -728,12 +731,17 @@ async def _credential_recovery_host_class(backend, client, image_ref):
         (row for row in await client.list_harnesses() if row.get("id") == HARNESS_ID),
         None,
     )
-    assert raw is not None, "exact recovery harness catalog is unavailable"
-    harness = _normalize_harness(
-        raw,
-        omnigent_version=version.strip(),
-        omnigent_build_digest=build_digest.strip(),
-    )
+    if raw is None:
+        # The upstream picker catalog omits native wrappers, so production
+        # publishes OpenCode through the deployment catalog overlay under its
+        # stable synthetic identity. Bind the same identity here.
+        implementation = _synthetic_opencode_implementation()
+    else:
+        implementation = _normalize_harness(
+            raw,
+            omnigent_version=version.strip(),
+            omnigent_build_digest=build_digest.strip(),
+        ).implementation
     payload = _host_class(image_ref).model_dump(mode="json", by_alias=True)
     payload.update(
         omnigentVersion=version.strip(),
@@ -741,7 +749,7 @@ async def _credential_recovery_host_class(backend, client, image_ref):
         architectures=[architecture.strip()],
     )
     payload["declaredHarnessImplementations"][0]["implementationRef"] = (
-        harness.implementation.implementation_ref()
+        implementation.implementation_ref()
     )
     return HostClass.model_validate(payload)
 
