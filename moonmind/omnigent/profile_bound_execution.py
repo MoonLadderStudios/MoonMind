@@ -92,6 +92,7 @@ from moonmind.omnigent.workspace_intent import (
     authored_anonymous_source,
     authored_checkout_commit,
     authored_github_mutation_required,
+    authored_publish_mode,
     authored_repository_mutation_required,
     authored_repository_source,
     authored_required_capabilities,
@@ -1374,10 +1375,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
             github_token: str | None = None
             github_token_resolved = False
+            github_publication_token_resolved = False
 
-            async def resolve_github_token() -> str | None:
-                nonlocal github_token, github_token_resolved
-                if not github_token_resolved:
+            async def resolve_github_token(
+                *, for_publication: bool = False
+            ) -> str | None:
+                nonlocal github_token, github_token_resolved, github_publication_token_resolved
+                if for_publication and not github_publication_token_resolved:
+                    # Source-read acquisition cannot authorize a later write.
+                    # Acquire at the existing publication boundary with only
+                    # destination requirements, including for prepared work.
+                    github_token = await self._github_token(
+                        request, for_publication=True
+                    )
+                    github_token_resolved = True
+                    github_publication_token_resolved = True
+                elif not github_token_resolved:
                     github_token = await self._github_token(request)
                     github_token_resolved = True
                 return github_token
@@ -1894,7 +1907,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                             (request.parameters or {}).get("repository")
                                             or ""
                                         ).strip(),
-                                        github_token=await resolve_github_token(),
+                                        github_token=await resolve_github_token(
+                                            for_publication=True
+                                        ),
                                         accepted_published_head=(
                                             request.parameters or {}
                                         ).get("acceptedPublishedHead"),
@@ -2373,6 +2388,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 attempt_cleanup_deferred_code = "activity_cancelled"
             elif isinstance(exc, OmnigentSessionStillRunningError):
                 attempt_cleanup_deferred_code = "ambiguous_terminal_state"
+            elif (
+                isinstance(exc, OmnigentOAuthHostError)
+                and exc.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+            ):
+                # Refresh failed on an already owned, running host. The same
+                # Activity retry must retain its bridge, workspace, and leases;
+                # ordinary launch cleanup would destroy that recovery path.
+                attempt_cleanup_deferred_code = exc.code
             elif (
                 isinstance(exc, OmnigentOAuthHostError)
                 and exc.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
@@ -3180,7 +3203,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         return evidence
 
     @classmethod
-    async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
+    async def _github_token(
+        cls, request: AgentExecutionRequest, *, for_publication: bool = False
+    ) -> str | None:
         gh_required = "gh" in cls._required_capabilities(request)
         # A GitHub repository source must be cloned into the sandbox before the
         # host launches. Private repositories require a credential for that clone
@@ -3209,9 +3234,22 @@ class OmnigentProfileBoundExecutionCoordinator:
         # connection's credential. Ambient worker tokens are never consulted
         # while git-default is recorded (MoonLadderStudios/MoonMind#4011).
         repository = cls._repository_source(request)
-        resolved = await (
-            managed_api_key_resolve.resolve_default_github_connection_credential(
-                repo=repository or None
+        # Enforce the existing branch/PR publication operation mapping before
+        # exposing a credential. A gh capability alone can be read-only; it
+        # does not imply publication or permission to merge a pull request.
+        publish_mode = authored_publish_mode(request)
+        required_operations: tuple[str, ...] = ("read",)
+        if publish_mode in {"branch", "pr"} and (gh_required or for_publication):
+            required_operations = ("write", "branch_write")
+            if publish_mode == "pr":
+                required_operations += ("review_request",)
+            if not for_publication:
+                required_operations = ("read", *required_operations)
+        resolved = (
+            await (
+                managed_api_key_resolve.resolve_default_github_connection_credential(
+                    repo=repository or None, required_operations=required_operations
+                )
             )
         )
         token = str(resolved.token or "").strip()
