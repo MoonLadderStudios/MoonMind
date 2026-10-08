@@ -270,6 +270,7 @@ class PublishService:
         publish_existing_commits: bool = False,
         publication_branch_name: str | None = None,
         verify_remote: bool = False,
+        expected_remote_head_sha: str | None = None,
     ) -> PublishResult | None:
         """Publish the changes to a branch or a pull request.
 
@@ -281,6 +282,8 @@ class PublishService:
             runtime_mode: The runtime that generated the changes (e.g. "codex", "claude").
             repo_dir: Path to the git repository.
             run_command: Async callable that runs a shell command and returns an object with a `stdout` attribute.
+            expected_remote_head_sha: Accepted candidate head to retain as the
+                remote lease, rather than adopting a concurrently advanced tip.
             bound_credential: Optional already-acquired bound credential (PAT or
                 GitHub App) for the admitted operation. When present and no
                 explicit token is given, push/gh env projections consume it
@@ -416,6 +419,13 @@ class PublishService:
             remote_line = str(remote_result.stdout or "").strip().splitlines()
             if remote_line:
                 remote_sha = remote_line[0].split(maxsplit=1)[0].strip()
+            if expected_remote_head_sha is not None and (
+                getattr(remote_result, "returncode", 1) != 0
+                or remote_sha != expected_remote_head_sha
+            ):
+                raise RuntimeError(
+                    "accepted publication candidate no longer matches its remote head"
+                )
             if branch_name == base_branch:
                 if getattr(remote_result, "returncode", 1) != 0 or not re.fullmatch(
                     r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha

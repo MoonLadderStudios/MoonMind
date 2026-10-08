@@ -106,6 +106,11 @@ MERGE_AUTOMATION_RESOLVER_VERIFICATION_CAPABILITY_PATCH = (
 MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH = (
     "merge-automation-resolver-merge-confirmation-v1"
 )
+# Unchanged reenter_gate handoffs consume the no-progress budget even when no
+# automated review loop is configured, so they cannot relaunch agents forever.
+MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH = (
+    "merge-automation-bound-reenter-without-review-loop-v1"
+)
 # Request/remediate/request loop for one configured automated review provider.
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
@@ -2236,9 +2241,13 @@ class MoonMindMergeAutomationWorkflow:
                                 summary="pr-resolver returned an invalid gated continuation.",
                                 blocker_kind="resolver_continuation_invalid",
                             )
-                        if (
-                            workflow.patched("merge-automation-bound-reenter-progress-v1")
-                            and self._review_loop_active()
+                        if workflow.patched(
+                            "merge-automation-bound-reenter-progress-v1"
+                        ) and (
+                            self._review_loop_active()
+                            or workflow.patched(
+                                MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH
+                            )
                         ):
                             continuation = resolver_result.get("gatedContinuation") or {}
                             signature = continuation.get("progressSignature")
@@ -2254,12 +2263,17 @@ class MoonMindMergeAutomationWorkflow:
                                 and self._no_progress_cycles
                                 >= self._review_loop_config().max_consecutive_no_progress_cycles
                             ):
+                                reason = (
+                                    str(continuation.get("reason") or "").strip()[:64]
+                                    or "unspecified"
+                                )
                                 return await self._blocked_review_summary(
                                     summary=(
                                         "Resolver continuation budget exhausted: "
                                         "the same head and outstanding work repeatedly "
-                                        "returned to the gate. Inspect the resolver "
-                                        "evidence and repair its blocker before retrying."
+                                        f"returned to the gate (reason: {reason}). "
+                                        "Inspect the resolver evidence and repair its "
+                                        "blocker before retrying."
                                     ),
                                     blocker_kind="review_loop_no_progress",
                                 )
