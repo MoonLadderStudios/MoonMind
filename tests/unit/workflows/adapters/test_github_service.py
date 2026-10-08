@@ -1149,7 +1149,9 @@ async def test_probe_token_pat_connection_reads_assigned_repository_any_case(
 
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
     monkeypatch.setattr(
-        github_credentials, "_resolve_secret_ref", AsyncMock(return_value="token-b")
+        github_credentials,
+        "_resolve_secret_ref_with_revision",
+        AsyncMock(return_value=("token-b", "fixture-managed-revision")),
     )
     mock_client = _probe_client(
         [
