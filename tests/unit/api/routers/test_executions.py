@@ -21607,6 +21607,32 @@ def test_list_row_reports_not_recorded_for_historical_rows_4640() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "memo",
+    [
+        {},
+        {"providerProfile": None},
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [],
+                "profileCount": 1,
+            }
+        },
+    ],
+)
+def test_list_row_reports_unavailable_for_indexed_but_unusable_projection(memo) -> None:
+    record = _build_execution_record()
+    record.memo = memo
+    record.search_attributes["mm_provider_profile"] = "ppstrecorded"
+
+    payload = _serialize_execution_list_item(record).model_dump(
+        by_alias=True, mode="json"
+    )
+
+    assert payload["providerProfile"] is None
+
+
 def test_list_query_applies_provider_profile_membership_before_pagination_4640() -> None:
     from moonmind.workflows.executions.provider_profile_projection import (
         provider_profile_id_token,
@@ -21896,6 +21922,87 @@ def test_provider_profile_facets_report_old_incomplete_projection_4640() -> None
     assert response.status_code == 200
     assert response.json()["truncated"] is True
     assert response.json()["items"][0]["value"] == "known"
+
+
+@pytest.mark.parametrize(
+    "memo",
+    [
+        {},
+        {"providerProfile": None},
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [],
+                "profileCount": 0,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "invalid",
+                "profiles": [{"id": "known"}],
+                "profileCount": 1,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [{"id": "known"}, {}],
+                "profileCount": 2,
+            }
+        },
+        {
+            "providerProfile": {
+                "selectionState": "recorded",
+                "profiles": [{"id": "known"}],
+                "profileCount": None,
+            }
+        },
+    ],
+)
+def test_provider_profile_facets_keep_malformed_coverage_incomplete_across_pages(
+    memo,
+) -> None:
+    first = SimpleNamespace(
+        memo=AsyncMock(return_value=memo),
+        search_attributes={"mm_provider_profile": ["ppstrecorded"]},
+    )
+    last = SimpleNamespace(
+        memo=AsyncMock(
+            return_value={
+                "providerProfile": {
+                    "selectionState": "recorded",
+                    "profiles": [{"id": "last"}],
+                    "profileCount": 1,
+                }
+            }
+        )
+    )
+    temporal_client = _provider_profile_temporal_client()
+    temporal_client.list_workflows.side_effect = lambda **kwargs: SimpleNamespace(
+        current_page=[last] if kwargs["next_page_token"] else [first],
+        next_page_token=None if kwargs["next_page_token"] else b"last-page",
+        fetch_next_page=AsyncMock(),
+    )
+    with TestClient(_provider_profile_app(temporal_client)) as test_client:
+        params = {"source": "temporal", "facet": "providerProfile", "pageSize": 1}
+        response = test_client.get("/api/executions/facets", params=params)
+        assert response.status_code == 200, response.text
+        first_body = response.json()
+        assert first_body["truncated"] is True
+        if (memo.get("providerProfile") or {}).get("profiles"):
+            assert [item["value"] for item in first_body["items"]] == ["known"]
+        params["nextPageToken"] = first_body["nextPageToken"]
+        response = test_client.get("/api/executions/facets", params=params)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["truncated"] is True
+        assert body["nextPageToken"] is None
+        assert [item["value"] for item in body["items"]] == ["last"]
+        assert [item["value"] for item in body["stateItems"]] == [
+            "pending",
+            "not_recorded",
+            "not_applicable",
+        ]
 
 
 @pytest.mark.parametrize(
