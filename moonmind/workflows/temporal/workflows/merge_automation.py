@@ -118,6 +118,9 @@ MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
 MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
     "merge-automation-actionable-ci-failure-v1:"
 )
+MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX = (
+    "merge-automation-missing-ci-wait-v1:"
+)
 MAX_PUBLISHED_REVIEW_CYCLES = 20
 # Typed routing for validated pr-resolver terminal verdicts
 # (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
@@ -1178,6 +1181,24 @@ class MoonMindMergeAutomationWorkflow:
         )
 
     @staticmethod
+    def _missing_ci_wait_enabled(evaluation: Any) -> bool:
+        if not isinstance(evaluation, Mapping) or not isinstance(
+            evaluation.get("checksReported"), bool
+        ):
+            # Old producers and unavailable/disabled check reads cannot prove
+            # absence. Do not reinterpret their incomplete checks as missing CI.
+            return False
+        observation_id = evaluation.get("readinessObservationId")
+        if not isinstance(observation_id, str) or not observation_id.strip():
+            return False
+        # A new producer may already have been observed by an old consumer.
+        # Preserve that poll on replay, then adopt on the next normal poll.
+        observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
+        return workflow.patched(
+            MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX + observation_key
+        )
+
+    @staticmethod
     def _resolver_child_failure_summary(error: Exception) -> str:
         prefix = "pr-resolver child workflow failed before returning a result."
         cause: BaseException | None = error
@@ -2057,6 +2078,34 @@ class MoonMindMergeAutomationWorkflow:
                 self._status = STATE_ALREADY_MERGED
                 self._publish_visibility()
                 return await self._finish()
+            if self._missing_ci_wait_enabled(evaluation):
+                if evidence.checks_reported is False and any(
+                    blocker.kind == "checks_running" for blocker in self._blockers
+                ):
+                    made_progress = self._register_progress_signature(
+                        f"missing-ci|{evidence.head_sha}"
+                    )
+                    if (
+                        not made_progress
+                        and self._no_progress_cycles
+                        >= self._review_loop_config().max_consecutive_no_progress_cycles
+                    ):
+                        return await self._blocked_review_summary(
+                            summary=(
+                                "No CI checks or gating statuses have reported for "
+                                "the current head after the no-progress budget. "
+                                "Check the CI workflow triggers for this PR's base "
+                                "and head before retrying merge automation."
+                            ),
+                            blocker_kind="review_loop_no_progress",
+                        )
+                elif evidence.checks_reported is True and str(
+                    self._last_progress_signature or ""
+                ).startswith("missing-ci|"):
+                    # Even queued/running checks establish that CI has started.
+                    # A later missing signal begins a fresh bounded wait.
+                    self._last_progress_signature = None
+                    self._no_progress_cycles = 0
             if evidence.ready:
                 self._status = STATE_EXECUTING
                 self._publish_visibility()
