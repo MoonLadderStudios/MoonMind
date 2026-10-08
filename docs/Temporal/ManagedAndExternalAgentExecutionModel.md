@@ -455,9 +455,13 @@ Profile and persists the immutable plan before scheduling. A raw
 `workflowType`/`initialParameters` request to `POST /api/executions` that names
 Omnigent, or omits the runtime when the deployment default is Omnigent, is
 rejected with `omnigent_product_boundary_required` instead of reaching a
-plan-less lane. Recurring schedule creation compiles the same plan into the
-stored target when the target names Omnigent or omits the runtime under an
-Omnigent default, so every scheduled launch carries it. Session admission
+plan-less lane. Recurring schedule creation and target edits compile the same
+plan into the stored target when the target names Omnigent or omits the runtime
+under an Omnigent default, so every scheduled launch carries it. An edit whose
+plan cannot be compiled is rejected rather than stored without one. A schedule
+stored without a plan before this admission existed is compiled by the existing
+deployment schedule refresh pass on its next run; a definition that cannot yet
+be compiled is named in the refresh failures and retried on the next pass. Session admission
 returns `realizer_managed_lifecycle` for `generic-omnigent-host@1`, and `codex-profile-bound@1` keeps its recorded
 coordinator, so both run through the one
 `integration.omnigent.profile_bound_execute` boundary. That boundary launches
@@ -466,7 +470,11 @@ cleanup. AgentRun does not start a second supervisor around it.
 
 The durable supervisor is retained compatibility for AgentRuns that carry no
 persisted plan: in-flight and replayed histories admitted before plan
-admission, and exact reruns of those executions. The supervisor input contains
+admission, exact reruns of those executions, and occurrences of a stored
+plan-less schedule until the refresh pass compiles its plan. A schedule saved
+with only a managed-bootstrap Agent Profile snapshot and no plan is advanced by
+the same pass but not yet compiled, so it remains a consumer of this lane. The
+supervisor input contains
 only immutable owner identities, a compiled-intent artifact ref and digest, the
 initial turn-attempt identity, and frozen feature/compatibility versions;
 provider content, credentials, and mutable host paths stay outside workflow
@@ -483,7 +491,8 @@ generation mismatch fails closed. An already admitted child does not
 re-evaluate admission, so disabling new selection cannot disable replay, query,
 cancellation, cleanup, or historical reads for an admitted session. Remove the
 plan-less branch and its admission flags when no retained execution without a
-persisted plan can still be replayed or exactly rerun.
+persisted plan can still be replayed or exactly rerun, and no stored Omnigent
+schedule lacks a plan.
 
 ### 7.2 Why the identity stays external
 
