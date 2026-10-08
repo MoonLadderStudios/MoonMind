@@ -227,7 +227,8 @@ async def test_batch_adoption_disables_review_and_preserves_resolver_budget(
     assert inputs["maxIterations"] == 7
     assert inputs["returnToGate"] is True
     assert inputs["finishMode"] == "merge"
-    assert "requireFreshReview" not in inputs
+    assert inputs["requireFreshReview"] is False
+    assert inputs["reviewProvider"] == "none"
     runtime = child["initial_parameters"]["task"]["runtime"]
     assert runtime["executionProfileRef"] == "chosen-profile"
     assert runtime["model"] == "chosen-model"
