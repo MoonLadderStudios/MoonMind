@@ -235,6 +235,8 @@ New managed and agent-owned publication results are derived from accepted `moonm
 
 Task-shaped envelopes are covered in section 16 and use the same admission compiler.
 
+A direct UserWorkflow request cannot select Omnigent. It returns 422 `omnigent_product_boundary_required` when it names `targetRuntime: omnigent` or names no runtime while the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling. `moonmind workflow run` submits that envelope.
+
 ### 9.2 Validation
 
 A UserWorkflow has at least one valid planning source before persistence/start: nonempty instructions, selected Skill, input artifact, or plan artifact. Parameters are small and JSON-serializable. Artifact refs are references, not embedded blobs.

@@ -20603,6 +20603,179 @@ async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
 
 
 # ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3935 — an Omnigent execution has one lifecycle
+# owner: the task/workflow envelope that compiles and persists the immutable
+# execution plan. The raw branch never compiles a plan, so a request that
+# leaves the runtime to the Omnigent default must not reach the legacy no-plan
+# session supervisor through it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting the runtime is the documented default, not a second lane."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3935_raw_default_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                # The pre-#3935 `moonmind workflow run --provider-profile` body.
+                payload={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "idempotencyKey": "mm3935-raw-default",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Run with the default runtime.",
+                            "providerProfileRef": "codex_minimax_team",
+                        },
+                        "providerProfileRef": "codex_minimax_team",
+                    },
+                },
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3935_raw_branch_keeps_an_explicit_managed_runtime(
+    tmp_path,
+) -> None:
+    """A named non-Omnigent runtime is not affected by the Omnigent default."""
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3935_raw_managed"
+    ) as (session, service, user):
+        response = await _mm3788_post_raw_execution(
+            service=service,
+            session=session,
+            user=user,
+            payload=_mm3788_raw_execution_request(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+        )
+
+        assert response.workflow_id.startswith("mm:")
+        service._client_adapter.start_workflow.assert_awaited_once()
+
+
+def test_mm3935_cli_run_payload_reaches_the_plan_owner(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`moonmind workflow run` compiles the same immutable plan as Create."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+    provider_profile = SimpleNamespace(
+        profile_id="codex-openai-oauth",
+        provider_id="openai",
+        runtime_id="codex_cli",
+        default_model=None,
+        default_effort=None,
+    )
+    db_session = SimpleNamespace(
+        # The idempotency reservation finds no admitted record; the plan
+        # compiler then loads the default Agent Profile's Provider Profile.
+        get=AsyncMock(side_effect=[None, provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_cli_plan",
+        taskInputSnapshotRef="art_cli_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_cli_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions."
+            "resolve_default_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "persist_json_artifact",
+            new=AsyncMock(return_value=("art_cli_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json=build_execution_payload(
+                instructions="Make the bounded deterministic change.",
+                title="CLI run",
+                repository="MoonLadderStudios/MoonMind",
+                publish_mode="none",
+                idempotency_key="mm3935-cli",
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = kwargs["initial_parameters"]
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    assert initial_parameters["instructions"] == (
+        "Make the bounded deterministic change."
+    )
+    assert kwargs["title"] == "CLI run"
+    assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+# ---------------------------------------------------------------------------
 # MoonLadderStudios/MoonMind#3788 — a recovery destination inherits the source
 # execution's authored runtime and Provider Profile and reaches a launch through
 # the same TemporalExecutionService.create_execution handoff. A pair persisted

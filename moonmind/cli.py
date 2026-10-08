@@ -387,7 +387,7 @@ def workflow_run(
             admitted = client.submit_execution(payload)
         except WorkflowCliError as exc:
             typer.secho(
-                f"Error: {exc} (requestId={payload.get('idempotencyKey', effective_request_id)}; "
+                f"Error: {exc} (requestId={effective_request_id}; "
                 "retry with the same --request-id to reconcile.)",
                 fg=typer.colors.RED,
                 err=True,
@@ -397,12 +397,12 @@ def workflow_run(
         url = detail_url(base, summary.workflow_id)
         if as_json:
             typer.echo(
-                format_execution_json({**admitted, "detailUrl": url, "requestId": payload["idempotencyKey"]})
+                format_execution_json({**admitted, "detailUrl": url, "requestId": effective_request_id})
             )
         else:
             typer.echo(f"workflow {summary.workflow_id}: {summary.status} (admitted)")
             typer.echo(f"details: {url}")
-            typer.echo(f"requestId: {payload['idempotencyKey']}")
+            typer.echo(f"requestId: {effective_request_id}")
             if summary.title:
                 typer.echo(f"title: {sanitize_terminal_text(summary.title, max_chars=500)}")
         if not wait:
