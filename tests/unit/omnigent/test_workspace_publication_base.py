@@ -57,6 +57,93 @@ def test_publication_transport_diagnostics_fail_closed(diagnostic, retryable):
     assert not _PRE_CONNECTION_FAILURE.fullmatch(f"remote: {error}")
 
 
+@pytest.mark.parametrize(
+    ("stderr", "transient"),
+    [
+        (
+            "error: RPC failed; HTTP 500 curl 22 The requested URL returned error: 500\n"
+            "send-pack: unexpected disconnect while reading sideband packet\n"
+            "fatal: the remote end hung up unexpectedly",
+            True,
+        ),
+        (
+            "fatal: unable to access 'https://github.com/o/r.git/': "
+            "The requested URL returned error: 502",
+            True,
+        ),
+        ("remote: Internal Server Error\nfatal: the remote end hung up unexpectedly", True),
+        ("error: RPC failed; curl 56 Recv failure: Connection reset by peer", True),
+        (
+            "fatal: unable to access 'https://github.com/o/r.git/': "
+            "Could not resolve host: github.com",
+            True,
+        ),
+        (
+            "fatal: unable to access 'https://github.com/o/r.git/': "
+            "Failed to connect to github.com port 443 after 75003 ms: Connection timed out",
+            True,
+        ),
+        (
+            "fatal: unable to access 'https://github.com/o/r.git/': "
+            "The requested URL returned error: 403",
+            False,
+        ),
+        ("fatal: Authentication failed for 'https://github.com/o/r.git/'", False),
+        (
+            "remote: error: GH013: Repository rule violations found for refs/heads/x.\n"
+            "! [remote rejected] x -> x (push declined due to repository rule violations)",
+            False,
+        ),
+        (
+            "! [rejected]        x -> x (stale info)\nerror: failed to push some refs",
+            False,
+        ),
+        ("publication requires destination credential authority", False),
+        ("", False),
+    ],
+)
+def test_publication_failure_transience_is_classified_from_git_diagnostics(
+    stderr, transient
+):
+    from moonmind.omnigent.workspace_publication import (
+        publication_failure_is_transient,
+    )
+
+    message = f"repository publication command failed: {stderr}"
+    assert publication_failure_is_transient(message) is transient
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stderr", "transient"),
+    [
+        (
+            b"error: RPC failed; HTTP 503 curl 22 The requested URL returned error: 503\n"
+            b"fatal: the remote end hung up unexpectedly\n",
+            True,
+        ),
+        (b"fatal: Authentication failed for 'https://github.com/o/r.git/'\n", False),
+    ],
+)
+async def test_failed_git_command_reports_remote_outage_as_transient(
+    monkeypatch, stderr, transient
+):
+    from moonmind.omnigent import workspace_publication
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    async def failed_push(args, **_kwargs):
+        return 128, b"", stderr
+
+    monkeypatch.setattr(workspace_publication, "run_runtime_command", failed_push)
+    with pytest.raises(HarnessPlatformError) as raised:
+        await workspace_publication.OmnigentWorkspacePublicationService._run(
+            "git", "push", "origin", "candidate"
+        )
+    assert raised.value.code == "OMNIGENT_REPOSITORY_PUBLICATION_FAILED"
+    assert raised.value.transient is transient
+    assert stderr.decode().splitlines()[0] in str(raised.value)
+
+
 @pytest.mark.asyncio
 async def test_checkpoint_restore_preserves_accepted_pr_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -961,6 +961,14 @@ RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
 RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH = (
     "run-verifier-remediation-stop-authority-v1"
 )
+# A verifier that declares NO_DETERMINATION with an explicit
+# ``reattempt_current_step`` is asking for its own rerun: the controlling
+# evidence is obtainable by a fresh verifier runtime even though it is not
+# recoverable in the current one (for example an expired container-job
+# capability). Retained histories keep their recorded control-gate stop.
+RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH = (
+    "run-verifier-explicit-evidence-rerun-v1"
+)
 # The dynamic controller replaces its durable decision while processing the
 # current verifier result. Re-read the blocking projection after that update so
 # a passing verdict cannot inherit the prior attempt's blocking reason. Keep
@@ -8565,6 +8573,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 return GateTransitionDecision(
                     "retry", "retry_current_verifier", "recoverable_no_determination"
                 )
+            if next_action == "reattempt_current_step" and (
+                self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH
+                )
+            ):
+                return GateTransitionDecision(
+                    "retry",
+                    "retry_current_verifier",
+                    "verifier_requested_evidence_rerun",
+                )
             return GateTransitionDecision(
                 "accept", "stop_at_control_gate", "unrecoverable_no_determination"
             )
@@ -9782,6 +9800,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "request ready for review."
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _gate_transition_admits_evidence_rerun(
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Only a verifier gate may rerun itself to collect missing evidence.
+
+        The transition owns the verifier-role check and the replay patch, so a
+        reviewed implementation step never repeats its paid work this way.
+        """
+        return transition.reason_code == "verifier_requested_evidence_rerun"
 
     @staticmethod
     def _gate_transition_allows_review_retry(
@@ -14372,6 +14401,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         ),
                         honor_explicit_stop=workflow.patched(
                             RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                        ),
+                        honor_explicit_evidence_rerun=(
+                            self._gate_transition_admits_evidence_rerun(transition)
                         ),
                     ):
                         review_retry_count += 1
