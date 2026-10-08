@@ -3008,6 +3008,22 @@ describe('Workflows Entrypoint', () => {
       expect(window.location.search).not.toContain('sort=');
     });
 
+    it.each([
+      null,
+      { selectionState: 'invalid', profiles: [], profileCount: 0 },
+      { selectionState: 'recorded', profiles: [], profileCount: 0 },
+    ])('shows unusable Provider Profile summaries as Unavailable on desktop and mobile: %j', async (summary) => {
+      mockListAndFacets([profileRow('wf-broken', 'Broken projection', summary)]);
+
+      renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+      const row = await screen.findByRole('row', { name: /Broken projection/ });
+      expect(within(row).getByText('Unavailable')).toBeTruthy();
+      const card = Array.from(document.querySelectorAll('.queue-card')).find((item) => item.textContent?.includes('Broken projection'));
+      expect(card?.textContent).toContain('Unavailable');
+      expect(screen.queryByText('Not recorded')).toBeNull();
+    });
+
     it('round-trips Provider Profile IDs and states through URL, chips, and detail links', async () => {
       window.history.pushState(
         {},
@@ -3138,7 +3154,7 @@ describe('Workflows Entrypoint', () => {
       const section = screen.getByRole('region', { name: 'Provider Profile filter' });
       const loadMore = await within(section).findByRole('button', { name: 'Load more Provider Profiles' });
       expect(profileUrls).toHaveLength(1);
-      expect(within(section).getByRole('option', { name: 'First account' })).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'First account (2)' })).toBeTruthy();
       fireEvent.click(within(section).getByRole('checkbox', { name: 'Pending selection (3)' }));
       fireEvent.click(loadMore);
       fireEvent.click(loadMore);
@@ -3146,11 +3162,11 @@ describe('Workflows Entrypoint', () => {
       expect((loadMore as HTMLButtonElement).disabled).toBe(true);
       resolveContinuation!({ ok: false, statusText: 'Service Unavailable' } as Response);
       expect(await within(section).findByText('More Provider Profile values unavailable. Previously loaded values are still available.')).toBeTruthy();
-      expect(within(section).getByRole('option', { name: 'First account' })).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'First account (2)' })).toBeTruthy();
       expect((within(section).getByRole('checkbox', { name: 'Pending selection (3)' }) as HTMLInputElement).checked).toBe(true);
       fireEvent.click(within(section).getByRole('button', { name: 'Retry loading Provider Profiles' }));
-      expect(await within(section).findByRole('option', { name: 'Later account' })).toBeTruthy();
-      expect(within(section).getAllByRole('option', { name: 'First account' })).toHaveLength(1);
+      expect(await within(section).findByRole('option', { name: 'Later account (1)' })).toBeTruthy();
+      expect(within(section).getAllByRole('option', { name: 'First account (2)' })).toHaveLength(1);
       expect(profileUrls).toHaveLength(3);
       for (const url of profileUrls) {
         const params = new URL(url, window.location.origin).searchParams;
@@ -3183,12 +3199,12 @@ describe('Workflows Entrypoint', () => {
       const { queryClient } = renderWithClient(<WorkflowListPage payload={mockPayload} />);
       openFilterDrawer();
       fireEvent.click(await screen.findByRole('button', { name: 'Load more Provider Profiles' }));
-      await screen.findByRole('option', { name: 'Later account' });
+      await screen.findByRole('option', { name: 'Later account (1)' });
       fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'another/repo' } });
       applyFilterDrawer();
       await queryClient.invalidateQueries({ queryKey: ['workflow-list-facet'], refetchType: 'none' });
       openFilterDrawer();
-      await screen.findByRole('option', { name: 'First account' });
+      await screen.findByRole('option', { name: 'First account (1)' });
       fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: '' } });
       applyFilterDrawer();
       const previousRequests = profileUrls.length;
@@ -3197,7 +3213,7 @@ describe('Workflows Entrypoint', () => {
       await waitFor(() => expect(screen.queryByText('Loading facet values...')).toBeNull());
       expect(profileUrls.slice(previousRequests)).toHaveLength(1);
       expect(profileUrls.filter((url) => url.includes('nextPageToken='))).toHaveLength(1);
-      expect(screen.queryByRole('option', { name: 'Later account' })).toBeNull();
+      expect(screen.queryByRole('option', { name: 'Later account (1)' })).toBeNull();
       expect(screen.getByRole('button', { name: 'Load more Provider Profiles' })).toBeTruthy();
     });
 
@@ -3219,13 +3235,13 @@ describe('Workflows Entrypoint', () => {
       fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'new/repo' } });
       applyFilterDrawer();
       openFilterDrawer();
-      await screen.findByRole('option', { name: 'New scope account' });
+      await screen.findByRole('option', { name: 'New scope account (1)' });
       resolveOldPage!({ ok: true, json: async () => ({ facet: 'providerProfile', items: [
         { value: 'acct-stale', label: 'Stale continuation account', count: 1 },
       ], nextPageToken: null, source: 'authoritative' }) } as Response);
       await waitFor(() => expect(screen.queryByText('Loading facet values...')).toBeNull());
-      expect(screen.queryByRole('option', { name: 'Stale continuation account' })).toBeNull();
-      expect(screen.getByRole('option', { name: 'New scope account' })).toBeTruthy();
+      expect(screen.queryByRole('option', { name: 'Stale continuation account (1)' })).toBeNull();
+      expect(screen.getByRole('option', { name: 'New scope account (1)' })).toBeTruthy();
     });
 
     it('keeps the blank shortcut meaning as explicit absence states', async () => {
@@ -3363,10 +3379,12 @@ describe('Workflows Entrypoint', () => {
       },
     );
 
-    it('shows facet values with ID disambiguation and state counts from the server', async () => {
-      window.history.pushState({}, 'Facet', '/workflows?stateIn=executing&providerProfileIdIn=acct-1&limit=50');
+    it('shows facet counts with ID disambiguation and keeps uncounted selected and current-page IDs', async () => {
+      window.history.pushState({}, 'Facet', '/workflows?stateIn=executing&providerProfileIdIn=acct-1&providerProfileIdIn=acct-gone&limit=50');
       const facetUrls: string[] = [];
-      mockListAndFacets([], (url) => {
+      mockListAndFacets([profileRow('wf-page', 'Page account', {
+        selectionState: 'recorded', profiles: [{ id: 'acct-page', label: 'Page only' }], profileCount: 1,
+      })], (url) => {
         facetUrls.push(url);
         if (!url.includes('facet=providerProfile')) {
           return Promise.resolve({ ok: false, statusText: 'nope', json: async () => ({}) } as Response);
@@ -3379,6 +3397,7 @@ describe('Workflows Entrypoint', () => {
               { value: 'acct-1', label: 'Work', count: 5 },
               { value: 'acct-2', label: 'Work', count: 3 },
               { value: 'acct-retired', label: 'acct-retired', count: 1 },
+              { value: 'acct-zero', label: 'Zero account', count: 0 },
             ],
             stateItems: [
               { value: 'pending', label: 'Pending selection', count: 2 },
@@ -3397,9 +3416,14 @@ describe('Workflows Entrypoint', () => {
 
       openFilterDrawer();
       const section = await screen.findByRole('region', { name: 'Provider Profile filter' });
-      expect(await within(section).findByRole('option', { name: 'Work · acct-2' })).toBeTruthy();
-      expect(within(section).getByRole('option', { name: 'acct-retired' })).toBeTruthy();
-      expect(within(section).getByText('Work · acct-1')).toBeTruthy();
+      expect(await within(section).findByRole('option', { name: 'Work · acct-2 (3)' })).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'acct-retired (1)' })).toBeTruthy();
+      expect(within(section).getByText('Work · acct-1 (5)')).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'Zero account (0)' })).toBeTruthy();
+      expect(within(section).getByRole('option', { name: 'Page only' })).toBeTruthy();
+      expect(within(section).getByText('acct-gone')).toBeTruthy();
+      fireEvent.change(within(section).getByLabelText('Provider Profile filter value'), { target: { value: 'acct-zero' } });
+      expect(within(section).getByText('Zero account (0)')).toBeTruthy();
       expect(within(section).getByRole('checkbox', { name: 'Not recorded (4)' })).toBeTruthy();
       const profileFacetUrl = facetUrls.find((url) => url.includes('facet=providerProfile')) || '';
       expect(profileFacetUrl).toContain('stateIn=executing');

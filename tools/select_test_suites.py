@@ -518,6 +518,18 @@ NON_BACKEND_EXACT = {
 }
 
 
+# Audited prose paths with no executable contract consumed by backend tests.
+# Keep this exact: other Markdown includes Skill contracts and machine-read docs.
+PROSE_ONLY_EXACT = {
+    "AGENTS.md",
+    "README.md",
+    "docs/Development/BackendTestSelection.md",
+    "docs/Development/PreCommitWorkflow.md",
+    "docs/FirstRunServiceInventory.md",
+    "docs/UI/WorkflowConsoleArchitecture.md",
+}
+
+
 @dataclass(frozen=True)
 class SuiteSelection:
     unit_fast: bool = False
@@ -720,11 +732,11 @@ def select_suites(
         for path in paths
     )
     selection = SuiteSelection(
-        # Markdown includes executable examples, Skill contracts, metadata,
-        # and internal links. The existing fast shard owns those checks.
+        # Unlisted Markdown retains the existing fast-shard coverage for
+        # executable examples, Skill contracts, metadata, and internal links.
         unit_fast=bool(backend_paths)
         or profile_authoring_changed
-        or any(path.endswith(".md") for path in paths),
+        or any(path.endswith(".md") and path not in PROSE_ONLY_EXACT for path in paths),
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
         ),

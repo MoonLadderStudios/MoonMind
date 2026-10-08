@@ -1030,8 +1030,10 @@ async def test_a_host_slot_lost_after_admission_requeues_instead_of_failing(
     waiting_reasons = [
         reason for state, reason in run.parent_states if state == "awaiting_slot"
     ]
-    assert len(waiting_reasons) == 1
-    assert "generic host capacity was lost after admission" in waiting_reasons[0]
+    assert len(waiting_reasons) == 3
+    assert "waiting for generic host capacity" in waiting_reasons[0]
+    assert "generic host capacity was lost after admission" in waiting_reasons[1]
+    assert "waiting for generic host capacity" in waiting_reasons[2]
 
 
 @pytest.mark.asyncio
@@ -1855,7 +1857,19 @@ async def test_codex_waits_for_its_profile_before_starting_execution(
     request = _omnigent_request(plan_binding=PLAN_REF).model_copy(
         update={"execution_profile_ref": "codex_openai_oauth"}
     )
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
     parent = MoonMindUserWorkflow()
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "codex_cli"}
+    )
+    profile_updates = []
+    monkeypatch.setattr(agent_run_module.workflow, "upsert_memo", profile_updates.append)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "upsert_search_attributes", lambda _values: None
+    )
     monkeypatch.setattr(parent, "_get_logger", lambda: logging.getLogger(__name__))
     monkeypatch.setattr(run, "_get_logger", lambda: logging.getLogger(__name__))
     parent._active_agent_child_workflow_id = "agent-run-1"
@@ -1902,6 +1916,7 @@ async def test_codex_waits_for_its_profile_before_starting_execution(
         admit_capacity_before_activity=True,
         execution_plan_admission=True,
     )
+    assert profile_updates[-1]["providerProfile"]["profiles"][0]["id"] == "codex_openai_oauth"
     assert result["summary"] == "completed"
     assert admitted_at is not None
     assert len(run.executions) == 1
@@ -2188,3 +2203,96 @@ async def test_unsatisfiable_host_demand_fails_without_capacity_retry(monkeypatc
         await run._await_omnigent_host_capacity(parent_info=None)
     assert error.value.type == "HostCapacityUnsatisfiable"
     assert slept == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retained", [False, True])
+async def test_generic_profile_identity_precedes_host_admission_without_starting(
+    monkeypatch: pytest.MonkeyPatch,
+    retained: bool,
+) -> None:
+    from moonmind.workflows.executions.provider_profile_projection import (
+        build_provider_profile_projection,
+    )
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda name: not (retained and name == "agent-run-profile-grant-host-wait-v1"),
+    )
+    run = _ExecutingRun([{"summary": "done"}])
+    request = _omnigent_request()
+    run._init_progress_identity(request)
+    run.host_decisions = [
+        {"admitted": False, "retryAfterSeconds": 1},
+        {"admitted": True},
+    ]
+    parent = MoonMindUserWorkflow()
+    parent._active_agent_child_workflow_id = "agent-run-1"
+    parent._provider_profile_projection = build_provider_profile_projection(
+        {"targetRuntime": "opencode"}
+    )
+    parent._trusted_issue_context = {"issueClaimLease": {"attemptId": "claim-attempt"}}
+    monkeypatch.setattr(parent, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(parent, "_update_memo", lambda: None)
+    monkeypatch.setattr(parent, "_get_logger", lambda: logging.getLogger(__name__))
+    monkeypatch.setattr(run, "_get_logger", lambda: logging.getLogger(__name__))
+    monkeypatch.setattr(agent_run_module.workflow, "upsert_memo", lambda _value: None)
+    monkeypatch.setattr(
+        agent_run_module.workflow, "upsert_search_attributes", lambda _value: None
+    )
+
+    def handle(_workflow_id, **_kwargs):
+        async def signal(name, payload=None, args=None):
+            if name == "agent_run_progress":
+                parent.agent_run_progress(args[0])
+            else:
+                run.signals.append((name, dict(payload or {})))
+
+        return SimpleNamespace(signal=signal)
+
+    monkeypatch.setattr(
+        agent_run_module.workflow, "get_external_workflow_handle", handle
+    )
+    monkeypatch.setattr(
+        run,
+        "_signal_parent_child_state_changed",
+        MoonMindAgentRun._signal_parent_child_state_changed.__get__(run),
+    )
+    execute = run._execute_routed_activity
+    host_reads = 0
+
+    async def observe_activity(name, payload=None, **kwargs):
+        nonlocal host_reads
+        if name == "omnigent.admit_generic_host_capacity":
+            host_reads += 1
+            assert (
+                parent._provider_profile_projection[0]["profiles"][0]["id"]
+                == "opencode-zen-free"
+            )
+            if not retained:
+                assert parent._state == "awaiting_slot"
+                assert parent._started_at is None
+                assert parent._issue_claim_work_started_attempt is None
+            else:
+                assert parent._started_at is not None
+        if name.startswith("integration.omnigent."):
+            assert host_reads == 2
+            assert parent._state == "executing"
+            assert parent._started_at is not None
+            assert parent._issue_claim_work_started_attempt == "claim-attempt"
+        return await execute(name, payload, **kwargs)
+
+    monkeypatch.setattr(run, "_execute_routed_activity", observe_activity)
+    result, _ = await run._execute_omnigent_with_admitted_capacity(
+        act_name="integration.omnigent.execute",
+        request=request,
+        admission=_admission(),
+        parent_info=SimpleNamespace(workflow_id="parent-1", run_id="parent-run-1"),
+        stc_seconds=600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+    assert result["summary"] == "done"
+    assert host_reads == 2

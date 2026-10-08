@@ -393,7 +393,7 @@ describe('workflow list recorded Provider Profile', () => {
     expect(profileUrls).toHaveLength(1);
     await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter mode'), 'exclude');
     expect((within(editor).getByRole('checkbox', { name: 'Not applicable (0)' }) as HTMLInputElement).checked).toBe(true);
-    expect(within(editor).getByText('Work · acct-b')).toBeTruthy();
+    expect(within(editor).getByText('Work · acct-b (1)')).toBeTruthy();
     await userEvent.click(within(editor).getByRole('checkbox', { name: 'Not recorded (0)' }));
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole(surface === 'desktop' ? 'dialog' : 'region', { name: 'Provider Profile filter' })).toBeNull());
@@ -403,10 +403,10 @@ describe('workflow list recorded Provider Profile', () => {
     expect((within(editor).getByRole('checkbox', { name: 'Not recorded (0)' }) as HTMLInputElement).checked).toBe(false);
     await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter mode'), 'include');
     await userEvent.click(within(editor).getByRole('button', { name: 'Load more Provider Profiles' }));
-    await within(editor).findByRole('option', { name: 'Later primary account' });
+    await within(editor).findByRole('option', { name: 'Later primary account (1)' });
     expect(profileUrls.filter((url) => url.includes('nextPageToken='))).toHaveLength(1);
     await userEvent.selectOptions(within(editor).getByLabelText('Provider Profile filter value'), 'account,primary');
-    expect(within(editor).getByText('Later primary account')).toBeTruthy();
+    expect(within(editor).getByText('Later primary account (1)')).toBeTruthy();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
     await page.getByRole('button', { name: surface === 'desktop' ? 'Apply Provider Profile filter' : 'Apply filters' }).click();
     await waitFor(() => expect(listParams().getAll('providerProfileIdIn')).toEqual(['account,primary', 'acct-a']));
@@ -415,6 +415,8 @@ describe('workflow list recorded Provider Profile', () => {
     expect(listParams().get('providerProfileStateNotIn')).toBe('not_applicable');
     expect(new URLSearchParams(window.location.search).getAll('providerProfileIdIn')).toEqual(['acct-a', 'account,primary']);
     editor = await openEditor();
+    // Applying changed the facet query: keep the selected label without a
+    // count until its continuation page is loaded again.
     expect(within(editor).getByText('Later primary account')).toBeTruthy();
     await userEvent.keyboard('{Escape}');
   });
