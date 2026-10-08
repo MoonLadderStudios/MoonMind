@@ -1332,7 +1332,7 @@ class OmnigentOAuthHostRuntime:
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python((request.workspace_spec or {}).get("workspaceLocator"))
         if not isinstance(locator, SandboxWorkspaceLocator):
             raise OmnigentOAuthHostError("preserved workspace authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
-        workspace = self._workspace_root / "temporal_sandbox" / locator.workspace_id / "repo"
+        workspace = publisher.resolve_request_workspace(request, must_exist=False)
         if workspace.exists():
             # Never restore an earlier save over a surviving current workspace.
             publisher.resolve_request_workspace(request)
@@ -3136,9 +3136,11 @@ class OmnigentOAuthHostRuntime:
             row = await store.get_existing(request.idempotency_key)
             if row is None or row.host_lease_ref != host_lease.lease_id:
                 raise blocked("bridge/host ownership changed")
-            await store.record_host_credential_recovery(
+            claimed = await store.record_host_credential_recovery(
                 request=request, host_lease_ref=host_lease.lease_id, phase="waiting",
             )
+            # Every later write of this attempt is fenced by its ordered claim.
+            claim = claimed.get("recoveryClaim")
             publisher = OmnigentWorkspacePublicationService(
                 self._workspace_root, artifact_gateway=artifact_gateway,
             )
@@ -3154,7 +3156,7 @@ class OmnigentOAuthHostRuntime:
                 )
                 receipt = await store.record_host_credential_recovery(
                     request=request, host_lease_ref=host_lease.lease_id, phase="waiting",
-                    source_container_id=live_identity["containerId"],
+                    source_container_id=live_identity["containerId"], recovery_claim=claim,
                 )
                 if int(effective_launch["limits"]["cpuMillis"]) < 1:
                     cpu_limit = await self._observe_finite_host_cpu(container_name)
@@ -3163,6 +3165,7 @@ class OmnigentOAuthHostRuntime:
                     receipt = await store.record_host_credential_recovery(
                         request=request, host_lease_ref=host_lease.lease_id,
                         phase="waiting", retained_cpu_limit=cpu_limit,
+                        recovery_claim=claim,
                     )
                 code, output, _ = await self._run(
                     "docker", "inspect", "--format", "{{json .Mounts}}",
@@ -3290,7 +3293,7 @@ class OmnigentOAuthHostRuntime:
                 saved = await publisher.save_request_workspace(request)
                 await store.record_host_credential_recovery(
                     request=request, host_lease_ref=host_lease.lease_id,
-                    phase="waiting", checkpoint=saved,
+                    phase="waiting", checkpoint=saved, recovery_claim=claim,
                 )
                 if await inactive_snapshot() != signature:
                     raise blocked("current turn changed while saving")
@@ -3310,7 +3313,7 @@ class OmnigentOAuthHostRuntime:
             saved = await publisher.save_request_workspace(request)
             return await store.record_host_credential_recovery(
                 request=request, host_lease_ref=host_lease.lease_id,
-                phase="saved", checkpoint=saved,
+                phase="saved", checkpoint=saved, recovery_claim=claim,
             )
         except asyncio.CancelledError:
             raise

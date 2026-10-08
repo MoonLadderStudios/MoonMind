@@ -247,6 +247,11 @@ def authored_publish_mode(request: AgentExecutionRequest) -> str:
     return value or "none"
 
 
+# Skill side effects that never change repository state. Fan-out parents only
+# queue child executions; each child declares its own repository intent.
+_NON_REPOSITORY_SIDE_EFFECT_KINDS = frozenset({"enqueue_children"})
+
+
 def authored_repository_mutation_required(request: AgentExecutionRequest) -> bool:
     parameters = _parameters(request)
     if bool(parameters.get("repositoryMutationRequired")):
@@ -258,10 +263,10 @@ def authored_repository_mutation_required(request: AgentExecutionRequest) -> boo
     skill = parameters.get("skill")
     if isinstance(skill, Mapping):
         side_effect = skill.get("sideEffect")
-        if isinstance(side_effect, Mapping) and str(
-            side_effect.get("kind") or ""
-        ).strip():
-            return True
+        if isinstance(side_effect, Mapping):
+            kind = str(side_effect.get("kind") or "").strip().lower()
+            if kind and kind not in _NON_REPOSITORY_SIDE_EFFECT_KINDS:
+                return True
     return False
 
 
