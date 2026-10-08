@@ -1,7 +1,221 @@
 """Host-owned controller lifecycle: install/update/restore, never self-replace."""
+import pytest
 from conftest import load
 
-import pytest
+
+@pytest.mark.parametrize("image_user", ["", "1200:1200"])
+def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
+    controller_path, tmp_path, monkeypatch, image_user
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = repo / "deploy" / "state" / "controller"
+    state.mkdir(parents=True)
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, repo, 8472, target_project="installed")
+    compose = bootstrap.render_compose_file(state_dir=state, repo=repo)
+    original_mounts = compose.read_text().split("    volumes:", 1)[1]
+    source_image = "sha256:" + "a" * 64
+    upgraded = False
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        if command[1] == "ps":
+            return subprocess.CompletedProcess(command, 0, "source-api\n", "")
+        if command[1] == "inspect":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Image": source_image,
+                            "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                        }
+                    ]
+                ),
+                "",
+            )
+        if command[1] == "run":
+            assert source_image in command
+            assert "--network=none" in command
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[1:3] == ["image", "inspect"]:
+            assert command[4] == "{{json .Config.User}}"
+            return subprocess.CompletedProcess(command, 0, json.dumps(image_user), "")
+        raise AssertionError(command)
+
+    def compose_run(state_dir, project, *args):
+        nonlocal upgraded
+        assert lock_mod.StackLock(state_dir, "moonmind").probe()
+        assert "--pull" in args and "never" in args
+        upgraded = True
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+    )
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    assert (
+        bootstrap.main(
+            [
+                "ensure",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(repo),
+                "--image",
+                "ghcr.io/org/moonmind:old",
+                "--controller-url",
+                "http://controller:8472",
+            ],
+            env={},
+        )
+        == 0
+    )
+    text = compose.read_text()
+    assert f"image: {source_image}" in text
+    assert 'entrypoint: ["python", "/app/deploy/controller/server.py"]' in text
+    assert f'    user: {json.dumps(image_user or "0:0")}' in text
+    assert text.split("    volumes:", 1)[1] == original_mounts
+    assert bootstrap.load_controller_image(state)["pinned"] == source_image
+    before = list(commands)
+    assert (
+        bootstrap.main(
+            [
+                "ensure",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(repo),
+                "--image",
+                "ghcr.io/org/moonmind:old",
+                "--controller-url",
+                "http://controller:8472",
+            ],
+            env={},
+        )
+        == 0
+    )
+    assert commands == before
+
+
+def test_ensure_never_replaces_controller_with_open_operation(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472)
+    bootstrap.render_compose_file(state_dir=state, repo=tmp_path)
+    load("record").OperationStore(state).begin(
+        stack="moonmind", desired_image="ghcr.io/org/app:next", source_revision=""
+    )
+    monkeypatch.setattr(bootstrap, "controller_capabilities", lambda *args: set())
+    monkeypatch.setattr(
+        bootstrap, "_run_capture", lambda *args: pytest.fail("Docker touched")
+    )
+    with pytest.raises(bootstrap.ActiveOperationError):
+        bootstrap.main(
+            ["ensure", "--state-dir", str(state), "--repo", str(tmp_path)], env={}
+        )
+
+
+def test_controller_prerequisite_uses_staged_target_when_installed_source_is_old(
+    controller_path, monkeypatch
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    target = "ghcr.io/org/app:new"
+    concrete = "sha256:" + "b" * 64
+    commands = []
+
+    def run(command):
+        commands.append(command)
+        result, output = 0, ""
+        if command[1] == "ps":
+            output = "installed-api"
+        elif command[1] == "inspect":
+            output = json.dumps(
+                [
+                    {
+                        "Image": "sha256:old",
+                        "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                    }
+                ]
+            )
+        elif command[1] == "run":
+            result = 10 if "sha256:old" in command else 0
+        elif command[1] == "image":
+            output = concrete
+        else:
+            assert command == ["docker", "pull", target]
+        return subprocess.CompletedProcess(command, result, output, "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    assert bootstrap._application_controller_image("installed", target) == concrete
+    assert ["docker", "pull", target] in commands
+    probes = [command for command in commands if command[1] == "run"]
+    assert "sha256:old" in probes[0]
+    assert concrete in probes[1]
+
+
+def test_controller_prerequisite_can_retry_failed_recreation(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472)
+    compose = bootstrap.render_compose_file(state_dir=state, repo=tmp_path)
+    concrete = "sha256:" + "b" * 64
+    attempts = []
+    upgraded = False
+
+    def recreate(*args):
+        nonlocal upgraded
+        attempts.append(compose.read_text())
+        if len(attempts) == 1:
+            return 1
+        upgraded = True
+        return 0
+
+    def capabilities(*args):
+        if attempts and not upgraded:
+            raise ConnectionRefusedError("old controller stopped before recreation failed")
+        return {"active-journal-transition"} if upgraded else set()
+
+    monkeypatch.setattr(
+        bootstrap, "_application_controller_image", lambda *args: concrete
+    )
+    monkeypatch.setattr(bootstrap, "controller_capabilities", capabilities)
+    monkeypatch.setattr(bootstrap, "_checked_capture", lambda _args: '""')
+    monkeypatch.setattr(bootstrap, "_compose", recreate)
+    args = [
+        "ensure",
+        "--state-dir",
+        str(state),
+        "--repo",
+        str(tmp_path),
+        "--image",
+        "ghcr.io/org/app:next",
+    ]
+    with pytest.raises(RuntimeError, match="recreation failed"):
+        bootstrap.main(args, env={})
+    assert bootstrap.load_controller_image(state)["pinned"] == concrete
+    assert bootstrap.main(args, env={}) == 0
+    assert attempts[0] == attempts[1]
 
 
 def test_bootstrap_refuses_to_run_inside_the_controller(controller_path, tmp_path):
