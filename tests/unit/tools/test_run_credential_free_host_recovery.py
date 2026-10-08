@@ -171,7 +171,9 @@ def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials(
     assert server["ports"] == []
     assert server["environment"]["OMNIGENT_AUTH_PROVIDER"] == "header"
     assert server["environment"]["OMNIGENT_AUTH_HEADER"] == "Authorization"
-    assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == "Bearer "
+    assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == (
+        "Bearer moonmind-test-"
+    )
 
 
 def test_compose_render_does_not_modify_canonical_document():
@@ -180,6 +182,96 @@ def test_compose_render_does_not_modify_canonical_document():
     original = copy.deepcopy(source)
     driver.compose_document(source, root, "test-server@" + IMAGE_ID, moonmind_image=IMAGE_ID)
     assert source == original
+
+
+@pytest.mark.parametrize("transport", ["http", "websocket"])
+def test_fixture_identity_matches_pinned_upstream_auth_and_strict_registration(
+    tmp_path, monkeypatch, transport
+):
+    import importlib.util
+
+    import httpx
+    from starlette.requests import HTTPConnection
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.host_services.registration import (
+        OmnigentHostRegistrationService,
+    )
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+    root = Path(__file__).resolve().parents[3]
+    # CI and local qualification initialize this exact repository gitlink.
+    # Execute the real extraction owner, including its environment trimming;
+    # a hand-written facsimile missed this whitespace mismatch.
+    source = root / "omnigent/omnigent/server/auth.py"
+    assert source.is_file(), "initialize the pinned Omnigent test fixture"
+    spec = importlib.util.spec_from_file_location("recovery_upstream_auth", source)
+    auth = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(auth)
+    document = driver.compose_document(
+        yaml.safe_load((root / "docker-compose.yaml").read_text()),
+        root,
+        "test-server@" + IMAGE_ID,
+        moonmind_image=IMAGE_ID,
+    )
+    for name, value in document["services"]["omnigent"]["environment"].items():
+        monkeypatch.setenv(name, value)
+    provider = auth.UnifiedAuthProvider(source="header", local_single_user=False)
+    owner = "1234567890abcdef1234567890abcdef"
+    token = "moonmind-test-" + owner
+
+    def authenticated_owner(header, header_name=b"authorization"):
+        headers = [] if header is None else [(header_name, header.encode())]
+        return provider.get_user_id(
+            HTTPConnection({"type": transport, "headers": headers})
+        )
+
+    assert authenticated_owner("Bearer " + token) == owner
+    command = driver.test_command(
+        image=IMAGE_ID,
+        network="moonmind-test-fixture_test",
+        name="moonmind-test-fixture-driver",
+        work=tmp_path,
+        dependencies=tmp_path / "deps",
+        source_commit=SHA,
+        host_image_ref=HOST_REF,
+        token=token,
+        project="moonmind-test-fixture",
+    )
+    assert f"MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER={owner}" in command
+    registration = OmnigentHostRegistrationService(client=None, expected_owner=owner)
+    client = OmnigentHttpClient(base_url="http://test-omnigent", api_token=token)
+
+    def verify(observed_owner):
+        return registration._verify_targeted_host(
+            client._parse_json_response(
+                httpx.Response(
+                    200,
+                    json={
+                        "host_id": "fixture-host",
+                        "name": "fixture-host",
+                        "owner": observed_owner,
+                        "status": "online",
+                        "configured_harnesses": {"opencode-native": True},
+                    },
+                )
+            ),
+            expected_host_id="fixture-host",
+            correlation_name="fixture-host",
+            harness_id="opencode-native",
+            credentialless=True,
+        )
+
+    assert verify(authenticated_owner("Bearer " + token))["harnessReady"]
+    assert authenticated_owner(None) is None
+    assert authenticated_owner("Bearer " + token, b"x-untrusted-identity") is None
+    for wrong in (
+        None,
+        "Bearer moonmind-test-foreign-owner",
+        "Bearer foreign-namespace",
+    ):
+        with pytest.raises(HarnessPlatformError, match="owner mismatch"):
+            verify(authenticated_owner(wrong))
 
 
 def test_candidate_command_does_not_overlay_application_source(tmp_path):

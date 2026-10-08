@@ -256,7 +256,9 @@ def compose_document(source, repo_root, server_image, *, moonmind_image):
             "OMNIGENT_AUTH_ENABLED": "1",
             "OMNIGENT_AUTH_PROVIDER": "header",
             "OMNIGENT_AUTH_HEADER": "Authorization",
-            "OMNIGENT_AUTH_HEADER_STRIP_PREFIX": "Bearer ",
+            # Upstream trims configured prefixes. End on the namespace
+            # delimiter so the authenticated identity has no leading space.
+            "OMNIGENT_AUTH_HEADER_STRIP_PREFIX": "Bearer moonmind-test-",
         },
         # Internal-only Docker networks do not publish host ports. Both the
         # readiness probe and actual recovery driver use this same network.
@@ -346,7 +348,7 @@ def test_command(
         "OMNIGENT_API_TOKEN": token,
         "OMNIGENT_HOST_RUNNER_TOKEN": token,
         "MOONMIND_OMNIGENT_HOST_SERVER_URL": "http://omnigent:8000",
-        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": token,
+        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": token.removeprefix("moonmind-test-"),
         "MOONMIND_OMNIGENT_CONCURRENCY_NETWORK": network,
         "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE": host_image_ref,
         "MOONMIND_OMNIGENT_CONCURRENCY_EVIDENCE_DIR": str(work),
