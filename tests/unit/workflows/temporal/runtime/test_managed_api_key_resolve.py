@@ -373,23 +373,31 @@ async def test_ghcr_pull_credentials_bound_to_ghcr_registry() -> None:
 
     assert GHCR_REGISTRY == "ghcr.io"
 
+
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
-    async def _fake_resolve(_secret_name: str) -> str:
+    attempted: list[str] = []
+
+    async def _fake_resolve(_cls, _session, secret_name: str):
+        attempted.append(secret_name)
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.setattr(
+        app_settings.github, "github_token_secret_ref", "db://github-pat"
+    )
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
-        _fake_resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_fake_resolve)
     )
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
+    assert attempted == ["github-pat"]
+
 
 class _FakeStatusResult:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
@@ -661,6 +669,7 @@ async def test_unreadable_default_connection_is_not_treated_as_absent(
 async def test_failed_configured_reference_does_not_search_other_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
     _clear_deployment_github_env(monkeypatch)
@@ -671,14 +680,12 @@ async def test_failed_configured_reference_does_not_search_other_sources(
     )
     attempted: list[str] = []
 
-    async def _resolve(ref: str, **_kwargs: object) -> str:
-        attempted.append(ref)
+    async def _resolve(_cls, _session, slug: str):
+        attempted.append(f"db://{slug}")
         raise ValueError("secret store unavailable")
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_managed_api_key_reference",
-        _resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_resolve)
     )
 
     assert await resolve_github_token_for_launch({}) is None
@@ -1090,6 +1097,9 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
 ) -> None:
     """The migrated default had no assignments before #4023 and needs none."""
 
+    from sqlalchemy import update
+
+    from api_service.db.models import RepositoryConnectionAuditEvent
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
     )
@@ -1105,8 +1115,13 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
         tmp_path,
         github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
     )
+    async with engine.begin() as database:
+        await database.execute(
+            update(RepositoryConnectionAuditEvent)
+            .where(RepositoryConnectionAuditEvent.request_id == "test-connection-0")
+            .values(request_id="migration:391:legacy-github-credential")
+        )
     try:
-        await _record_default_migration_provenance(engine)
         selected = (
             await managed_api_key_resolve_module.select_git_connection_for_launch(
                 DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"

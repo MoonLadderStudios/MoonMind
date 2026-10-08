@@ -442,6 +442,8 @@ Publication-only execution accepts an immutable `savedWorkRef`, an authorized de
 
 The saved result's authorization, digest, and completeness are verified. Destination repository/branch, connection, operations, client/policy snapshot, and remote expectation are newly admitted. A clean contained workspace receives content without old credentials or approvals. Candidate construction is deterministic, provenance-preserving, and scanned under current destination policy.
 
+The recorded default destination follows the existing connection service's repository assignments and operations, including its classified migrated-default exception. Branch publication requires read, write, and branch-write authority; a PR also requires review-request authority. One selection supplies both the policy and credential. The persisted authority records the connection's policy and credential revisions alongside its redaction-safe credential source. A selected managed `db://` SecretRef also contributes its own credential and policy revisions, read atomically with its value through the Secrets System; independent managed-secret rotation cannot retain the old authority identity. Prepare retries, push, and PR creation reject a revision mismatch with `PUBLICATION_AUTHORITY_CHANGED`; a missing or revoked grant instead makes authority unavailable. They preserve the saved result, original decision, and prior confirmed effects for a newly admitted decision. Tokens and token hashes never enter this reference or workflow history.
+
 Mutation uses the existing protected-branch and compare-and-set/lease controls. The exact remote revision is verified, and a PR is created or adopted only when requested and supported. Canonical provider-aware publication evidence links the saved-work digest and destination authority. A self-contained result requires no original source PAT.
 
 The one-control authoring contract does not replay an old workflow's Auto to choose new side effects. Publish Saved Work admits its own explicit Branch/PR objective and supported automation, if any, under the same compiler. None is deliberate non-publication. An old Skill-owned Auto result cannot be converted into a publication-only Skill execution or a claim that unrelated resolver/tracker effects completed.
@@ -462,6 +464,8 @@ Repository creation is a separate authorization capability. Separate source/dest
 ### QUALITY-006 Publication recovery reconciles exact remote evidence
 
 Publication idempotency includes saved-work digest, admitted destination, application strategy, and intended branch. Candidate identity and observed remote expectation are persisted before mutation. A lost push or PR-create response leads to exact remote reconciliation, not blind repetition.
+
+An explicit fresh admission generation separates re-admission from retry while preserving the same saved work, commit, destination, and output. Ordinary Saved Results authoring persists the generation before submission, reuses it through ambiguous acknowledgments and reloads, and rotates only on a new explicit submission after the matching operation is known terminal. Omitted generations retain historical keys; old admissions, decisions, and receipts remain immutable.
 
 A stale baseline or conflict blocks publication while preserving original saved work. Replanning onto a newer base produces a new candidate/attempt and required approval. Changing connection or destination requires re-admission. The original saved artifact and compute outcome are immutable.
 

@@ -166,10 +166,11 @@ async def test_blank_secret_ref_does_not_fall_through_to_ambient(monkeypatch) ->
     monkeypatch.setenv("MOONMIND_GITHUB_TOKEN_REF", "env://FALLBACK")
     monkeypatch.setenv("FALLBACK", "fallback-token")
 
-    async def _blank(_ref: str) -> str:
-        return "   "
+    async def _blank(_ref: str) -> tuple[str, str | None]:
+        return "   ", None
 
-    monkeypatch.setattr(gc, "_resolve_secret_ref", _blank)
+    # Managed db:// references are read together with their revision.
+    monkeypatch.setattr(gc, "_resolve_secret_ref_with_revision", _blank)
     resolved = await gc.resolve_github_credential()
     assert resolved.token == ""
     assert resolved.source == gc.GitHubCredentialSource.UNRESOLVABLE
@@ -189,10 +190,10 @@ async def test_backend_exception_does_not_select_ambient(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GITHUB_TOKEN_SECRET_REF", "db://broken")
 
-    async def _boom(_ref: str) -> str:
+    async def _boom(_ref: str) -> tuple[str, str | None]:
         raise RuntimeError("vault down")
 
-    monkeypatch.setattr(gc, "_resolve_secret_ref", _boom)
+    monkeypatch.setattr(gc, "_resolve_secret_ref_with_revision", _boom)
     resolved = await gc.resolve_github_credential()
     assert resolved.token == ""
     assert resolved.source == gc.GitHubCredentialSource.UNRESOLVABLE
@@ -293,6 +294,7 @@ async def test_anonymous_snapshot_makes_zero_secret_queries(monkeypatch) -> None
     from moonmind.auth import github_credentials as gc
 
     monkeypatch.setattr(gc, "_resolve_secret_ref", _must_not_query)
+    monkeypatch.setattr(gc, "_resolve_secret_ref_with_revision", _must_not_query)
 
     snapshot = select_repository_authority(
         access_mode=AccessMode.ANONYMOUS,
