@@ -3,14 +3,14 @@
 **Document Class:** Canonical declarative  
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed  
-**Updated:** 2026-09-21  
+**Updated:** 2026-10-08  
 **Audience:** Workflow and runtime authors, integration authors, security reviewers, operators, and dashboard contributors  
 **Authority:** Feature-level target behavior for optional repository access, connection-bound authentication, durable workspace results, and independently authorized publication  
 **Owning Surface:** Workflow admission, repository access, workspace materialization, publishing, Secrets System, and runtime integration boundaries  
 **Related Docs:** [MoonMind Architecture](MoonMindArchitecture.md), [Workflow Architecture](Workflows/WorkflowArchitecture.md), [Lore VCS Integration](Workflows/LoreVcsIntegrationDesign.md), [Workflow Publishing](Workflows/WorkflowPublishing.md), [Workspace Locators](Workflows/WorkspaceLocators.md), [Secrets System](Security/SecretsSystem.md), [Provider Profiles](Security/ProviderProfiles.md), [Omnigent Harness Platform](Omnigent/OmnigentHarnessPlatformDesign.md), [OpenCode Host](Omnigent/OpenCodeHost.md), [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), [Create Page](UI/CreatePage.md), [Input Schema Guidance](Steps/InputSchemaGuidance.md)  
 **Related Implementation:** [`repository_contract.py`](../moonmind/workflows/executions/repository_contract.py), [`workspace_intent.py`](../moonmind/omnigent/workspace_intent.py), [`moonmind/auth/`](../moonmind/auth/), [`moonmind/publish/`](../moonmind/publish/), [`moonmind/omnigent/host_services/`](../moonmind/omnigent/host_services/), and [`SecretsService`](../api_service/services/secrets.py)
 
-> This document describes proposed desired state, not implemented API support or deployment evidence. It expresses the consolidated multi-PAT and workspace-decoupling design. Sequencing, current-state findings, migration inventories, and qualification procedures live in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md), which derives from this design rather than defining a competing target. The single-context publication contract is owned by Workflow Publishing; current helper or seed defaults do not override it. The [Single-User Application Design](SingleUserApplicationDesign.md) governs operator admission and instance resources. Execution, repository, and secret-use restrictions remain without a human-account or tenant model.
+> This document describes desired state; it is not itself evidence of implemented API support or deployment. It expresses the consolidated multi-PAT and workspace-decoupling design. Much of it is implemented; which parts are, which gaps remain and who owns them, and which live observations have not been performed are recorded in the [temporary implementation plan](tmp/RepositoryAccessAndWorkspaceDecouplingPlan.md#status-at-8dc675040-2026-10-08), together with sequencing, migration inventories, and qualification procedures. That plan derives from this design rather than defining a competing target. The single-context publication contract is owned by Workflow Publishing; current helper or seed defaults do not override it. The [Single-User Application Design](SingleUserApplicationDesign.md) governs operator admission and instance resources. Execution, repository, and secret-use restrictions remain without a human-account or tenant model.
 
 ## Advance organizer
 
@@ -349,6 +349,15 @@ review requests pass their executing run to `GitHubService`. An App connection
 acquires `merge_request` for a merge or base retarget, `review_request` for a
 review request, and `read` for readiness and selector lookups. A failed
 selection or credential reports the operation unavailable and sends no request.
+For a run with frozen repository access, server-side operations use the existing
+Omnigent credential acquisition owner to verify the snapshot digest, repository,
+role, operation and current assignment/revision before resolving either a PAT or
+App credential. An admitted run takes precedence over a service-supplied
+connection. Native review bindings retain their read/review-only restriction.
+Historical runs without repository snapshots must match their recorded
+repository and the selected connection's active operation grant. A default
+connection does not bypass a recorded assignment, and an absent operation grant
+reports the operation unavailable; this path adds no grant or credential fallback.
 The `github.resolve_pull_request_target` tool resolves its selector and reads
 the pull request with the executing run's admitted connection the same way.
 Review-only merge automation and saved publication supply their own admitted

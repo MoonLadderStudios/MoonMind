@@ -67,6 +67,7 @@ class PullRequestReadinessResult(BaseModel):
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
+    checks_reported: bool | None = Field(None, alias="checksReported")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
@@ -203,8 +204,8 @@ class GitHubService:
     Repository readers (:meth:`read_pull_request`,
     :meth:`read_repository_target`, :meth:`commit_is_ancestor`) use only the
     connection admitted for the work (MoonLadderStudios/MoonMind#4010): a
-    supplied ``connection`` (per call, or ``connection`` here), else the
-    recorded ``connectionRef`` of ``admitted_workflow_id``, else the default
+    recorded authority of ``admitted_workflow_id``, else a supplied
+    ``connection`` (per call, or ``connection`` here), else the default
     connection. A selection or credential that fails raises; no ambient token
     is substituted. Pull-request operations given ``admitted_workflow_id``
     (merge, base update, readiness, review request, selector) use the same
@@ -332,10 +333,13 @@ class GitHubService:
         admitted_workflow_id: str,
         *,
         operation: str = "read",
+        expected_api_base: str | None = None,
     ) -> tuple[str, dict[str, str]]:
         """Return the API base and headers of the connection admitted for work.
 
-        Selection reuses the launch selector, so a deleted, disabled, or
+        Frozen plans use the existing Omnigent acquisition owner for their
+        exact repository and operation. Historical selection reuses the
+        launch selector, so a deleted, disabled, or
         unassigned connection fails there. A ``github_app`` connection issues
         through the bound acquirer for exactly ``operation``; any other
         connection reads only its own credential. An explicitly anonymous run
@@ -343,7 +347,6 @@ class GitHubService:
         """
         from moonmind.auth.github_app_wiring import github_api_base_for
         from moonmind.auth.github_credentials import (
-            resolve_connection_github_credential,
             resolve_deployment_github_credential,
         )
         from moonmind.workflows.executions.repository_contract import (
@@ -352,9 +355,29 @@ class GitHubService:
         from moonmind.workflows.temporal.runtime import managed_api_key_resolve
 
         active = connection if connection is not None else self._connection
+        if str(admitted_workflow_id or "").strip():
+            active = None
         if active is None:
             connection_ref, anonymous = "", False
             if str(admitted_workflow_id or "").strip():
+                frozen_base, acquired = (
+                    await managed_api_key_resolve.acquire_admitted_repository_use(
+                        admitted_workflow_id,
+                        repository=repository,
+                        operation=operation,
+                        expected_api_base=expected_api_base,
+                    )
+                )
+                if frozen_base is not None and acquired is None:
+                    return frozen_base, {
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    }
+                if frozen_base is not None:
+                    try:
+                        return frozen_base, self.headers_from_bound_credential(acquired)
+                    finally:
+                        acquired.credential.clear()
                 connection_ref, anonymous = (
                     await managed_api_key_resolve.load_admitted_repository_access(
                         admitted_workflow_id
@@ -365,7 +388,14 @@ class GitHubService:
                     raise ValueError(
                         f"An anonymous run cannot {operation} {repository}"
                     )
-                return github_api_base_for(), {
+                api_base = github_api_base_for()
+                if expected_api_base is not None and api_base.rstrip(
+                    "/"
+                ) != expected_api_base.rstrip("/"):
+                    raise ValueError(
+                        f"The admitted repository connection does not serve {expected_api_base}"
+                    )
+                return api_base, {
                     "Accept": "application/vnd.github+json",
                     "X-GitHub-Api-Version": "2022-11-28",
                 }
@@ -373,19 +403,41 @@ class GitHubService:
                 connection_ref or DEFAULT_GIT_CONNECTION_REF, repository=repository
             )
         if active is None:
+            if operation != "read":
+                raise ValueError(
+                    f"No recorded repository connection grants {operation} {repository}"
+                )
             # The unrecorded default derives from the deployment declaration.
             api_base = github_api_base_for()
+            if expected_api_base is not None and api_base.rstrip(
+                "/"
+            ) != expected_api_base.rstrip("/"):
+                raise ValueError(
+                    f"The admitted repository connection does not serve {expected_api_base}"
+                )
             resolved = await resolve_deployment_github_credential(repo=repository)
         else:
             # Trust the destination before reading either kind of credential.
-            api_base = github_api_base_for(str(getattr(active, "endpoint_ref", "") or ""))
+            api_base = github_api_base_for(
+                str(getattr(active, "endpoint_ref", "") or "")
+            )
+            if expected_api_base is not None and api_base.rstrip(
+                "/"
+            ) != expected_api_base.rstrip("/"):
+                raise ValueError(
+                    f"The admitted repository connection does not serve {expected_api_base}"
+                )
             if getattr(active.credential, "source", "") == "github_app":
                 return api_base, await self.bound_app_headers_for_connection(
                     active, repository=repository, operations=(operation,)
                 )
-            resolved = await resolve_connection_github_credential(
-                active, repo=repository
+            selected = (
+                await managed_api_key_resolve._resolve_github_access_for_connection(
+                    active, repository=repository, required_operations=(operation,)
+                )
             )
+            resolved = selected.credential
+            api_base = github_api_base_for(selected.connection.endpoint_ref)
         if not resolved.token:
             raise ValueError(resolved.safe_summary)
         return api_base, self._github_headers(resolved.token)
@@ -416,7 +468,11 @@ class GitHubService:
             return self._github_headers(token), None
         try:
             admitted_base, headers = await self._repository_reader(
-                repo, None, admitted_workflow_id, operation=operation
+                repo,
+                None,
+                admitted_workflow_id,
+                operation=operation,
+                expected_api_base=api_base,
             )
         except Exception as exc:
             from moonmind.utils.logging import redact_sensitive_text
@@ -2304,6 +2360,7 @@ class GitHubService:
         observed_base_sha: str | None = None
         pr_open: bool | None = None
         pr_merged: bool | None = None
+        checks_reported: bool | None = None
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
@@ -2392,6 +2449,7 @@ class GitHubService:
                         str(base.get("ref") or "") if isinstance(base, dict) else None
                     ),
                 )
+                checks_reported = check_evidence.get("reported")
                 checks_complete = check_evidence["complete"]
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
@@ -2458,6 +2516,7 @@ class GitHubService:
             and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
+            checksReported=checks_reported,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
@@ -2478,7 +2537,10 @@ class GitHubService:
         headers: dict[str, str],
         base_branch: str | None = None,
     ) -> dict[str, Any]:
-        from pr_resolver_core.github_checks import partition_commit_statuses
+        from pr_resolver_core.github_checks import (
+            head_ci_reported,
+            partition_commit_statuses,
+        )
 
         blockers: list[dict[str, Any]] = []
 
@@ -2500,7 +2562,6 @@ class GitHubService:
                 f"https://api.github.com/repos/{repo}/commits/{head_sha}/status?per_page=100",
                 "statuses",
             )
-            status_state = str(status_data.get("state") or "").lower()
             commit_statuses = status_data.get("statuses") or []
 
             checks_data = await fetch_collection(
@@ -2602,8 +2663,6 @@ class GitHubService:
             if str(run.get("conclusion") or "").lower()
             not in {"", "success", "neutral", "skipped"}
         ]
-        has_commit_statuses = bool(commit_statuses)
-        has_check_runs = bool(check_runs)
         status_pending = any(
             str(status.get("state") or "").lower() in {"pending", "expected"}
             for status in commit_statuses
@@ -2612,11 +2671,14 @@ class GitHubService:
             str(status.get("state") or "").lower() in {"failure", "error"}
             for status in commit_statuses
         )
-        if required_contexts is None and not has_commit_statuses and not has_check_runs:
-            status_pending = status_state in {"pending", "expected"}
-            status_failed = status_state in {"failure", "error"}
+        ci_reported = head_ci_reported(
+            check_runs, commit_statuses, advisory_statuses, required_contexts
+        )
         has_running_checks = (
-            status_pending or bool(pending_runs) or bool(missing_required)
+            status_pending
+            or bool(pending_runs)
+            or bool(missing_required)
+            or not ci_reported
         )
         has_failed_checks = status_failed or bool(failed_runs)
 
@@ -2624,7 +2686,11 @@ class GitHubService:
             blockers.append(
                 {
                     "kind": "checks_running",
-                    "summary": "Required checks are still running.",
+                    "summary": (
+                        "Required checks are still running."
+                        if ci_reported
+                        else "No checks have reported for this head yet."
+                    ),
                     "retryable": True,
                     "source": "github",
                 }
@@ -2640,6 +2706,7 @@ class GitHubService:
             )
 
         return {
+            "reported": ci_reported,
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,

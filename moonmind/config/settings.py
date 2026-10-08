@@ -1908,7 +1908,7 @@ class FeatureFlagsSettings(BaseSettings):
         )
     )
     publication_recovery_enabled: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__PUBLICATION_RECOVERY_ENABLED",
             "PUBLICATION_RECOVERY_ENABLED",
@@ -1943,7 +1943,7 @@ class FeatureFlagsSettings(BaseSettings):
         ),
     )
     publication_recovery_generation: str = Field(
-        "disabled",
+        "default",
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__PUBLICATION_RECOVERY_GENERATION",
             "PUBLICATION_RECOVERY_GENERATION",

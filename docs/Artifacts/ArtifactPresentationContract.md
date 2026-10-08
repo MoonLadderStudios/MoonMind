@@ -1019,8 +1019,9 @@ Rules:
   the execution's action projection reports `canPublishSavedWork`. That capability applies the same
   submission gate and publication-recovery rollout admission as the
   publication route; when it is off, `disabledReasons.canPublishSavedWork`
-  carries the route's reason (`publication_recovery_disabled` under the
-  shipped default-off rollout gate, `publication_recovery_shadow_only`,
+  carries the route's reason (`publication_recovery_disabled` when the
+  operator turns the default-on rollout gate off,
+  `publication_recovery_shadow_only`,
   `publication_mode_not_allowed`, `publication_recovery_not_in_canary` when
   a canary admits no repository for the operator,
   `publication_recovery_policy_invalid` when the rollout setting cannot be

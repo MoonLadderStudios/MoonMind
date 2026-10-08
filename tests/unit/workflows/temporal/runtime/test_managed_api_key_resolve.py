@@ -1086,6 +1086,9 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
 ) -> None:
     """The migrated default had no assignments before #4023 and needs none."""
 
+    from sqlalchemy import update
+
+    from api_service.db.models import RepositoryConnectionAuditEvent
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
     )
@@ -1100,6 +1103,12 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
         tmp_path,
         github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
     )
+    async with engine.begin() as database:
+        await database.execute(
+            update(RepositoryConnectionAuditEvent)
+            .where(RepositoryConnectionAuditEvent.request_id == "test-connection-0")
+            .values(request_id="migration:391:legacy-github-credential")
+        )
     try:
         selected = await managed_api_key_resolve_module.select_git_connection_for_launch(
             DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"

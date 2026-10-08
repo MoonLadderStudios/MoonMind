@@ -269,7 +269,7 @@ Review evidence must cover the actual admitted head; merge modes require it for 
 }
 ```
 
-Provider is neutral metadata. Trusted `pr_resolver_core.review_providers` defines the command and accepted identities. An explicit command can only restate the registered command exactly. Children cannot supply arbitrary comment text or another provider. In resolver modes, enabled loops pass reviewProvider and requireFreshReview into the pinned Skill's inputs.
+Provider is neutral metadata. Trusted `pr_resolver_core.review_providers` defines the command and accepted identities. An explicit command can only restate the registered command exactly. Children cannot supply arbitrary comment text or another provider. In resolver modes, enabled loops pass reviewProvider and requireFreshReview into the pinned Skill's inputs. Disabled loops pass reviewProvider `none` and requireFreshReview false, and the resolver prompt says the gate owns review requirements. The gate rejects a child's review request when it runs no loop, so a child that inferred a review requirement from repository or task prose would otherwise wait on every pass for a review nobody requests.
 
 ### 11.3.3 Request side effect
 
@@ -320,7 +320,23 @@ For merge and fix-only, external scheduling reads cover PR state/current head, r
 
 Confirmed failing checks and merge conflicts are resolver-actionable. A completed
 failure can launch remediation while other checks remain queued or running;
-incomplete checks without a confirmed failure keep waiting. With the review loop
+incomplete checks without a confirmed failure keep waiting. A head that has
+reported no check runs or gating statuses has no CI evidence yet, whether CI is
+still being queued after a push or never runs for the PR's base, so the gate
+keeps waiting instead of launching a resolver that would read the same state as
+`ci_signal_degraded` and hand straight back. Only advisory status on a base
+with no required checks counts as a clean signal without gating checks. The gate
+and the Skill share this rule (`pr_resolver_core.github_checks.head_ci_reported`).
+A successful read explicitly records whether head CI has reported. Repeated
+confirmed absence for the same head consumes the existing
+`maxConsecutiveNoProgressCycles` budget, including when the review loop is off
+and no expiry was configured. Exhaustion returns `review_loop_no_progress` with
+a CI-trigger diagnostic without launching a resolver. A changed head or newly
+reported CI resets that missing-signal wait; queued/running checks and unavailable
+or legacy observations do not consume it. Explicit expiry remains authoritative.
+The observation-scoped Temporal patch preserves old consumer decisions during
+rolling upgrades and adopts this behavior on the next fresh observation.
+With the review loop
 disabled, required automated review is still observed and must complete before
 that resolver dispatch, including when a failed build has a queued downstream
 check. A merge conflict
