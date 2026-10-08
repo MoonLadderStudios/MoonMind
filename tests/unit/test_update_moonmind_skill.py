@@ -54,7 +54,7 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
         url = request.full_url
         if request.method == "GET" and url.endswith("/v1/healthz"):
             assert request.get_header("Authorization") == "Bearer test-secret"
-            return FakeResponse(200, {"status": "ok"})
+            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
         if request.method == "POST" and url.endswith("/v1/operations"):
             payload = json.loads(request.data.decode("utf-8"))
             assert payload["stack"] == "moonmind"
@@ -241,6 +241,15 @@ def test_unreachable_controller_with_owned_state_keeps_recovery_authority(
         raise update.ControllerUnreachableError("controller unavailable")
 
     monkeypatch.setattr(update, "_controller_call", unreachable)
+    # The controller's host-owned bootstrap remains the recovery owner;
+    # an endpoint outage never starts the legacy stack updater.
+    resumed = []
+
+    def resume_controller(*args, **kwargs):
+        resumed.append(args)
+        raise update.ControllerUnreachableError("controller unavailable")
+
+    monkeypatch.setattr(update, "_submit_via_controller", resume_controller)
     monkeypatch.setattr(
         update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("fallback")
     )
@@ -255,6 +264,7 @@ def test_unreachable_controller_with_owned_state_keeps_recovery_authority(
             secret_file=None,
             legacy_direct=False,
         )
+    assert len(resumed) == 1
 
 
 def test_partial_controller_install_does_not_change_resume_owner(
@@ -368,6 +378,8 @@ def _stub_controller_success(monkeypatch, image):
             return False
 
     def fake_urlopen(request, timeout=None):
+        if request.full_url.endswith("/v1/healthz"):
+            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
         if request.method == "POST":
             posted.append(json.loads(request.data.decode("utf-8")))
             return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
@@ -987,6 +999,8 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
             return False
 
     def fake_urlopen(request, timeout=None):
+        if request.full_url.endswith("/v1/healthz"):
+            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
         if request.method == "POST":
             return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
         outcome = statuses[min(len(gets), len(statuses) - 1)]
