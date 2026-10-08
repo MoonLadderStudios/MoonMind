@@ -480,10 +480,7 @@ def _agent_run_id_from_env() -> str | None:
     return None
 
 
-def _resolve_child_instructions(args: argparse.Namespace) -> str | None:
-    explicit = getattr(args, "child_instructions", None)
-    if explicit is not None:
-        return _runtime_text(explicit)
+def _inherited_skill_arg(args: argparse.Namespace, key: str) -> str | None:
     for candidate in _repo_context_candidates(args.task_context_path):
         try:
             context = json.loads(candidate.read_text(encoding="utf-8"))
@@ -496,10 +493,70 @@ def _resolve_child_instructions(args: argparse.Namespace) -> str | None:
         if not isinstance(inputs, dict):
             inputs = context.get("inputs")
         if isinstance(inputs, dict):
-            instructions = _runtime_text(inputs.get("childInstructions"))
-            if instructions:
-                return instructions
+            value = _runtime_text(inputs.get(key))
+            if value:
+                return value
     return None
+
+
+def _resolve_child_instructions(args: argparse.Namespace) -> str | None:
+    explicit = getattr(args, "child_instructions", None)
+    if explicit is not None:
+        return _runtime_text(explicit)
+    return _inherited_skill_arg(args, "childInstructions")
+
+
+def _resolve_pull_request_selection(args: argparse.Namespace) -> str | None:
+    explicit = getattr(args, "pull_requests", None)
+    if explicit is not None:
+        return explicit
+    return _inherited_skill_arg(args, "pullRequests")
+
+
+def _parse_pull_request_selection(spec: str) -> list[tuple[int, int]]:
+    """Parse ``4724-4746, #4765`` into inclusive ``(low, high)`` number ranges."""
+
+    ranges: list[tuple[int, int]] = []
+    for entry in re.split(r"[\s,]+", spec.strip()):
+        if not entry:
+            continue
+        match = re.fullmatch(r"#?(\d+)(?:-#?(\d+))?", entry)
+        low = int(match.group(1)) if match else 0
+        high = int(match.group(2) or low) if match else 0
+        if low < 1 or high < low:
+            raise ValueError(
+                f"Invalid pull request selection {spec!r}: use numbers or "
+                "inclusive ranges such as '4724-4746, 4765'."
+            )
+        ranges.append((low, high))
+    if not ranges:
+        raise ValueError(f"Invalid pull request selection {spec!r}: it is empty.")
+    return ranges
+
+
+def _select_pull_requests(
+    open_prs: list[dict[str, Any]], ranges: list[tuple[int, int]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Keep open PRs inside the selection; report listed numbers that are not open."""
+
+    def _number(pr: dict[str, Any]) -> int:
+        try:
+            return int(pr.get("number", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    selected = [
+        pr
+        for pr in open_prs
+        if any(low <= _number(pr) <= high for low, high in ranges)
+    ]
+    open_numbers = {_number(pr) for pr in open_prs}
+    not_open = [
+        {"pr": low, "reason": "not-open"}
+        for low, high in ranges
+        if low == high and low not in open_numbers
+    ]
+    return selected, not_open
 
 
 def _build_queue_request(
@@ -582,7 +639,9 @@ def _build_queue_request(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Submit pr-resolver tasks for every open PR in a repository."
+        description=(
+            "Submit pr-resolver tasks for every selected open PR in a repository."
+        )
     )
     parser.add_argument(
         "--repo",
@@ -628,6 +687,15 @@ def _parse_args() -> argparse.Namespace:
         "--runtime-provider-profile",
         default=None,
         help="Explicit runtime provider profile for queued pr-resolver tasks.",
+    )
+    parser.add_argument(
+        "--pull-requests",
+        default=None,
+        help=(
+            "Only queue these open PRs: numbers or inclusive ranges, e.g. "
+            "'4724-4746, 4765' (default: inherit pullRequests from task "
+            "context, else every open PR)."
+        ),
     )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=5)
@@ -929,8 +997,16 @@ async def main() -> int:
         },
     )
 
+    selection = _resolve_pull_request_selection(args)
+    selected_ranges = (
+        _parse_pull_request_selection(selection) if selection is not None else None
+    )
     open_prs = _run_pr_list(repo=repo, state=args.state)
+    not_open: list[dict[str, Any]] = []
+    if selected_ranges is not None:
+        open_prs, not_open = _select_pull_requests(open_prs, selected_ranges)
     queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
+    skipped.extend(not_open)
     created, errors = await _submit_jobs(queue_requests)
 
     failure_code: str | None = None
@@ -963,6 +1039,7 @@ async def main() -> int:
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "repository": repo,
         "state": args.state,
+        "selection": selection,
         "runtime": {
             "mode": runtime.mode,
             "model": runtime.model,
@@ -994,6 +1071,9 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
+    except ValueError as exc:
+        print(f"error: {exc}", flush=True)
+        raise SystemExit(2)
     except Exception:
         print("error: batch-pr-resolver failed. See logs for details.", flush=True)
         raise SystemExit(1)
