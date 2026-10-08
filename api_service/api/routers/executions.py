@@ -10724,6 +10724,9 @@ def _build_original_workflow_input_snapshot_payload(
             attachment_refs=attachment_refs,
         ),
     }
+    workspace_value = payload.get("workspace")
+    if isinstance(workspace_value, Mapping):
+        draft["workspace"] = copy.deepcopy(dict(workspace_value))
     return {
         "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {
@@ -10777,6 +10780,9 @@ def _snapshot_source_payload_from_parameters(
             list(capabilities_value) if isinstance(capabilities_value, list) else []
         ),
     }
+    workspace_value = parameters.get("workspace")
+    if isinstance(workspace_value, Mapping):
+        payload["workspace"] = copy.deepcopy(dict(workspace_value))
     return payload, task
 
 
