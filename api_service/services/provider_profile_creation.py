@@ -20,6 +20,7 @@ from moonmind.provider_profiles.isolation_policy import (
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider,
     get_provider_default,
+    supported_runtime_ids,
 )
 
 
@@ -37,6 +38,7 @@ class ProviderApiKeyStrategy:
     auth_strategy: str
     materialization_mode: str
     ready_label: str
+    provider_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +59,7 @@ class RuntimeProviderAuthenticationCapability:
 
     runtime_id: str
     provider_id: str
+    provider_label: str = ""
     credential_free: bool = False
     expert_manual_credentials: tuple[ExpertManualCredentialCapability, ...] = ()
 
@@ -119,11 +122,13 @@ _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES: tuple[
     RuntimeProviderAuthenticationCapability(
         runtime_id="opencode",
         provider_id="opencode",
+        provider_label="OpenCode",
         credential_free=True,
     ),
     RuntimeProviderAuthenticationCapability(
         runtime_id="claude_code",
         provider_id="minimax",
+        provider_label="MiniMax",
         expert_manual_credentials=(
             ExpertManualCredentialCapability(
                 authentication_method="api_key",
@@ -143,6 +148,7 @@ _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES: tuple[
     RuntimeProviderAuthenticationCapability(
         runtime_id="codex_cli",
         provider_id="minimax",
+        provider_label="MiniMax",
         expert_manual_credentials=(
             ExpertManualCredentialCapability(
                 authentication_method="api_key",
@@ -161,6 +167,7 @@ _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES: tuple[
     RuntimeProviderAuthenticationCapability(
         runtime_id="codex_cli",
         provider_id="openrouter",
+        provider_label="OpenRouter",
         expert_manual_credentials=(
             ExpertManualCredentialCapability(
                 authentication_method="api_key",
@@ -193,6 +200,7 @@ _API_KEY_STRATEGIES: dict[tuple[str, str], ProviderApiKeyStrategy] = {
         auth_strategy="api_key_env",
         materialization_mode="api_key_env",
         ready_label="Anthropic API key ready",
+        provider_label="Anthropic",
     ),
     ("codex_cli", "openai"): ProviderApiKeyStrategy(
         runtime_id="codex_cli",
@@ -204,7 +212,21 @@ _API_KEY_STRATEGIES: dict[tuple[str, str], ProviderApiKeyStrategy] = {
         auth_strategy="api_key_env",
         materialization_mode="api_key_env",
         ready_label="OpenAI API key ready",
+        provider_label="OpenAI",
     ),
+}
+
+# The OpenCode API-key strategy accepts any safe provider ID. These are the
+# providers it names; others remain valid custom provider choices.
+_OPENCODE_RUNTIME_ID = "opencode"
+_OPENCODE_NAMED_API_KEY_PROVIDERS: dict[str, str] = {"opencode-go": "OpenCode Go"}
+
+# Display labels for Harness choices. Canonical runtime IDs stay the submitted
+# values; the declarations above decide which Harnesses are offered.
+_HARNESS_LABELS: dict[str, str] = {
+    "codex_cli": "Codex CLI",
+    "claude_code": "Claude Code",
+    _OPENCODE_RUNTIME_ID: "OpenCode",
 }
 
 
@@ -215,8 +237,8 @@ def provider_api_key_strategy(
     runtime_id = runtime_id.strip()
     provider_id = provider_id.strip()
     if (
-        runtime_id == "opencode"
-        and provider_id != "opencode"
+        runtime_id == _OPENCODE_RUNTIME_ID
+        and provider_id != _OPENCODE_RUNTIME_ID
         and is_safe_provider_id(provider_id)
     ):
         policy = derive_isolation_policy(
@@ -225,7 +247,7 @@ def provider_api_key_strategy(
             authentication_method="api_key",
         )
         assert policy is not None
-        label = "OpenCode Go" if provider_id == "opencode-go" else provider_id
+        label = _OPENCODE_NAMED_API_KEY_PROVIDERS.get(provider_id, provider_id)
         return ProviderApiKeyStrategy(
             runtime_id=runtime_id,
             provider_id=provider_id,
@@ -236,6 +258,7 @@ def provider_api_key_strategy(
             auth_strategy="opencode_auth_json",
             materialization_mode="composite",
             ready_label=f"{label} API key ready",
+            provider_label=label,
         )
     return _API_KEY_STRATEGIES.get((runtime_id, provider_id))
 
@@ -539,6 +562,59 @@ def provider_profile_creation_capabilities(
         "authentication_methods": methods,
         "diagnostics": diagnostics,
     }
+
+
+def provider_profile_creation_choices() -> dict[str, Any]:
+    """Project the supported Harness/Provider pairs for the creation form.
+
+    This is a read-only view of the OAuth, API-key, and independent
+    authentication declarations that ``provider_profile_creation_capabilities``
+    already trusts. It never reads saved profiles or launch hosts, so the first
+    profile can be created on an empty deployment.
+    """
+
+    providers_by_runtime: dict[str, dict[str, str]] = {}
+
+    def offer(runtime_id: str, provider_id: str, label: str) -> None:
+        providers = providers_by_runtime.setdefault(runtime_id, {})
+        providers.setdefault(provider_id, label or provider_id)
+
+    for runtime_id in supported_runtime_ids():
+        oauth_provider = get_provider(runtime_id)
+        if oauth_provider:
+            offer(
+                runtime_id,
+                oauth_provider["provider_id"],
+                oauth_provider["provider_label"],
+            )
+    for strategy in _API_KEY_STRATEGIES.values():
+        offer(strategy.runtime_id, strategy.provider_id, strategy.provider_label)
+    for capability in _RUNTIME_PROVIDER_AUTHENTICATION_CAPABILITIES:
+        offer(capability.runtime_id, capability.provider_id, capability.provider_label)
+    for provider_id, label in _OPENCODE_NAMED_API_KEY_PROVIDERS.items():
+        offer(_OPENCODE_RUNTIME_ID, provider_id, label)
+
+    harnesses: list[dict[str, Any]] = []
+    for runtime_id, providers in providers_by_runtime.items():
+        supported = [
+            {"provider_id": provider_id, "label": label}
+            for provider_id, label in providers.items()
+            if provider_profile_creation_capabilities(
+                runtime_id=runtime_id,
+                provider_id=provider_id,
+            )["supported"]
+        ]
+        if not supported:
+            continue
+        harnesses.append(
+            {
+                "runtime_id": runtime_id,
+                "label": _HARNESS_LABELS.get(runtime_id, runtime_id),
+                "providers": supported,
+                "custom_provider_allowed": runtime_id == _OPENCODE_RUNTIME_ID,
+            }
+        )
+    return {"version": CREATION_PRESET_VERSION, "harnesses": harnesses}
 
 
 def authentication_method_preset(

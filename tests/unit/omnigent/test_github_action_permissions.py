@@ -871,7 +871,11 @@ async def test_early_action_token_is_reused_by_lazy_workspace_owner(
 def test_portable_resolver_rejects_native_review_mode_when_config_model_expands(
     monkeypatch,
 ):
-    """A broader automation enum cannot expand the portable Skill's contract."""
+    """A broader automation enum cannot expand the portable Skill's contract.
+
+    ``review_only`` has its own explicit rejection; this covers any future
+    native-only mode the parent configuration may accept.
+    """
     from typing import Literal
 
     from pydantic import Field
@@ -879,15 +883,15 @@ def test_portable_resolver_rejects_native_review_mode_when_config_model_expands(
     from moonmind.workflows.temporal.workflows import merge_gate
 
     class ExpandedMergeAutomationConfig(merge_gate.MergeAutomationConfigModel):
-        finish_mode: Literal["merge", "fix_only", "review_only"] = Field(
+        finish_mode: Literal["merge", "fix_only", "review_only", "native_review"] = Field(
             "merge", alias="finishMode"
         )
 
     assert (
         ExpandedMergeAutomationConfig.model_validate(
-            {"finishMode": "review_only"}
+            {"finishMode": "native_review"}
         ).finish_mode
-        == "review_only"
+        == "native_review"
     )
     monkeypatch.setattr(
         merge_gate, "MergeAutomationConfigModel", ExpandedMergeAutomationConfig
@@ -897,7 +901,7 @@ def test_portable_resolver_rejects_native_review_mode_when_config_model_expands(
             parent_workflow_id="merge-parent",
             jira_issue_key=None,
             merge_method="squash",
-            finish_mode="review_only",
+            finish_mode="native_review",
             pull_request={
                 "repo": "owner/repo",
                 "number": 1,

@@ -128,6 +128,7 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["search_attributes"] == {
                 "mm_owner_type": "user",
                 "mm_owner_id": str(definition.owner_user_id),
+                "mm_provider_profile": "ppstpending",
             }
 
 
@@ -529,6 +530,8 @@ async def test_create_manual_run_triggers_temporal_schedule(
             workflow_type, workflow_input = service._workflow_bundle_for_definition(
                 definition
             )
+            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            created_metadata = mock_temporal_adapter.create_schedule.await_args.kwargs
             triggered_at = datetime.now(UTC)
             mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
                 schedule=SimpleNamespace(
@@ -537,6 +540,10 @@ async def test_create_manual_run_triggers_temporal_schedule(
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
                         task_queue="mm.workflow.user.v2",
+                        memo=created_metadata["memo"],
+                        typed_search_attributes=_build_typed_search_attributes(
+                            {key: [value] for key, value in created_metadata["search_attributes"].items()}
+                        ),
                     )
                 )
             )
@@ -1310,6 +1317,8 @@ async def test_reconcile_skips_update_when_metadata_and_action_match(
             _workflow_type, workflow_input = service._workflow_bundle_for_definition(
                 definition
             )
+            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            created = mock_temporal_adapter.create_schedule.await_args.kwargs
             mock_temporal_adapter.create_schedule.reset_mock()
             mock_temporal_adapter.update_schedule.reset_mock()
             mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
@@ -1329,6 +1338,10 @@ async def test_reconcile_skips_update_when_metadata_and_action_match(
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
                         task_queue="mm.workflow.user.v2",
+                        memo=created["memo"],
+                        typed_search_attributes=_build_typed_search_attributes(
+                            {key: [value] for key, value in created["search_attributes"].items()}
+                        ),
                     ),
                 )
             )
@@ -2361,3 +2374,168 @@ async def test_retained_openclaw_schedule_recovers_without_retiring_saved_work(
                 "workflow"
             ]["runtime"]["mode"]
             assert submitted_runtime == "openclaw"
+
+
+@pytest.mark.parametrize("selection", ["recorded", "pending", "not_applicable"])
+async def test_schedule_actions_record_provider_profile_projection_4640(
+    tmp_path: Path, mock_temporal_adapter, selection: str
+) -> None:
+    """Every durable schedule writer supplies both stores from admitted input."""
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        build_provider_profile_projection,
+    )
+    from moonmind.workflows.temporal.schedule_errors import ScheduleAlreadyExistsError
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        parameters = {}
+        labels = {"work": "Work account", "secondary": "Other provider"}
+        if selection != "not_applicable":
+            parameters["targetRuntime"] = "codex_cli"
+        if selection == "recorded":
+            session.add_all(
+                [
+                    ManagedAgentProviderProfile(
+                        profile_id="work",
+                        runtime_id="codex_cli",
+                        provider_id="openai",
+                        account_label="Work account",
+                        provider_label="Ignored provider",
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="secondary",
+                        runtime_id="codex_cli",
+                        provider_id="openai",
+                        provider_label="Other provider",
+                    ),
+                ]
+            )
+            await session.flush()
+            parameters.update(
+                {
+                    "profileId": "work",
+                    "task": {
+                        "steps": [
+                            {"runtime": {"providerProfileRef": "work"}},
+                            {"runtime": {"providerProfileRef": "secondary"}},
+                            {"runtime": {"providerProfileRef": "deleted-profile"}},
+                        ]
+                    },
+                }
+            )
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        definition = await _mm3788_create(
+            service,
+            owner_user_id=None,
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": parameters,
+            },
+        )
+        expected_summary, expected_value = build_provider_profile_projection(
+            parameters, labels=labels
+        )
+        assert expected_summary["selectionState"] == selection
+
+        def assert_projection(kwargs):
+            assert kwargs["memo"] == {
+                "definitionId": str(definition.id),
+                PROVIDER_PROFILE_MEMO_KEY: expected_summary,
+            }
+            assert kwargs["search_attributes"] == {
+                "mm_owner_type": "system",
+                "mm_owner_id": "system",
+                PROVIDER_PROFILE_SEARCH_ATTRIBUTE: expected_value,
+            }
+
+        assert_projection(mock_temporal_adapter.create_schedule.await_args.kwargs)
+        await service.update_definition(definition, name="Renamed schedule")
+        assert_projection(mock_temporal_adapter.update_schedule.await_args.kwargs)
+        # Recreate and its create-conflict recovery must carry the same projection.
+        from api_service.services.recurring_workflows_service import _normalize_policy
+
+        policy = _normalize_policy({}, global_max_backfill=3)
+        await service._recreate_temporal_schedule(definition, policy)
+        assert_projection(mock_temporal_adapter.create_schedule.await_args.kwargs)
+        mock_temporal_adapter.create_schedule.side_effect = ScheduleAlreadyExistsError(
+            "exists"
+        )
+        await service._recreate_temporal_schedule(definition, policy)
+        assert_projection(mock_temporal_adapter.update_schedule.await_args.kwargs)
+
+
+@pytest.mark.parametrize("entrypoint", ["reconcile", "ensure_current"])
+@pytest.mark.parametrize("missing_store", ["memo", "search", "both"])
+async def test_existing_schedule_missing_profile_projection_is_repaired_4640(
+    tmp_path: Path, mock_temporal_adapter, entrypoint: str, missing_store: str
+) -> None:
+    """Upgrade future occurrences without backfilling any already-started run."""
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        provider_profile_state_token,
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        definition = await _mm3788_create(
+            service,
+            owner_user_id=None,
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {"targetRuntime": "codex_cli"},
+            },
+        )
+        workflow_type, workflow_input = service._workflow_bundle_for_definition(
+            definition
+        )
+        from moonmind.workflows.temporal.client import _build_typed_search_attributes
+
+        current = mock_temporal_adapter.create_schedule.await_args.kwargs
+        memo = dict(current["memo"])
+        search = dict(current["search_attributes"])
+        if missing_store in {"memo", "both"}:
+            memo.pop(PROVIDER_PROFILE_MEMO_KEY)
+        if missing_store in {"search", "both"}:
+            search.pop(PROVIDER_PROFILE_SEARCH_ATTRIBUTE)
+        mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+            schedule=SimpleNamespace(
+                spec=SimpleNamespace(
+                    cron_expressions=[definition.cron],
+                    time_zone_name="UTC",
+                    jitter=timedelta(0),
+                ),
+                policy=SimpleNamespace(
+                    overlap=SimpleNamespace(name="SKIP"),
+                    catchup_window=timedelta(minutes=15),
+                ),
+                state=SimpleNamespace(paused=False, note=definition.name),
+                action=SimpleNamespace(
+                    workflow=workflow_type,
+                    id=make_scheduled_workflow_id_base(definition.id),
+                    args=[workflow_input],
+                    task_queue="mm.workflow.user.v2",
+                    memo=memo,
+                    typed_search_attributes=_build_typed_search_attributes(
+                        {key: [value] for key, value in search.items()}
+                    ),
+                ),
+            )
+        )
+        mock_temporal_adapter.update_schedule.reset_mock()
+        if entrypoint == "reconcile":
+            assert await service.reconcile_schedules() == 1
+        else:
+            await service._ensure_schedule_action_current(definition)
+        mock_temporal_adapter.update_schedule.assert_awaited_once()
+        updated = mock_temporal_adapter.update_schedule.await_args.kwargs
+        assert updated["memo"][PROVIDER_PROFILE_MEMO_KEY]["selectionState"] == "pending"
+        assert updated["search_attributes"][
+            PROVIDER_PROFILE_SEARCH_ATTRIBUTE
+        ] == provider_profile_state_token("pending")
+        assert updated["workflow_input"] == workflow_input

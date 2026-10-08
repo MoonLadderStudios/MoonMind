@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -173,6 +173,20 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     window.history.pushState({}, 'Settings', '/settings/providers-secrets');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === '/api/v1/provider-profiles/creation-choices') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            version: 'provider-profile-creation-v1',
+            profile_id_max_length: 128,
+            harnesses: [
+              { runtime_id: 'codex_cli', label: 'Codex CLI', providers: [{ provider_id: 'openai', label: 'OpenAI' }], custom_provider_allowed: false },
+              { runtime_id: 'claude_code', label: 'Claude Code', providers: [{ provider_id: 'anthropic', label: 'Anthropic' }], custom_provider_allowed: false },
+              { runtime_id: 'opencode', label: 'OpenCode', providers: [{ provider_id: 'opencode', label: 'OpenCode' }], custom_provider_allowed: true },
+            ],
+          }),
+        } as Response);
+      }
       if (url.startsWith('/api/v1/provider-profiles')) {
         return Promise.resolve({
           ok: true,
@@ -219,7 +233,11 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     // runtime the way an execution surface does.
     const profileRequests = fetchSpy.mock.calls
       .map(([requestUrl]) => String(requestUrl))
-      .filter((requestUrl) => requestUrl.startsWith('/api/v1/provider-profiles'));
+      .filter(
+        (requestUrl) =>
+          requestUrl.startsWith('/api/v1/provider-profiles') &&
+          requestUrl !== '/api/v1/provider-profiles/creation-choices',
+      );
     expect(profileRequests).toEqual(['/api/v1/provider-profiles']);
 
     expect(runtimeFilterControl().value).toBe('all');
@@ -277,24 +295,29 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     expect(within(healthSummary).getByText('2')).toBeTruthy();
   });
 
-  it('prefills the create form runtime from the active filter without touching an existing runtime', async () => {
+  it('prefills the create form Harness from the active filter without touching an existing runtime', async () => {
     renderProvidersPage(payloadWithRuntimes);
 
     await screen.findByRole('heading', { name: 'Profiles' });
 
-    const runtimeIdInput = () => screen.getByLabelText(/Runtime ID/) as HTMLInputElement;
-    expect(runtimeIdInput().value).toBe('');
+    const harnessSelect = () => screen.getByLabelText('Harness') as HTMLSelectElement;
+    await waitFor(() => expect(harnessSelect().disabled).toBe(false));
+    expect(harnessSelect().value).toBe('');
 
     selectRuntimeFilter('claude_code');
-    expect(runtimeIdInput().value).toBe('claude_code');
+    expect(harnessSelect().value).toBe('claude_code');
 
     selectRuntimeFilter('codex_cli');
-    expect(runtimeIdInput().value).toBe('codex_cli');
+    expect(harnessSelect().value).toBe('codex_cli');
 
-    // An explicitly authored runtime survives a later filter change.
-    fireEvent.change(runtimeIdInput(), { target: { value: 'opencode' } });
+    // A filter Harness that is not a permitted creation choice seeds nothing.
+    selectRuntimeFilter('jules');
+    expect(harnessSelect().value).toBe('');
+
+    // An explicitly chosen Harness survives a later filter change.
+    fireEvent.change(harnessSelect(), { target: { value: 'opencode' } });
     selectRuntimeFilter('claude_code');
-    expect(runtimeIdInput().value).toBe('opencode');
+    expect(harnessSelect().value).toBe('opencode');
   });
 
   it('names the active runtime in the empty state instead of the global message', async () => {
@@ -319,9 +342,9 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Profile runtime filter', () =
     selectRuntimeFilter('claude_code');
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
-    const runtimeIdInput = screen.getByLabelText(/Runtime ID/) as HTMLInputElement;
-    expect(runtimeIdInput.value).toBe('claude_code');
-    expect(runtimeIdInput.disabled).toBe(true);
+    const harnessSelect = screen.getByLabelText('Harness') as HTMLSelectElement;
+    expect(harnessSelect.value).toBe('claude_code');
+    expect(harnessSelect.disabled).toBe(true);
   });
   it('does not offer a removed runtime from a stale boot catalog (#4644)', async () => {
     const stale = structuredClone(payloadWithRuntimes);

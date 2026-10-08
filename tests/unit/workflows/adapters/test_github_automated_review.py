@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -47,14 +48,30 @@ def _patch_client(mock_client):
     )
 
 
+def _review_clock(monkeypatch, initial):
+    from moonmind.workflows.adapters import github_service
+
+    current = [datetime.fromisoformat(initial)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current[0].astimezone(tz or timezone.utc)
+
+    monkeypatch.setattr(github_service, "datetime", Clock)
+    return current
+
+
 # ---------------------------------------------------------------------------
 # request_automated_review
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_request_posts_exactly_the_configured_command(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_posts_exactly_the_configured_command(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:15:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -80,6 +97,7 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "requested"
@@ -91,10 +109,12 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch, expires_at):
     """A lost response is recovered by adopting the comment it created."""
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -120,6 +140,7 @@ async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkey
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "reconciled"
@@ -219,8 +240,10 @@ async def test_request_refuses_when_pull_request_is_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_adopts_previously_recorded_comment(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_adopts_previously_recorded_comment(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -244,11 +267,64 @@ async def test_request_adopts_previously_recorded_comment(monkeypatch):
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
             recorded_comment_id=777,
+            expires_at=expires_at,
         )
 
     assert result.status == "recorded"
     assert result.request_comment_id == 777
     assert mock_client.post.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expiry_case", ["already_expired", "during_read", "on_retry"])
+async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
+    current = _review_clock(
+        monkeypatch,
+        "2026-08-24T22:17:00+00:00"
+        if expiry_case == "already_expired"
+        else "2026-08-24T22:15:00+00:00",
+    )
+    responses = [
+        _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
+        _get(200, []),
+    ]
+    if expiry_case == "on_retry":
+        responses.insert(0, httpx.ReadTimeout("first attempt could not read PR"))
+    client = _client(get_responses=[])
+
+    async def get(*_args, **_kwargs):
+        response = responses.pop(0)
+        current[0] = datetime.fromisoformat("2026-08-24T22:17:00+00:00")
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client.get.side_effect = get
+    request = {
+        "repo": _REPO, "pr_number": 350, "expected_head_sha": _HEAD,
+        "provider": "codex", "attempt_started_at": "2026-08-24T22:14:00Z",
+        "github_token": "selected-token", "expires_at": "2026-08-24T22:16:00Z",
+    }
+    with _patch_client(client):
+        service = GitHubService()
+        if expiry_case == "on_retry":
+            first = await service.request_automated_review(**request)
+            assert first.status == "unavailable" and first.retryable is True
+        result = await service.request_automated_review(**request)
+    assert result.status == "expired"
+    assert result.retryable is False
+    assert result.request_comment_id is None
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_at", ["", "not-a-timestamp"])
+async def test_request_rejects_invalid_deadline_without_posting(expires_at):
+    with pytest.raises(ValueError, match="expires_at must be an ISO timestamp"):
+        await GitHubService().request_automated_review(
+            repo=_REPO, pr_number=350, expected_head_sha=_HEAD, provider="codex",
+            attempt_started_at="2026-08-24T22:14:00Z", expires_at=expires_at,
+        )
 
 
 @pytest.mark.asyncio
@@ -717,6 +793,82 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reaction_path", ["issues/comments/98765/reactions", "issues/350/reactions"]
+)
+async def test_app_review_permissions_allow_request_bound_reaction_completion(
+    reaction_path,
+):
+    from moonmind.auth.github_app import build_installation_token_request
+
+    payload = build_installation_token_request(
+        operations=["read", "review_request"], repositories=[_REPO]
+    )
+    permissions = payload["permissions"]
+    seen_reaction_paths = []
+    reaction = {
+        "id": 55,
+        "content": "+1",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.headers["Authorization"] == "Bearer synthetic-app-token"
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path in {"pulls/350/reviews", "issues/350/comments"}:
+            body = []
+        elif path in {"issues/comments/98765/reactions", "issues/350/reactions"}:
+            seen_reaction_paths.append(path)
+            # GitHub's two issue-reaction reads require Issues read, unlike
+            # issue-comment reads that also accept Pull requests read.
+            if permissions.get("issues") not in {"read", "write"}:
+                return httpx.Response(
+                    403,
+                    json={"message": "Resource not accessible by integration"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            body = [reaction] if path == reaction_path else []
+        else:
+            raise AssertionError(f"Unexpected GitHub endpoint: {path}")
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-app-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "reaction"
+    assert result.automated_review_completion_id == 55
+    assert result.ready is True
+    assert seen_reaction_paths == (
+        ["issues/comments/98765/reactions"]
+        if reaction_path == "issues/comments/98765/reactions"
+        else ["issues/comments/98765/reactions", "issues/350/reactions"]
+    )
+    assert payload == {
+        "repositories": ["MoonMind"],
+        "permissions": {
+            "contents": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "issues": "read",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_requested_review_reports_stale_when_head_moves(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     moved_prefix = [
@@ -832,3 +984,192 @@ async def test_requested_review_uses_latest_comment_across_pages(
         )
     assert (result.automated_review_complete is True) is latest_clean
     assert result.ready is latest_clean
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "alternative",
+    [
+        "none",
+        "malformed_comments",
+        "old_comment",
+        "other_provider_comment",
+        "different_commit_comment",
+        "malformed_comment_timestamp",
+        "stale_pr_reaction",
+        "other_provider_reaction",
+        "malformed_pr_reaction_timestamp",
+    ],
+)
+async def test_requested_review_reaction_denial_is_terminal_without_fresh_evidence(
+    monkeypatch, alternative
+):
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        TERMINAL_BLOCKER_KINDS,
+        classify_readiness,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    comment = {
+        "id": 56,
+        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    reaction = {
+        "id": 55,
+        "content": "+1",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    comments = []
+    reactions = []
+    if alternative == "malformed_comments":
+        comments = {"message": "not a comment collection"}
+    elif (
+        alternative.endswith("comment")
+        or alternative == "malformed_comment_timestamp"
+    ):
+        comments = [comment]
+        if alternative == "old_comment":
+            comment["created_at"] = "2026-08-24T22:14:00Z"
+        elif alternative == "other_provider_comment":
+            comment["user"] = {"login": "unrelated-reviewer[bot]"}
+        elif alternative == "different_commit_comment":
+            comment["commit_id"] = _OLD_HEAD
+        else:
+            comment["created_at"] = "not-a-timestamp"
+    elif alternative != "none":
+        reactions = [reaction]
+        if alternative == "stale_pr_reaction":
+            reaction["created_at"] = "2026-08-24T22:14:00Z"
+        elif alternative == "other_provider_reaction":
+            reaction["user"] = {"login": "unrelated-reviewer[bot]"}
+        else:
+            reaction["created_at"] = "not-a-timestamp"
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(
+                403,
+                {"message": "Resource not accessible; token=fixture-secret-value"},
+                headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+            ),
+            _get(200, reactions),
+            _get(200, comments),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is None
+    assert result.ready is False
+    assert result.automated_review_completion_kind is None
+    assert [blocker["kind"] for blocker in result.blockers] == ["policy_denied"]
+    blocker = result.blockers[0]
+    assert blocker["retryable"] is False
+    assert blocker["source"] == "github"
+    assert blocker["evidenceSource"] == "issue_reactions"
+    assert blocker["missingPermission"] == "Issues: read"
+    assert "fixture-secret-value" not in blocker["summary"]
+    assert "issues=read" in blocker["summary"]
+    evidence = classify_readiness(
+        result.model_dump(by_alias=True), tracked_head_sha=_HEAD
+    )
+    assert evidence.ready is False
+    assert [blocker.kind for blocker in evidence.blockers] == ["policy_denied"]
+    assert evidence.blockers[0].kind in TERMINAL_BLOCKER_KINDS
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_requested_review_fresh_clean_comment_completes_despite_reaction_denial(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(403, {"message": "Resource not accessible by integration"}),
+            _get(403, {"message": "Resource not accessible by integration"}),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "issue_comment"
+    assert result.automated_review_completion_id == 56
+    assert result.ready is True
+    assert result.blockers == []
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "headers", "message"),
+    [
+        (403, {"x-ratelimit-remaining": "0"}, "API rate limit exceeded"),
+        (403, {}, "API rate limit exceeded"),
+        (403, {"retry-after": "60"}, "Secondary rate limit"),
+        (429, {}, "Too many requests"),
+        (401, {}, "Bad credentials"),
+        (503, {}, "Service unavailable"),
+    ],
+)
+async def test_requested_review_nonpermission_reaction_errors_keep_existing_wait(
+    monkeypatch, status, headers, message
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(status, {"message": message}, headers=headers),
+            _get(200, []),
+            _get(200, []),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.ready is False
+    assert result.automated_review_complete is False
+    assert [blocker["kind"] for blocker in result.blockers] == [
+        "automated_review_pending"
+    ]
+    assert result.blockers[0]["retryable"] is True
+    mock_client.post.assert_not_awaited()
+
+

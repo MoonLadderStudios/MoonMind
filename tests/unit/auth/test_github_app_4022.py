@@ -21,7 +21,7 @@ ACCOUNT = "acme-org"
 REPOS = ["acme/repo"]
 
 
-def _app_connection():
+def _app_connection(*, operations=("read", "write")):
     from moonmind.workflows.executions.repository_contract import RepositoryConnection
 
     return RepositoryConnection.model_validate(
@@ -31,7 +31,7 @@ def _app_connection():
             "provider": "git",
             "displayName": "App connection",
             "endpointRef": "https://github.com",
-            "allowedOperations": ["read", "write"],
+            "allowedOperations": list(operations),
             "clientPolicy": {
                 "pinnedVersion": "2.46.0",
                 "toolBundleRef": "tool-bundle:git-2.46",
@@ -51,7 +51,7 @@ def _app_connection():
     )
 
 
-def _snapshot_for_app(conn=None):
+def _snapshot_for_app(conn=None, *, operations=("read", "write"), role="publisher"):
     from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
     from moonmind.workflows.executions.repository_contract import (
         RepositoryAssignment,
@@ -67,7 +67,7 @@ def _snapshot_for_app(conn=None):
         {
             "connectionId": conn.id,
             "identity": identity.model_dump(by_alias=True, mode="json"),
-            "operations": ["read", "write"],
+            "operations": list(operations),
             "revision": 1,
             "verified": True,
         }
@@ -77,8 +77,8 @@ def _snapshot_for_app(conn=None):
         principal_ref="principal:alice",
         principal_scope=("system", None),
         identity=identity,
-        role="publisher",
-        requested_operations=["read", "write"],
+        role=role,
+        requested_operations=operations,
         policy_revision=1,
         explicit_connection=conn,
         explicit_assignment=assignment,
@@ -132,6 +132,36 @@ def test_app_request_sends_exact_restrictions() -> None:
     assert set(payload.keys()) == {"repositories", "permissions"}
 
 
+@pytest.mark.parametrize(
+    ("operations", "permissions"),
+    [
+        (["read"], {"contents": "read", "metadata": "read"}),
+        (["review_request"], {"pull_requests": "write", "issues": "read"}),
+        (
+            ["read", "review_request"],
+            {
+                "contents": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+                "issues": "read",
+            },
+        ),
+    ],
+)
+def test_app_review_request_can_post_comments_without_source_write_authority(
+    operations, permissions
+) -> None:
+    from moonmind.auth.github_app import build_installation_token_request
+
+    # Review requests POST an issue comment on the PR, which requires
+    # pull_requests:write; observing clean-review reactions needs issues:read.
+    # Reading a source must not acquire either collaboration permission, and
+    # requesting a review must not acquire contents/branch write access.
+    assert build_installation_token_request(
+        operations=operations, repositories=REPOS
+    ) == {"repositories": ["repo"], "permissions": permissions}
+
+
 def test_app_request_serializes_numeric_ids_as_repository_ids() -> None:
     from moonmind.auth.github_app import build_installation_token_request
 
@@ -153,7 +183,29 @@ def test_app_request_serializes_numeric_ids_as_repository_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_app_issuance_validates_returned_scope_and_expiry() -> None:
+@pytest.mark.parametrize(
+    ("operations", "role", "permissions"),
+    [
+        (
+            ("read", "write"),
+            "publisher",
+            {"contents": "write", "metadata": "read"},
+        ),
+        (
+            ("read", "review_request"),
+            "collaboration",
+            {
+                "contents": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+                "issues": "read",
+            },
+        ),
+    ],
+)
+async def test_app_issuance_validates_returned_scope_and_expiry(
+    operations, role, permissions
+) -> None:
     from moonmind.auth.bound_acquisition import (
         AcquisitionRequest,
         BoundAccessError,
@@ -161,8 +213,8 @@ async def test_app_issuance_validates_returned_scope_and_expiry() -> None:
     )
     from moonmind.auth.github_app import GitHubAppAdapter
 
-    conn = _app_connection()
-    snapshot = _snapshot_for_app(conn)
+    conn = _app_connection(operations=operations)
+    snapshot = _snapshot_for_app(conn, operations=operations, role=role)
 
     async def _jwt(_key_material: bytes) -> str:
         return "fake-jwt-for-test"
@@ -170,6 +222,7 @@ async def test_app_issuance_validates_returned_scope_and_expiry() -> None:
     async def _post_ok(*, jwt: str, payload: dict):
         assert jwt == "fake-jwt-for-test"
         assert payload["repositories"] == ["repo"]
+        assert payload["permissions"] == permissions
         return {
             "token": "ghs_opaque_test_token_abc",
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=55)).isoformat(),
@@ -204,6 +257,7 @@ async def test_app_issuance_validates_returned_scope_and_expiry() -> None:
         AcquisitionRequest(snapshot=snapshot, execution_owner="exec:app")
     )
     assert acquired.binding.adapter_kind == "github_app"
+    assert set(acquired.binding.operations) == set(operations)
     seen: list[bytes] = []
     acquired.credential.use_now(seen.append)
     assert seen[0] == b"ghs_opaque_test_token_abc"

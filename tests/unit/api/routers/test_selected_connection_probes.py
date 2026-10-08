@@ -80,6 +80,10 @@ def probe_route(monkeypatch):
         return state.connection
 
     monkeypatch.setattr(RepositoryConnectionService, "get_connection", get_connection)
+    # The fixture connection admits acme/widgets through its own allowlist.
+    monkeypatch.setattr(
+        RepositoryConnectionService, "list_assignments", AsyncMock(return_value=[])
+    )
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-must-not-be-used")
     secret = AsyncMock(return_value="selected-pat-token")
     monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)
@@ -150,17 +154,17 @@ def probe_route(monkeypatch):
         )
     )
 
-    async def probe(mode="indexing"):
+    async def probe(mode=None, **overrides):
+        payload = {"connectionId": "selected-connection", "repo": "acme/widgets"}
+        if mode is not None:
+            payload["mode"] = mode
+        payload.update(overrides)
+        payload = {key: value for key, value in payload.items() if value is not None}
         async with real_client(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver"
         ) as client:
             return await client.post(
-                "/api/v1/settings/github/token-probe",
-                json={
-                    "connectionId": "selected-connection",
-                    "repo": "acme/widgets",
-                    "mode": mode,
-                },
+                "/api/v1/settings/github/token-probe", json=payload
             )
 
     state.probe = probe
@@ -185,7 +189,11 @@ async def test_selected_app_probe_acquires_bound_installation_token(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["observations"] == {"read": "verified", "write": "untested"}
+    assert body["observations"] == {
+        "read": "verified",
+        "branch": "verified",
+        "write": "untested",
+    }
     assert body["credentialSource"] == {
         "sourceKind": "github_app",
         "sourceName": "selected-connection",
@@ -328,7 +336,8 @@ async def test_selected_app_probe_does_not_deny_unrequested_collaboration_scope(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["observations"] == {"read": "verified", "write": "untested"}
+    assert body["observations"]["read"] == "verified"
+    assert body["observations"]["write"] == "untested"
     assert body["pullRequestAccessible"] is None
     assert all(
         item["status"] == "not_checked"
@@ -342,3 +351,45 @@ async def test_selected_app_probe_does_not_deny_unrequested_collaboration_scope(
         for request in probe_route.requests
     )
     assert any("read-scoped" in limitation for limitation in body["limitations"])
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"connectionId": None}, {"connectionId": ""}, {"connectionId": "   "}],
+)
+async def test_probe_without_selected_connection_never_uses_ambient_token(
+    probe_route, monkeypatch, overrides
+):
+    """MoonLadderStudios/MoonMind#4008: no selection, no fallback."""
+
+    ambient = AsyncMock(side_effect=AssertionError("ambient resolver must not run"))
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", ambient)
+
+    response = await probe_route.probe("publish", **overrides)
+
+    assert response.status_code in {404, 422}, response.text
+    assert probe_route.requests == []
+    assert probe_route.lookups == []
+    probe_route.secret.assert_not_called()
+    ambient.assert_not_called()
+    assert "ambient-must-not-be-used" not in response.text
+
+
+async def test_probe_rejects_retired_indexing_mode(probe_route):
+    response = await probe_route.probe("indexing")
+
+    assert response.status_code == 422
+    assert probe_route.requests == []
+    probe_route.secret.assert_not_called()
+
+
+async def test_probe_omitted_mode_uses_the_panel_default(probe_route):
+    response = await probe_route.probe()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["mode"] == "publish"
+    assert [request.method for request in probe_route.requests] == ["GET"] * 3
+    assert all(
+        request.headers["Authorization"] == "Bearer selected-pat-token"
+        for request in probe_route.requests
+    )

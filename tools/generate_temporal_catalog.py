@@ -296,6 +296,7 @@ def collect_search_attributes() -> tuple[tuple[str, str], tuple[str, str]]:
         ("mm_target_skill", "moonmind/workflows/temporal/service.py"),
         ("mm_stage", "docs/Temporal/WorkflowTypeCatalogAndLifecycle.md §5.2"),
         ("mm_title", "moonmind/workflows/temporal/service.py"),
+        ("mm_provider_profile", "moonmind/workflows/temporal/service.py"),
         (
             "mm_has_dependencies",
             "moonmind/workflows/temporal/workflows/run.py",

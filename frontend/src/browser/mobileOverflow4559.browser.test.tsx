@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { DataTable, type Column } from '../components/tables/DataTable';
 import {
+  PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY,
   ProviderProfilesManager,
   type ProviderProfile,
 } from '../components/settings/ProviderProfilesManager';
@@ -500,6 +501,19 @@ describe('mobile overflow and cramped cards/forms (MoonMind#4559)', () => {
       throw new Error('Unexpected fetch in mobileOverflow4559 provider journey');
     }) as typeof window.fetch;
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Creation choices as the backend projects them (#4001), already loaded.
+    queryClient.setQueryData(PROVIDER_PROFILE_CREATION_CHOICES_QUERY_KEY, {
+      version: 'provider-profile-creation-v1',
+      profile_id_max_length: 128,
+      harnesses: [
+        {
+          runtime_id: 'codex_cli',
+          label: 'Codex CLI',
+          providers: [{ provider_id: 'openai', label: 'OpenAI' }],
+          custom_provider_allowed: false,
+        },
+      ],
+    });
     const { unmount } = render(
       <QueryClientProvider client={queryClient}>
         <div className="dashboard-content">

@@ -1,7 +1,7 @@
 # Execution Tool and Plan Contracts
 
 **Status:** Active contracts and specialized execution paths, with remaining general tool-plan integration tracked separately. This document is not evidence that every declared tool can execute through every product entrypoint.  
-**Updated:** 2026-09-21  
+**Updated:** 2026-10-07
 **Authority:** Executable tool and plan semantics under [AGENTS.md](../../AGENTS.md). Instruction Skills remain owned by the [Skill System](../Steps/SkillSystem.md).
 
 Implementation gaps belong in existing issues, not a second checklist or registry in this document. The [previous full specification](https://github.com/MoonLadderStudios/MoonMind/blob/50262ac4d68f71ce5b73f83a37e2755dfd31ff5b/docs/Workflows/SkillAndPlanContracts.md) remains available for historical examples. Retained payloads keep their original meaning.
@@ -25,7 +25,7 @@ This document covers ToolDefinition, invocation, dependency/data-reference seman
 
 ToolDefinition, ToolResult, ToolFailure, Step, and ToolPolicies retain their existing Python aliases where actual consumers require them. Class aliases are not authored capability names. New tool invocations identify the tool by name; the existing parser owns legacy object spelling and rejected version fields. Do not add a new alias registry or rewrite old serialized records to match new terminology.
 
-**Support boundary:** At the September 21 source baseline, the plan parser recognizes `skill` and `agent_runtime`, and `container.run_job` has dedicated canonical integration contracts. Recognition, registration, or a directly callable Activity does not establish complete normal-plan dispatch. The old document simultaneously described agent-only dispatch and generic tool execution. Those statements must not be used as a blanket completion claim. #973 owns verification and completion of the actual admitted tool path, preserving working specialized routes rather than rebuilding them.
+**Support boundary:** The plan parser recognizes `skill` and `agent_runtime`, and `container.run_job` retains its dedicated canonical integration contracts. The registered `document.discover` path supplies a concrete deterministic operation with typed dependency outputs through normal plan admission and the existing Activity dispatcher. Agent nodes use their own lifecycle rather than requiring a deterministic-tool registry entry. Recognition or registration alone still does not establish complete dispatch for every declared operation; verify the actual producer, dispatcher, and result handoff.
 
 ## 2) Design principles
 
@@ -87,7 +87,7 @@ Retained `selectedSkill`/`selectedSkillArgs` decoding belongs at its existing in
 
 Keep the existing typed status, small outputs, and output-artifact references. A parsed result is not necessarily success. The actual owner distinguishes completed effect, failed operation, uncertain delivery, and pending external work using the providing contract.
 
-Validate outputs before making them available to dependents. Preserve confirmed tool output through later progress, preview, verification, or publication failure. Do not rerun a completed operation to reconstruct an optional report or relabel failed compute as successful because saving worked.
+The registered handler validates its resolved inputs before effects, reusing the existing schema owner where applicable. For example, `document.discover` rejects malformed dependency values as non-retryable `INVALID_INPUT` before local or remote reads. Effect owners retain output validation and reconciliation; adding universal post-effect rejection requires a separate disposition for retained registry contracts. Failed or cancelled ToolResults keep their original diagnostics. Preserve confirmed tool output through later progress, preview, verification, or publication failure. Do not rerun a completed operation to reconstruct an optional report or relabel failed compute as successful because saving worked.
 
 ### 4.5 Error model (ToolFailure)
 

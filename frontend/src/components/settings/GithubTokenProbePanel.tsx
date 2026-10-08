@@ -1,7 +1,17 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
+import type { components } from '../../generated/openapi';
+
 type ProbeMode = 'publish' | 'readiness' | 'full_pr_automation';
-type ReadObservation = 'verified' | 'denied' | 'unavailable' | 'not_checked';
+type ReadObservation = 'verified' | 'denied' | 'not_found' | 'unavailable' | 'not_checked';
+type BranchObservation =
+  | 'verified'
+  | 'missing'
+  | 'empty_repository'
+  | 'not_found'
+  | 'denied'
+  | 'unavailable'
+  | 'not_checked';
 
 interface DiagnosticEntry {
   operation: string;
@@ -18,7 +28,10 @@ interface ProbeResponse {
   defaultBranchAccessible?: boolean | null;
   pullRequestAccessible?: boolean | null;
   remoteDefaultBranch?: string | null;
-  observations?: { read?: ReadObservation; write?: string };
+  testedBranch?: string | null;
+  reportedPermissions?: Record<string, boolean> | null;
+  retryAfterSeconds?: number | null;
+  observations?: { read?: ReadObservation; branch?: BranchObservation; write?: string };
   diagnostics?: DiagnosticEntry[];
   limitations?: string[];
 }
@@ -29,14 +42,7 @@ interface Notice {
 }
 
 /** The selected connection the test runs against; never a global token. */
-export interface ProbeConnection {
-  id: string;
-  displayName: string;
-  policyRevision: number;
-  credentialRevision: number;
-  assignmentCount: number;
-  lifecycle: string;
-}
+export type ProbeConnection = components['schemas']['RepositoryConnectionView'];
 
 export interface GithubTokenProbePanelProps {
   connection: ProbeConnection;
@@ -60,6 +66,10 @@ const READ_SUMMARY: Record<ReadObservation, { text: string; tone: string }> = {
     text: 'Read access denied for this repository',
     tone: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300',
   },
+  not_found: {
+    text: 'Repository not found, or this connection cannot see it. GitHub reports private repositories it does not share as not found; check the name and the connection’s repository access.',
+    tone: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300',
+  },
   unavailable: {
     text: 'GitHub or the credential store was unavailable, so access is unknown. This is not a denial; test again.',
     tone: 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200',
@@ -70,7 +80,15 @@ const READ_SUMMARY: Record<ReadObservation, { text: string; tone: string }> = {
   },
 };
 
-function AccessibilityPill({ label, value }: { label: string; value: boolean | null | undefined }) {
+function AccessibilityPill({
+  label,
+  value,
+  falseLabel = 'not readable',
+}: {
+  label: string;
+  value: boolean | null | undefined;
+  falseLabel?: string;
+}) {
   let toneClass =
     'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300';
   let valueLabel = 'unknown';
@@ -81,7 +99,7 @@ function AccessibilityPill({ label, value }: { label: string; value: boolean | n
   } else if (value === false) {
     toneClass =
       'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300';
-    valueLabel = 'not readable';
+    valueLabel = falseLabel;
   }
   return (
     <div className={`flex items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-sm ${toneClass}`}>
@@ -92,7 +110,27 @@ function AccessibilityPill({ label, value }: { label: string; value: boolean | n
 }
 
 function connectionKey(connection: ProbeConnection): string {
-  return `${connection.id}@${connection.policyRevision}.${connection.credentialRevision}`;
+  // Assignments have their own revisions: changing admission does not rotate
+  // the connection policy or credential. Bind evidence to the complete scope.
+  return JSON.stringify([
+    connection.id,
+    connection.endpoint,
+    connection.policyRevision,
+    connection.credentialRevision,
+    connection.lifecycle,
+    connection.credentialKind,
+    [...connection.allowedOperations].sort(),
+    [...(connection.permittedRepositories ?? [])].sort(),
+    (connection.assignments ?? [])
+      .map((assignment) => JSON.stringify([
+        assignment.repository,
+        assignment.providerRepoId,
+        assignment.revision,
+        assignment.verified,
+        [...assignment.operations].sort(),
+      ]))
+      .sort(),
+  ]);
 }
 
 export function GithubTokenProbePanel({
@@ -175,6 +213,16 @@ export function GithubTokenProbePanel({
   const resultIsCurrent = result !== null && resultTarget === currentTarget;
   const readObservation: ReadObservation = result?.observations?.read ?? 'not_checked';
   const readSummary = READ_SUMMARY[readObservation] ?? READ_SUMMARY.not_checked;
+  const branchObservation = result?.observations?.branch;
+  const branchFalseLabel =
+    branchObservation === 'missing' || branchObservation === 'not_found'
+      ? 'not found'
+      : branchObservation === 'empty_repository'
+        ? 'repository empty'
+        : 'not readable';
+  const reportsPush = result?.reportedPermissions?.push === true;
+  const isApp = connection.credentialKind === 'github_app';
+  const hasPermittedRepositories = (connection.permittedRepositories?.length ?? 0) > 0;
 
   return (
     <section
@@ -184,8 +232,10 @@ export function GithubTokenProbePanel({
       <header className="space-y-1">
         <h4 className="text-base font-semibold text-slate-900 dark:text-white">Test connection</h4>
         <p className="text-sm text-slate-600 dark:text-slate-400">
-          Reads one repository with <strong>{connection.displayName}</strong> only. The test never
-          writes, so it cannot prove publishing works, and it never uses another credential.
+          Reads one repository {isApp ? 'permitted by' : 'assigned to'}{' '}
+          <strong>{connection.displayName}</strong>, with that
+          connection only. The test never writes, so it cannot prove publishing works, and it never
+          uses another credential.
         </p>
       </header>
 
@@ -274,24 +324,48 @@ export function GithubTokenProbePanel({
           <p className={`rounded-2xl border px-3 py-2 text-sm font-medium ${readSummary.tone}`}>
             {readSummary.text}
           </p>
+          {typeof result.retryAfterSeconds === 'number' ? (
+            <p className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200">
+              GitHub is limiting requests for this credential, so the test stopped early. Wait about{' '}
+              {result.retryAfterSeconds} seconds before testing again.
+            </p>
+          ) : null}
+          {branchObservation === 'empty_repository' ? (
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              The repository is empty: it has no branches yet, so branch checks were skipped.
+            </p>
+          ) : null}
+          {(branchObservation === 'missing' || branchObservation === 'not_found') && result.testedBranch ? (
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Branch <code>{result.testedBranch}</code> was not found in this repository.
+            </p>
+          ) : null}
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            Write access not tested: this test only reads. Publishing is confirmed when a workflow
-            pushes.
+            {reportsPush ? 'GitHub reports push permission for this connection, but write' : 'Write'}{' '}
+            access not tested: this test only reads. Publishing is confirmed when a workflow pushes.
           </p>
           {result.remoteDefaultBranch ? (
             <p className="text-sm text-slate-600 dark:text-slate-400">
               Remote default branch: <code>{result.remoteDefaultBranch}</code>
             </p>
           ) : null}
-          {connection.assignmentCount === 0 ? (
+          {(connection.assignments?.length ?? 0) === 0 ? (
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              This connection has no assigned repositories, so workflows cannot use it yet. A
-              readable repository is not assigned until you add it below.
+              This connection has no assigned repositories, so workflows cannot use it yet.{' '}
+              {isApp
+                ? hasPermittedRepositories
+                  ? 'Tests can read its permitted repositories before assignment.'
+                  : 'Tests require a repository permitted by this App connection.'
+                : 'Tests read only assigned repositories; assign one first.'}
             </p>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-3">
             <AccessibilityPill label="Repository" value={result.repositoryAccessible} />
-            <AccessibilityPill label="Branch" value={result.defaultBranchAccessible} />
+            <AccessibilityPill
+              label="Branch"
+              value={result.defaultBranchAccessible}
+              falseLabel={branchFalseLabel}
+            />
             <AccessibilityPill label="Pull requests" value={result.pullRequestAccessible} />
           </div>
 

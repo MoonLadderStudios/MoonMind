@@ -297,8 +297,9 @@ eligibility:
     - every unexpired existing-workspace claim belongs to a closed workflow
     - newest activity (owner close time, record files, path mtime) is older than workspace retention
     - no live container mounts the workspace path or its volume subpath
+    - no unexpired unsaved-work marker records a failed required save
   deleteWith:
-    - the owner record, materialization/readiness markers and claim directory
+    - the owner record, materialization/readiness/unsaved markers and claim directory
 safety:
   skipWhenOwnerOpenOrUnknown: true
   skipWhenOwnerRecordMissing: true
@@ -321,6 +322,19 @@ lives outside the removed records; grant admission rechecks that the workspace
 still exists while holding it, so a late claim cannot reopen deleted content. Owner close
 time, not workspace creation, starts the retention window, so a long-running
 workflow keeps its checkout for the full window after it finishes.
+
+When a required save fails, the generic Omnigent realizer still stops the host
+and releases credentials and provider capacity, but first records an
+unsaved-work marker (`<workspace_id>.unsaved.json`) beside the owner record and
+an identical `saveDeferred` runtime-binding receipt. The workspace is then the
+only copy of the work (`locally_retained_but_unsaved`). The janitor classifies
+it `protected_unsaved`, including in its rescan and under the claims lock,
+until the marker's `retainUntil`. That bound is fixed when the failure is first
+recorded, using `SAVED_WORK_UNSAVED_LOCAL_RETENTION` from the saved-work
+retention owner (#4017), and repeated failures do not extend it. A later
+successful save clears the marker and returns the workspace to ordinary
+retention. If the marker cannot be written, cleanup stays pending instead of
+releasing anything.
 
 ### 6.6 Managed runtime artifact directory
 
@@ -622,7 +636,8 @@ Before deleting a workspace or artifact root, the janitor must verify all of the
    root (for example `agent_workspaces:/work/agent_jobs`) is not per-candidate
    liveness evidence; active MoonMind owner/correlation labels provide that
    evidence.
-9. The newest relevant timestamp is older than both retention and grace windows.
+9. The newest relevant timestamp is older than both retention and grace windows,
+   and no unexpired unsaved-work marker protects a sandbox workspace.
 10. The candidate is still eligible after a second just-before-delete scan.
 11. The per-pass path and byte budgets allow deletion.
 12. Dry-run mode is disabled.
@@ -719,6 +734,7 @@ Each candidate should receive exactly one final classification:
 | `protected_active` | At least one owner is active or has `activeTurnId`. |
 | `protected_recent` | All owners are terminal, but retention/grace has not elapsed. |
 | `protected_shared` | A shared workspace has at least one recent or active owner. |
+| `protected_unsaved` | A required save failed and the bounded unsaved-work retention has not expired. |
 | `eligible` | All deletion gates pass, but dry-run may prevent deletion. |
 | `deleted` | Candidate was renamed and removed. |
 | `skipped_unsafe_path` | Path is outside canonical roots, symlinked, or traversal-like. |
