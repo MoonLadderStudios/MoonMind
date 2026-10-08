@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import os
 import signal
+import sys
 from pathlib import Path
 
 import pytest
@@ -122,6 +123,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and not _item_has_marker(item, "requires_credentials")
         ):
             item.add_marker(pytest.mark.unit_fast)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_handlecrashitem(crashitem, report):
+    """Expose the lost test before xdist recovery can delay its failure summary."""
+    try:
+        print(
+            f"xdist-crash {report.node.gateway.id} {crashitem}",
+            file=sys.__stderr__,
+            flush=True,
+        )
+    except OSError:
+        pass  # Diagnostic output must not replace the original crash failure.
 
 
 @pytest.fixture
