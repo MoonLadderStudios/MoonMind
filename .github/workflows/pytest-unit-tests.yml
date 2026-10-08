@@ -1516,9 +1516,23 @@ jobs:
     - name: Report Playwright environment
       run: npx playwright --version
     - name: Run real-browser style regression suite
+      id: browser-tests
       env:
         MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
+        # Temporary passive capture for #4736; keep the test command unchanged.
+        NODE_OPTIONS: ${{ format('{0} {1}', env.NODE_OPTIONS, matrix.engine == 'firefox' && '--require=./tools/ci/firefox_profile_keyboard_observer.cjs' || '') }}
       run: npm run ui:test:browser
+    - name: Preserve Firefox keyboard failure diagnostics
+      if: failure() && matrix.engine == 'firefox' && steps.browser-tests.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: firefox-profile-keyboard-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          artifacts/firefox-profile-keyboard/*.jsonl
+          frontend/src/browser/__screenshots__/workflowListResponsiveToolbar.browser.test.tsx/*.png
+        if-no-files-found: warn
+        retention-days: 7
 
   test-frontend:
     needs:
