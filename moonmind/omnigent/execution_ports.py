@@ -91,6 +91,7 @@ class OmnigentHostPreparationPort(Protocol):
         artifact_gateway: Any | None = None,
         evidence_request: Any | None = None,
         cleanup_authority_store: Any | None = None,
+        recovery_artifact_gateway: Any | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
