@@ -174,8 +174,9 @@ installed runtime: the planned-host resolver selects the deployment's installed
 Host Class image, as fresh admission does, even while the plan's older image is
 still cached. The generic realizer and the profile-bound Codex realizer
 (`codex-profile-bound@1`, the default Codex route) use that same resolver for an
-on-demand host. A retained static Codex or Claude host profile keeps the plan's
-image. A compatible same-repository image rebuild does not invalidate the
+on-demand host. A retained static Codex or Claude host profile follows the
+installed shared host image that fresh static launches read, so the new
+attempt does not return the recreated static service to its old image. A compatible same-repository image rebuild does not invalidate the
 plan. A different image family is never adopted, so the attempt then keeps the
 plan's image. An explicitly requested Host Class keeps the plan's image, and an
 operator image pin is the installed image. The old attempt's records keep the
