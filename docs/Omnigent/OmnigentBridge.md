@@ -3,7 +3,7 @@
 Status: Proposed design  
 Document Class: System / Feature Design View
 Owners: MoonMind Platform  
-Last updated: 2026-10-04
+Last updated: 2026-10-07
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -721,20 +721,37 @@ runtime.omnigent.sse.raw.jsonl
 ```
 
 Raw and normalized journals default to seven-day troubleshooting retention.
-During execution, the bridge commits both complete accumulated journal refs
-before reclaiming the preceding numbered snapshots. It refuses an incomplete
-replacement or a shorter prefix that would discard verified progress. Current
-canonical refs, operator pins and live artifact use claims remain protected;
-the current pair of a non-terminal bridge session survives ordinary expiry.
-The artifact service records recoverable deletion intents for failed physical
-cleanup, which the existing hourly lifecycle sweep reconciles. Final journals
-retain the full event history without keeping a separate growing copy per event.
-Proxy and retained embedded journal writers share this same reclamation owner.
-Bridge event-index payload locators advance with the committed complete journal
-pair, including when an older snapshot remains pinned or in use. Delayed event
-appends use the current complete prefix containing their payload. Append-only
-control-plane observations preserve their original artifact references and
-protect those exact snapshots from prefix reclamation.
+During execution the bridge persists them in bounded chunks, so durable work per
+event does not grow with the length of the turn. A flush rewrites only the open
+chunk, at most 256 normalized events or about 4 MiB, named by the chunk's first
+normalized event and its length. Each chunk version commits before the index
+rows that locate events in it: a crash can leave an unindexed journal tail, but
+never an index row whose evidence does not exist. The stream loop commits every
+event before it waits for the provider or acts on a turn-ending or approval
+status. Only while further provider frames are already queued may up to 32
+events share one commit, which bounds loss on a crash while letting a fast
+stream amortize fixed artifact and database overhead instead of falling behind.
+
+Within a chunk, the bridge commits the longer version before reclaiming the
+preceding one. It refuses an incomplete replacement, a shorter version, or a
+different chunk that would drop verified progress. Starting the next chunk
+retains the completed pair unchanged in the bridge session row's chunk history,
+and the row's current refs name the open chunk. Activity retry restores the
+chunk history followed by the current pair, locates each restored event in its
+chunk, and continues in a new chunk. The terminal capture bundle publishes the
+complete journals, which then replace the chunk history as the canonical refs.
+
+Current canonical refs, the chunk history of a non-terminal bridge session,
+operator pins and live artifact use claims remain protected; a non-terminal
+session's journal survives ordinary expiry. The artifact service records
+recoverable deletion intents for failed physical cleanup, which the existing
+hourly lifecycle sweep reconciles. Proxy and retained embedded journal writers
+share this same reclamation owner; the retired embedded writer still publishes
+accumulated prefixes. Bridge event-index payload locators advance with the
+committed version of their chunk, including when an older version remains
+pinned or in use. Delayed event appends use the current version of their chunk.
+Append-only control-plane observations preserve their original artifact
+references and protect those exact versions from reclamation.
 
 ### 10.2 Normalized event shape
 
