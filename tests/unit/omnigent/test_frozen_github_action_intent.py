@@ -431,6 +431,40 @@ def test_equivalent_repository_projections_preserve_source(workspace, parameter)
 
 
 @pytest.mark.asyncio
+async def test_generic_credential_owner_rejects_conflicting_repositories_before_snapshot():
+    artifacts = SimpleNamespace(
+        read_repository_access_snapshot=AsyncMock(),
+        read_bytes=AsyncMock(),
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            credentialBindings={},
+            resolvedTools={
+                "repositoryAccess": {
+                    "collaboration": {
+                        "artifactRef": "artifact:test",
+                        "snapshotRef": "repository-access-snapshot:sha256:" + "0" * 64,
+                    }
+                }
+            },
+        )
+    )
+    service = OmnigentGithubCredentialService(None, artifact_gateway=artifacts)
+
+    with pytest.raises(WorkspaceIntentCompilationError) as excinfo:
+        await service.admitted_repository_identity(
+            plan=plan,
+            request=_request("owner/repo-a", repository="owner/repo-b"),
+            role="collaboration",
+            operation="read",
+        )
+
+    assert excinfo.value.code == "repository_intent_conflict"
+    artifacts.read_repository_access_snapshot.assert_not_awaited()
+    artifacts.read_bytes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_profile_conflicting_repositories_fail_before_any_host_or_token(
     monkeypatch,
 ):

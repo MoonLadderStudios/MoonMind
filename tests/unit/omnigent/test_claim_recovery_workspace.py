@@ -122,6 +122,7 @@ async def capture_saved_workspace(
         )
     )
     payload = request.model_dump(by_alias=True, mode="json")
+    payload["parameters"]["repository"] = "example/repo"
     payload["workspaceSpec"] = {
         "repository": "example/repo",
         "startingBranch": "main",

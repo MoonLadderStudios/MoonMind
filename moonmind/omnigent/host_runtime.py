@@ -119,9 +119,6 @@ class GenericOmnigentHostRuntime:
         Resumed hosts retain their projection, so this is also a delivery
         precondition rather than only a materialization check.
         """
-        from moonmind.omnigent.workspace_intent import authored_repository_source
-
-        authored_repository_source(request)
         if plan.payload.resolvedTools.get("repositoryAccess", {}).get("collaboration"):
             await self._github_credentials.admitted_repository_identity(
                 plan=plan,
