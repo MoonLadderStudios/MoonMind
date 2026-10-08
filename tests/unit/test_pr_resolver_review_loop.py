@@ -1270,15 +1270,19 @@ def test_missing_head_timestamp_cannot_bind_historical_comments(
 
 
 @pytest.mark.parametrize("new_result", ["pending", "failure", "complete"])
+@pytest.mark.parametrize("initial_result", ["complete", "failure"])
 def test_refreshed_inventory_rebinds_review_evidence(
-    snapshot_module, monkeypatch, tmp_path, new_result
+    snapshot_module, monkeypatch, tmp_path, new_result, initial_result
 ):
     main = snapshot_module["main"]
     scope = main.__globals__
     first = {**_request_comment(), "id": 100}
     second = {**_request_comment("2026-08-24T22:22:00Z"), "id": 102}
     first_clean = _codex_reply(
-        "Codex Review: Didn't find any major issues. 🚀", comment_id=101
+        CODEX_USAGE_LIMIT_REPLY
+        if initial_result == "failure"
+        else "Codex Review: Didn't find any major issues. \U0001f680",
+        comment_id=101,
     )
     second_reply = _codex_reply(
         (
