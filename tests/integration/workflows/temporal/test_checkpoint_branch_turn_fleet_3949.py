@@ -260,6 +260,7 @@ async def _run_fleet3949(
     tmp_path,
     *,
     cancel: bool = False,
+    cancel_at_activity_entry: bool = False,
     artifacts_slots: int | None = None,
 ):
     """Run one turn against the production artifacts-fleet registration.
@@ -278,8 +279,17 @@ async def _run_fleet3949(
     engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     FLEET3949_REFS.update(refs)
     queue = f"checkpoint-branch-fleet3949-{_uuid4()}"
+    # The time-skipping server can reject cancellation racing activity
+    # completion with ACTIVITY_UNKNOWN (temporalio/sdk-java#2391). Keep that
+    # activity-entry boundary on the cached CLI server; other journeys retain
+    # the established time-skipping environment and post-handoff observation.
+    start_environment = (
+        WorkflowEnvironment.start_local
+        if cancel_at_activity_entry
+        else WorkflowEnvironment.start_time_skipping
+    )
     try:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with await start_environment() as env:
             async with AsyncExitStack() as stack:
                 artifact_session = await stack.enter_async_context(sessions())
                 artifact_service = TemporalArtifactService(
@@ -340,7 +350,10 @@ async def _run_fleet3949(
                     assert any(
                         name == "mark_running" for name, *_rest in FLEET3949_CALLS
                     )
-                    if FLEET3949_HOLD_MARK_RUNNING is None:
+                    if (
+                        not cancel_at_activity_entry
+                        and FLEET3949_HOLD_MARK_RUNNING is None
+                    ):
                         # Cancel the parent after its real persistence handoff.
                         # Racing the test server's
                         # activity completion can reject the cancel command
@@ -478,11 +491,18 @@ async def test_new_failure_reaches_artifacts_fleet_with_real_handlers_3949(
     ).replay_workflow(history)
 
 
+@pytest.mark.parametrize(
+    "cancel_at_activity_entry", [False, True], ids=["post-handoff", "activity-entry"]
+)
 async def test_new_cancellation_reaches_artifacts_fleet_with_real_handlers_3949(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, cancel_at_activity_entry: bool
 ) -> None:
     result, history, fleet_calls, sessions = await _run_fleet3949(
-        "canceled", monkeypatch, tmp_path, cancel=True
+        "canceled",
+        monkeypatch,
+        tmp_path,
+        cancel=True,
+        cancel_at_activity_entry=cancel_at_activity_entry,
     )
 
     assert result is None
@@ -496,6 +516,11 @@ async def test_new_cancellation_reaches_artifacts_fleet_with_real_handlers_3949(
         for _name, task_queue, _attempt, _value in fleet_calls
     )
     _assert_fleet3949_operation_identity(history)
+    assert any(
+        event.HasField("workflow_execution_cancel_requested_event_attributes")
+        for event in history.events
+    )
+    assert history.events[-1].HasField("workflow_execution_canceled_event_attributes")
     async with sessions() as session:
         turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
         assert turn is not None
