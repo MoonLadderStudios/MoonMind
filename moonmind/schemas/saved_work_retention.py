@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 SAVED_WORK_RETENTION_CONTRACT_VERSION = "saved-work-retention/v1"
@@ -67,6 +68,12 @@ SAVED_WORK_OPERATION_KINDS: tuple[str, ...] = (
     "publication",
     "download",
 )
+
+# A required save that failed leaves its only copy on the local workspace
+# volume (``locally_retained_but_unsaved``). Cleanup keeps that copy for this
+# explicit, non-extendable window after the failure is first recorded so
+# finalization can retry the save; it is never retained without limit.
+SAVED_WORK_UNSAVED_LOCAL_RETENTION = timedelta(days=30)
 
 # Default per-scope quotas. Scopes are admission-time owner handles
 # (user/execution principals), never source credentials.

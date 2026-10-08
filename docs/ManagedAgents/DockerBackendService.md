@@ -1057,7 +1057,17 @@ with migration guidance.
 An authenticated deployment must not expose a shared or deployment-wide token
 to managed sessions. The token is signed by the trusted session launcher,
 expires with the bounded session lifetime, and is accepted only by
-`/mcp/container/tools/call`. Its claims bind the owner, runtime, agent run, and
+`/mcp/container/tools/call`. A generic Omnigent host receives it as a file in
+its lease-owned control volume, minted for the launch policy's
+`timeoutSeconds`. Its session can outlive that timeout, because the session
+runs until the execute activity deadline while it makes progress. So while the
+session is driven, the realizer re-mints the same scope at half the lifetime
+and atomically replaces the file. This happens independently of the
+host-lease heartbeats, and each Docker command is bounded. A resumed host
+renews before its session is driven. A failed renewal is logged and retried
+after one heartbeat interval without ending the session. The CLI re-reads the
+file for every request, so a job that runs across a renewal polls with the new
+token. When the session ends, the last token lapses within one lifetime. Its claims bind the owner, runtime, agent run, and
 session; submissions whose logical workspace or correlation differs from those
 claims fail before job creation. It is transported over the API's TLS/loopback
 transport, never placed in URLs, and never accepted as a MoonMind browser

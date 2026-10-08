@@ -525,6 +525,15 @@ The normal stop owner still reconciles and verifies removal before capacity
 releases. This proves consumer absence, not successful launch or egress
 conformance; an existing attachment or
 recorded attachment identity still requires its durable cleanup authority.
+For retained hosts, the cleanup evidence payload and protected launch reference
+remain paired through a pending-to-attested authority upgrade. If a bind reports
+failure after a possible commit, one bounded read through the existing store
+confirms whether the same fully verified launch became attested. Cleanup adopts
+that stored pair only when its complete immutable identity and attempted launch
+reference match. Unavailable or conflicting readback retains the last confirmed
+pair for existing reconciliation, and the original bind error remains observable.
+A new cancellation during readback propagates through the existing cancellation
+path with the last confirmed pair; it is not replaced by the earlier bind error.
 The persisted workflow owner and lease purpose survive host-model projection.
 A binding saved before host attachment can be completed only when the current
 execution scope has the same provider lease, profile, and credential generation

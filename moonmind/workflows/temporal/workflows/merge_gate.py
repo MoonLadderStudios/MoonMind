@@ -55,6 +55,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 FINISH_MODE_MERGE = "merge"
 FINISH_MODE_FIX_ONLY = "fix_only"
+FINISH_MODE_REVIEW_ONLY = "review_only"
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
@@ -100,6 +101,7 @@ def _blocker_from_mapping(
             "summary": sanitize_blocker_summary(payload.get("summary")),
             "retryable": bool(payload.get("retryable", True)),
             "source": payload.get("source"),
+            "providerFailure": payload.get("providerFailure"),
         }
     )
 
@@ -332,6 +334,8 @@ def build_resolver_run_request(
     finish_mode: str = FINISH_MODE_MERGE,
     legacy_capabilities: bool = False,
 ) -> dict[str, Any]:
+    if str(finish_mode or "").strip() == FINISH_MODE_REVIEW_ONLY:
+        raise ValueError("review_only cannot launch a publishing resolver")
     pr = (
         pull_request
         if isinstance(pull_request, PullRequestRefModel)
@@ -408,6 +412,13 @@ def build_resolver_run_request(
     if review_loop_enabled:
         args["reviewProvider"] = parsed_review_loop.provider
         args["requireFreshReview"] = True
+    else:
+        # The gate owns review effects and rejects a child's review request
+        # when it runs no loop. Say so explicitly: without these inputs the
+        # child infers a review requirement from repository or task prose and
+        # waits on every pass for a review nobody will request.
+        args["reviewProvider"] = "none"
+        args["requireFreshReview"] = False
     title = f"Resolve PR #{pr.number}"
     runtime_payload: dict[str, Any] = {"mode": target_runtime}
     if provider_profile:
@@ -450,7 +461,13 @@ def build_resolver_run_request(
                     "--require-fresh-review to every pr_resolve_finalize.py "
                     "invocation, and never post the review request yourself."
                     if review_loop_enabled
-                    else ""
+                    else " This merge automation runs no automated review loop, "
+                    "and its gate owns review requirements: pass --review-provider "
+                    "none and --no-require-fresh-review to every "
+                    "pr_resolve_finalize.py and pr_resolve_orchestrate.py "
+                    "invocation, and do not request or wait for an automated "
+                    "review. Repository or task guidance about an owning review "
+                    "refers to this gate's policy."
                 )
                 + (
                     " Return external CI/provider waits to this durable parent: "

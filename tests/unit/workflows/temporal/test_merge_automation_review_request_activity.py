@@ -267,3 +267,31 @@ async def test_distinct_heads_get_distinct_request_identities() -> None:
         head_sha=other_head,
         provider="codex",
     )
+
+
+@pytest.mark.parametrize("status", ["expired", "reconciled"])
+async def test_review_request_deadline_preserves_ledger_outcome(
+    ledger_session, monkeypatch, status
+):
+    from moonmind.workflows.temporal import activity_runtime
+
+    @asynccontextmanager
+    async def token_context(*_args, **_kwargs):
+        yield "selected-token"
+
+    monkeypatch.setattr(activity_runtime, "_merge_automation_github_token", token_context)
+    expiry = "2026-08-24T22:16:00Z"
+    fake = _install_fake_github(monkeypatch, [_outcome(
+        status,
+        requestCommentId=None if status == "expired" else 98765,
+        requestedAt=None if status == "expired" else "2026-08-24T22:15:00Z",
+    )])
+    payload = _payload(finishMode="review_only", expiresAt=expiry)
+    result = await TemporalIntegrationActivities().merge_automation_request_automated_review(payload)
+    assert fake.calls[0]["expires_at"] == expiry
+    assert result["status"] == status
+    assert result["retryable"] is False
+    async with ledger_session() as session:
+        record = await session.get(MergeAutomationReviewRequestRecord, payload["requestKey"])
+        assert record.status == ("failed" if status == "expired" else "requested")
+        assert record.request_comment_id == (None if status == "expired" else 98765)

@@ -194,7 +194,7 @@ class WorkerSpec:
     immutable_release_identity: bool
 
     def readiness_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ready": True,
             "fleet": self.fleet,
             "buildId": self.build_id,
@@ -218,6 +218,12 @@ class WorkerSpec:
                 "digest": RESOLVER_CORE_DIGEST,
             },
         }
+        if self.fleet == DEPLOYMENT_FLEET and "mm.tool.execute" in self.activity_types:
+            # This executable deployment adapter invokes the existing host
+            # bootstrap before submission. Older pinned workers advertise no
+            # such method, even when their generic tool activity is healthy.
+            payload["controllerBootstrapCapabilities"] = ["active-journal-transition"]
+        return payload
 
 
 def _workflow_type(workflow_class: type[Any]) -> str:
@@ -332,8 +338,9 @@ def normalize_worker_fleet(fleet: str) -> str:
 def require_fleet_capability_allowed(fleet: str, capability: str) -> str:
     """Deny one capability on one fleet, failing closed.
 
-    This is the executed process-boundary check behind
-    ``_FLEET_FORBIDDEN_CAPABILITIES``: the workflow fleet refuses the
+    This is the worker-bootstrap binding check behind
+    ``_FLEET_FORBIDDEN_CAPABILITIES`` (in-process; container rights come
+    from the compose service definition): the workflow fleet refuses the
     ``artifacts`` capability through the catalog binding path, so new
     artifact writes cannot be bound there. The three checkpoint persistence
     handlers stay reachable on the workflow fleet only through the explicit

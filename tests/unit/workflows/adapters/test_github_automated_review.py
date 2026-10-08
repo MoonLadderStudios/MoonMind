@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -47,14 +48,30 @@ def _patch_client(mock_client):
     )
 
 
+def _review_clock(monkeypatch, initial):
+    from moonmind.workflows.adapters import github_service
+
+    current = [datetime.fromisoformat(initial)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return current[0].astimezone(tz or timezone.utc)
+
+    monkeypatch.setattr(github_service, "datetime", Clock)
+    return current
+
+
 # ---------------------------------------------------------------------------
 # request_automated_review
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_request_posts_exactly_the_configured_command(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_posts_exactly_the_configured_command(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:15:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -80,6 +97,7 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "requested"
@@ -91,10 +109,12 @@ async def test_request_posts_exactly_the_configured_command(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkeypatch, expires_at):
     """A lost response is recovered by adopting the comment it created."""
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -120,6 +140,7 @@ async def test_request_reconciles_ambiguous_post_instead_of_posting_twice(monkey
             expected_head_sha=_HEAD,
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
+            expires_at=expires_at,
         )
 
     assert result.status == "reconciled"
@@ -219,8 +240,10 @@ async def test_request_refuses_when_pull_request_is_closed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_adopts_previously_recorded_comment(monkeypatch):
+@pytest.mark.parametrize("expires_at", [None, "2026-08-24T22:16:00Z"])
+async def test_request_adopts_previously_recorded_comment(monkeypatch, expires_at):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    _review_clock(monkeypatch, "2026-08-24T22:17:00+00:00")
     mock_client = _client(
         get_responses=[
             _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
@@ -244,11 +267,64 @@ async def test_request_adopts_previously_recorded_comment(monkeypatch):
             provider="codex",
             attempt_started_at="2026-08-24T22:14:00Z",
             recorded_comment_id=777,
+            expires_at=expires_at,
         )
 
     assert result.status == "recorded"
     assert result.request_comment_id == 777
     assert mock_client.post.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expiry_case", ["already_expired", "during_read", "on_retry"])
+async def test_request_deadline_prevents_a_new_post(monkeypatch, expiry_case):
+    current = _review_clock(
+        monkeypatch,
+        "2026-08-24T22:17:00+00:00"
+        if expiry_case == "already_expired"
+        else "2026-08-24T22:15:00+00:00",
+    )
+    responses = [
+        _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
+        _get(200, []),
+    ]
+    if expiry_case == "on_retry":
+        responses.insert(0, httpx.ReadTimeout("first attempt could not read PR"))
+    client = _client(get_responses=[])
+
+    async def get(*_args, **_kwargs):
+        response = responses.pop(0)
+        current[0] = datetime.fromisoformat("2026-08-24T22:17:00+00:00")
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client.get.side_effect = get
+    request = {
+        "repo": _REPO, "pr_number": 350, "expected_head_sha": _HEAD,
+        "provider": "codex", "attempt_started_at": "2026-08-24T22:14:00Z",
+        "github_token": "selected-token", "expires_at": "2026-08-24T22:16:00Z",
+    }
+    with _patch_client(client):
+        service = GitHubService()
+        if expiry_case == "on_retry":
+            first = await service.request_automated_review(**request)
+            assert first.status == "unavailable" and first.retryable is True
+        result = await service.request_automated_review(**request)
+    assert result.status == "expired"
+    assert result.retryable is False
+    assert result.request_comment_id is None
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_at", ["", "not-a-timestamp"])
+async def test_request_rejects_invalid_deadline_without_posting(expires_at):
+    with pytest.raises(ValueError, match="expires_at must be an ISO timestamp"):
+        await GitHubService().request_automated_review(
+            repo=_REPO, pr_number=350, expected_head_sha=_HEAD, provider="codex",
+            attempt_started_at="2026-08-24T22:14:00Z", expires_at=expires_at,
+        )
 
 
 @pytest.mark.asyncio
@@ -327,8 +403,6 @@ async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
         get_responses=[
             *_readiness_prefix(),
             _get(200, []),
-            _get(200, []),
-            _get(200, []),
             _get(200, [], headers={"Link": f'<{page2}>; rel="next"'}),
             _get(
                 200,
@@ -341,6 +415,22 @@ async def test_requested_review_accepts_paginated_clean_comment(monkeypatch):
                     }
                 ],
             ),
+            _get(200, []),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "**Codex Review:** Didn't find any major issues. 🚀",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -493,6 +583,10 @@ async def test_requested_review_accepts_review_for_requested_commit(monkeypatch)
                     }
                 ],
             ),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -519,8 +613,7 @@ async def test_requested_review_follows_pagination_for_requested_commit(monkeypa
 
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
     second_page_url = (
-        f"https://api.github.com/repos/{_REPO}/pulls/350/reviews"
-        "?page=2&per_page=100"
+        f"https://api.github.com/repos/{_REPO}/pulls/350/reviews" "?page=2&per_page=100"
     )
     first_page = _get(
         200,
@@ -551,6 +644,10 @@ async def test_requested_review_follows_pagination_for_requested_commit(monkeypa
                     }
                 ],
             ),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -633,8 +730,6 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
         get_responses=[
             *_readiness_prefix(),
             _get(200, []),
-            _get(200, []),
-            _get(200, []),
             first_page,
             _get(
                 200,
@@ -653,6 +748,28 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
                     }
                 ],
             ),
+            _get(200, []),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            first_page,
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": (
+                            "You have reached your Codex usage limits for code "
+                            "reviews."
+                        ),
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {
+                            "login": "chatgpt-codex-connector[bot]",
+                            "type": "Bot",
+                        },
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -673,11 +790,68 @@ async def test_requested_review_surfaces_paginated_provider_usage_failure(monkey
     ]
     assert result.blockers[0]["retryable"] is False
     assert result.blockers[0]["source"] == "codex"
-    assert result.blockers[0]["providerFailure"]["providerErrorClass"] == (
-        "rate_limit"
-    )
+    assert result.blockers[0]["providerFailure"]["providerErrorClass"] == ("rate_limit")
     assert "Codex usage limits" not in result.blockers[0]["summary"]
-    assert mock_client.get.await_args_list[-1].args == (second_page_url,)
+    assert any(
+        call.args == (second_page_url,) for call in mock_client.get.await_args_list
+    )
+
+
+# The provider's status comment: short SHAs and timestamps are not HTTP status
+# codes.
+_CODEX_STATUS_SUMMARY = (
+    "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+    "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+    "| 📝 **Code Review** | ⏳ **Running** | `4290abc` | Manual request |"
+)
+# A task reply that merely discusses failures it fixed.
+_CODEX_TASK_REPLY = (
+    "### Summary\n* Return 403 Forbidden when the token is unauthorized and "
+    "retry later on the API rate limit."
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [_CODEX_STATUS_SUMMARY, _CODEX_TASK_REPLY],
+    ids=["status_summary", "task_reply"],
+)
+async def test_requested_review_ignores_provider_chatter(monkeypatch, body):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(
+                200,
+                [
+                    {
+                        "id": 99,
+                        "body": body,
+                        "created_at": "2026-08-24T22:20:01Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(200, []),
+            _get(200, []),
+        ]
+    )
+
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is False
+    assert "automated_review_request_failed" not in [
+        blocker["kind"] for blocker in result.blockers
+    ]
 
 
 @pytest.mark.asyncio
@@ -686,6 +860,7 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
     mock_client = _client(
         get_responses=[
             *_readiness_prefix(),
+            _get(200, []),
             _get(200, []),
             _get(
                 200,
@@ -698,6 +873,9 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
                     }
                 ],
             ),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, []),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
 
@@ -714,6 +892,82 @@ async def test_requested_review_accepts_reaction_on_request_comment(monkeypatch)
     assert result.automated_review_complete is True
     assert result.automated_review_completion_kind == "reaction"
     assert result.automated_review_completion_id == 55
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reaction_path", ["issues/comments/98765/reactions", "issues/350/reactions"]
+)
+async def test_app_review_permissions_allow_request_bound_reaction_completion(
+    reaction_path,
+):
+    from moonmind.auth.github_app import build_installation_token_request
+
+    payload = build_installation_token_request(
+        operations=["read", "review_request"], repositories=[_REPO]
+    )
+    permissions = payload["permissions"]
+    seen_reaction_paths = []
+    reaction = {
+        "id": 55,
+        "content": "+1",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.headers["Authorization"] == "Bearer synthetic-app-token"
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path in {"pulls/350/reviews", "issues/350/comments"}:
+            body = []
+        elif path in {"issues/comments/98765/reactions", "issues/350/reactions"}:
+            seen_reaction_paths.append(path)
+            # GitHub's two issue-reaction reads require Issues read, unlike
+            # issue-comment reads that also accept Pull requests read.
+            if permissions.get("issues") not in {"read", "write"}:
+                return httpx.Response(
+                    403,
+                    json={"message": "Resource not accessible by integration"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            body = [reaction] if path == reaction_path else []
+        else:
+            raise AssertionError(f"Unexpected GitHub endpoint: {path}")
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-app-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "reaction"
+    assert result.automated_review_completion_id == 55
+    assert result.ready is True
+    assert seen_reaction_paths == (
+        ["issues/comments/98765/reactions"]
+        if reaction_path == "issues/comments/98765/reactions"
+        else ["issues/comments/98765/reactions", "issues/350/reactions"]
+    )
+    assert payload == {
+        "repositories": ["MoonMind"],
+        "permissions": {
+            "contents": "read",
+            "metadata": "read",
+            "pull_requests": "write",
+            "issues": "read",
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -816,10 +1070,14 @@ async def test_requested_review_uses_latest_comment_across_pages(
         get_responses=[
             *_readiness_prefix(),
             _get(200, []),
-            _get(200, []),
-            _get(200, []),
             _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
             _get(200, [last]),
+            _get(200, []),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [first], headers={"Link": f'<{page2}>; rel="next"'}),
+            _get(200, [last]),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
         ]
     )
     with _patch_client(mock_client):
@@ -832,3 +1090,749 @@ async def test_requested_review_uses_latest_comment_across_pages(
         )
     assert (result.automated_review_complete is True) is latest_clean
     assert result.ready is latest_clean
+    assert [b["kind"] for b in result.blockers] == (
+        [] if latest_clean else ["automated_review_request_failed"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "alternative",
+    [
+        "none",
+        "old_comment",
+        "other_provider_comment",
+        "different_commit_comment",
+        "malformed_comment_timestamp",
+        "stale_pr_reaction",
+        "other_provider_reaction",
+        "malformed_pr_reaction_timestamp",
+    ],
+)
+async def test_requested_review_reaction_denial_is_terminal_without_fresh_evidence(
+    monkeypatch, alternative
+):
+    from moonmind.workflows.temporal.workflows.merge_gate import (
+        TERMINAL_BLOCKER_KINDS,
+        classify_readiness,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    comment = {
+        "id": 56,
+        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    reaction = {
+        "id": 55,
+        "content": "+1",
+        "created_at": "2026-08-24T22:20:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    comments = []
+    reactions = []
+    if alternative.endswith("comment") or alternative == "malformed_comment_timestamp":
+        comments = [comment]
+        if alternative == "old_comment":
+            comment["created_at"] = "2026-08-24T22:14:00Z"
+        elif alternative == "other_provider_comment":
+            comment["user"] = {"login": "unrelated-reviewer[bot]"}
+        elif alternative == "different_commit_comment":
+            comment["commit_id"] = _OLD_HEAD
+        else:
+            comment["created_at"] = "not-a-timestamp"
+    elif alternative != "none":
+        reactions = [reaction]
+        if alternative == "stale_pr_reaction":
+            reaction["created_at"] = "2026-08-24T22:14:00Z"
+        elif alternative == "other_provider_reaction":
+            reaction["user"] = {"login": "unrelated-reviewer[bot]"}
+        else:
+            reaction["created_at"] = "not-a-timestamp"
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, comments),
+            _get(
+                403,
+                {"message": "Resource not accessible; token=fixture-secret-value"},
+                headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+            ),
+            _get(200, reactions),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is None
+    assert result.ready is False
+    assert result.automated_review_completion_kind is None
+    assert [blocker["kind"] for blocker in result.blockers] == ["policy_denied"]
+    blocker = result.blockers[0]
+    assert blocker["retryable"] is False
+    assert blocker["source"] == "github"
+    assert blocker["evidenceSource"] == "issue_reactions"
+    assert blocker["missingPermission"] == "Issues: read"
+    assert "fixture-secret-value" not in blocker["summary"]
+    assert "issues=read" in blocker["summary"]
+    evidence = classify_readiness(
+        result.model_dump(by_alias=True), tracked_head_sha=_HEAD
+    )
+    assert evidence.ready is False
+    assert [blocker.kind for blocker in evidence.blockers] == ["policy_denied"]
+    assert evidence.blockers[0].kind in TERMINAL_BLOCKER_KINDS
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_requested_review_fresh_clean_comment_completes_despite_reaction_denial(
+    monkeypatch,
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(403, {"message": "Resource not accessible by integration"}),
+            _get(403, {"message": "Resource not accessible by integration"}),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(
+                200,
+                [
+                    {
+                        "id": 56,
+                        "body": "Codex Review: Didn't find any major issues. \U0001f680",
+                        "created_at": "2026-08-24T22:20:00Z",
+                        "user": {"login": "chatgpt-codex-connector[bot]"},
+                    }
+                ],
+            ),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": _HEAD}}),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == "issue_comment"
+    assert result.automated_review_completion_id == 56
+    assert result.ready is True
+    assert result.blockers == []
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "headers", "message"),
+    [
+        (403, {"x-ratelimit-remaining": "0"}, "API rate limit exceeded"),
+        (403, {}, "API rate limit exceeded"),
+        (403, {"retry-after": "60"}, "Secondary rate limit"),
+        (429, {}, "Too many requests"),
+        (401, {}, "Bad credentials"),
+        (503, {}, "Service unavailable"),
+    ],
+)
+async def test_requested_review_nonpermission_reaction_errors_remain_observable(
+    monkeypatch, status, headers, message
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, []),
+            _get(status, {"message": message}, headers=headers),
+            _get(200, []),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert [blocker["kind"] for blocker in result.blockers] == [
+        "policy_denied" if status == 401 else "external_state_unavailable"
+    ]
+    assert result.blockers[0]["retryable"] is (status != 401)
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_second", [True, False])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "none",
+        "failure",
+        "clean",
+        "review",
+        "reaction",
+        "old_review",
+        "old_reaction",
+        "old_clean",
+        "old_pr_reaction",
+    ],
+)
+async def test_new_request_supersedes_old_refusal_and_completion(same_second, reply):
+    first_time = _ACTIVE_REQUEST["requestedAt"]
+    later_time = first_time if same_second else "2026-08-24T22:20:00Z"
+    old_failure = {
+        "id": 98766,
+        "body": "You have reached your Codex usage limits for code reviews.",
+        "created_at": first_time if same_second else "2026-08-24T22:16:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    new_request = {"id": 98767, "body": "@codex review", "created_at": later_time}
+    comments = [new_request]
+    if reply == "old_clean":
+        old_failure["body"] = "Codex Review: Didn't find any major issues. 🚀"
+    if reply in {"clean", "failure"}:
+        comments.append(
+            {
+                **old_failure,
+                "id": 98768,
+                "created_at": later_time,
+                "body": (
+                    "Codex Review: Didn't find any major issues. 🚀"
+                    if reply == "clean"
+                    else old_failure["body"]
+                ),
+            }
+        )
+    requests = []
+
+    def respond(request):
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        requests.append(path)
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path == "pulls/350/reviews":
+            body = (
+                [
+                    {
+                        "id": 777,
+                        "state": "COMMENTED",
+                        "commit_id": _HEAD,
+                        "submitted_at": (
+                            old_failure["created_at"]
+                            if reply == "old_review"
+                            else "2026-08-24T22:21:00Z"
+                        ),
+                        "user": old_failure["user"],
+                    }
+                ]
+                if reply in {"review", "old_review"}
+                else []
+            )
+        elif path == "issues/350/comments":
+            if request.url.params.get("page") != "2":
+                return httpx.Response(
+                    200,
+                    json=[old_failure],
+                    headers={
+                        "Link": f'<https://api.github.com/repos/{_REPO}/issues/350/comments?page=2>; rel="next"'
+                    },
+                )
+            body = comments
+        elif path == "issues/comments/98767/reactions":
+            body = (
+                [{"id": 778, "content": "+1", "user": old_failure["user"]}]
+                if reply == "reaction"
+                else []
+            )
+        elif path in {"issues/comments/98765/reactions", "issues/350/reactions"}:
+            body = (
+                [
+                    {
+                        "id": 999999,
+                        "content": "+1",
+                        "created_at": old_failure["created_at"],
+                        "user": old_failure["user"],
+                    }
+                ]
+                if (
+                    reply == "old_reaction"
+                    and path == "issues/comments/98765/reactions"
+                )
+                or (reply == "old_pr_reaction" and path == "issues/350/reactions")
+                else []
+            )
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    expected_complete = (
+        None if reply == "failure" else reply in {"clean", "review", "reaction"}
+    )
+    assert result.automated_review_complete is expected_complete
+    assert result.automated_review_request_comment_id == 98767
+    assert result.automated_review_requested_at == later_time
+    assert result.ready is (expected_complete is True)
+    if expected_complete is False:
+        assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
+    if reply == "reaction":
+        assert "issues/comments/98767/reactions" in requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        "finding",
+        "quote",
+        "indented",
+        "other_provider",
+        "old_head",
+        "earlier_id",
+        "missing_id",
+    ],
+)
+async def test_same_second_runtime_reply_keeps_identity_head_and_body_guards(change):
+    reply = {
+        "id": 98766,
+        "body": "You have reached your Codex usage limits for code reviews.",
+        "created_at": _ACTIVE_REQUEST["requestedAt"],
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    if change == "finding":
+        reply["body"] = "[P1] Preserve rate limit metadata"
+    elif change == "quote":
+        reply["body"] = "> " + reply["body"]
+    elif change == "indented":
+        reply["body"] = "    " + reply["body"]
+    elif change == "other_provider":
+        reply["user"] = {"login": "codex[bot]"}
+    elif change == "old_head":
+        reply["commit_id"] = _OLD_HEAD
+    elif change == "earlier_id":
+        reply["id"] = 98764
+    else:
+        reply["id"] = None
+    mock_client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(200, [reply]),
+            _get(200, []),
+            _get(200, []),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.automated_review_complete is False
+    assert result.ready is False
+    assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["malformed", "http_error", "partial_page", "denied"])
+async def test_unavailable_request_inventory_cannot_accept_an_older_review(problem):
+    reviews = [
+        {
+            "id": 777,
+            "state": "COMMENTED",
+            "commit_id": _HEAD,
+            "submitted_at": "2026-08-24T22:20:00Z",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        }
+    ]
+    bad = (
+        _get(200, {"message": "not a collection"})
+        if problem == "malformed"
+        else _get(503, {"message": "unavailable"})
+    )
+    if problem == "denied":
+        bad = _get(403, {"message": "denied"})
+    pages = [bad]
+    if problem == "partial_page":
+        pages.insert(
+            0,
+            _get(
+                200, [], headers={"Link": '<https://api.github.com/page2>; rel="next"'}
+            ),
+        )
+    mock_client = _client(
+        get_responses=[*_readiness_prefix(), _get(200, reviews), *pages]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.automated_review_complete is None
+    assert result.ready is False
+    assert [b["kind"] for b in result.blockers] == [
+        "policy_denied" if problem == "denied" else "external_state_unavailable"
+    ]
+
+    assert result.blockers[0]["retryable"] is (problem in {"http_error", "partial_page"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,headers,message,limited,retryable",
+    [
+        (429, {"retry-after": "90"}, "Too many requests", True, True),
+        (
+            403,
+            {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000000"},
+            "Forbidden",
+            True,
+            True,
+        ),
+        (403, {"retry-after": "30"}, "Secondary rate limit", True, True),
+        (403, {}, "API rate limit exceeded", True, True),
+        (403, {}, "Resource not accessible by integration", False, False),
+        (401, {}, "Bad credentials", False, False),
+        (503, {}, "Unavailable", False, True),
+    ],
+)
+async def test_request_inventory_preserves_quota_retry_and_permission_denial(
+    status, headers, message, limited, retryable
+):
+    client = _client(
+        get_responses=[
+            *_readiness_prefix(),
+            _get(200, []),
+            _get(status, {"message": message}, headers=headers),
+        ]
+    )
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    blocker = result.blockers[0]
+    assert blocker["kind"] == (
+        "policy_denied"
+        if status in {401, 403} and not limited
+        else "external_state_unavailable"
+    )
+    assert blocker["retryable"] is retryable
+    assert bool(blocker.get("providerFailure")) is limited
+    if limited:
+        assert blocker["providerFailure"]["providerErrorClass"] == "rate_limit"
+        if "retry-after" in headers:
+            assert blocker["providerFailure"]["retryAfterSeconds"] == float(
+                headers["retry-after"]
+            )
+
+
+def _request_evidence_transport(
+    *, comments, reaction_problem=None, clean_reaction=False
+):
+    """Script provider I/O while exercising the production evidence reader."""
+    calls = []
+
+    def respond(request):
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        calls.append(str(request.url))
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path == "pulls/350/reviews":
+            body = []
+        elif path == "issues/350/comments":
+            body = comments
+        elif path == "issues/comments/98765/reactions":
+            if request.url.params.get("page") == "2":
+                if clean_reaction:
+                    return httpx.Response(
+                        200,
+                        json=[
+                            {
+                                "id": 12,
+                                "content": "+1",
+                                "user": {"login": "chatgpt-codex-connector[bot]"},
+                            }
+                        ],
+                    )
+                return httpx.Response(503, json={"message": "Unavailable"})
+            if reaction_problem == "transport":
+                raise httpx.ConnectError("Synthetic reaction outage", request=request)
+            if reaction_problem in {"partial_page", "paginated_clean"}:
+                return httpx.Response(
+                    200,
+                    json=[],
+                    headers={
+                        "Link": f'<https://api.github.com/repos/{_REPO}/issues/comments/98765/reactions?page=2>; rel="next"'
+                    },
+                )
+            if reaction_problem == "malformed":
+                return httpx.Response(
+                    200, json={"message": "Not a reaction collection"}
+                )
+            if reaction_problem == "malformed_item":
+                return httpx.Response(200, json=[None])
+            if reaction_problem == "missing_then_outage":
+                return httpx.Response(404, json={"message": "Not found"})
+            if reaction_problem == "outage_then_denied":
+                return httpx.Response(503, json={"message": "Unavailable"})
+            if reaction_problem == "denied_then_outage":
+                return httpx.Response(
+                    403,
+                    json={"message": "Denied"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            if reaction_problem == "permission":
+                return httpx.Response(
+                    403,
+                    json={"message": "Denied"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            if reaction_problem == "rate_limit":
+                return httpx.Response(
+                    429,
+                    json={"message": "Too many requests"},
+                    headers={"retry-after": "30"},
+                )
+            if reaction_problem == "server":
+                return httpx.Response(503, json={"message": "Unavailable"})
+            body = []
+        elif path.endswith("/reactions"):
+            if reaction_problem in {"missing_then_outage", "denied_then_outage"}:
+                return httpx.Response(503, json={"message": "Unavailable"})
+            if reaction_problem == "outage_then_denied":
+                return httpx.Response(
+                    403,
+                    json={"message": "Denied"},
+                    headers={"X-Accepted-GitHub-Permissions": "issues=read"},
+                )
+            body = []
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json=body)
+
+    return (
+        httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False),
+        calls,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "permission",
+        "rate_limit",
+        "server",
+        "transport",
+        "malformed",
+        "malformed_item",
+        "partial_page",
+        "missing_then_outage",
+        "outage_then_denied",
+        "denied_then_outage",
+    ],
+)
+async def test_unavailable_reactions_cannot_confirm_a_provider_refusal(problem):
+    refusal = {
+        "id": 98766,
+        "body": "You have reached your Codex usage limits for code reviews.",
+        "created_at": "2026-08-24T22:16:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    client, calls = _request_evidence_transport(
+        comments=[refusal], reaction_problem=problem
+    )
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.automated_review_complete is None
+    assert result.ready is False
+    blocker = result.blockers[0]
+    assert blocker["kind"] == (
+        "policy_denied" if problem == "permission" else "external_state_unavailable"
+    )
+    assert blocker["retryable"] is (
+        problem
+        in {
+            "rate_limit",
+            "server",
+            "transport",
+            "partial_page",
+            "missing_then_outage",
+            "outage_then_denied",
+            "denied_then_outage",
+        }
+    )
+    assert all(
+        item["kind"] != "automated_review_request_failed" for item in result.blockers
+    )
+    if problem == "rate_limit":
+        assert blocker["providerFailure"]["providerErrorClass"] == "rate_limit"
+        assert blocker["providerFailure"]["retryAfterSeconds"] == 30
+    if problem == "partial_page":
+        assert any("page=2" in call for call in calls)
+    if problem in {"outage_then_denied", "denied_then_outage"}:
+        assert "HTTP 403" in blocker["summary"] and "HTTP 503" in blocker["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("evidence", ["comment", "paginated_reaction"])
+async def test_qualified_completion_survives_alternative_reaction_outage(evidence):
+    comments = [
+        {
+            "id": 98766,
+            "body": "You have reached your Codex usage limits for code reviews.",
+            "created_at": "2026-08-24T22:16:00Z",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        }
+    ]
+    if evidence == "comment":
+        comments.append(
+            {
+                **comments[0],
+                "id": 98767,
+                "created_at": "2026-08-24T22:17:00Z",
+                "body": "Codex Review: Didn't find any major issues. \U0001f680",
+            }
+        )
+    client, _ = _request_evidence_transport(
+        comments=comments,
+        reaction_problem="server" if evidence == "comment" else "paginated_clean",
+        clean_reaction=evidence != "comment",
+    )
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    assert result.ready is True
+    assert result.automated_review_complete is True
+    assert result.automated_review_completion_kind == (
+        "issue_comment" if evidence == "comment" else "reaction"
+    )
+    assert result.blockers == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_at", [None, "malformed-time", "2026-08-24", "2026-08-24T22:15:00"]
+)
+@pytest.mark.parametrize(
+    "active", ["absent", "bad_time", "wrong_body", "wrong_head", "pending", "completed"]
+)
+async def test_invalid_request_time_requires_the_exact_active_comment(
+    requested_at, active
+):
+    comments = [
+        {"id": 10, "body": "@codex review", "created_at": "2026-08-24T22:00:00Z"},
+        {
+            "id": 11,
+            "body": "Codex Review: Didn't find any major issues. \U0001f680",
+            "created_at": "2026-08-24T22:01:00Z",
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+        },
+    ]
+    if active != "absent":
+        comment = {
+            "id": 98765,
+            "body": "@codex review",
+            "created_at": _ACTIVE_REQUEST["requestedAt"],
+        }
+        if active == "bad_time":
+            comment["created_at"] = "malformed-time"
+        elif active == "wrong_body":
+            comment["body"] = "> @codex review"
+        elif active == "wrong_head":
+            comment["commit_id"] = _OLD_HEAD
+        comments.append(comment)
+        if active == "completed":
+            comments.append(
+                {**comments[1], "id": 98766, "created_at": "2026-08-24T22:16:00Z"}
+            )
+    client, calls = _request_evidence_transport(comments=comments)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request={**_ACTIVE_REQUEST, "requestedAt": requested_at},
+        )
+    if active in {"pending", "completed"}:
+        assert result.automated_review_complete is (active == "completed")
+        assert result.automated_review_request_comment_id == 98765
+        assert result.automated_review_requested_at == _ACTIVE_REQUEST["requestedAt"]
+    else:
+        assert result.automated_review_complete is None
+        assert result.ready is False
+        assert [item["kind"] for item in result.blockers] == [
+            "external_state_unavailable"
+        ]
+        assert result.blockers[0]["retryable"] is False
+        assert all("/reactions" not in call for call in calls)

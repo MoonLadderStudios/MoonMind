@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
     )
     from moonmind.omnigent.stock_agents import (
@@ -91,7 +92,10 @@ with workflow.unsafe.imports_passed_through():
         eligible_for_bundle,
         is_jules_agent_runtime_node,
     )
-    from moonmind.workflows.executions.routing import _coerce_bool
+    from moonmind.workflows.executions.routing import (
+        _coerce_bool,
+        merge_automation_candidates,
+    )
     from moonmind.workflows.executions.preset_readiness import (
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
@@ -128,6 +132,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.executions.execution_contract import (
         build_effective_workflow_skill_selectors,
+    )
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+        merge_resolved_provider_profile,
     )
     from moonmind.workflows.executions.repository_contract import (
         repository_branch_from_value,
@@ -504,7 +513,7 @@ MERGE_AUTOMATION_DEFAULT_FINISH_MODE = "merge"
 # value takes the default; every other unsupported value fails validation
 # instead of silently inheriting merge authority.
 MERGE_AUTOMATION_FINISH_MODES = frozenset(
-    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only"}
+    {MERGE_AUTOMATION_DEFAULT_FINISH_MODE, "fix_only", "review_only"}
 )
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
@@ -655,8 +664,11 @@ RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH = (
 # histories retain their original immediate idle completion and memo commands.
 RUN_ISSUE_SEARCH_CAPACITY_RETRY_PATCH = "run-issue-search-capacity-retry-v1"
 ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT = timedelta(minutes=30)
-ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL = timedelta(seconds=30)
-ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL = timedelta(minutes=5)
+# The search is not queued at the ProviderProfileManager, so it only starts in
+# the gap between one holder's release and the next request. Those gaps last
+# about a minute when other workflows re-request a busy slot; a steady recheck
+# observes them, where a backed-off one sleeps through every gap in the budget.
+ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL = timedelta(seconds=30)
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Expose the workflow-owned continuation capability to the portable Skill at
@@ -952,6 +964,14 @@ RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH = (
 RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH = (
     "run-verifier-remediation-stop-authority-v1"
 )
+# A verifier that declares NO_DETERMINATION with an explicit
+# ``reattempt_current_step`` is asking for its own rerun: the controlling
+# evidence is obtainable by a fresh verifier runtime even though it is not
+# recoverable in the current one (for example an expired container-job
+# capability). Retained histories keep their recorded control-gate stop.
+RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH = (
+    "run-verifier-explicit-evidence-rerun-v1"
+)
 # The dynamic controller replaces its durable decision while processing the
 # current verifier result. Re-read the blocking projection after that update so
 # a passing verdict cannot inherit the prior attempt's blocking reason. Keep
@@ -1099,6 +1119,11 @@ RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH = (
 # Existing histories retain requests without this optional no-commit authority.
 RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH = (
     "run-accepted-publication-head-handoff-v1"
+)
+# Histories that already handed off an accepted head omitted its authored base.
+# Preserve those request payloads even when the older head marker is present.
+RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH = (
+    "run-accepted-publication-base-handoff-v1"
 )
 # External runtimes create a fresh sandbox only after their AgentRun starts, so
 # they cannot satisfy a pre-execution archive checkpoint. Continue from the
@@ -1312,6 +1337,20 @@ class GateTransitionDecision:
 # memo command require a reset/versioning cutover; see
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
+# MoonLadderStudios/MoonMind#4640: fold the Provider Profile a managed launch
+# actually used into the admitted list projection. Histories recorded before
+# this patch never upserted it, so the new memo/Search Attribute commands are
+# gated for replay.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH = (
+    "run-launch-provider-profile-projection-v1"
+)
+# Retained histories skipped repeat writes after a partial projection failure.
+RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH = (
+    "run-launch-provider-profile-projection-retry-v1"
+)
+# Existing launch-result histories must retain their later upsert position.
+RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
+RUN_PAUSED_AGENT_PROGRESS_PATCH = "run-paused-agent-progress-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -1335,6 +1374,10 @@ RUN_PR_RESOLVER_SELECTOR_RESOLUTION_PATCH = "run-pr-resolver-selector-resolution
 RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH = (
     "run-deterministic-tool-ref-resolution-v1"
 )
+# Preserve resolved authored data in instructions-only AgentRun requests without
+# changing the child command payload recorded by pre-patch histories.
+RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH = "run-agent-step-inputs-handoff-v1"
+RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-validation-v1"
 # PR #4557 review: deriving a stable container-job idempotency key changes the
 # submit activity arguments. Replay-gate the derivation so in-flight histories
 # that recorded the old request shape keep replaying it.
@@ -1776,6 +1819,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # Temporal's workflow start_time / execution_time, which fire as soon
         # as Temporal schedules the workflow even if it is awaiting a slot.
         self._started_at: datetime | None = None
+        # Admitted recorded Provider Profile projection (memo summary, Search
+        # Attribute value), seeded on first launch-resolved profile (#4640).
+        self._provider_profile_projection: tuple[Any, str | None] | None = None
+        self._provider_profile_projection_dirty = False
 
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
@@ -8545,6 +8592,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 return GateTransitionDecision(
                     "retry", "retry_current_verifier", "recoverable_no_determination"
                 )
+            if next_action == "reattempt_current_step" and (
+                self._patched_or_false_outside_workflow(
+                    RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH
+                )
+            ):
+                return GateTransitionDecision(
+                    "retry",
+                    "retry_current_verifier",
+                    "verifier_requested_evidence_rerun",
+                )
             return GateTransitionDecision(
                 "accept", "stop_at_control_gate", "unrecoverable_no_determination"
             )
@@ -9762,6 +9819,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "request ready for review."
         )
         return "\n".join(lines)
+
+    @staticmethod
+    def _gate_transition_admits_evidence_rerun(
+        transition: GateTransitionDecision,
+    ) -> bool:
+        """Only a verifier gate may rerun itself to collect missing evidence.
+
+        The transition owns the verifier-role check and the replay patch, so a
+        reviewed implementation step never repeats its paid work this way.
+        """
+        return transition.reason_code == "verifier_requested_evidence_rerun"
 
     @staticmethod
     def _gate_transition_allows_review_retry(
@@ -12606,6 +12674,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "produce a plan artifact reference before execution can proceed. "
                 "Ensure the planning activity returns a non-None 'plan_ref'."
             )
+        if parameters.get("omnigentExecutionPlan") and workflow.patched(
+            RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH
+        ):
+            # Detect native grants from durable authority inside the Activity,
+            # never from an authored marker or the mutable current finish mode.
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.validate")
+            await workflow.execute_activity(
+                "plan.validate",
+                {
+                    "plan_ref": plan_ref,
+                    "principal": self._principal(),
+                    "omnigent_execution_plan": parameters["omnigentExecutionPlan"],
+                    "execution_parameters": parameters,
+                },
+                **self._execute_kwargs_for_route(route),
+            )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
 
         # Fetch provider profile snapshots so that _build_agent_execution_request
@@ -13663,6 +13747,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 "node_id": node_id,
                                 **(
                                     {
+                                        "repositoryAuthority": {
+                                            "executionOwner": workflow.info().workflow_id,
+                                            "parentExecutionPlan": parameters.get(
+                                                "omnigentExecutionPlan"
+                                            ),
+                                        }
+                                    }
+                                    if tool_name == "github.resolve_pull_request_target"
+                                    and (self._merge_automation_request(parameters) or {}).get(
+                                        "finishMode"
+                                    ) == "review_only"
+                                    else {}
+                                ),
+                                **(
+                                    {
                                         "execution_principal": parameters.get(
                                             "executionPrincipal"
                                         )
@@ -14321,6 +14420,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         ),
                         honor_explicit_stop=workflow.patched(
                             RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+                        ),
+                        honor_explicit_evidence_rerun=(
+                            self._gate_transition_admits_evidence_rerun(transition)
                         ),
                     ):
                         review_retry_count += 1
@@ -16535,7 +16637,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         self._publish_context["capacityWait"] = wait_context
         deadline = workflow.now() + ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT
-        interval = ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL
         current_result = execution_result
         while capacity_deferred(current_result):
             remaining = deadline - workflow.now()
@@ -16570,7 +16671,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             try:
                 await workflow.wait_condition(
                     lambda: self._cancel_requested or self._paused,
-                    timeout=min(interval, remaining),
+                    timeout=min(ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL, remaining),
                 )
             except asyncio.TimeoutError:
                 # Timeout is the expected path for periodic capacity rechecks.
@@ -16598,7 +16699,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping) and outputs.get("capacityEvidence"):
                 wait_context["lastCapacityEvidence"] = outputs["capacityEvidence"]
-            interval = min(interval * 2, ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL)
 
         self._waiting_reason = None
         self._set_state(
@@ -20035,29 +20135,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self,
         parameters: Mapping[str, Any],
     ) -> dict[str, Any] | None:
-        candidates: list[Any] = []
         publish_payload = self._resolve_publish_payload(parameters)
         task_payload = self._mapping_value(parameters, "workflow")
         if not task_payload:
             task_payload = self._mapping_value(parameters, "task")
-        if isinstance(publish_payload, Mapping):
-            candidates.append(
-                publish_payload.get("mergeAutomation")
-                or publish_payload.get("merge_automation")
-            )
-        if isinstance(task_payload, Mapping):
-            candidates.append(
-                task_payload.get("mergeAutomation")
-                or task_payload.get("merge_automation")
-            )
-            task_publish = task_payload.get("publish")
-            if isinstance(task_publish, Mapping):
-                candidates.append(
-                    task_publish.get("mergeAutomation")
-                    or task_publish.get("merge_automation")
-                )
-        candidates.append(
-            parameters.get("mergeAutomation") or parameters.get("merge_automation")
+        candidates = merge_automation_candidates(
+            parameters, publish_payload=publish_payload, task_payload=task_payload
         )
 
         for candidate in candidates:
@@ -20065,6 +20148,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 continue
             if not _coerce_bool(candidate.get("enabled"), default=False):
                 continue
+            finish_mode = self._normalize_finish_mode(
+                candidate.get("finishMode") or candidate.get("finish_mode")
+            )
             timeout_config = candidate.get("timeouts")
             if not isinstance(timeout_config, Mapping):
                 timeout_config = {}
@@ -20088,7 +20174,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 or self._canonical_jira_issue_key_from_parameters(parameters)
             )
             post_merge_jira: dict[str, Any] = dict(post_merge_jira_config)
-            if effective_jira_issue_key and "enabled" not in post_merge_jira:
+            if (
+                finish_mode != "review_only"
+                and effective_jira_issue_key
+                and "enabled" not in post_merge_jira
+            ):
                 post_merge_jira["enabled"] = True
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
@@ -20108,7 +20198,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 else {}
             )
             github_issue = self._canonical_github_issue_from_parameters(parameters)
-            if github_issue:
+            if github_issue and finish_mode != "review_only":
                 post_merge_github.setdefault("enabled", True)
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
@@ -20148,9 +20238,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 or "squash",
                 "maxIterations": candidate.get("maxIterations"),
-                "finishMode": self._normalize_finish_mode(
-                    candidate.get("finishMode") or candidate.get("finish_mode")
-                ),
+                "finishMode": finish_mode,
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
                 "postMergeGithub": post_merge_github,
@@ -20405,6 +20493,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ) or self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
         if not normalized_head_sha:
             return None
+        parent_execution_plan = None
+        if request.get("finishMode") == "review_only":
+            admitted_binding = parameters.get("omnigentExecutionPlan")
+            if not isinstance(admitted_binding, Mapping):
+                raise ValueError(
+                    "review_only requires admitted parent execution-plan authority"
+                )
+            parent_execution_plan = OmnigentExecutionPlanBinding.model_validate(
+                admitted_binding
+            ).model_dump(by_alias=True, mode="json")
         pr_number = int(parsed["number"])
         fallback_poll_seconds = self._normalize_positive_int(
             request.get("fallbackPollSeconds"),
@@ -20521,6 +20619,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "parentWorkflowId": parent_workflow_id,
             "parentRunId": parent_run_id,
             "principal": self._owner_id or parent_workflow_id,
+            **(
+                {"parentExecutionPlan": parent_execution_plan}
+                if request.get("finishMode") == "review_only"
+                else {}
+            ),
             "publishContextRef": (
                 self._coerce_text(
                     self._publish_context.get("publishContextRef")
@@ -20609,6 +20712,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "enabled": True,
             "status": status or "unknown",
         }
+        finish_mode = self._coerce_text(
+            result_map.get("finishMode") or context.get("mergeAutomationFinishMode"),
+            max_chars=20,
+        )
+        if finish_mode == "review_only":
+            summary["finishMode"] = finish_mode
         if pr_number is not None:
             summary["prNumber"] = pr_number
         if pr_url:
@@ -20811,10 +20920,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return f"Jira issue {issue_key} was already in a done-category status."
         return ""
 
-    def _merge_automation_child_succeeded(self, result: Any) -> bool:
+    def _merge_automation_child_succeeded(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status == "review_complete"
         return status in MERGE_AUTOMATION_SUCCESS_STATUSES
 
     def _merge_automation_child_canceled(self, result: Any) -> bool:
@@ -20823,19 +20936,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         )
         return status == MERGE_AUTOMATION_CANCELED_STATUS
 
-    def _merge_automation_child_status_valid(self, result: Any) -> bool:
+    def _merge_automation_child_status_valid(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> bool:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
+        if finish_mode == "review_only":
+            return status in (
+                MERGE_AUTOMATION_FAILURE_STATUSES
+                | {MERGE_AUTOMATION_CANCELED_STATUS, "review_complete"}
+            )
         return bool(status) and status in MERGE_AUTOMATION_TERMINAL_STATUSES
 
-    def _merge_automation_failure_reason(self, result: Any) -> str:
+    def _merge_automation_failure_reason(
+        self, result: Any, *, finish_mode: str = "merge"
+    ) -> str:
         status = self._coerce_text(
             self._get_from_result(result, "status"), max_chars=40
         )
         if not status:
             return "merge automation failed: missing terminal status"
-        if status not in MERGE_AUTOMATION_TERMINAL_STATUSES:
+        if not self._merge_automation_child_status_valid(result, finish_mode=finish_mode):
             return f"merge automation failed: unsupported terminal status {status}"
         blockers = self._get_from_result(result, "blockers")
         blocker_summary = ""
@@ -20891,6 +21013,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         self._awaiting_external = True
         self._publish_context["mergeAutomationWorkflowId"] = workflow_id
+        if payload["mergeAutomationConfig"]["finishMode"] == "review_only":
+            self._publish_context["mergeAutomationFinishMode"] = "review_only"
         self._publish_context["mergeAutomationStatus"] = "awaiting_child"
         self._waiting_reason = "Waiting for PR merge automation."
         self._attention_required = False
@@ -20982,10 +21106,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             or "unknown"
         )
-        child_status_valid = self._merge_automation_child_status_valid(child_result)
+        finish_mode = payload["mergeAutomationConfig"]["finishMode"]
+        child_status_valid = self._merge_automation_child_status_valid(
+            child_result, finish_mode=finish_mode
+        )
         reason = (
-            self._merge_automation_failure_reason(child_result)
-            if not self._merge_automation_child_succeeded(child_result)
+            self._merge_automation_failure_reason(child_result, finish_mode=finish_mode)
+            if not self._merge_automation_child_succeeded(
+                child_result, finish_mode=finish_mode
+            )
             else None
         )
         if child_status_valid:
@@ -21001,10 +21130,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._close_status = CLOSE_STATUS_CANCELED
             self._set_state(
                 STATE_CANCELED,
-                summary=self._merge_automation_failure_reason(child_result),
+                summary=self._merge_automation_failure_reason(
+                    child_result, finish_mode=finish_mode
+                ),
             )
             return
-        if not self._merge_automation_child_succeeded(child_result):
+        if not self._merge_automation_child_succeeded(
+            child_result, finish_mode=finish_mode
+        ):
             raise ValueError(reason or "merge automation failed")
 
     async def _resolve_agent_node_skillset_ref(
@@ -21903,6 +22036,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "branch": accepted_head[0],
                     "headSha": accepted_head[1],
                 }
+                # The base recorded with the head lets a later step extend its
+                # own candidate instead of publishing a PR stacked on it.
+                accepted_base = self._accepted_published_base_branch()
+                if (
+                    accepted_base
+                    and accepted_base != accepted_head[0]
+                    and self._workflow_patch_enabled(
+                        RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH
+                    )
+                ):
+                    parameters["acceptedPublishedHead"]["baseBranch"] = accepted_base
         repository_bound_policy = self._workflow_patch_enabled(
             RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH
         )
@@ -22783,6 +22927,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or node_inputs.get("instructionRef")
         )
         if (
+            skill_inputs
+            and not selected_skill
+            and not branch_instruction_ref
+            and isinstance(node_inputs.get("instructions"), str)
+            and node_inputs["instructions"].strip()
+            and not node_inputs["instructions"].strip().startswith("artifact://")
+            and self._workflow_patch_enabled(RUN_AGENT_STEP_INPUTS_HANDOFF_PATCH)
+        ):
+            # Selected Skills already carry their inputs in the skill contract.
+            # Instructions-only Steps must receive the same resolved user data
+            # as prompt content, never as runtime or authorization parameters.
+            # Opaque instruction refs remain owned by their materialization path.
+            input_data = json.dumps(
+                self._json_mapping(skill_inputs, path=f"node[{node_id}].inputs"),
+                indent=2,
+                sort_keys=True,
+            )
+            instruction = str(request_instruction_ref or "").rstrip()
+            if input_data not in instruction:
+                request_instruction_ref = (
+                    f"{instruction}\n\nResolved step inputs:\n{input_data}".lstrip()
+                )
+        if (
             branch_instruction_ref
             and agent_kind == "external"
             and _normalize_agent_runtime_id(agent_id) == "omnigent"
@@ -23662,11 +23829,74 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if isinstance(metadata, Mapping):
             for key, value in metadata.items():
                 outputs.setdefault(key, value)
+            self._record_launch_provider_profile(metadata)
 
         return {
             "status": status,
             "outputs": outputs,
         }
+
+    def _record_launch_provider_profile(self, metadata: Mapping[str, Any]) -> None:
+        """Record the Provider Profile a managed launch actually used.
+
+        Admission records ``pending`` when selection resolves at launch; this
+        folds the granted profile into the same memo summary and
+        ``mm_provider_profile`` Search Attribute that list rows, filters, and
+        facets read (MoonLadderStudios/MoonMind#4640). Workflows without an
+        admitted projection are left unchanged rather than guessed.
+        """
+
+        profile_id = str(metadata.get("providerProfileId") or "").strip()
+        if not profile_id or not workflow.patched(
+            RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_PATCH
+        ):
+            return
+        if self._provider_profile_projection is None:
+            self._provider_profile_projection = (
+                workflow.memo_value(PROVIDER_PROFILE_MEMO_KEY, default=None),
+                workflow.info().typed_search_attributes.get(
+                    SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE)
+                ),
+            )
+        summary, search_value = self._provider_profile_projection
+        merged = merge_resolved_provider_profile(
+            summary,
+            search_value,
+            profile_id,
+            label=str(metadata.get("providerProfileLabel") or "") or None,
+            retain_all_profiles=workflow.patched(
+                "provider-profile-complete-associations-v1"
+            ),
+        )
+        if merged is not None:
+            # Retain the desired union and frozen labels even if only one
+            # store accepts its write. Later grants merge into this snapshot.
+            self._provider_profile_projection = merged
+            self._provider_profile_projection_dirty = workflow.patched(
+                RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH
+            )
+        elif not self._provider_profile_projection_dirty:
+            return
+        merged_summary, merged_value = self._provider_profile_projection
+        try:
+            workflow.upsert_memo({PROVIDER_PROFILE_MEMO_KEY: merged_summary})
+            workflow.upsert_search_attributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_text(PROVIDER_PROFILE_SEARCH_ATTRIBUTE),
+                        merged_value,
+                    )
+                ]
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to record launch-resolved Provider Profile",
+                extra={"error": str(exc)},
+            )
+        else:
+            # A repeated profile is a no-op only after both stores accepted
+            # the projection; progress or terminal metadata can retry it.
+            self._provider_profile_projection_dirty = False
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
@@ -25857,6 +26087,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 expected_step_execution_id=step_id,
             )
             self._agent_run_progress_by_child[child_id] = state
+        has_profile_fields = (
+            "providerProfileId" in payload or "providerProfileLabel" in payload
+        )
+        grant_progress_enabled = has_profile_fields and workflow.patched(
+            RUN_GRANTED_PROFILE_PROGRESS_PATCH
+        )
+        if has_profile_fields and not grant_progress_enabled:
+            # Older parents rejected these fields under extra="forbid". A new
+            # child can reach an old worker during rollout, so replay must keep
+            # ignoring that recorded signal, including ordinary state upserts.
+            return
         outcome = apply_agent_run_progress(
             state,
             payload,
@@ -25878,6 +26119,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             return
         accepted = outcome.accepted_state
+        if grant_progress_enabled:
+            # Only accepted progress crosses the child/attempt/revision fences.
+            # This records display identity, never profile lease ownership.
+            self._record_launch_provider_profile(accepted)
+        if (
+            str(accepted.get("state") or "") not in TERMINAL_PROGRESS_STATES
+            and (self._paused or self._pause_resume_transition_in_progress)
+            and workflow.patched(RUN_PAUSED_AGENT_PROGRESS_PATCH)
+        ):
+            # Identity remains visible immediately, but an operator pause owns
+            # product state until Resume succeeds. Reuse the accepted reducer
+            # state so older children need not emit the same grant again.
+            state["pausedProductProgress"] = accepted
+            return
+        state.pop("pausedProductProgress", None)
+        self._apply_agent_run_product_progress(child_id, accepted)
+
+    def _apply_agent_run_product_progress(
+        self, child_id: str, accepted: Mapping[str, Any]
+    ) -> None:
+        """Reflect already-fenced progress in workflow and Step product state."""
+
         self._note_issue_claim_work_started(str(accepted.get("state") or ""))
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated
@@ -25945,6 +26208,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "agent_run_progress ledger reflection skipped for %s",
                     progress_step_id,
                 )
+
+    def _apply_resumed_agent_progress(self, child_id: str | None) -> None:
+        """Drain paused progress only for the child the control update reached."""
+
+        if (
+            self._paused
+            or not child_id
+            or child_id != self._active_agent_child_workflow_id
+        ):
+            return
+        state = self._agent_run_progress_by_child.get(child_id) or {}
+        accepted = state.pop("pausedProductProgress", None)
+        if (
+            not isinstance(accepted, Mapping)
+            or self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED)
+            or state.get("terminalSealed")
+            or accepted.get("sourceGeneration") != state.get("acceptedSourceGeneration")
+            or accepted.get("agentRunRunId") != state.get("acceptedAgentRunRunId")
+            or accepted.get("projectionRevision") != state.get("acceptedRevision")
+        ):
+            return
+        previous_attention = self._attention_required
+        self._apply_agent_run_product_progress(child_id, accepted)
+        if self._attention_required != previous_attention:
+            # The ordinary reflection writes status before updating attention.
+            # Resume has no later child observation to persist that final value.
+            self._update_search_attributes()
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
@@ -26023,6 +26313,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and self._paused:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_waiting_reason = self._waiting_reason
         try:
@@ -26038,6 +26329,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @pause.validator
     def validate_pause(self, payload: dict[str, Any] | None = None) -> None:
@@ -26061,6 +26353,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if generation and not self._paused and not self._awaiting_external:
             self._system_control_generation = generation
             return
+        child_id = self._active_agent_child_workflow_id
         self._pause_resume_transition_in_progress = True
         previous_paused = self._paused
         previous_waiting_reason = self._waiting_reason
@@ -26080,6 +26373,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
         finally:
             self._pause_resume_transition_in_progress = False
+            self._apply_resumed_agent_progress(child_id)
 
     @resume.validator
     def validate_resume(self, payload: dict[str, Any] | None = None) -> None:

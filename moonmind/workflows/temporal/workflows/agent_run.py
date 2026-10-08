@@ -359,6 +359,9 @@ MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
     "agent-run-managed-status-rollout-tolerance-v1"
 )
 PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
+# New progress payload and grant-time command ordering must not alter retained histories.
+AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID = "agent-run-granted-profile-progress-v1"
+AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID = "agent-run-profile-grant-host-wait-v1"
 MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID = "agent-run-managed-task-workflow-binding-v1"
 MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
     "agent-run-managed-session-fetch-result-activity-v1"
@@ -1232,6 +1235,8 @@ class MoonMindAgentRun:
         self._progress_generation: str | None = None
         self._progress_next_revision: int = 1
         self._progress_last_signature: tuple | None = None
+        self._progress_provider_profile_id: str | None = None
+        self._progress_provider_profile_label: str | None = None
         self.run_id: str | None = None
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
@@ -1477,6 +1482,33 @@ class MoonMindAgentRun:
             parent_info, new_state, reason
         )
 
+    async def _signal_parent_granted_profile(
+        self, parent_info: Any, runtime_id: str, *, awaiting_host_capacity: bool = False
+    ) -> None:
+        """Freeze the granted identity before pause, launch, or cancellation.
+
+        Called only behind the grant-progress replay patch. Carry the snapshot
+        on later progress too, so a transient signal failure can recover through
+        the existing progress handoff without another lifecycle signal.
+        """
+
+        profile_id = str(self._assigned_profile_id or "").strip() or None
+        if profile_id != self._progress_provider_profile_id:
+            snapshot = self._profile_snapshots.get(profile_id) or {}
+            self._progress_provider_profile_id = profile_id
+            self._progress_provider_profile_label = str(
+                snapshot.get("account_label") or snapshot.get("provider_label") or ""
+            ).strip()[:120] or None
+        await self._signal_parent_child_state_changed(
+            parent_info,
+            "awaiting_slot" if awaiting_host_capacity else "launching",
+            (
+                f"Provider Profile slot acquired for {runtime_id}; waiting for generic host capacity."
+                if awaiting_host_capacity
+                else f"Slot acquired for {runtime_id}"
+            ),
+        )
+
     def _init_progress_identity(self, request: AgentExecutionRequest) -> None:
         """Record the Step Execution/attempt identity for progress emission.
 
@@ -1565,6 +1597,8 @@ class MoonMindAgentRun:
                 # and bounded by the schema); authority comes from the
                 # canonical triple above, never by parsing this string.
                 summary=reason,
+                provider_profile_id=self._progress_provider_profile_id,
+                provider_profile_label=self._progress_provider_profile_label,
             )
         except Exception as exc:
             self._get_logger().warning(
@@ -1579,6 +1613,8 @@ class MoonMindAgentRun:
             payload.get("attentionRequired"),
             payload.get("summary"),
             payload.get("diagnosticArtifactRef"),
+            payload.get("providerProfileId"),
+            payload.get("providerProfileLabel"),
         )
         if signature == self._progress_last_signature:
             return
@@ -2741,6 +2777,19 @@ class MoonMindAgentRun:
 
         if agent_run_id:
             metadata.setdefault("agentRunId", agent_run_id)
+
+        # MoonLadderStudios/MoonMind#4640: a managed launch's
+        # execution_profile_ref is the Provider Profile the manager granted, so
+        # the parent can record a selection that was still pending at admission.
+        provider_profile_id = str(request.execution_profile_ref or "").strip()
+        if request.agent_kind == "managed" and provider_profile_id:
+            metadata.setdefault("providerProfileId", provider_profile_id)
+            snapshot = self._profile_snapshots.get(provider_profile_id) or {}
+            provider_profile_label = str(
+                snapshot.get("account_label") or snapshot.get("provider_label") or ""
+            ).strip()
+            if provider_profile_label:
+                metadata.setdefault("providerProfileLabel", provider_profile_label)
 
         if request.agent_kind == "managed":
             runtime_id = (
@@ -4812,6 +4861,10 @@ class MoonMindAgentRun:
                 "executionPlanRef": plan_ref,
                 "credentialGeneration": profiles[0].get("credentialGeneration"),
             },
+            awaiting_host_capacity=(
+                getattr(admission, "execution_realizer_ref", None)
+                != "codex-profile-bound@1"
+            ),
         )
         if (
             getattr(admission, "execution_realizer_ref", None)
@@ -5063,6 +5116,7 @@ class MoonMindAgentRun:
         parent_info: Any,
         lease_metadata: dict[str, Any] | None = None,
         lease_purpose: str = "execution_direct",
+        awaiting_host_capacity: bool = False,
     ) -> None:
         """Admit Provider Profile capacity before the long execution Activity.
 
@@ -5188,6 +5242,20 @@ class MoonMindAgentRun:
             )
         self._omnigent_capacity_profile_id = profile_id
         self._omnigent_capacity_state = "granted"
+        if self._workflow_patch_enabled(AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID):
+            await self._signal_parent_granted_profile(
+                parent_info,
+                runtime_id,
+                # Preserve the launch observation already recorded by older
+                # generic admissions. New grants do not start product work
+                # until the required host capacity is also admitted.
+                awaiting_host_capacity=(
+                    awaiting_host_capacity
+                    and self._workflow_patch_enabled(
+                        AGENT_RUN_PROFILE_GRANT_HOST_WAIT_PATCH_ID
+                    )
+                ),
+            )
 
     async def _execute_omnigent_with_admitted_capacity(
         self,
@@ -7578,6 +7646,11 @@ class MoonMindAgentRun:
                         runtime_id=runtime_id,
                         request=request,
                     )
+                    grant_progress_enabled = self._workflow_patch_enabled(
+                        AGENT_RUN_GRANTED_PROFILE_PROGRESS_PATCH_ID
+                    )
+                    if grant_progress_enabled:
+                        await self._signal_parent_granted_profile(parent_info, runtime_id)
                     if self._paused:
                         await workflow.wait_condition(lambda: not self._paused)
 
@@ -7594,22 +7667,23 @@ class MoonMindAgentRun:
                     # AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID so
                     # in-flight histories that recorded the legacy command
                     # keep replaying it.
-                    if self._workflow_patch_enabled(
-                        AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID
-                    ):
-                        await self._signal_parent_child_state_changed(
-                            parent_info,
-                            "launching",
-                            f"Slot acquired for {runtime_id}",
-                        )
-                    else:
-                        # Replay compatibility for histories that already
-                        # recorded the legacy signal at slot acquisition.
-                        await self._signal_parent_legacy_child_state_changed(
-                            parent_info,
-                            "launching",
-                            f"Slot acquired for {runtime_id}",
-                        )
+                    if not grant_progress_enabled:
+                        if self._workflow_patch_enabled(
+                            AGENT_RUN_SLOT_ACQUIRED_PROGRESS_PATCH_ID
+                        ):
+                            await self._signal_parent_child_state_changed(
+                                parent_info,
+                                "launching",
+                                f"Slot acquired for {runtime_id}",
+                            )
+                        else:
+                            # Replay compatibility for histories that already
+                            # recorded the legacy signal at slot acquisition.
+                            await self._signal_parent_legacy_child_state_changed(
+                                parent_info,
+                                "launching",
+                                f"Slot acquired for {runtime_id}",
+                            )
                     request.execution_profile_ref = self._assigned_profile_id
                     if workflow.patched(
                         AWAITING_SLOT_RUNTIME_PROFILE_EDIT_PATCH_ID

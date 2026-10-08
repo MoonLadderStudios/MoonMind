@@ -1643,6 +1643,117 @@ def test_moonspec_gate_transition_matrix(
     )
 
 
+@pytest.mark.parametrize("rerun_patch_enabled", [True, False])
+def test_explicit_verifier_rerun_retries_unrecoverable_no_determination(
+    monkeypatch: pytest.MonkeyPatch,
+    rerun_patch_enabled: bool,
+) -> None:
+    """A verifier asking for its own rerun gets one in a fresh runtime.
+
+    ``recoverableInCurrentRuntime: false`` with ``reattempt_current_step``
+    means the evidence is obtainable by rerunning the verifier, for example
+    after its container-job capability expired. Retained histories without
+    the patch marker keep the recorded control-gate stop.
+    """
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(
+        workflow,
+        "_patched_or_false_outside_workflow",
+        lambda patch: (
+            rerun_patch_enabled
+            if patch == run_module.RUN_VERIFIER_EXPLICIT_EVIDENCE_RERUN_PATCH
+            else True
+        ),
+    )
+    gate = SimpleNamespace(
+        verdict="NO_DETERMINATION",
+        recommended_next_action="reattempt_current_step",
+        recoverable_in_current_runtime=False,
+    )
+    transition = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+            }
+        ],
+    )
+    if rerun_patch_enabled:
+        assert (
+            transition.disposition,
+            transition.routing_disposition,
+            transition.reason_code,
+        ) == ("retry", "retry_current_verifier", "verifier_requested_evidence_rerun")
+    else:
+        assert (
+            transition.disposition,
+            transition.routing_disposition,
+            transition.reason_code,
+        ) == ("accept", "stop_at_control_gate", "unrecoverable_no_determination")
+    assert (
+        review_gate_retry_allowed(
+            verdict=gate,
+            review_retry_count=0,
+            max_review_attempts=2,
+            consecutive_no_progress_attempts=0,
+            max_consecutive_no_progress_attempts=3,
+            honor_explicit_evidence_rerun=rerun_patch_enabled,
+        )
+        is rerun_patch_enabled
+    )
+    # The rerun stays inside the existing review budget.
+    assert (
+        review_gate_retry_allowed(
+            verdict=gate,
+            review_retry_count=2,
+            max_review_attempts=2,
+            consecutive_no_progress_attempts=0,
+            max_consecutive_no_progress_attempts=3,
+            honor_explicit_evidence_rerun=True,
+        )
+        is False
+    )
+
+
+def test_explicit_evidence_rerun_is_limited_to_verifier_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reviewed implementation step never repeats its paid work this way."""
+
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    monkeypatch.setattr(workflow, "_patched_or_false_outside_workflow", lambda _p: True)
+    gate = SimpleNamespace(
+        verdict="NO_DETERMINATION",
+        recommended_next_action="reattempt_current_step",
+        recoverable_in_current_runtime=False,
+    )
+    verifier = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[
+            {
+                "id": "verify",
+                "annotations": {"issueImplementRole": "moonspec-verification-gate"},
+            }
+        ],
+    )
+    implementation = workflow._resolve_gate_transition(
+        verdict=gate,
+        current_index=0,
+        ordered_nodes=[{"id": "implement", "tool": {"name": "moonspec-implement"}}],
+    )
+
+    assert MoonMindRunWorkflow._gate_transition_admits_evidence_rerun(verifier)
+    assert implementation.disposition == "generic"
+    assert not MoonMindRunWorkflow._gate_transition_admits_evidence_rerun(
+        implementation
+    )
+
+
 def test_moonspec_gate_transition_handles_initial_final_and_malformed_topology(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2651,6 +2651,27 @@ class PresetCatalogService:
         alias: str | None = None,
         input_mapping: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        inputs = variables["inputs"]
+        if (
+            template.slug == "pr-review-resolve"
+            and inputs.get("review_only") is True
+            and inputs.get("review_provider") == "none"
+        ):
+            message = (
+                "Review only requires a fresh automated reviewer; "
+                "choose Codex or turn off Review only."
+            )
+            raise PresetValidationError(
+                message,
+                errors=[
+                    {
+                        "path": "preset.inputs.review_provider",
+                        "message": message,
+                        "code": "invalid_review_provider",
+                        "recoverable": True,
+                    }
+                ],
+            )
         node: dict[str, Any] = {
             "slug": template.slug,
             "digest": _preset_digest(template),

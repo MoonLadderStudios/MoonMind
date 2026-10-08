@@ -24,7 +24,7 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -107,6 +107,15 @@ class RepositoryAuthorityBinding(BaseModel):
     repositoryAccessSnapshotRef: str = Field(alias="repositoryAccessSnapshotRef")
     materializerRef: str = Field(alias="materializerRef")
     repositoryRole: str = Field(alias="repositoryRole")
+    consumer: Literal["agent", "native"] = "agent"
+
+    @model_serializer(mode="wrap")
+    def serialize_consumer(self, handler):
+        payload = handler(self)
+        # Preserve recorded v2 envelopes and binding digests byte-for-byte.
+        if self.consumer == "agent":
+            payload.pop("consumer", None)
+        return payload
 
     @model_validator(mode="after")
     def validate(self) -> "RepositoryAuthorityBinding":
@@ -120,6 +129,8 @@ class RepositoryAuthorityBinding(BaseModel):
             )
         if self.repositoryRole not in REPOSITORY_ROLES:
             raise ValueError(f"repositoryRole must be one of {REPOSITORY_ROLES}")
+        if self.consumer == "native" and self.repositoryRole != "collaboration":
+            raise ValueError("native repository authority requires collaboration role")
         _reject_secret_material(self.model_dump(by_alias=True, mode="json"))
         return self
 
@@ -631,6 +642,10 @@ def validate_binding_set_for_plan(
                 f"credential slot {slot} role {binding.repositoryRole} not admitted; "
                 "a source read grant cannot be relabeled as publication authority"
             )
+        if binding.consumer not in tuple(decl.get("allowedConsumers", ("agent",)) or ()):
+            raise _slot_unbound(
+                f"credential slot {slot} consumer {binding.consumer} not admitted"
+            )
         allowed_snapshots = decl.get("allowedSnapshotRefs")
         if allowed_snapshots is not None and (
             binding.repositoryAccessSnapshotRef not in tuple(allowed_snapshots)
@@ -785,6 +800,7 @@ def attenuate_repository_binding_for_child(
             "repositoryAccessSnapshotRef": child_snapshot_ref,
             "materializerRef": parent_binding.materializerRef,
             "repositoryRole": parent_binding.repositoryRole,
+            "consumer": parent_binding.consumer,
         }
     )
     return ChildRepositoryGrant.model_validate(
@@ -837,10 +853,11 @@ def assert_worker_supports_binding_set(
     """Capability/version admission barrier for new work.
 
     An incompatible old worker rejects new authority without
-    global-credential fallback: a model-only worker refuses any set
-    carrying repository authority, and any worker that did not advertise
+    global-credential fallback: a model-only worker refuses agent-consumed
+    repository authority, and any worker that did not advertise
     model authority refuses plan admission (every binding set requires
-    model authority through :func:`required_worker_authority_kinds`).
+    model authority through :func:`required_worker_authority_kinds`). Native
+    grants belong to Activities; their plans cannot enter agent execution.
     """
     kinds = {str(kind).strip().lower() for kind in worker_authority_kinds}
     required = set(required_worker_authority_kinds(binding_set))
@@ -875,15 +892,35 @@ def required_worker_authority_kinds(
 ) -> tuple[str, ...]:
     """Return the worker authority kinds a binding set requires.
 
-    Model-only sets (legacy v1 or v2 model) require ``("model",)``; any set
-    carrying repository authority requires ``("model", "repository")``.
+    Model-only sets (legacy v1 or v2 model) require ``("model",)``; agent
+    repository grants also require ``repository``. Native-only grants are
+    consumed by trusted Activities and never by the agent realizer.
     Production worker admission compares the worker's advertised kinds
     against this requirement via :func:`assert_worker_supports_binding_set`
     instead of re-deriving the rule per call site.
     """
-    if repository_authority_bindings(binding_set):
+    if any(
+        binding.consumer == "agent"
+        for binding in repository_authority_bindings(binding_set).values()
+    ):
         return ("model", "repository")
     return ("model",)
+
+
+def assert_agent_execution_authority(bindings: Any) -> None:
+    """A native-only workflow plan cannot be reused to launch an AgentRun."""
+    for binding in dict(bindings or {}).values():
+        if not is_repository_authority(binding):
+            continue
+        consumer = (
+            binding.get("consumer", "agent")
+            if isinstance(binding, Mapping)
+            else getattr(binding, "consumer", "agent")
+        )
+        if consumer != "agent":
+            raise _binding_conflict(
+                "native-only repository authority cannot launch an agent"
+            )
 
 
 def validate_child_snapshot_coverage(    *,
@@ -980,6 +1017,11 @@ def derive_repository_slot_requirements(
                     raise _slot_unbound(
                         f"credential slot {slot_name} role {role} not admitted"
                     )
+        allowed_consumers = decl_map.get("allowedConsumers", ("agent",))
+        if not allowed_consumers or any(
+            consumer not in {"agent", "native"} for consumer in allowed_consumers
+        ):
+            raise _slot_unbound(f"credential slot {slot_name} consumer not admitted")
         allowed_materializers = decl_map.get("allowedMaterializers")
         if allowed_materializers is not None:
             materializers = tuple(allowed_materializers)
@@ -1023,6 +1065,7 @@ def derive_repository_slot_requirements(
                         f"credential slot {slot_name} connection not admitted"
                     )
         derived[slot_name] = {
+            "allowedConsumers": tuple(allowed_consumers),
             "allowedRoles": tuple(allowed_roles) if allowed_roles is not None else None,
             "allowedMaterializers": (
                 tuple(allowed_materializers)
