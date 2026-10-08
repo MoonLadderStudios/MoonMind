@@ -888,13 +888,10 @@ def build_automated_review_evidence(
         completion_id = fresh_review.get("id")
         completed_at = str(fresh_review.get("submitted_at") or "").strip() or None
 
-    if head_committed_at is None and (
-        fresh_review is None
-        or any(
-            is_review_request_comment(record, comment)
-            and str(comment.get("commit_id") or "").strip() in {"", normalized_head}
-            for comment in comments
-        )
+    if head_committed_at is None and any(
+        is_review_request_comment(record, comment)
+        and str(comment.get("commit_id") or "").strip() in {"", normalized_head}
+        for comment in comments
     ):
         raise RuntimeError(
             "Current head commit timestamp is unavailable; comment/reaction evidence cannot be bound to this head"

@@ -53,6 +53,8 @@ async def observe(*, comments=None, routes=None, active=None, heads=None):
         seen.append(key)
         if key in routes:
             result = routes[key]
+            if callable(result):
+                result = result()
             if isinstance(result, Exception):
                 raise result
             if isinstance(result, httpx.Response):
@@ -160,8 +162,7 @@ async def test_reaction_pagination_preserves_completion_or_missing_evidence(
                     "Link": f'<https://api.github.com/repos/{REPO}/{endpoint}?page=2>; rel="next"'
                 },
             ),
-            endpoint
-            + "?page=2": (
+            endpoint + "?page=2": (
                 [REACTION]
                 if last_page == "clean"
                 else httpx.Response(503, json={"message": "Unavailable"})
@@ -245,3 +246,109 @@ async def test_clean_comment_can_complete_despite_unavailable_review_api():
         routes={"pulls/350/reviews": httpx.Response(503, json={})},
     )
     assert result.ready is True and result.automated_review_complete is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["comment", "review", "reaction", "refusal"])
+@pytest.mark.parametrize("same_second", [False, True])
+async def test_terminal_evidence_rechecks_the_latest_request(outcome, same_second):
+    first_comments = [COMMAND, CLEAN if outcome == "comment" else REFUSAL]
+    second = {
+        **COMMAND,
+        "id": 110,
+        "created_at": WHEN if same_second else "2026-08-24T22:18:00Z",
+    }
+    inventories = iter([first_comments, [*first_comments, second]])
+    result, seen = await observe(
+        routes={
+            "issues/350/comments": lambda: next(inventories),
+            "pulls/350/reviews": [REVIEW] if outcome == "review" else [],
+            "issues/comments/100/reactions": [REACTION]
+            if outcome == "reaction"
+            else [],
+        }
+    )
+    assert seen.count("issues/350/comments") == 2
+    assert result.automated_review_complete is False
+    assert result.automated_review_request_comment_id == 110
+    assert result.automated_review_requested_at == second["created_at"]
+    assert result.automated_review_completion_id is None
+    assert result.automated_review_request_stale is False
+    assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["comment", "refusal"])
+@pytest.mark.parametrize(
+    "final_pr",
+    [
+        {"state": "open", "head": {"sha": "b" * 40}},
+        {"state": "closed", "head": {"sha": HEAD}},
+        {"state": "open", "merged": True, "head": {"sha": HEAD}},
+    ],
+)
+async def test_terminal_evidence_requires_unchanged_open_pr(outcome, final_pr):
+    states = iter([{"state": "open", "head": {"sha": HEAD}}, final_pr])
+    result, _ = await observe(
+        comments=[COMMAND, CLEAN if outcome == "comment" else REFUSAL],
+        routes={"pulls/350": lambda: next(states)},
+    )
+    assert result.ready is False
+    assert result.automated_review_complete is False
+    assert result.automated_review_request_stale is True
+    assert result.automated_review_completion_id is None
+    assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["comment", "refusal"])
+@pytest.mark.parametrize("endpoint", ["issues/350/comments", "pulls/350"])
+async def test_terminal_revalidation_preserves_unavailable_evidence(outcome, endpoint):
+    comments = [COMMAND, CLEAN if outcome == "comment" else REFUSAL]
+    results = iter(
+        [
+            comments
+            if endpoint.endswith("comments")
+            else {"state": "open", "head": {"sha": HEAD}},
+            httpx.Response(429, headers={"Retry-After": "23"}, json={}),
+        ]
+    )
+    result, _ = await observe(
+        comments=comments, routes={endpoint: lambda: next(results)}
+    )
+    assert result.ready is False
+    assert result.automated_review_complete is None
+    assert result.automated_review_completion_id is None
+    blocker = result.blockers[0]
+    assert blocker["kind"] == "external_state_unavailable"
+    assert blocker["retryable"] is True
+    assert blocker["providerFailure"]["retryAfterSeconds"] == 23
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("was_refusal", [False, True])
+@pytest.mark.parametrize("same_second", [False, True])
+@pytest.mark.parametrize("removed", [False, True])
+async def test_changed_terminal_reply_requires_a_fresh_observation(
+    was_refusal, same_second, removed
+):
+    first = REFUSAL if was_refusal else CLEAN
+    second = {
+        **(CLEAN if was_refusal else REFUSAL),
+        "id": 111,
+        "created_at": first["created_at"] if same_second else "2026-08-24T22:18:00Z",
+    }
+    refreshed = [COMMAND] if removed else [COMMAND, first, second]
+    inventories = iter([[COMMAND, first], refreshed])
+    result, _ = await observe(routes={"issues/350/comments": lambda: next(inventories)})
+    assert result.ready is False
+    assert result.automated_review_complete is False
+    assert result.automated_review_request_stale is False
+    assert result.automated_review_request_comment_id == 100
+    assert result.automated_review_completion_id is None
+    assert [b["kind"] for b in result.blockers] == ["automated_review_pending"]
+    # The next complete observation settles the new result instead of waiting forever.
+    if not removed:
+        settled, _ = await observe(comments=refreshed)
+        assert settled.automated_review_complete is (True if was_refusal else None)
+        assert settled.ready is was_refusal

@@ -39,6 +39,7 @@ from moonmind.statuses.step_ledger import (
     step_execution_to_ledger_status,
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
+from moonmind.utils.logging import redact_sensitive_text
 
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. MoonMind.ManifestIngest is intentionally absent from the live
@@ -2124,6 +2125,29 @@ class ReadinessBlockerModel(BaseModel):
     summary: str = Field(..., alias="summary")
     retryable: bool = Field(True, alias="retryable")
     source: str | None = Field(None, alias="source")
+
+    provider_failure: dict[str, Any] | None = Field(
+        None, alias="providerFailure", exclude_if=lambda value: value is None
+    )
+
+    @field_validator("provider_failure", mode="before")
+    @classmethod
+    def _compact_provider_failure(cls, value: Any) -> dict[str, Any] | None:
+        from moonmind.workflows.provider_failures import (
+            provider_failure_event_from_metadata,
+        )
+
+        if not isinstance(value, Mapping):
+            return None
+        # Use the canonical codec to discard raw bodies and regenerate the
+        # operator summary. Only compact scalar evidence belongs in history.
+        compact = {
+            key: redact_sensitive_text(item)[:500] if isinstance(item, str) else item
+            for key, item in value.items()
+            if isinstance(item, (str, int)) and not isinstance(item, bool)
+        }
+        event = provider_failure_event_from_metadata(compact)
+        return event.to_metadata() if event is not None else None
 
     @field_validator("summary")
     @classmethod
