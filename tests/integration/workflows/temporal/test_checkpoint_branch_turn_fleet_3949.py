@@ -25,7 +25,7 @@ import asyncio
 from contextlib import AsyncExitStack
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from temporalio import activity, workflow
 from temporalio.client import WorkflowFailureError
 from temporalio.testing import WorkflowEnvironment
@@ -39,8 +39,18 @@ from temporalio.worker import (
 )
 
 from api_service.db.models import (
+    TemporalArtifact,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionRemediationLink,
+    TemporalWorkflowType,
     WorkflowCheckpointBranch,
+    WorkflowCheckpointBranchArtifact,
+    WorkflowCheckpointBranchGitBinding,
     WorkflowCheckpointBranchTurn,
+)
+from api_service.services.checkpoint_branch_service import (
+    CheckpointBranchService,
+    build_branch_turn_launch_idempotency_key,
 )
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -78,6 +88,7 @@ from tests.integration.workflows.temporal.test_checkpoint_branch_turn_execution 
     _input,
     _terminal_activity_database,
 )
+from tests.support.isolated_postgres import isolated_postgres
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -264,9 +275,7 @@ async def _run_fleet3949(
 
     FLEET3949_REFS.clear()
     FLEET3949_CALLS.clear()
-    engine, sessions, refs = await _terminal_activity_database(
-        tmp_path, monkeypatch
-    )
+    engine, sessions, refs = await _terminal_activity_database(tmp_path, monkeypatch)
     FLEET3949_REFS.update(refs)
     queue = f"checkpoint-branch-fleet3949-{_uuid4()}"
     try:
@@ -338,9 +347,7 @@ async def _run_fleet3949(
                         if any(name == "terminal" for name, *_rest in FLEET3949_CALLS):
                             break
                         await asyncio.sleep(0.01)
-                    assert any(
-                        name == "terminal" for name, *_rest in FLEET3949_CALLS
-                    )
+                    assert any(name == "terminal" for name, *_rest in FLEET3949_CALLS)
                     if FLEET3949_HOLD_MARK_RUNNING is not None:
                         FLEET3949_HOLD_MARK_RUNNING.set()
                         for _attempt in range(200):
@@ -525,9 +532,7 @@ async def test_saturated_artifacts_slot_keeps_cancellation_and_ordering_3949(
         event.HasField("workflow_execution_cancel_requested_event_attributes")
         for event in history.events
     )
-    assert history.events[-1].HasField(
-        "workflow_execution_canceled_event_attributes"
-    )
+    assert history.events[-1].HasField("workflow_execution_canceled_event_attributes")
     async with sessions() as session:
         turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
         assert turn is not None
@@ -538,6 +543,162 @@ async def test_saturated_artifacts_slot_keeps_cancellation_and_ordering_3949(
         workflows=[MoonMindCheckpointBranchTurnWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@pytest.mark.parametrize(
+    "outcome,expected_status,expected_branch_state",
+    [("canceled", "canceled", "blocked"), ("succeeded", "checking", "active")],
+)
+async def test_overlapping_running_claim_preserves_terminal_commit_3949(
+    control_plane_postgres_url,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    expected_status: str,
+    expected_branch_state: str,
+) -> None:
+    """A real row-lock wait cannot turn accepted terminal evidence into running.
+
+    Unlike the slot-saturation journey, the running transaction starts before
+    finalization commits. Preloading its identity map also requires the lock
+    boundary to refresh stale ORM objects after the database lock is released.
+    """
+
+    monkeypatch.setenv("MOONMIND_TEST_POSTGRES_URL", control_plane_postgres_url)
+    tables = [
+        model.__table__
+        for model in (
+            TemporalArtifact,
+            TemporalExecutionCanonicalRecord,
+            WorkflowCheckpointBranch,
+            TemporalExecutionRemediationLink,
+            WorkflowCheckpointBranchGitBinding,
+            WorkflowCheckpointBranchTurn,
+            WorkflowCheckpointBranchArtifact,
+        )
+    ]
+    async with isolated_postgres(tables) as sessions:
+        identity = {
+            "workflow_id": "source-workflow",
+            "branch_id": "branch-1",
+            "branch_turn_id": "turn-1",
+        }
+        async with sessions() as seed:
+            seed.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id=identity["workflow_id"],
+                    run_id="source-run",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    entry="api",
+                )
+            )
+            await seed.commit()
+            service = CheckpointBranchService(seed)
+            await service.create_branch_graph(
+                {
+                    "branchId": identity["branch_id"],
+                    "label": "Concurrent terminal handoff",
+                    "branchTurnId": identity["branch_turn_id"],
+                    "source": {
+                        "workflowId": identity["workflow_id"],
+                        "runId": "source-run",
+                        "logicalStepId": "implement",
+                        "sourceExecutionOrdinal": 1,
+                        "checkpointBoundary": "after_execution",
+                        "checkpointRef": "artifact://source/checkpoint",
+                        "checkpointDigest": "sha256:" + "a" * 64,
+                    },
+                    "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                    "instructionRef": "artifact://source/instruction",
+                    "instructionDigest": "sha256:" + "b" * 64,
+                    "idempotencyKey": "create-turn-1",
+                }
+            )
+            await service.claim_turn_execution(
+                **identity,
+                context_bundle_ref="artifact://launch/context",
+                step_execution_manifest_ref="artifact://launch/manifest",
+                diagnostics_ref="artifact://launch/diagnostics",
+                launch_idempotency_key=build_branch_turn_launch_idempotency_key(
+                    **identity
+                ),
+                runtime_agent_run_id="agent-run-turn-1",
+                created_step_execution_id="branch-owner:run:implement:execution:1",
+                agent_request_ref="artifact://launch/request",
+                execution_workflow_id="checkpoint-branch-turn:turn-1",
+            )
+            await seed.commit()
+
+        async with sessions() as running, sessions() as terminal, sessions() as observer:
+            # Hold strong references so SQLAlchemy's identity map keeps the
+            # pre-terminal values even after the other transaction commits.
+            stale_branch = await running.get(WorkflowCheckpointBranch, "branch-1")
+            stale_turn = await running.get(WorkflowCheckpointBranchTurn, "turn-1")
+            assert stale_branch.state == "preparing"
+            assert stale_turn.completed_at is None
+            running_pid = await running.scalar(text("SELECT pg_backend_pid()"))
+            terminal_pid = await terminal.scalar(text("SELECT pg_backend_pid()"))
+            terminal_service = CheckpointBranchService(terminal)
+            branch, turn = await terminal_service.lock_turn_execution(**identity)
+
+            async def deliver_running():
+                await CheckpointBranchService(running).mark_turn_running(
+                    **identity, runtime_agent_run_id="agent-run-turn-1"
+                )
+                await running.commit()
+
+            handoff = asyncio.create_task(deliver_running())
+            try:
+                # Observe an actual PostgreSQL lock wait, rather than assuming
+                # the transactions overlap after a fixed scheduling delay.
+                async with asyncio.timeout(10):
+                    while True:
+                        if handoff.done():
+                            await handoff
+                            pytest.fail("running handoff escaped the terminal row lock")
+                        blockers = await observer.scalar(
+                            text("SELECT pg_blocking_pids(:pid)"), {"pid": running_pid}
+                        )
+                        if terminal_pid in blockers:
+                            break
+                        await asyncio.sleep(0.01)
+
+                await terminal_service.finalize_turn_execution(
+                    **identity,
+                    outcome=outcome,
+                    agent_result_ref="artifact://terminal/result",
+                    diagnostics_ref="artifact://terminal/diagnostics",
+                    checkpoint_ref="artifact://terminal/checkpoint",
+                    checkpoint_digest="sha256:" + "c" * 64,
+                    terminal_ref="artifact://terminal/evidence",
+                )
+                await terminal.commit()
+                expected_diagnostics = dict(turn.diagnostics)
+                expected_artifacts = dict(branch.artifact_refs)
+                expected_completed_at = turn.completed_at
+                expected_version = branch.current_head_version
+                await asyncio.wait_for(handoff, timeout=10)
+            finally:
+                if not handoff.done():
+                    handoff.cancel()
+                await asyncio.gather(handoff, return_exceptions=True)
+
+        async with sessions() as check:
+            saved_turn = await check.get(WorkflowCheckpointBranchTurn, "turn-1")
+            saved_branch = await check.get(WorkflowCheckpointBranch, "branch-1")
+            assert saved_turn.status == expected_status
+            assert saved_turn.completed_at == expected_completed_at
+            assert saved_turn.started_at is None
+            assert saved_turn.runtime_agent_run_id == "agent-run-turn-1"
+            assert saved_turn.diagnostics == expected_diagnostics
+            assert saved_branch.state == expected_branch_state
+            assert (
+                saved_branch.current_head_checkpoint_ref
+                == "artifact://terminal/checkpoint"
+            )
+            assert saved_branch.current_head_checkpoint_digest == "sha256:" + "c" * 64
+            assert saved_branch.current_head_version == expected_version
+            assert saved_branch.artifact_refs == expected_artifacts
 
 
 async def test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949(
@@ -561,8 +722,7 @@ async def test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949
     assert len(terminal_calls) == 2
     assert [attempt for _n, _q, attempt, _v in terminal_calls] == [1, 2]
     assert all(
-        task_queue == ARTIFACTS_TASK_QUEUE
-        for _n, task_queue, _a, _v in terminal_calls
+        task_queue == ARTIFACTS_TASK_QUEUE for _n, task_queue, _a, _v in terminal_calls
     )
     _assert_fleet3949_operation_identity(history)
     async with sessions() as session:
@@ -582,7 +742,8 @@ async def test_transient_terminal_retry_reuses_owned_row_on_artifacts_fleet_3949
     ).replay_workflow(history)
 
 
-def _fleet3949_terminal_payload(refs: dict[str, str]) -> dict:    return {
+def _fleet3949_terminal_payload(refs: dict[str, str]) -> dict:
+    return {
         "workflowId": "source-workflow",
         "branchId": "branch-1",
         "branchTurnId": "turn-1",
@@ -775,9 +936,7 @@ async def test_new_rejection_reaches_artifacts_fleet_with_real_handlers_3949(
     kinds = [name for name, _queue, _attempt, _value in fleet_calls]
     assert kinds[0] == "mark_running"
     terminal_calls = [call for call in fleet_calls if call[0] == "terminal"]
-    rejection_calls = [
-        call for call in fleet_calls if call[0] == "terminal_rejection"
-    ]
+    rejection_calls = [call for call in fleet_calls if call[0] == "terminal_rejection"]
     assert len(terminal_calls) == 3
     assert [attempt for _n, _q, attempt, _v in terminal_calls] == [1, 2, 3]
     assert len(rejection_calls) == 1

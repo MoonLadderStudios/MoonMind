@@ -1319,11 +1319,13 @@ class CheckpointBranchService:
     ) -> WorkflowCheckpointBranchTurn:
         """Record that the canonical AgentRun child is about to dispatch."""
 
-        branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
-        turn = await self._require_turn_on_branch(
+        # Reuse finalization's branch-then-turn lock order and refresh any
+        # cached rows before checking terminal state. An unlocked read can
+        # race a terminal commit, then overwrite it when the UPDATE resumes.
+        branch, turn = await self.lock_turn_execution(
+            workflow_id=workflow_id,
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
-            relation="branchTurnId",
         )
         if turn.runtime_agent_run_id != runtime_agent_run_id:
             raise ValueError("branch turn Agent Run identity does not match claim")
