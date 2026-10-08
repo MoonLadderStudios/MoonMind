@@ -674,3 +674,63 @@ async def test_terminal_event_payloads_survive_expired_chunk_cleanup(
         ]
         assert payload[event.sequence - 1]["textPreview"] == event.text_preview
         assert event.artifact_ref == final[1]
+
+
+@pytest.mark.asyncio
+async def test_deferred_terminal_keeps_prior_attempt_payload_locator(journals):
+    store, session_id, sessions, service, blobs, publish = journals
+    prior_event = {
+        "eventType": "session.created",
+        "textPreview": "prior attempt before dispatch",
+        "deduplicationKey": "prior-attempt",
+    }
+    prior = await publish(1, events=[prior_event])
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=prior[0], normalized_ref=prior[1]
+    )
+    await store.append_events(session_id, [{**prior_event, "artifactRef": prior[1]}])
+    await store.mark_terminal("journal-test", status="failed")
+    # A failed pre-dispatch attempt reopens the same row while retaining its
+    # historical evidence. The new capture contains only the new attempt.
+    await store.get_or_create(
+        request=AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="journal-test",
+            idempotencyKey="journal-test",
+        ),
+        endpoint_ref="test-endpoint",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    current_event = {
+        "eventType": "response.delta",
+        "textPreview": "current attempt",
+        "deduplicationKey": "current-attempt",
+    }
+    current = await publish(1, chunk=0, events=[current_event])
+    await store.attach_active_journal_refs(
+        session_id, raw_ref=current[0], normalized_ref=current[1], new_chunk=True
+    )
+    await store.append_events(
+        session_id, [{**current_event, "artifactRef": current[1]}]
+    )
+    final = await publish(1, events=[current_event])
+    await store.mark_terminal(
+        "journal-test",
+        status="completed",
+        terminal_refs={
+            "metadataRefs": {
+                "rawSseStreamRef": final[0],
+                "normalizedEventStreamRef": final[1],
+            }
+        },
+    )
+    indexed = (await store.list_event_page(session_id)).rows
+    assert [event.sequence for event in indexed] == [1, 2]
+    assert [event.artifact_ref for event in indexed] == [prior[1], final[1]]
+    for event in indexed:
+        artifact = await _artifact(sessions, service, event.artifact_ref)
+        payload = json.loads(blobs.read_bytes(artifact.storage_key))
+        assert payload["textPreview"] == event.text_preview

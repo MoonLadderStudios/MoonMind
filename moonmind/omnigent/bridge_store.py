@@ -2991,6 +2991,7 @@ class OmnigentBridgeSessionStore:
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             terminal_normalized_ref = None
+            replaced_normalized_refs: set[str] = set()
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if row.omnigent_endpoint_ref == "embedded":
@@ -3010,6 +3011,25 @@ class OmnigentBridgeSessionStore:
                 # rows (§7.1); the JSON ``terminal_refs`` blob is preserved as-is.
                 canonical_refs = _canonical_ref_columns(safe_terminal_refs)
                 terminal_normalized_ref = canonical_refs.get("normalized_events_ref")
+                if terminal_normalized_ref:
+                    replaced_normalized_refs = {
+                        ref
+                        for ref in (
+                            row.normalized_events_ref,
+                            *(
+                                chunk.get("normalized")
+                                for chunk in (row.metadata_ or {}).get(
+                                    SEALED_JOURNAL_CHUNKS_KEY, []
+                                )
+                            ),
+                        )
+                        if ref
+                    }
+                    for ref in tuple(replaced_normalized_refs):
+                        if artifact_id := _journal_artifact_id(ref):
+                            replaced_normalized_refs.update(
+                                (artifact_id, f"artifact:{artifact_id}")
+                            )
                 for column, value in canonical_refs.items():
                     setattr(row, column, value)
                 if {"raw_events_ref", "normalized_events_ref"} <= set(canonical_refs):
@@ -3050,13 +3070,17 @@ class OmnigentBridgeSessionStore:
                     session.add(event_row)
             elif terminal_normalized_ref:
                 # Profile-bound cleanup publishes the same final journals
-                # without rebuilding the already committed provider index.
+                # without rebuilding the provider index. Only this attempt's
+                # journal rows move; retained prior-attempt evidence stays put.
                 await session.execute(
                     update(OmnigentBridgeSessionEvent)
                     .where(
                         OmnigentBridgeSessionEvent.bridge_session_id
                         == row.bridge_session_id,
                         OmnigentBridgeSessionEvent.direction != "moonmind_system",
+                        OmnigentBridgeSessionEvent.artifact_ref.in_(
+                            replaced_normalized_refs
+                        ),
                     )
                     .values(artifact_ref=terminal_normalized_ref)
                 )
