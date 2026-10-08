@@ -2148,6 +2148,12 @@ class ReadinessEvidenceModel(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_request_comment_id: int | None = Field(
+        None, alias="automatedReviewRequestCommentId", gt=0
+    )
+    automated_review_requested_at: str | None = Field(
+        None, alias="automatedReviewRequestedAt"
+    )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"
     )
