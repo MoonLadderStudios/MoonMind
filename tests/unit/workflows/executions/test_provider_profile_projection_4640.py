@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_MEMO_KEY,
     build_provider_profile_projection,
     merge_resolved_provider_profile,
+    provider_profile_associations_from_memo,
     provider_profile_id_token,
     provider_profile_state_token,
     provider_profile_summary_from_memo,
@@ -143,6 +146,59 @@ def test_historical_memo_without_summary_is_not_recorded() -> None:
         "profileCount": 0,
     }
     assert provider_profile_summary_from_memo(None)["selectionState"] == "not_recorded"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        None,
+        [],
+        {},
+        {"selectionState": "invalid", "profiles": [], "profileCount": 0},
+        {"selectionState": [], "profiles": [], "profileCount": 0},
+        {"selectionState": "recorded", "profiles": [], "profileCount": 0},
+        {"selectionState": "recorded", "profiles": [{"id": " "}], "profileCount": 1},
+        {"selectionState": "pending", "profiles": None, "profileCount": 0},
+    ],
+)
+def test_malformed_projection_without_usable_ids_is_unavailable(summary) -> None:
+    memo = {PROVIDER_PROFILE_MEMO_KEY: summary}
+    assert provider_profile_summary_from_memo(memo) is None
+    assert provider_profile_associations_from_memo(memo) is None
+
+
+@pytest.mark.parametrize("search_value", ["ppstrecorded", "", [], ["ppstrecorded"]])
+def test_missing_memo_with_recorded_index_is_unavailable(search_value) -> None:
+    assert provider_profile_summary_from_memo({}, search_value=search_value) is None
+
+
+@pytest.mark.parametrize(
+    "state,profiles,count",
+    [
+        ("invalid", [{"id": "known"}], 1),
+        ("pending", [{"id": "known"}], 1),
+        ("recorded", [{"id": "known"}, {"label": "Lost ID"}], 2),
+        ("recorded", [{"id": "known"}], "invalid"),
+        ("recorded", [{"id": "known"}], 0),
+        ("recorded", [{"id": "known"}, {"id": "known"}], 2),
+    ],
+)
+def test_partial_projection_preserves_trustworthy_associations(
+    state, profiles, count
+) -> None:
+    memo = {
+        PROVIDER_PROFILE_MEMO_KEY: {
+            "selectionState": state,
+            "profiles": profiles,
+            "profileCount": count,
+        }
+    }
+    associations = provider_profile_associations_from_memo(memo)
+    assert associations["incomplete"] is True
+    summary = provider_profile_summary_from_memo(memo)
+    assert summary["selectionState"] == "recorded"
+    assert summary["profiles"] == [{"id": "known", "label": None, "harness": None}]
+    assert "incomplete" not in summary
 
 
 def test_renamed_or_deleted_live_profile_keeps_recorded_label() -> None:

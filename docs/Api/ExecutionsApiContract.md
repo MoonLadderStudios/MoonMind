@@ -263,6 +263,12 @@ Context bindings are resolved before required-field validation and preset expans
 
 The compiler pins selected definitions, context/target identity, authored intent, resolved default behavior, child requirements, and effect owners in existing snapshot/plan evidence. It validates known composition conflicts before parent launch or tracker mutation. Unknown future targets are validated at the declared child boundary.
 
+The original task-input snapshot also preserves the workspace authority compiled
+from the selected Agent Profile. Native review admission compares the complete
+compiled graph, including that workspace, with the frozen input bytes. An
+altered workspace or artifact digest remains a pre-launch rejection; preserving
+the compiled value does not grant additional repository or execution authority.
+
 Explicit None is never promoted. An incompatible publishing Skill, parallel shared-branch batch without a qualified serial handoff, or missing required predecessor-code transfer produces a pre-effect error. A read-only step or non-publishing coordinator does not erase the scope's PR intent.
 
 The following are semantic examples, not promises that current deployed schemas already accept target-state authoring:

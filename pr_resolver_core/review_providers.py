@@ -210,6 +210,10 @@ def is_clean_review_comment(
     lines = []
     body = _PROVIDER_FOOTER_RE.sub("", str(comment.get("body") or ""))
     for line in body.splitlines():
+        # Markdown code indentation quotes the result or its reviewed commit;
+        # stripping it would turn embedded text into completion evidence.
+        if line.strip() and line.expandtabs(4).startswith("    "):
+            return False
         line = re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "")
         line = " ".join(line.split())
         reviewed_commit = _REVIEWED_COMMIT_RE.fullmatch(line)
