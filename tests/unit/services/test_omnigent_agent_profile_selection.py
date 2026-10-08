@@ -76,6 +76,8 @@ class _Session:
         )
         self.provider = SimpleNamespace(
             profile_id="oauth-team",
+            account_label=None,
+            provider_label=None,
             enabled=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
             disabled_reason=None,
@@ -109,6 +111,21 @@ class _Session:
         return self.profile if model is OmnigentAgentProfile else None
 
     async def execute(self, statement):
+        columns = statement.column_descriptions
+        if all(column.get("entity") is ManagedAgentProviderProfile for column in columns):
+            # Admission reads a projection, not the configuration/version join.
+            # Match the requested columns and IDs so a missing profile cannot
+            # acquire a label from whichever profile this fixture holds.
+            names = [column["name"] for column in columns]
+            assert set(names) <= {"profile_id", "account_label", "provider_label"}
+            profile_ids = statement.compile().params["profile_id_1"]
+            assert isinstance(profile_ids, (list, tuple))
+            rows = (
+                [tuple(getattr(self.provider, name) for name in names)]
+                if self.provider.profile_id in profile_ids
+                else []
+            )
+            return SimpleNamespace(all=lambda: rows)
         return SimpleNamespace(all=lambda: [(self.profile, self.version)])
 
     async def scalars(self, statement):
@@ -919,6 +936,8 @@ class _GenericV2Session(_Session):
         self.version.document["harness"]["id"] = harness_id
         self.provider = SimpleNamespace(
             profile_id="mm3788-openai-profile",
+            account_label=None,
+            provider_label=None,
             enabled=True,
             auth_state=ProviderProfileAuthState.CONNECTED,
             disabled_reason=None,

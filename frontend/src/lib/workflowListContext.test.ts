@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  workflowDetailHref,
   workflowListApiQueryFromContext,
   workflowListContextParams,
   workflowListHrefFromContext,
@@ -17,6 +18,20 @@ describe("workflowListContextParams", () => {
     expect(params.toString()).toBe(
       "source=temporal&integration=jira&repo=MoonMind&state=executing&limit=10",
     );
+  });
+
+  it("preserves repeated exact profile IDs including commas through API and return links", () => {
+    const params = new URLSearchParams("providerProfileIdIn=account%2Cprimary&providerProfileIdIn=other&providerProfileIdNotIn=excluded%2Cone&providerProfileStateNotIn=pending&targetRuntimeIn=codex_cli");
+    const detail = workflowDetailHref("wf-1", params);
+    const context = new URL(detail, "https://example.test").searchParams;
+    const back = new URL(workflowListHrefFromContext(context), "https://example.test").searchParams;
+    const api = new URLSearchParams(workflowListApiQueryFromContext(context));
+    for (const result of [context, back, api]) {
+      expect(result.getAll("providerProfileIdIn")).toEqual(["account,primary", "other"]);
+      expect(result.getAll("providerProfileIdNotIn")).toEqual(["excluded,one"]);
+      expect(result.get("providerProfileStateNotIn")).toBe("pending");
+      expect(result.get("targetRuntimeIn")).toBe("codex_cli");
+    }
   });
 
   it("drops parameters that are not part of the workflow list context", () => {
@@ -46,5 +61,25 @@ describe("workflowListContextParams", () => {
     );
 
     expect(href).toBe("/workflows?stateIn=completed&limit=100&returnFromWorkflowDetail=1");
+  });
+
+  it("MoonLadderStudios/MoonMind#4640 round-trips Provider Profile filters through list/detail context", () => {
+    const listQuery =
+      "providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50";
+    const detailHref = workflowDetailHref("wf-1", new URLSearchParams(listQuery));
+
+    expect(detailHref).toBe(
+      "/workflows/wf-1?providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50&source=temporal",
+    );
+    const backHref = workflowListHrefFromContext(
+      new URLSearchParams(detailHref.split("?")[1]),
+      { markDetailReturn: true },
+    );
+    expect(backHref).toBe(
+      "/workflows?providerProfileNotIn=acct-1&providerProfileStateNotIn=not_applicable&targetRuntimeIn=codex_cli&limit=50&returnFromWorkflowDetail=1",
+    );
+    expect(workflowListApiQueryFromContext(new URLSearchParams("providerProfileBlank=true"))).toBe(
+      "source=temporal&pageSize=25&providerProfileBlank=true",
+    );
   });
 });

@@ -3,7 +3,7 @@
 Status: Proposed design  
 Document Class: System / Feature Design View
 Owners: MoonMind Platform  
-Last updated: 2026-10-04
+Last updated: 2026-10-07
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -687,7 +687,7 @@ A native runner acknowledges the message injection itself: `session.status runni
 
 1. **Boundary.** The marked user item (or, when the bounded snapshot evicted it, the item-id frontier captured before dispatch) fixes where the current turn begins.
 2. **Progress.** Provider work is a `function_call`, `function_call_output`, or assistant `message` ordered after the boundary. Resource events and the marked message itself are not progress.
-3. **Quiescence.** A structurally complete turn (no unmatched tool call) must stay unchanged for 60s after a final assistant text, or 300s when the turn ended on a tool result. Terminal success always requires the provider snapshot to project an inactive turn; elapsed time and a generic `response.completed` event never override an explicitly active projection. Native Codex mirrors its own turn lifecycle into session status (`running` from `turn/started` until `turn/completed` posts `idle`) while its injection response completes immediately, so a `codex-native` snapshot with status `running` is active even without an active response id; a commentary message followed by a long reasoning pause is not a finished turn and never requests same-session continuation. When a live post-dispatch completion event is followed by 300s of unchanged, fully matched tool output while the snapshot remains active, the bridge emits the typed `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED` recovery signal instead. A profile-bound repository run claims a distinct continuation turn and retains its session, host, credential, workspace, and bridge authority until that continuation reaches an inactive terminal boundary. Callers without that durable continuation owner preserve the existing ambiguous-session cleanup fence.
+3. **Quiescence.** A structurally complete turn (no unmatched tool call) must stay unchanged for 60s after a final assistant text, or 300s when the turn ended on a tool result. The `turn_diff` call and output that native Codex mirrors after its final answer are evidence-only instrumentation, not a tool result, both here and when the profile-bound repository gate decides whether a turn ended on a final answer. This exemption requires the provider session snapshot's canonical `harness=codex-native` identity; other or unknown harnesses retain calls named `turn_diff` as real tool work. Terminal success always requires the provider snapshot to project an inactive turn; elapsed time and a generic `response.completed` event never override an explicitly active projection. Native Codex mirrors its own turn lifecycle into session status (`running` from `turn/started` until `turn/completed` posts `idle`) while its injection response completes immediately, so a `codex-native` snapshot with status `running` is active even without an active response id; a commentary message followed by a long reasoning pause is not a finished turn and never requests same-session continuation. When a live post-dispatch completion event is followed by 300s of unchanged, fully matched tool output while the snapshot remains active, the bridge emits the typed `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED` recovery signal instead. A profile-bound repository run claims a distinct continuation turn and retains its session, host, credential, workspace, and bridge authority until that continuation reaches an inactive terminal boundary. Callers without that durable continuation owner preserve the existing ambiguous-session cleanup fence.
 4. **Turn-start budget.** One watchdog per execution attempt is anchored at the instant the provider accepts the marked message (or at reattach, when a prior attempt posted it) and is evaluated wherever the snapshot is observed: the reattach snapshot, provider heartbeats, idle-stream ticks while the SSE stream is open but silent, the stream-closed snapshot, and the terminal poll. It depends on neither a terminal SSE frame nor any SSE frame at all. While the boundary is visible, no live active response remains, and no item follows the boundary, the wait is bounded at 300s; only an observation initiated after the deadline can fire it. A current active response temporarily defers the check, except when a post-dispatch terminal response event identifies that exact response id: retaining an id after completion, failure, policy denial, incompleteness, error, or cancellation is then a stale projection and cannot extend the budget. Activity retry rebuilds that terminal-response set from the durable redacted raw-event journal as well as the latest heartbeat, so a crash between journal commit and heartbeat cannot restore stale live-work authority. Only ordered progress after the boundary permanently disarms the watchdog. This distinction is required because the message-injection response can briefly project an active response id, can retain that id after its terminal event, and can do either without starting the harness; a generic session-level `running` status is likewise not correlated evidence that the marked turn started. Native Codex is the harness-specific exception described above: its `running` turn lifecycle also defers the turn-start watchdog and remains subject to the no-progress stall budget. Exceeding the budget fails with `OMNIGENT_CURRENT_TURN_NOT_STARTED` (`integration_error`, remediation `retry_step_execution`): the provider accepted the turn and dropped it, and no work exists to preserve. The execution boundary finalizes this failure itself: the decisive no-work snapshot is captured into the evidence bundle, the durable bridge row is marked terminal `failed`, and the typed result is returned rather than raised, so the generic-host realizer, the profile-bound coordinator, and the unprofiled path all release host, credential, and provider authority through their normal cleanup instead of deferring it for live work that does not exist. The failed attempt's runtime binding is cleaned and its canonical turn command settled, both immutably, so the retry is a new step execution attempt with a fresh idempotency key, never a same-key redispatch. The parent workflow treats the explicit `retry_step_execution` recommendation as retry authority even though the failure class is `integration_error`; credential, authorization, permanent, and terminal-contract failures remain non-retryable.
 5. **Host loss.** The same observations bound an unfinished turn whose host is gone. A Docker engine restart stops on-demand host containers without restarting them, and Omnigent then projects the session with `runner_online`, `host_online`, and `host_resumable` all false while the turn stays frozen, typically on a tool call whose output can never arrive. When every observation across 180s projects that lost host and the marked turn has no final assistant text, the attempt fails with `OMNIGENT_SESSION_HOST_LOST` and `retry_step_execution`. It is finalized at the execution boundary like a never-started turn, and the step reruns on a fresh host from its saved workspace checkpoint. Any observation that does not project a lost host restarts the grace, including a host reconnecting after an Omnigent server restart or a resumable host. A snapshot without the liveness fields never counts as lost.
 6. **No-progress budget and recovery.** The execution budget determines the marked-turn wait, with its existing 120s recovery reserve; the progress-extension grace does not shorten a quiet build's base budget. An active turn with an unchanged ordered-work signature cannot renew this wait through liveness heartbeats. Its `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED` observation and last-progress clock are preserved in the existing journals and diagnostic artifacts. A profile-bound continuation owner whose compiled session policy permits interruption may make one bounded interrupt/probe. Only a confirmed inactive projection admits `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED`, retaining the session, leases, workspace, and original request for the existing bounded continuation loop. An unavailable probe or still-active projection preserves the ambiguous-session cleanup fence. Other unresolved terminal shapes retain `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS`.
@@ -721,20 +721,52 @@ runtime.omnigent.sse.raw.jsonl
 ```
 
 Raw and normalized journals default to seven-day troubleshooting retention.
-During execution, the bridge commits both complete accumulated journal refs
-before reclaiming the preceding numbered snapshots. It refuses an incomplete
-replacement or a shorter prefix that would discard verified progress. Current
-canonical refs, operator pins and live artifact use claims remain protected;
-the current pair of a non-terminal bridge session survives ordinary expiry.
-The artifact service records recoverable deletion intents for failed physical
-cleanup, which the existing hourly lifecycle sweep reconciles. Final journals
-retain the full event history without keeping a separate growing copy per event.
-Proxy and retained embedded journal writers share this same reclamation owner.
-Bridge event-index payload locators advance with the committed complete journal
-pair, including when an older snapshot remains pinned or in use. Delayed event
-appends use the current complete prefix containing their payload. Append-only
-control-plane observations preserve their original artifact references and
-protect those exact snapshots from prefix reclamation.
+During execution the bridge persists them in bounded chunks, so durable work per
+event does not grow with the length of the turn. A flush rewrites only the open
+chunk, at most 256 normalized events or about 4 MiB, named by the chunk's first
+normalized event and its length. Each chunk version commits before the index
+rows that locate events in it: a crash can leave an unindexed journal tail, but
+never an index row whose evidence does not exist. The stream loop commits every
+event before it waits for the provider or acts on a turn-ending or approval
+status. Only while further provider frames are already queued may up to 32
+events share one commit, which bounds loss on a crash while letting a fast
+stream amortize fixed artifact and database overhead instead of falling behind.
+
+Within a chunk, the bridge commits the longer version before reclaiming the
+preceding one. It refuses an incomplete replacement, a shorter version, or a
+different chunk that would drop verified progress. Starting the next chunk
+retains the completed pair unchanged in the bridge session row's chunk history,
+and the row's current refs name the open chunk. Activity retry restores the
+chunk history followed by the current pair, locates each restored event in its
+chunk, and continues in a new chunk. The terminal capture bundle publishes the
+complete journals, which then replace the chunk history as the canonical refs.
+Terminal event-index rows point to the complete normalized journal in the same
+transaction that publishes terminal status, so expired chunks can be reclaimed
+without invalidating the terminal payload locators.
+
+Deployment transitions stop the observed journal writers and retention workers
+through the existing deployment owner, then compact any sealed history once
+into the full JSONL prefix understood by older readers. The bridge store keeps
+the old chunks until the complete pair and current-attempt index locators commit
+atomically; it does not terminalize the provider turn or change dispatch intent.
+Raw frames and event order/provenance survive unchanged. The compacted normalized
+stream restores the original provider `artifactRef` projection from `artifactRefs`,
+so a legacy decoder cannot resurrect transient chunk locators. Lost acknowledgments
+reuse completed compaction uploads and reconcile current refs before repeating.
+The update and rollback sequence is owned by
+[Docker Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services).
+
+Current canonical refs, the chunk history of a non-terminal bridge session,
+operator pins and live artifact use claims remain protected; a non-terminal
+session's journal survives ordinary expiry. The artifact service records
+recoverable deletion intents for failed physical cleanup, which the existing
+hourly lifecycle sweep reconciles. Proxy and retained embedded journal writers
+share this same reclamation owner; the retired embedded writer still publishes
+accumulated prefixes. Bridge event-index payload locators advance with the
+committed version of their chunk, including when an older version remains
+pinned or in use. Delayed event appends use the current version of their chunk.
+Append-only control-plane observations preserve their original artifact
+references and protect those exact versions from reclamation.
 
 ### 10.2 Normalized event shape
 

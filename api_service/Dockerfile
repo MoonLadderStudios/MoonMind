@@ -78,12 +78,13 @@ RUN npm config set fund false \
     && npm config set audit false \
     && npm config set update-notifier false
 
-COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
+COPY package.json package-lock.json /build/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --no-fund --no-audit
 
 # Copy only the source files needed for the frontend build after dependencies
 # are installed so source-only edits do not invalidate npm ci.
+COPY postcss.config.cjs tailwind.config.cjs /build/
 COPY frontend/ /build/frontend/
 # Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
 COPY api_service/templates/react_dashboard.html /build/api_service/templates/react_dashboard.html
@@ -249,6 +250,11 @@ USER app
 
 FROM runtime-dependencies AS runtime-base
 
+# Install the egress proxy before source copies so source edits retain this layer.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends squid
+
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
@@ -256,15 +262,15 @@ COPY moonmind /app/moonmind/
 # needs its source. No API or worker runtime path imports it: deployment
 # updates reach the deploy/controller endpoint over HTTP.
 COPY moonmind_controller /app/moonmind_controller/
+# The existing host-owned bootstrap can run this small stdlib controller
+# from the already-published application image before an update submission.
+COPY deploy/controller /app/deploy/controller/
 COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
 # The enforcer's own policy is image-owned and lives in its own source
 # directory. It must never be copied out of the deployment-mounted directory:
 # a live v1 gateway bind-mounts that directory's squid.conf, so rewriting it
 # for a newer enforcer invalidates every running v1 gateway on the host.
 COPY docker/moonmind-egress /opt/moonmind-egress/
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends squid
 # The embedded host-auth adapter executes verifier sources from the exact
 # pinned submodule revision. Keep that immutable source available in every API
 # and worker runtime derived from this stage.

@@ -1,8 +1,8 @@
 # First-Run Service Inventory (MoonMind#3940)
 
-This is the operational counterpart of the conceptual [architecture table in the
-README](../README.md#architecture). The README table maps conceptual
-components to roles; this document lists every service declared in the
+This is the operational counterpart of the conceptual [architecture overview in the
+README](../README.md#architecture). The README describes the main components
+and their roles; this document lists every service declared in the
 canonical `docker-compose.yaml`, its published ports and Compose profiles, and
 whether it is steady-state, init/one-shot, optional, or worker-created
 on-demand. Optional, init, one-shot, and on-demand containers are not part of
@@ -98,10 +98,7 @@ diagnostics (see [Combined Stack Validation and Rollback](Omnigent/CombinedStack
 
 ## Conceptual components versus operational services
 
-The README architecture table stays a short conceptual map (API Service,
-Temporal Server, Worker Fleet, Omnigent Runtime Plane, Managed Compatibility
-Plane, Docker Backend Service, Dashboard, MinIO, Docker Proxy). Several rows
-in the tables above implement one conceptual component — for example, seven
-`temporal-worker-*` services implement the Worker Fleet — and init, optional,
-and on-demand containers are accounted separately, never merged into the
-defaults.
+The README architecture overview groups the API and dashboard, Temporal and
+workers, Omnigent, storage, and Docker Compose. Several services in the tables
+above can implement one component. Init, optional, and on-demand containers
+are listed separately from the default stack.

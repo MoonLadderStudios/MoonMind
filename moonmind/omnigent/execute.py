@@ -47,6 +47,7 @@ from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_POSTED,
     FIRST_MESSAGE_POSTING,
     FIRST_MESSAGE_TERMINAL,
+    SEALED_JOURNAL_CHUNKS_KEY,
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
@@ -129,6 +130,26 @@ _SESSION_HOST_LOSS_GRACE_SECONDS = 180.0
 # re-sent for this long instead of failing the attempt on a refused connection.
 _OMNIGENT_SERVER_OUTAGE_GRACE_SECONDS = 120.0
 _TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
+# Live journals persist in bounded chunks: a flush rewrites only the open
+# chunk, so per-event durable work never grows with the journal length.
+_JOURNAL_CHUNK_MAX_EVENTS = 256
+_JOURNAL_CHUNK_MAX_BYTES = 4 * 1024 * 1024
+# While further provider frames are already queued, the stream loop defers its
+# flush for at most this many events, amortizing fixed artifact and database
+# overhead instead of falling behind a fast stream.
+_JOURNAL_FLUSH_MAX_EVENTS = 32
+# Statuses that end or pause the turn are committed before acting on them.
+_JOURNAL_FLUSH_NOW_STATUSES = frozenset(
+    {
+        "awaiting_approval",
+        "intervention_requested",
+        "completed",
+        "failed",
+        "canceled",
+        "timed_out",
+        "idle",
+    }
+)
 _MARKED_TURN_ACTIVITY_RETRY_RESERVE_SECONDS = 600.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "omnigent_activity_heartbeat_state",
@@ -1165,6 +1186,48 @@ def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
     return _validated_pre_dispatch_item_ids(metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY])
 
 
+# Native Codex mirrors each turn's working-tree diff as a ``turn_diff`` call and
+# output appended after its final assistant text. The pair is evidence-only
+# instrumentation, not agent work, so it must never turn a completed response
+# back into an active tool boundary.
+_TURN_INSTRUMENTATION_TOOL_NAMES = frozenset({"turn_diff"})
+
+
+def turn_instrumentation_item_indexes(
+    items: list[Any], *, harness: str | None
+) -> frozenset[int]:
+    """Return the indexes of native evidence-only instrumentation items.
+
+    Only the provider session's canonical native Codex harness projects this
+    instrumentation. Other and unknown harnesses may have real tools with the
+    same name. Within Codex, outputs must match a recognized call id.
+    """
+
+    if harness != "codex-native":
+        return frozenset()
+
+    call_ids: set[str] = set()
+    indexes: set[int] = set()
+    for index, raw_item in enumerate(items):
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_type = str(raw_item.get("type") or "").strip()
+        data = raw_item.get("data")
+        item_data = data if isinstance(data, Mapping) else {}
+        call_id = str(item_data.get("call_id") or "").strip()
+        if (
+            item_type == "function_call"
+            and str(item_data.get("name") or "").strip()
+            in _TURN_INSTRUMENTATION_TOOL_NAMES
+        ):
+            indexes.add(index)
+            if call_id:
+                call_ids.add(call_id)
+        elif item_type == "function_call_output" and call_id in call_ids:
+            indexes.add(index)
+    return frozenset(indexes)
+
+
 def _marked_turn_item_state(
     snapshot: Mapping[str, Any],
     *,
@@ -1240,7 +1303,9 @@ def _marked_turn_item_state(
     progress = False
     pending_call_ids: set[str] = set()
     pending_call_names: dict[str, str] = {}
-    instrumentation_call_ids: set[str] = set()
+    instrumentation_indexes = turn_instrumentation_item_indexes(
+        raw_items, harness=snapshot.get("harness")
+    )
     anonymous_pending_calls = 0
     anonymous_pending_call_names: list[str] = []
     for index, raw_item in enumerate(
@@ -1252,16 +1317,11 @@ def _marked_turn_item_state(
         item_type = str(raw_item.get("type") or "").strip()
         data = raw_item.get("data")
         item_data = data if isinstance(data, Mapping) else {}
+        if index in instrumentation_indexes:
+            progress = True
+            continue
         if item_type == "function_call":
             progress = True
-            # Native Codex appends this evidence-only instrumentation after its
-            # final assistant text. It is not agent work and must not turn a
-            # completed response back into an active tool boundary.
-            if str(item_data.get("name") or "").strip() == "turn_diff":
-                call_id = str(item_data.get("call_id") or "").strip()
-                if call_id:
-                    instrumentation_call_ids.add(call_id)
-                continue
             last_tool_index = index
             call_id = str(item_data.get("call_id") or "").strip()
             tool_name = str(item_data.get("name") or "").strip()
@@ -1274,8 +1334,6 @@ def _marked_turn_item_state(
         elif item_type == "function_call_output":
             progress = True
             call_id = str(item_data.get("call_id") or "").strip()
-            if call_id and call_id in instrumentation_call_ids:
-                continue
             last_tool_index = index
             if call_id:
                 pending_call_ids.discard(call_id)
@@ -2319,51 +2377,114 @@ def _activity_attempt() -> int:
         return 1
 
 
-async def _publish_active_journals(
-    *,
-    artifact_gateway: OmnigentArtifactGateway,
-    request: AgentExecutionRequest,
-    raw_events: list[dict[str, Any]],
-    normalized_events: list[dict[str, Any]],
-) -> tuple[str, str]:
-    """Finalize the current crash-safe journal prefix before its DB commit."""
+def _journal_jsonl(items: list[dict[str, Any]]) -> str:
+    return "".join(
+        f"{json.dumps(item, sort_keys=True, default=str)}\n" for item in items
+    )
 
-    def jsonl(items: list[dict[str, Any]]) -> str:
-        return "".join(
-            f"{json.dumps(item, sort_keys=True, default=str)}\n" for item in items
+
+class _ActiveJournal:
+    """Crash-safe live raw/normalized journals, persisted in bounded chunks.
+
+    ``raw_events`` and ``normalized_events`` keep the complete history for the
+    capture bundle and marked-turn reconciliation. A flush rewrites only the
+    open chunk, so durable work per event is bounded by the chunk limits rather
+    than by the journal length. Each chunk commits before the index rows that
+    locate events in it: a crash can leave an unindexed journal tail, never a
+    row whose evidence does not exist. The bridge store retains a completed
+    chunk in the row's chunk history when the next chunk begins.
+    """
+
+    def __init__(
+        self,
+        *,
+        artifact_gateway: OmnigentArtifactGateway,
+        request: AgentExecutionRequest,
+        run_store: OmnigentBridgeSessionStore | None,
+        bridge_session_id: str | None,
+        raw_events: list[dict[str, Any]],
+        normalized_events: list[dict[str, Any]],
+    ) -> None:
+        self._artifact_gateway = artifact_gateway
+        self._request = request
+        self._run_store = run_store if bridge_session_id else None
+        self._bridge_session_id = bridge_session_id or ""
+        self.raw_events = raw_events
+        self.normalized_events = normalized_events
+        # Restored history is already durable, so the first flush opens a chunk.
+        self._raw_start = len(raw_events)
+        self._normalized_start = len(normalized_events)
+        self._chunk_committed = False
+        self._unindexed: list[dict[str, Any]] = []
+
+    @property
+    def pending(self) -> int:
+        return len(self._unindexed)
+
+    def append(self, event: dict[str, Any]) -> None:
+        """Record a normalized event; ``flush`` makes it durable and indexed."""
+
+        self.normalized_events.append(event)
+        if self._run_store is not None:
+            self._unindexed.append(event)
+
+    async def flush(self) -> None:
+        if self._run_store is None or not self._unindexed:
+            return
+        count = len(self.normalized_events) - self._normalized_start
+        name = f"{self._normalized_start:08d}.{count:08d}"
+        raw_payload = _journal_jsonl(
+            redact_raw_events(self.raw_events[self._raw_start :])
         )
-
-    prefix = f"{len(normalized_events):08d}"
-    raw_ref = await artifact_gateway.write_text(
-        request=request,
-        name=f"runtime.omnigent.sse.raw.{prefix}.jsonl",
-        payload=jsonl(redact_raw_events(raw_events)),
-        link_type="runtime.omnigent.sse.raw",
-        content_type="application/x-ndjson",
-    )
-    normalized_ref = await artifact_gateway.write_text(
-        request=request,
-        name=f"runtime.omnigent.sse.normalized.{prefix}.jsonl",
-        payload=jsonl(normalized_events),
-        link_type="runtime.omnigent.sse.normalized",
-        content_type="application/x-ndjson",
-    )
-    return raw_ref, normalized_ref
+        normalized_payload = _journal_jsonl(
+            self.normalized_events[self._normalized_start :]
+        )
+        raw_ref = await self._artifact_gateway.write_text(
+            request=self._request,
+            name=f"runtime.omnigent.sse.raw.{name}.jsonl",
+            payload=raw_payload,
+            link_type="runtime.omnigent.sse.raw",
+            content_type="application/x-ndjson",
+        )
+        normalized_ref = await self._artifact_gateway.write_text(
+            request=self._request,
+            name=f"runtime.omnigent.sse.normalized.{name}.jsonl",
+            payload=normalized_payload,
+            link_type="runtime.omnigent.sse.normalized",
+            content_type="application/x-ndjson",
+        )
+        await self._run_store.attach_active_journal_refs(
+            self._bridge_session_id,
+            raw_ref=raw_ref,
+            normalized_ref=normalized_ref,
+            new_chunk=not self._chunk_committed,
+        )
+        self._chunk_committed = True
+        # The committed version supersedes this chunk's earlier versions, so
+        # every event in it, indexed or not, is now located there.
+        for event in self.normalized_events[self._normalized_start :]:
+            event["artifactRef"] = normalized_ref
+        await self._run_store.append_events(self._bridge_session_id, self._unindexed)
+        self._unindexed = []
+        if (
+            count >= _JOURNAL_CHUNK_MAX_EVENTS
+            or len(raw_payload) + len(normalized_payload) >= _JOURNAL_CHUNK_MAX_BYTES
+        ):
+            self._raw_start = len(self.raw_events)
+            self._normalized_start = len(self.normalized_events)
+            self._chunk_committed = False
 
 
 async def _append_reconciled_terminal_snapshot(
     *,
-    artifact_gateway: OmnigentArtifactGateway,
+    journal: _ActiveJournal,
     request: AgentExecutionRequest,
-    run_store: OmnigentBridgeSessionStore | None,
     bridge_session_id: str | None,
     session_id: str,
     terminal_status: str,
     snapshot: dict[str, Any],
     source: str,
     event_count: dict[str, int],
-    raw_events: list[dict[str, Any]],
-    normalized_events: list[dict[str, Any]],
 ) -> None:
     """Persist the synthetic terminal edge recovered from provider state."""
 
@@ -2389,26 +2510,9 @@ async def _append_reconciled_terminal_snapshot(
     moonmind_metadata = normalized_bridge_event.event["metadata"]["moonmind"]
     moonmind_metadata["source"] = "omnigent_terminal_reconciliation"
     moonmind_metadata["terminalReconciliationSource"] = source
-    normalized_events.append(normalized_bridge_event.event)
+    journal.append(normalized_bridge_event.event)
     event_count["value"] += 1
-    if run_store is None or not bridge_session_id:
-        return
-    raw_ref, normalized_ref = await _publish_active_journals(
-        artifact_gateway=artifact_gateway,
-        request=request,
-        raw_events=raw_events,
-        normalized_events=normalized_events,
-    )
-    normalized_bridge_event.event["artifactRef"] = normalized_ref
-    await run_store.attach_active_journal_refs(
-        bridge_session_id,
-        raw_ref=raw_ref,
-        normalized_ref=normalized_ref,
-    )
-    await run_store.append_events(
-        bridge_session_id,
-        [normalized_bridge_event.event],
-    )
+    await journal.flush()
 
 
 def _parse_jsonl(payload: str) -> list[dict[str, Any]]:
@@ -2433,21 +2537,35 @@ async def _restore_active_journals(
     artifact_gateway: OmnigentArtifactGateway,
     durable_row: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Restore the last committed journal prefix for an Activity retry.
+    """Restore every committed journal chunk for an Activity retry.
 
-    Journal refs are attached before the matching index commit, so a prefix may
-    contain one harmless unindexed tail event. Reusing that prefix is safe: the
-    event store deduplicates it when the retry reaches the same observation.
+    The durable journal is the row's retained chunk history followed by its
+    current refs. Refs are attached before the matching index commit, so the
+    last chunk may hold a harmless unindexed tail; the event store deduplicates
+    it when the retry reaches the same observation. Each restored event is
+    located in the chunk it was read from.
     """
 
-    restored: list[list[dict[str, Any]]] = []
-    for attribute in ("raw_events_ref", "normalized_events_ref"):
-        ref = str(getattr(durable_row, attribute, None) or "").strip()
-        if not ref:
-            restored.append([])
-            continue
-        restored.append(_parse_jsonl(await artifact_gateway.read_text(ref)))
-    return restored[0], restored[1]
+    metadata = getattr(durable_row, "metadata_", None) or {}
+    chunks = [
+        *(metadata.get(SEALED_JOURNAL_CHUNKS_KEY) or []),
+        {
+            "raw": getattr(durable_row, "raw_events_ref", None),
+            "normalized": getattr(durable_row, "normalized_events_ref", None),
+        },
+    ]
+    raw_events: list[dict[str, Any]] = []
+    normalized_events: list[dict[str, Any]] = []
+    for chunk in chunks:
+        raw_ref = str(chunk.get("raw") or "").strip()
+        if raw_ref:
+            raw_events.extend(_parse_jsonl(await artifact_gateway.read_text(raw_ref)))
+        normalized_ref = str(chunk.get("normalized") or "").strip()
+        if normalized_ref:
+            for event in _parse_jsonl(await artifact_gateway.read_text(normalized_ref)):
+                event["artifactRef"] = normalized_ref
+                normalized_events.append(event)
+    return raw_events, normalized_events
 
 
 def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> float:
@@ -3182,40 +3300,36 @@ async def run_omnigent_execution(
                     ),
                     default=0,
                 )
-                if durable_cursor:
-                    # The current Omnigent stream endpoint has no cursor/resume
-                    # parameter. Preserve that discontinuity explicitly and once
-                    # instead of implying that the new connection is contiguous.
-                    gap_event = build_omnigent_bridge_event(
-                        payload={
-                            "type": "stream.resume_gap",
-                            "status": "running",
-                            "metadata": {
-                                "reason": "upstream_replay_unavailable",
-                                "lastDurableCursor": durable_cursor,
-                            },
+            journal = _ActiveJournal(
+                artifact_gateway=artifact_gateway,
+                request=request,
+                run_store=run_store,
+                bridge_session_id=bridge_session_id,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+            )
+            if durable_cursor:
+                # The current Omnigent stream endpoint has no cursor/resume
+                # parameter. Preserve that discontinuity explicitly and once
+                # instead of implying that the new connection is contiguous.
+                gap_event = build_omnigent_bridge_event(
+                    payload={
+                        "type": "stream.resume_gap",
+                        "status": "running",
+                        "metadata": {
+                            "reason": "upstream_replay_unavailable",
+                            "lastDurableCursor": durable_cursor,
                         },
-                        sequence=durable_cursor + 1,
-                        request=request,
-                        omnigent_session_id=session_id,
-                        bridge_session_id=bridge_session_id,
-                    ).event
-                    gap_event["deduplicationKey"] = f"resume-gap:{durable_cursor}"
-                    normalized_events.append(gap_event)
-                    raw_ref, normalized_ref = await _publish_active_journals(
-                        artifact_gateway=artifact_gateway,
-                        request=request,
-                        raw_events=raw_events,
-                        normalized_events=normalized_events,
-                    )
-                    gap_event["artifactRef"] = normalized_ref
-                    await run_store.attach_active_journal_refs(
-                        bridge_session_id,
-                        raw_ref=raw_ref,
-                        normalized_ref=normalized_ref,
-                    )
-                    await run_store.append_events(bridge_session_id, [gap_event])
-                    durable_cursor += 1
+                    },
+                    sequence=durable_cursor + 1,
+                    request=request,
+                    omnigent_session_id=session_id,
+                    bridge_session_id=bridge_session_id,
+                ).event
+                gap_event["deduplicationKey"] = f"resume-gap:{durable_cursor}"
+                journal.append(gap_event)
+                await journal.flush()
+                durable_cursor += 1
 
             event_count = {"value": durable_cursor}
             heartbeat_status = {"value": "running"}
@@ -3308,17 +3422,14 @@ async def run_omnigent_execution(
                         "status": terminal_status,
                     }
                     await _append_reconciled_terminal_snapshot(
-                        artifact_gateway=artifact_gateway,
+                        journal=journal,
                         request=request,
-                        run_store=run_store,
                         bridge_session_id=bridge_session_id,
                         session_id=session_id,
                         terminal_status=terminal_status,
                         snapshot=terminal_snapshot_override,
                         source="reattached_inactive_snapshot",
                         event_count=event_count,
-                        raw_events=raw_events,
-                        normalized_events=normalized_events,
                     )
             stream_events: AsyncIterator[Any] | None = None
             if terminal_status is None:
@@ -3362,6 +3473,8 @@ async def run_omnigent_execution(
 
                 nonlocal terminal_status, terminal_snapshot_override
                 nonlocal next_terminal_reconciliation_at
+                # Snapshot reads and terminal decisions follow committed evidence.
+                await journal.flush()
                 observed_at = asyncio.get_running_loop().time()
                 next_terminal_reconciliation_at = (
                     observed_at + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
@@ -3403,17 +3516,14 @@ async def run_omnigent_execution(
                     "status": terminal_status,
                 }
                 await _append_reconciled_terminal_snapshot(
-                    artifact_gateway=artifact_gateway,
+                    journal=journal,
                     request=request,
-                    run_store=run_store,
                     bridge_session_id=bridge_session_id,
                     session_id=session_id,
                     terminal_status=terminal_status,
                     snapshot=terminal_snapshot_override,
                     source=source,
                     event_count=event_count,
-                    raw_events=raw_events,
-                    normalized_events=normalized_events,
                 )
                 heartbeat_status["value"] = terminal_status
                 return True
@@ -3451,29 +3561,21 @@ async def run_omnigent_execution(
                         ].update(start_watchdog.heartbeat_fields())
                     if normalized_bridge_event.diagnostic is not None:
                         event_diagnostics.append(normalized_bridge_event.diagnostic)
-                    normalized_events.append(normalized_bridge_event.event)
-                    if run_store is not None and bridge_session_id:
-                        # Durability policy: publish the redacted journals first,
-                        # then commit each normalized index row. A crash can leave
-                        # an unreferenced artifact, never a DB row whose evidence
-                        # does not exist. Per-event commits favor loss bounds over
-                        # throughput for this interactive stream.
-                        raw_ref, normalized_ref = await _publish_active_journals(
-                            artifact_gateway=artifact_gateway,
-                            request=request,
-                            raw_events=raw_events,
-                            normalized_events=normalized_events,
-                        )
-                        normalized_bridge_event.event["artifactRef"] = normalized_ref
-                        await run_store.attach_active_journal_refs(
-                            bridge_session_id,
-                            raw_ref=raw_ref,
-                            normalized_ref=normalized_ref,
-                        )
-                        await run_store.append_events(
-                            bridge_session_id, [normalized_bridge_event.event]
-                        )
+                    journal.append(normalized_bridge_event.event)
                     normalized = normalized_bridge_event.event["normalizedStatus"]
+                    # Durability policy: commit the redacted journal chunk, then
+                    # its index rows. Every event is committed before the loop
+                    # waits for the provider or acts on a turn-ending status;
+                    # only while further frames are already queued may a bounded
+                    # batch share one commit, so a fast stream cannot outpace
+                    # persistence.
+                    if (
+                        stream_queue is None
+                        or stream_queue.empty()
+                        or journal.pending >= _JOURNAL_FLUSH_MAX_EVENTS
+                        or normalized in _JOURNAL_FLUSH_NOW_STATUSES
+                    ):
+                        await journal.flush()
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,
@@ -3623,29 +3725,9 @@ async def run_omnigent_execution(
                                 omnigent_session_id=session_id,
                                 bridge_session_id=bridge_session_id,
                             )
-                            normalized_events.append(normalized_bridge_event.event)
+                            journal.append(normalized_bridge_event.event)
                             event_count["value"] += 1
-                            if run_store is not None and bridge_session_id:
-                                raw_ref, normalized_ref = (
-                                    await _publish_active_journals(
-                                        artifact_gateway=artifact_gateway,
-                                        request=request,
-                                        raw_events=raw_events,
-                                        normalized_events=normalized_events,
-                                    )
-                                )
-                                normalized_bridge_event.event["artifactRef"] = (
-                                    normalized_ref
-                                )
-                                await run_store.attach_active_journal_refs(
-                                    bridge_session_id,
-                                    raw_ref=raw_ref,
-                                    normalized_ref=normalized_ref,
-                                )
-                                await run_store.append_events(
-                                    bridge_session_id,
-                                    [normalized_bridge_event.event],
-                                )
+                            await journal.flush()
                         heartbeat_status["value"] = terminal_status
                         break
                     if event_count["value"] % 8 == 0:
@@ -3657,9 +3739,15 @@ async def run_omnigent_execution(
                                 "firstMessagePosted": True,
                             }
                         )
+            except Exception:
+                # A failing stream must not strand events it already delivered.
+                with suppress(Exception):
+                    await journal.flush()
+                raise
             finally:
                 await _cancel_task(heartbeat_task)
                 await _cancel_task(stream_task)
+            await journal.flush()
 
             final_snapshot_observed_at: float | None = None
             final_snapshot_completed_at: float | None = None
@@ -3807,24 +3895,9 @@ async def run_omnigent_execution(
                         omnigent_session_id=session_id,
                         bridge_session_id=bridge_session_id,
                     )
-                    normalized_events.append(normalized_bridge_event.event)
+                    journal.append(normalized_bridge_event.event)
                     event_count["value"] += 1
-                    if run_store is not None and bridge_session_id:
-                        raw_ref, normalized_ref = await _publish_active_journals(
-                            artifact_gateway=artifact_gateway,
-                            request=request,
-                            raw_events=raw_events,
-                            normalized_events=normalized_events,
-                        )
-                        normalized_bridge_event.event["artifactRef"] = normalized_ref
-                        await run_store.attach_active_journal_refs(
-                            bridge_session_id,
-                            raw_ref=raw_ref,
-                            normalized_ref=normalized_ref,
-                        )
-                        await run_store.append_events(
-                            bridge_session_id, [normalized_bridge_event.event]
-                        )
+                    await journal.flush()
             if terminal_status is None:
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
@@ -4231,21 +4304,8 @@ async def run_omnigent_execution(
                     **start_watchdog.heartbeat_fields(),
                 }
             )
-            normalized_events.append(recovery_event)
-            raw_ref, normalized_ref = await _publish_active_journals(
-                artifact_gateway=artifact_gateway,
-                request=request,
-                raw_events=raw_events,
-                normalized_events=normalized_events,
-            )
-            if run_store is not None and bridge_session_id:
-                await run_store.attach_active_journal_refs(
-                    bridge_session_id,
-                    raw_ref=raw_ref,
-                    normalized_ref=normalized_ref,
-                )
-                recovery_event["artifactRef"] = normalized_ref
-                await run_store.append_events(bridge_session_id, [recovery_event])
+            journal.append(recovery_event)
+            await journal.flush()
         # Keep the original stall diagnostic in the existing artifact owner;
         # failed reporting cannot erase the journal or authorize terminalization.
         with suppress(Exception):

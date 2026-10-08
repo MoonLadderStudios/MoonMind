@@ -24,6 +24,7 @@ from pr_resolver_core.review_providers import (
 )
 
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
 from moonmind.schemas.temporal_payload_policy import validate_compact_temporal_mapping
@@ -38,6 +39,7 @@ from moonmind.statuses.step_ledger import (
     step_execution_to_ledger_status,
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
+from moonmind.utils.logging import redact_sensitive_text
 
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. MoonMind.ManifestIngest is intentionally absent from the live
@@ -1804,8 +1806,9 @@ MergeMethod = Literal["merge", "squash", "rebase"]
 # How merge automation finishes once the gate opens and the resolver reports
 # that nothing is left to address. "merge" runs the final pr-resolver pass with
 # merge authority; "fix_only" stops at the open gate without a merge side
-# effect. Histories recorded before this field default to "merge".
-MergeAutomationFinishMode = Literal["merge", "fix_only"]
+# effect. "review_only" requests and observes fresh review without a resolver.
+# Histories recorded before this field default to "merge".
+MergeAutomationFinishMode = Literal["merge", "fix_only", "review_only"]
 PostMergeJiraStrategy = Literal["done_category"]
 
 class MergeAutomationGitHubGateModel(BaseModel):
@@ -2081,6 +2084,19 @@ class MergeAutomationConfigModel(BaseModel):
     # derives its merge authority from this value; it is never configured twice.
     finish_mode: MergeAutomationFinishMode = Field("merge", alias="finishMode")
 
+    @model_validator(mode="after")
+    def _validate_review_only(self) -> "MergeAutomationConfigModel":
+        if self.finish_mode != "review_only":
+            return self
+        if (
+            not self.review_loop.enabled
+            or not self.review_loop.require_fresh_review_for_every_head
+        ):
+            raise ValueError("review_only requires an enabled fresh automated reviewer.")
+        if self.post_merge_jira.enabled or self.post_merge_github.enabled:
+            raise ValueError("review_only forbids post-merge effects.")
+        return self
+
 ReadinessBlockerKind = Literal[
     "checks_running",
     "checks_failed",
@@ -2110,6 +2126,29 @@ class ReadinessBlockerModel(BaseModel):
     retryable: bool = Field(True, alias="retryable")
     source: str | None = Field(None, alias="source")
 
+    provider_failure: dict[str, Any] | None = Field(
+        None, alias="providerFailure", exclude_if=lambda value: value is None
+    )
+
+    @field_validator("provider_failure", mode="before")
+    @classmethod
+    def _compact_provider_failure(cls, value: Any) -> dict[str, Any] | None:
+        from moonmind.workflows.provider_failures import (
+            provider_failure_event_from_metadata,
+        )
+
+        if not isinstance(value, Mapping):
+            return None
+        # Use the canonical codec to discard raw bodies and regenerate the
+        # operator summary. Only compact scalar evidence belongs in history.
+        compact = {
+            key: redact_sensitive_text(item)[:500] if isinstance(item, str) else item
+            for key, item in value.items()
+            if isinstance(item, (str, int)) and not isinstance(item, bool)
+        }
+        event = provider_failure_event_from_metadata(compact)
+        return event.to_metadata() if event is not None else None
+
     @field_validator("summary")
     @classmethod
     def _summary_required(cls, value: str) -> str:
@@ -2117,6 +2156,30 @@ class ReadinessBlockerModel(BaseModel):
         if not candidate:
             raise ValueError("summary must be a non-empty string")
         return candidate[:500]
+
+class AutomatedReviewFailureModel(BaseModel):
+    """Compact identity of a provider refusal, separate from review completion."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["issue_comment"] = Field(..., alias="kind")
+    id: int = Field(..., alias="id", gt=0, strict=True)
+    failed_at: str = Field(..., alias="failedAt")
+    provider_error_class: str = Field(
+        ...,
+        alias="providerErrorClass",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+    @field_validator("failed_at")
+    @classmethod
+    def _aware_failure_timestamp(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("failedAt must carry a timezone")
+        return value
 
 class ReadinessEvidenceModel(BaseModel):
     """Compact result of evaluating external PR readiness."""
@@ -2127,10 +2190,17 @@ class ReadinessEvidenceModel(BaseModel):
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
+    checks_reported: bool | None = Field(None, alias="checksReported")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
+    )
+    automated_review_request_comment_id: int | None = Field(
+        None, alias="automatedReviewRequestCommentId", gt=0
+    )
+    automated_review_requested_at: str | None = Field(
+        None, alias="automatedReviewRequestedAt"
     )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"
@@ -2140,6 +2210,9 @@ class ReadinessEvidenceModel(BaseModel):
     )
     automated_review_completed_at: str | None = Field(
         None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="automatedReviewRequestFailure", exclude_if=lambda value: value is None
     )
     automated_review_request_stale: bool | None = Field(
         None, alias="automatedReviewRequestStale"
@@ -2199,6 +2272,9 @@ class AutomatedReviewCycleModel(BaseModel):
     completion_kind: str | None = Field(None, alias="completionKind")
     completion_id: int | None = Field(None, alias="completionId")
     completed_at: str | None = Field(None, alias="completedAt")
+    request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="requestFailure", exclude_if=lambda value: value is None
+    )
     status: str = Field("requested", alias="status")
     progress_signature: str | None = Field(None, alias="progressSignature")
 
@@ -2221,6 +2297,9 @@ class MergeAutomationStartInput(BaseModel):
     parent_workflow_id: str = Field(..., alias="parentWorkflowId")
     parent_run_id: str | None = Field(None, alias="parentRunId")
     principal: str | None = Field(None, alias="principal")
+    parent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="parentExecutionPlan"
+    )
     publish_context_ref: str = Field(..., alias="publishContextRef")
     pull_request: PullRequestRefModel = Field(..., alias="pullRequest")
     jira_issue_key: str | None = Field(None, alias="jiraIssueKey")
@@ -2263,6 +2342,20 @@ class MergeAutomationStartInput(BaseModel):
         if value < 0:
             raise ValueError("cycleCount must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def _require_review_only_parent_plan(self) -> "MergeAutomationStartInput":
+        if self.config.finish_mode == "review_only" and self.parent_execution_plan is None:
+            raise ValueError("review_only requires parentExecutionPlan authority.")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_parent_plan(self, handler):
+        payload = handler(self)
+        if self.parent_execution_plan is None:
+            payload.pop("parentExecutionPlan", None)
+            payload.pop("parent_execution_plan", None)
+        return payload
 
 
 class PRResolverPolicyModel(BaseModel):
@@ -4250,6 +4343,36 @@ class ExecutionModel(BaseModel):
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
 
 
+class ExecutionProviderProfileItemModel(BaseModel):
+    """One recorded Provider Profile association in a list row."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    id: str = Field(..., alias="id", min_length=1, max_length=255)
+    label: Optional[str] = Field(None, alias="label", max_length=255)
+    harness: Optional[str] = Field(None, alias="harness", max_length=255)
+
+
+class ExecutionProviderProfileSummaryModel(BaseModel):
+    """Bounded recorded Provider Profile summary for list rows (#4640).
+
+    ``selectionState`` is ``recorded`` whenever any applicable ID is recorded;
+    the absence states apply only when none is. It carries stable IDs, a
+    display-name snapshot, and optional Harness only: never credentials, OAuth
+    paths, raw provider payloads, or host/container handles.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    selection_state: Literal[
+        "recorded", "pending", "not_recorded", "not_applicable"
+    ] = Field(..., alias="selectionState")
+    profiles: list[ExecutionProviderProfileItemModel] = Field(
+        default_factory=list, alias="profiles", max_length=8
+    )
+    profile_count: int = Field(0, alias="profileCount", ge=0)
+
+
 class ExecutionListItemModel(BaseModel):
     """Compact execution row returned by list APIs.
 
@@ -4301,6 +4424,9 @@ class ExecutionListItemModel(BaseModel):
     waiting_reason: Optional[str] = Field(None, alias="waitingReason")
     attention_required: bool = Field(False, alias="attentionRequired")
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    provider_profile: ExecutionProviderProfileSummaryModel | None = Field(
+        None, alias="providerProfile"
+    )
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
     repository: Optional[str] = Field(None, alias="repository")
@@ -4446,12 +4572,18 @@ class ExecutionFacetResponse(BaseModel):
 
     facet: Literal[
         "status",
+        "providerProfile",
         "targetRuntime",
         "targetSkill",
         "repository",
         "integration",
     ] = Field(..., alias="facet")
     items: list[ExecutionFacetItemModel] = Field(default_factory=list, alias="items")
+    # Provider Profile absence states (pending, not_recorded, not_applicable),
+    # typed separately from profile-ID values and always listed with counts.
+    state_items: list[ExecutionFacetItemModel] | None = Field(
+        None, alias="stateItems"
+    )
     blank_count: int | None = Field(None, alias="blankCount")
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(
         "exact", alias="countMode"

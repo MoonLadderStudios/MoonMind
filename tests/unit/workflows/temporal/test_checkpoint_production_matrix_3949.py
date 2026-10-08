@@ -1,31 +1,28 @@
-"""Production-matrix evidence for MoonLadderStudios/MoonMind#3949.
+"""Source, registry and service checks for MoonLadderStudios/MoonMind#3949.
 
 The artifacts-fleet cutover (#4032) is delivered; the workflow-queue
 persistence registration stays only for pre-cutover replay/in-flight
-compatibility. The verifier's remaining work asks for three recoverable
-proofs this module supplies without a Temporal server, deployment probe,
-or second worker:
+compatibility. This module runs without a Temporal server or deployment.
+Its first sections are source/registry checks, not execution proof:
 
-- production-path identity chain: the workflow's scheduled persistence
+- identity chain (source/registry): the workflow's scheduled persistence
   strings, the registered handler operation names, and the catalog routes
-  agree exactly, every persistence site carries the patch route options
-  with the shared retry budget, and per-type call-site timeouts equal the
-  serving catalog budgets;
-- measured capability inventory: the four retained helpers reference no
-  database/credential/Docker/artifact-storage authority in their bodies,
-  imports, or env-key strings, while the three persistence handlers
-  explicitly carry database authority; the compose spec pins which mounts
-  each fleet actually carries;
-- service failure matrix: duplicate terminal delivery replays idempotently,
-  stale terminal evidence is rejected without overwrite, a failed handoff
-  stays visible and unfinalized, and cancellation cannot be overwritten by
-  a stale success — all through ``CheckpointBranchService``, the single
-  mutator (no second writer).
+  agree, every persistence site carries the patch route options with the
+  shared retry budget, and call-site timeouts equal the catalog budgets;
+- capability inventory (AST/import/env-string inspection): the four
+  retained helpers name no database/credential/Docker/artifact-storage
+  authority, while the persistence handlers name database authority;
+- compose rights (spec inspection): declared mounts and environment plus
+  the ``env_file`` each worker loads. Both workers load the operator
+  ``.env``, so no per-fleet credential confinement is claimed.
 
-Out of scope by design (verifier marks them unrecoverable in this
-runtime): live deployment drain probes, execution-under-load saturation,
-and compat removal itself. Compat stays retained; the drain gate in
-``moonmind.gates.checkpoint_compat_drain`` owns that sequencing.
+The service failure matrix executes ``CheckpointBranchService`` (the single
+mutator) against a database: duplicate delivery, stale evidence, failed
+handoff, cancellation precedence and late running handoffs. The executed
+workflow-to-artifacts-worker journeys, including slot saturation, live in
+``tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py``.
+Live deployment drain observation and compat removal are separately owned;
+the drain gate in ``moonmind.gates.checkpoint_compat_drain`` sequences them.
 """
 
 from __future__ import annotations
@@ -218,7 +215,7 @@ def _function_body_strings(source: Path, function_name: str) -> set[str]:
     raise AssertionError(f"{function_name} not found in {source}")
 
 
-# --- 1. Production-path identity chain ---------------------------------------
+# --- 1. Identity chain (source/registry check) -------------------------------
 
 
 def test_scheduled_registered_and_routed_persistence_agree_exactly():
@@ -338,11 +335,11 @@ def test_cancellation_reaches_persistence_only_through_the_routed_path():
     assert "asyncio.shield(terminal_task)" in source
 
 
-# --- 2. Measured capability inventory ----------------------------------------
+# --- 2. Capability inventory (AST/import inspection, not confinement) --------
 
 
 def test_retained_helpers_reference_no_io_authority():
-    """Measured call graph: helpers cannot reach DB/credential/Docker I/O."""
+    """Source check: helper bodies name no DB/credential/Docker authority."""
 
     for helper in HELPER_FUNCTIONS:
         names = _function_body_names(AGENT_RUN_SRC, helper)
@@ -396,7 +393,7 @@ def test_workflow_fleet_composition_is_helpers_plus_compat_persistence():
 
 
 def test_deployment_spec_pins_each_fleet_mount_boundary():
-    """Measured mounts: workflow fleet carries workspaces, artifacts does not."""
+    """Compose check: workflow fleet mounts workspaces, artifacts does not."""
 
     import yaml
 
@@ -654,6 +651,53 @@ async def test_cancellation_cannot_be_overwritten_by_stale_success(
 
 
 @pytest.mark.asyncio
+async def test_late_running_handoff_cannot_reopen_canceled_turn(
+    matrix_session: AsyncSession,
+) -> None:
+    """A running handoff delivered after cancellation leaves the turn terminal.
+
+    The Temporal half (a ``mark_running`` delivery stuck in a saturated
+    artifacts slot while the cancellation terminal persists) lives in
+    ``test_saturated_artifacts_slot_keeps_cancellation_and_ordering_3949``.
+    """
+
+    service = CheckpointBranchService(matrix_session)
+    branch_id = "cbr-matrix-late-running"
+    turn_id = await _claimed_turn(service, branch_id)
+    canceled = await service.finalize_turn_execution(
+        workflow_id="wf-matrix",
+        branch_id=branch_id,
+        branch_turn_id=turn_id,
+        outcome="canceled",
+        agent_result_ref=f"artifact://agent-result/{branch_id}-cancel",
+        diagnostics_ref=f"artifact://terminal-diagnostics/{branch_id}-cancel",
+    )
+    await matrix_session.commit()
+    completed_at = canceled.completed_at
+
+    await service.mark_turn_running(
+        workflow_id="wf-matrix",
+        branch_id=branch_id,
+        branch_turn_id=turn_id,
+        runtime_agent_run_id=f"checkpoint-branch-agent:{branch_id}:turn-1",
+    )
+    await matrix_session.commit()
+    matrix_session.expire_all()
+
+    turn = await matrix_session.get(WorkflowCheckpointBranchTurn, turn_id)
+    assert turn is not None
+    assert turn.status == "canceled"
+    assert turn.completed_at is not None and completed_at is not None
+    # SQLite drops tzinfo on reload; the instant must be unchanged.
+    assert turn.completed_at.replace(tzinfo=None) == completed_at.replace(tzinfo=None)
+    assert turn.diagnostics["deliveryStage"] == "canceled"
+    assert turn.diagnostics["verificationPending"] is False
+    branch = await matrix_session.get(WorkflowCheckpointBranch, branch_id)
+    assert branch is not None
+    assert branch.state == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_restarted_worker_cannot_steal_running_turn_or_release_cleanup(
     matrix_session: AsyncSession,
 ) -> None:
@@ -694,12 +738,12 @@ async def test_restarted_worker_cannot_steal_running_turn_or_release_cleanup(
     assert "latestBranchTurnResult" not in (branch.artifact_refs or {})
 
 
-# --- 4. Executed denial at the workflow-fleet process boundary -----------------
+# --- 4. Executed denial at worker-bootstrap binding time ----------------------
 #
-# Inventory (AST/import/mount pinning above) is not execution proof. These
-# tests execute one real forbidden operation at the claimed worker-composition
-# boundary: the workflow fleet must refuse the artifacts capability through
-# the catalog binding path, while the artifacts fleet keeps serving it. The
+# These tests execute the bootstrap capability check in-process; they are not
+# a process or container boundary. The workflow fleet must refuse the
+# artifacts capability through the catalog binding path, while the artifacts
+# fleet keeps serving it. The
 # three compat persistence handlers stay reachable only through the explicit
 # workflow-queue compat registration (pre-cutover replay), never through a
 # new catalog binding on the workflow fleet.
@@ -781,27 +825,20 @@ def test_supported_topology_builds_all_fleets_with_bounded_concurrency():
 
 # --- 5. Credential/mount retain-vs-remove justification (3949-R2) ---------------
 #
-# The verifier asks for evidence that the workflow/artifacts fleets carry only
-# the credentials and mounts their actual colocated work needs. While the three
-# compat persistence handlers stay registered on the workflow fleet (the R3
-# live drain verdict is pending and fail-closed retain holds), the workflow
-# fleet must keep the I/O rights those handlers really use: database access
-# (async_session_maker, wired via the shared .env DATABASE_URL plus the
-# moonmind_secrets mount) and artifact retention (TEMPORAL_ARTIFACT_S3_* env
-# plus moonmind_secrets, via _retain_artifact/_write_result_artifact into the
-# S3-backed artifact service). Neither fleet carries LLM provider keys or
-# Docker authority, and the artifacts fleet correctly mounts no agent
-# workspaces. The agent_workspaces mount on the workflow fleet is not required
-# by the compat handlers (the four helpers carry no I/O authority per the
-# inventory tests above), but removing it — like removing the workflow fleet's
-# S3 config — is coupled to the R4 removal checklist: registration, dead DI,
-# and permissions go together once the live drain gate reports all-zero. No
-# compose change is taken in this pass; removal without the R3 verdict would
-# be a deployment change merely to close the issue.
+# While the three compat persistence handlers stay registered on the workflow
+# fleet (removal waits for the observed drain verdict), the workflow fleet
+# keeps the I/O rights those handlers use: database access and artifact
+# retention (TEMPORAL_ARTIFACT_S3_* plus moonmind_secrets). The workflow
+# fleet's agent_workspaces mount is not a compat-handler right: the workflow
+# side of MoonMind.AgentRun (ManagedAgentAdapter/CodexSessionAdapter) saves
+# and loads ManagedRunStore records under /work/agent_jobs/managed_runs, so it
+# stays with that consumer. Both workers also load the operator .env through
+# env_file, which can carry provider keys; queue separation is therefore not
+# credential separation, and these tests make no least-privilege claim.
 
 
 def test_retained_compat_handlers_require_database_and_artifact_authority():
-    """Measured I/O needs: every compat handler needs DB; terminals need artifacts."""
+    """Source check: compat handlers name DB access; terminals name artifacts."""
 
     for handler in PERSISTENCE_HANDLERS:
         names = _function_body_names(WORKFLOW_SRC, handler)
@@ -826,8 +863,26 @@ def test_retained_compat_handlers_require_database_and_artifact_authority():
         )
 
 
+def _effective_env_keys(service: dict) -> set[str]:
+    """Declared environment keys plus keys the documented env_file supplies."""
+
+    keys = {str(entry).split("=", 1)[0] for entry in service.get("environment", [])}
+    for env_file in service.get("env_file", []):
+        path = env_file["path"] if isinstance(env_file, dict) else env_file
+        # The operator's .env is created from .env-template; inspect the
+        # documented default keys it can deliver.
+        template = REPO_ROOT / (
+            ".env-template" if Path(path).name == ".env" else str(path)
+        )
+        for line in template.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                keys.add(line.split("=", 1)[0].strip())
+    return keys
+
+
 def test_fleet_credentials_and_mounts_match_retained_handler_needs():
-    """Pinned compose boundary: required rights retained, no unused secrets held."""
+    """Effective compose rights (declared env plus env_file) keep handler needs."""
 
     import yaml
 
@@ -835,49 +890,50 @@ def test_fleet_credentials_and_mounts_match_retained_handler_needs():
     workflow_worker = compose["services"]["temporal-worker-workflow"]
     artifacts_worker = compose["services"]["temporal-worker-artifacts"]
 
-    workflow_env = " ".join(str(entry) for entry in workflow_worker["environment"])
-    artifacts_env = " ".join(str(entry) for entry in artifacts_worker["environment"])
+    workflow_env = _effective_env_keys(workflow_worker)
+    artifacts_env = _effective_env_keys(artifacts_worker)
     workflow_volumes = [str(volume) for volume in workflow_worker.get("volumes", [])]
     artifacts_volumes = [str(volume) for volume in artifacts_worker.get("volumes", [])]
 
     # The retained workflow-queue handlers still need artifact retention, so
     # the workflow fleet intentionally keeps the S3 backend config alongside
-    # the artifacts fleet; queue separation is not privilege separation.
-    required_s3_keys = (
+    # the artifacts fleet.
+    for key in (
         "TEMPORAL_ARTIFACT_S3_ENDPOINT",
         "TEMPORAL_ARTIFACT_S3_BUCKET",
         "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
         "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
-    )
-    for key in required_s3_keys:
+    ):
         assert key in workflow_env, f"workflow fleet must retain {key} while compat is retained"
         assert key in artifacts_env, f"artifacts fleet must carry {key}"
     assert any("moonmind_secrets" in volume for volume in workflow_volumes)
     assert any("moonmind_secrets" in volume for volume in artifacts_volumes)
 
-    # The artifacts fleet serves persistence without agent workspaces.
+    # The artifacts fleet serves persistence without agent workspaces; the
+    # workflow fleet's mount belongs to the AgentRun managed-run store.
     assert not any(
         volume.startswith("agent_workspaces:") for volume in artifacts_volumes
     ), "artifacts fleet must not mount agent workspaces"
+    assert "agent_workspaces:/work/agent_jobs" in workflow_volumes
 
-    # Neither persistence fleet carries provider or container authority:
-    # no LLM keys, no Docker socket/host.
-    for key in (
-        "OPENAI_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "DOCKER_HOST",
-        "DOCKER_SOCKET",
-    ):
-        assert key not in workflow_env, f"workflow fleet must not carry {key}"
-        assert key not in artifacts_env, f"artifacts fleet must not carry {key}"
+    # Neither worker mounts the Docker socket. Credentials are not asserted
+    # absent: both workers load the operator .env, which can supply provider
+    # keys, so this composition makes no per-fleet credential claim.
+    for volume in workflow_volumes + artifacts_volumes:
+        assert "docker.sock" not in volume
 
-    # agent_workspaces on the workflow fleet is not a compat-handler need
-    # (helpers carry no I/O authority), but its removal — like the workflow
-    # fleet's S3 config — belongs to the R4 removal checklist together with
-    # the handler registration and dead DI, once the live drain gate reports
-    # all-zero. Recorded here so a future removal diff is reviewable.
+    # Network rights: both workers join only the control-plane network
+    # (Temporal, Postgres, MinIO and the API). The Docker API proxy is
+    # reachable only on the internal docker-proxy network, which neither
+    # worker joins, so neither has Docker API reach. The control-plane
+    # network is not internal, so this is no egress-confinement claim.
+    networks = compose["networks"]
+    assert networks["docker-proxy-network"].get("internal") is True
+    assert compose["services"]["docker-proxy"]["networks"] == ["docker-proxy-network"]
+    assert not networks["control-plane-network"].get("internal")
+    for worker in (workflow_worker, artifacts_worker):
+        assert "network_mode" not in worker
+        assert worker["networks"] == ["control-plane-network"]
 
 
 @pytest.mark.asyncio

@@ -196,6 +196,7 @@ mm_integration:Keyword
 mm_target_runtime:KeywordList
 mm_target_skill:KeywordList
 mm_title:KeywordList
+mm_provider_profile:Text
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
 mm_dependency_count:Int
