@@ -123,6 +123,8 @@ New handoffs bind owner workflow/run/type, resolver child workflow/run, step exe
 
 The portable Skill, not MoonMind's UI or scheduling gate, owns automatedReview freshness classification for the current head. Its result captures freshReviewForHead, requestPending, request/comment and completion identities/times, and progressSignature under the resolved Skill contract.
 
+Both the portable snapshot and GitHub readiness gate use the shared provider request selector. A newer explicit request on the unchanged head supersedes earlier refusals and completion evidence. Issue comments with equal creation timestamps are ordered by their numeric comment IDs; review and reaction IDs do not share that ordering. Only registered provider refusal openings count as a failed request, not findings or quoted examples that mention limits. An incomplete request inventory cannot establish completion.
+
 An older-commit review is not fresh for a new head. ProgressSignature includes head plus sorted actionable/deferred comment IDs so the parent can enforce the declared no-progress handoff without implementing the Skill's comment classification.
 
 ---
