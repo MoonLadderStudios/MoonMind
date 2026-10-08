@@ -67,6 +67,7 @@ class PullRequestReadinessResult(BaseModel):
     ready: bool = Field(False, alias="ready")
     pull_request_open: bool | None = Field(None, alias="pullRequestOpen")
     pull_request_merged: bool | None = Field(None, alias="pullRequestMerged")
+    checks_reported: bool | None = Field(None, alias="checksReported")
     checks_complete: bool | None = Field(None, alias="checksComplete")
     checks_passing: bool | None = Field(None, alias="checksPassing")
     automated_review_complete: bool | None = Field(
@@ -2180,6 +2181,7 @@ class GitHubService:
         observed_base_sha: str | None = None
         pr_open: bool | None = None
         pr_merged: bool | None = None
+        checks_reported: bool | None = None
         checks_complete: bool | None = None
         checks_passing: bool | None = None
         automated_review_complete: bool | None = None
@@ -2268,6 +2270,7 @@ class GitHubService:
                         str(base.get("ref") or "") if isinstance(base, dict) else None
                     ),
                 )
+                checks_reported = check_evidence.get("reported")
                 checks_complete = check_evidence["complete"]
                 checks_passing = check_evidence["passing"]
                 blockers.extend(check_evidence["blockers"])
@@ -2334,6 +2337,7 @@ class GitHubService:
             and pr_merged is not True,
             pullRequestOpen=pr_open,
             pullRequestMerged=pr_merged,
+            checksReported=checks_reported,
             checksComplete=checks_complete,
             checksPassing=checks_passing,
             automatedReviewComplete=automated_review_complete,
@@ -2523,6 +2527,7 @@ class GitHubService:
             )
 
         return {
+            "reported": ci_reported,
             "complete": not has_running_checks,
             "passing": not has_running_checks and not has_failed_checks,
             "blockers": blockers,
