@@ -2,6 +2,7 @@
 
 import inspect
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,7 +54,23 @@ def test_agent_run_workflow_child_task_queue_is_replay_patched(
         "patched",
         lambda patch_id: patch_id == AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     )
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2"),
+    )
     assert MoonMindAgentRun._workflow_child_task_queue() == "mm.workflow.custom.v2"
+    # MoonMind#3937: merge-lane descendants stay on the merge lane now that
+    # the lane shares the workflow process instead of overriding settings.
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.merge_automation"),
+    )
+    assert (
+        MoonMindAgentRun._workflow_child_task_queue()
+        == "mm.workflow.merge_automation"
+    )
 
     monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch_id: False)
     assert MoonMindAgentRun._workflow_child_task_queue() == "mm.workflow"

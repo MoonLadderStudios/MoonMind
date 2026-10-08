@@ -212,7 +212,7 @@ production registries and resolved settings (see #3959).
 
 - `mm.workflow.user.v2` (default start queue; `TemporalSettings.user_workflow_v2_task_queue`; new `MoonMind.UserWorkflow` starts and replay-patched child workflows route here under the `renamed_contract` mode)
 - `mm.workflow` (replay/poll address; `TemporalSettings.workflow_task_queue`; the workflow fleet keeps polling it for pre-patch in-flight histories via `get_workflow_poll_task_queues()`)
-- `mm.workflow.merge_automation` (`TemporalSettings.merge_automation_workflow_task_queue`; hosts the merge-automation workflow registration in `workflow_registry.py`)
+- `mm.workflow.merge_automation` (`TemporalSettings.merge_automation_workflow_task_queue`; runs workflows started with merge automation selected). The workflow fleet polls it from the same process as the queues above, through a separate SDK Worker with its own workflow-task budget (`TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY`, default 2). Replay-patched children of a workflow on this queue stay on it (`get_workflow_child_task_queue`); children of every other workflow route to the start queue.
 
 ### Activity task queues
 
@@ -230,7 +230,8 @@ production registries and resolved settings (see #3959).
   topology.
 
 The workflow poll topology (`get_workflow_poll_task_queues()` in
-`activity_catalog.py`: default start queue plus the replay queue) is wider
+`activity_catalog.py`: default start queue, the replay queue, and the
+merge-automation queue) is wider
 than the drain/fan-out scope (`_MOONMIND_TASK_QUEUES` in `client.py`), which
 covers only drain metrics and batch Pause/Resume fan-out. The intended
 contract derives the inventory from production registries and resolved

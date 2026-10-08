@@ -529,8 +529,8 @@ services:
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
     entrypoint:
-      - python
-      - /app/services/temporal/scripts/start-workflow-worker-group.py
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
       test: [
           "CMD",
