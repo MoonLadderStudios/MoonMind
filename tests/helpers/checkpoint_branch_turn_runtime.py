@@ -569,7 +569,11 @@ async def execute_checkpoint_branch_request(
     # The deployment-owned repository connection is an external boundary just
     # like the provider profile. Keep this fake instance-local so concurrent
     # turns never patch the real credential resolver for another coordinator.
+    async def validate_repository_actions(_request: AgentExecutionRequest):
+        return None
+
     coordinator._github_token = resolve_repository_credential
+    coordinator._github_action_authority_error = validate_repository_actions
     return await coordinator.branch_from_checkpoint(
         request=request,
         checkpoint=checkpoint,

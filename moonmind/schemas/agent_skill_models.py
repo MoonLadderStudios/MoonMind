@@ -103,6 +103,8 @@ class ResolvedSkillEntry(BaseModel):
     required_skills: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
     terminal_contract: SkillTerminalContract | None = None
+    publish: dict[str, Any] | None = None
+    side_effect: dict[str, Any] | None = None
     selection_reason: str | None = None
     required_by: list[str] = Field(default_factory=list)
     implementation: SkillImplementationContract | None = None

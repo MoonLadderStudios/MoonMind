@@ -1268,6 +1268,123 @@ class OmnigentBridgeSessionStore:
             await session.refresh(stored)
             return _detached(session, stored)
 
+    async def record_host_credential_recovery(
+        self, *, request: AgentExecutionRequest, host_lease_ref: str,
+        phase: str, checkpoint: Mapping[str, Any] | None = None,
+        terminal_ref: str | None = None,
+        retained_cpu_limit: Mapping[str, Any] | None = None,
+        source_container_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Keep credential replacement under the existing bridge and lease fence.
+
+        The host row lock serializes preservation with the cleanup CAS. A save
+        is an immutable receipt, never permission to restore over current work.
+        """
+        from api_service.db.models import OmnigentOAuthHostLeaseRecord
+        from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
+        from moonmind.omnigent.oauth_hosts import HEARTBEAT_HOST_STATES
+
+        if phase not in {"waiting", "saved", "recreated", "completed"}:
+            raise ValueError("unsupported host credential recovery phase")
+        async with self._session_factory() as session:
+            lease = (await session.execute(
+                select(OmnigentOAuthHostLeaseRecord)
+                .where(OmnigentOAuthHostLeaseRecord.lease_id == host_lease_ref)
+                .with_for_update()
+            )).scalar_one_or_none()
+            row = (await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == request.idempotency_key)
+                .with_for_update()
+            )).scalar_one_or_none()
+            if row is None:
+                raise OmnigentIdempotencyError("credential recovery bridge is unavailable")
+            if (lease is None or lease.status not in HEARTBEAT_HOST_STATES
+                    or row.host_lease_ref != host_lease_ref
+                    or row.provider_lease_id != lease.provider_lease_id
+                    or row.credential_generation != lease.credential_generation):
+                raise OmnigentIdempotencyError("credential recovery lease authority changed")
+            metadata = dict(row.metadata_ or {})
+            previous = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
+            if previous and (
+                previous.get("hostLeaseRef") != host_lease_ref
+                or previous.get("credentialGeneration") != lease.credential_generation
+                or previous.get("ownerIdempotencyKey") != request.idempotency_key
+                or previous.get("bridgeSessionId") != row.bridge_session_id
+                or previous.get("omnigentSessionId") not in {None, row.omnigent_session_id}
+                or previous.get("omnigentHostId") not in {None, row.omnigent_host_id}
+            ):
+                raise OmnigentIdempotencyError("preserved host authority changed")
+            if previous and previous.get("phase") == "completed":
+                raise OmnigentIdempotencyError("credential recovery already settled")
+            checkpoint_fields = {
+                "kind", "baseCommit", "headCommit", "archiveRef", "archiveDigest",
+                "manifestRef", "manifestDigest", "workspaceDigest",
+                "workspaceIdentityDigest", "createdAt", "checkpointRef",
+            }
+            receipt = {
+                "schemaVersion": 1, "hostLeaseRef": host_lease_ref,
+                "credentialGeneration": lease.credential_generation,
+                "bridgeSessionId": row.bridge_session_id,
+                "omnigentSessionId": row.omnigent_session_id,
+                "omnigentHostId": row.omnigent_host_id,
+                "ownerIdempotencyKey": request.idempotency_key,
+                "phase": phase,
+                "recoveryOwner": "integration.omnigent.execute",
+                "recoveryAction": "save_and_resume_same_host",
+            }
+            if "replacementEgressPending" in previous:
+                if type(previous["replacementEgressPending"]) is not bool:
+                    raise OmnigentIdempotencyError("credential recovery egress receipt is invalid")
+                receipt["replacementEgressPending"] = previous["replacementEgressPending"]
+            source_id = source_container_id or previous.get("sourceContainerId")
+            if source_id is not None:
+                if (not re.fullmatch(r"[0-9a-f]{64}", str(source_id))
+                        or previous.get("sourceContainerId") not in (None, source_id)):
+                    raise OmnigentIdempotencyError("preserved container identity changed")
+                receipt["sourceContainerId"] = source_id
+            cpu_limit = retained_cpu_limit if retained_cpu_limit is not None else previous.get("retainedCpuLimit")
+            if cpu_limit is not None:
+                cpu_fields = {"sourceContainerId", "nanoCpus", "cpuQuota", "cpuPeriod", "cpusetCpus"}
+                if not isinstance(cpu_limit, Mapping) or set(cpu_limit) - cpu_fields:
+                    raise OmnigentIdempotencyError("credential recovery CPU receipt contains unsupported fields")
+                if (not re.fullmatch(r"[0-9a-f]{64}", str(cpu_limit.get("sourceContainerId", "")))
+                        or any(type(cpu_limit[key]) is not int or not 0 < cpu_limit[key] <= 2**63 - 1
+                               for key in ("nanoCpus", "cpuQuota", "cpuPeriod") if key in cpu_limit)
+                        or not re.fullmatch(r"(?:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)?", str(cpu_limit.get("cpusetCpus", "")))
+                        or not ("nanoCpus" in cpu_limit or {"cpuQuota", "cpuPeriod"} <= set(cpu_limit))):
+                    raise OmnigentIdempotencyError("credential recovery CPU receipt is invalid")
+                if "nanoCpus" in cpu_limit and ({"cpuQuota", "cpuPeriod"} & set(cpu_limit)):
+                    raise OmnigentIdempotencyError("CPU receipt contains conflicting quota authorities")
+                if source_id is None or cpu_limit["sourceContainerId"] != source_id:
+                    raise OmnigentIdempotencyError("CPU receipt does not match the preserved container")
+                if previous.get("retainedCpuLimit") not in (None, dict(cpu_limit)):
+                    raise OmnigentIdempotencyError("retained CPU authority changed")
+                receipt["retainedCpuLimit"] = {key: cpu_limit[key] for key in cpu_fields if key in cpu_limit}
+            saved_checkpoint = checkpoint if checkpoint is not None else previous.get("checkpoint")
+            if saved_checkpoint is not None:
+                if not isinstance(saved_checkpoint, Mapping) or not all(saved_checkpoint.get(key) for key in (
+                    "archiveRef", "archiveDigest", "manifestRef", "manifestDigest",
+                    "workspaceDigest", "workspaceIdentityDigest",
+                )):
+                    raise OmnigentIdempotencyError("credential recovery checkpoint is incomplete")
+                receipt["checkpoint"] = {key: saved_checkpoint[key] for key in checkpoint_fields if key in saved_checkpoint}
+            if phase in {"saved", "recreated", "completed"} and not receipt.get("checkpoint"):
+                raise OmnigentIdempotencyError("credential recovery requires saved current work")
+            if phase == "saved":
+                receipt["replacementEgressPending"] = True
+            if phase == "completed":
+                if checkpoint is None or not terminal_ref:
+                    raise OmnigentIdempotencyError("credential recovery requires current terminal capture")
+                receipt["terminalRef"] = terminal_ref
+            metadata[HOST_CREDENTIAL_RECOVERY_KEY] = receipt
+            row.metadata_ = metadata
+            # Invalidate a janitor observation taken before this preservation
+            # transaction even if it has already read the bridge metadata.
+            lease.last_heartbeat_at = datetime.now(UTC)
+            await session.commit()
+            return receipt
+
     async def bind_egress_cleanup_authority(
         self,
         *,
@@ -1276,6 +1393,7 @@ class OmnigentBridgeSessionStore:
         egress_evidence: Mapping[str, Any],
         launch_evidence_ref: str,
         phase: str = "attested",
+        replaces_launch_evidence_ref: str | None = None,
     ) -> OmnigentBridgeSession:
         """Persist or monotonically attest authority required by a later janitor."""
 
@@ -1292,7 +1410,13 @@ class OmnigentBridgeSessionStore:
         if phase not in {"launched", "attested"}:
             raise OmnigentIdempotencyError("egress cleanup authority phase is invalid")
         async with self._session_factory() as session:
-            row = await self._require(session, request.idempotency_key)
+            row = (await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.idempotency_key == request.idempotency_key)
+                .with_for_update()
+            )).scalar_one_or_none()
+            if row is None:
+                raise OmnigentIdempotencyError("credential recovery bridge is unavailable")
             if row.host_lease_ref != host_lease_ref:
                 raise OmnigentIdempotencyError(
                     "egress cleanup authority does not match the bridge host lease"
@@ -1320,6 +1444,28 @@ class OmnigentBridgeSessionStore:
             }
             metadata = dict(row.metadata_ or {})
             existing = metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
+            if replaces_launch_evidence_ref is not None:
+                from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
+                recovery = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
+                if not (
+                    isinstance(existing, dict)
+                    and existing.get("launchEvidenceRef") == replaces_launch_evidence_ref
+                    and existing.get("hostLeaseRef") == host_lease_ref
+                    and existing.get("effectiveLaunchRef") == effective_launch_ref
+                    and recovery.get("ownerIdempotencyKey") == request.idempotency_key
+                    and recovery.get("hostLeaseRef") == host_lease_ref
+                    and recovery.get("phase") == "saved"
+                    and recovery.get("replacementEgressPending") is True
+                    and recovery.get("checkpoint")
+                    and phase == "launched"
+                ):
+                    raise OmnigentIdempotencyError("replacement cleanup authority lacks current preservation evidence")
+                prior = list(metadata.get("priorEgressCleanupAuthorities") or [])
+                metadata["priorEgressCleanupAuthorities"] = [*prior, existing][-10:]
+                metadata[HOST_CREDENTIAL_RECOVERY_KEY] = {
+                    **recovery, "replacementEgressPending": False, "phase": "recreated",
+                }
+                existing = None
             if isinstance(existing, dict) and existing != authority:
                 normalized_existing = {
                     **existing,
@@ -1362,6 +1508,13 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "bridge session has malformed egress cleanup authority"
                 )
+            from moonmind.omnigent.host_failures import HOST_CREDENTIAL_RECOVERY_KEY
+            recovery = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) or {}
+            if (phase == "launched" and recovery.get("phase") == "saved"
+                    and recovery.get("replacementEgressPending") is True):
+                metadata[HOST_CREDENTIAL_RECOVERY_KEY] = {
+                    **recovery, "replacementEgressPending": False, "phase": "recreated",
+                }
             metadata[EGRESS_CLEANUP_AUTHORITY_KEY] = authority
             row.metadata_ = metadata
             await session.commit()

@@ -306,26 +306,13 @@ async def resolve_selected_github_credential_for_launch(
     return access.credential
 
 
-async def resolve_default_github_connection_credential(
-    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
-) -> Any:
-    """Resolve the deployment's default GitHub connection and nothing else.
-
-    A recorded ``repository-connection:git-default`` (normally produced by the
-    #4023 migration) is authoritative: only its credential is read. Without a
-    recorded connection, the deployment's declared GitHub configuration
-    applies. An unreadable record or a failed selected source yields an
-    unresolved result instead of another credential. When ``repo`` is named,
-    its assignment must admit the connection before the credential is read.
-    Explicitly required operations must also survive that assignment's
-    narrowing; a broader provider token cannot replace local authorization.
-    """
-
+async def _default_github_connection_with_operations(
+    *, repo: str | None, required_operations: tuple[str, ...]
+) -> tuple[Any, Any]:
+    """Read and validate recorded authority without accessing its credential."""
     from moonmind.auth.github_credentials import (
         GitHubCredentialSource,
         ResolvedGitHubCredential,
-        resolve_connection_github_credential,
-        resolve_deployment_github_credential,
     )
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
@@ -339,7 +326,7 @@ async def resolve_default_github_connection_credential(
     except asyncio.CancelledError:
         raise
     except RepositoryRouteError as exc:
-        return ResolvedGitHubCredential(
+        return None, ResolvedGitHubCredential(
             source=GitHubCredentialSource.UNRESOLVABLE,
             sourceName=DEFAULT_GIT_CONNECTION_REF,
             repo=repo,
@@ -355,7 +342,7 @@ async def resolve_default_github_connection_credential(
             "Default repository connection could not be read: %s",
             type(exc).__name__,
         )
-        return ResolvedGitHubCredential(
+        return None, ResolvedGitHubCredential(
             source=GitHubCredentialSource.UNRESOLVABLE,
             sourceName=DEFAULT_GIT_CONNECTION_REF,
             repo=repo,
@@ -367,14 +354,14 @@ async def resolve_default_github_connection_credential(
             retryable=True,
         )
     if connection is None:
-        return await resolve_deployment_github_credential(repo=repo)
+        return None, None
     missing_operations = tuple(
         operation
         for operation in required_operations
         if operation not in connection.allowed_operations
     )
     if missing_operations:
-        return ResolvedGitHubCredential(
+        return None, ResolvedGitHubCredential(
             source=GitHubCredentialSource.UNRESOLVABLE,
             sourceName=DEFAULT_GIT_CONNECTION_REF,
             repo=repo,
@@ -384,6 +371,44 @@ async def resolve_default_github_connection_credential(
                 "MoonMind does not read or substitute a credential for denied use."
             ),
         )
+    return connection, None
+
+
+async def validate_default_github_connection_operations(
+    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
+) -> Any:
+    """Return a safe denial before host/lease mutation, without reading secrets.
+
+    The token boundary rechecks this same authority immediately before delivery;
+    validation is not a reusable grant and does not weaken revocation checks.
+    """
+    _connection, error = await _default_github_connection_with_operations(
+        repo=repo, required_operations=required_operations
+    )
+    return error
+
+
+async def resolve_default_github_connection_credential(
+    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
+) -> Any:
+    """Resolve only the default credential after its assigned actions admit use.
+
+    A recorded default is authoritative. Only true absence uses the deployment
+    declaration; denied operations and unreadable records never read or replace
+    a secret. Assignment narrowing is shared with the metadata-only preflight.
+    """
+    from moonmind.auth.github_credentials import (
+        resolve_connection_github_credential,
+        resolve_deployment_github_credential,
+    )
+
+    connection, error = await _default_github_connection_with_operations(
+        repo=repo, required_operations=required_operations
+    )
+    if error is not None:
+        return error
+    if connection is None:
+        return await resolve_deployment_github_credential(repo=repo)
     return await resolve_connection_github_credential(connection, repo=repo)
 
 
@@ -1025,4 +1050,5 @@ __all__ = [
     "resolve_selected_github_credential_for_launch",
     "select_git_connection_for_launch",
     "select_github_access_for_launch",
+    "validate_default_github_connection_operations",
 ]

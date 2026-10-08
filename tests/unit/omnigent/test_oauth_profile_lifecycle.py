@@ -1794,6 +1794,11 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
                     if state["running"]
                     else (1, "", "not found")
                 )
+            if template == "{{json .Mounts}}":
+                return (0, json.dumps([{
+                    "Type": "volume", "Name": "mm-host-lease-1-cache",
+                    "Destination": "/home/app/.cache", "RW": True,
+                }]), "")
             if "moonmind.host_lease_id" in template:
                 return (
                     (0, "host-lease-1\n", "")
@@ -1966,7 +1971,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         for _args, kwargs in commands
         if kwargs.get("input_bytes") is not None
     ]
-    assert writers == ([b"selected_token_B"] if gh_projected else [])
+    assert writers == ([b"selected_token_B"] * 2 if gh_projected else [])
 
 
 @pytest.mark.asyncio
@@ -5385,6 +5390,7 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         return_value=_launch_ready_profile()
     )
     coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
+    coordinator._github_action_authority_error = AsyncMock(return_value=None)
 
     with pytest.raises(MountedToolPreflightError):
         await coordinator.execute(
@@ -5539,6 +5545,7 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
         return_value=_workspace_intent_profile()
     )
     coordinator._github_token = AsyncMock(return_value="resolved-token")  # type: ignore[method-assign]
+    coordinator._github_action_authority_error = AsyncMock(return_value=None)
 
     workspace_id = hashlib.sha256(b"workflow-1:idem-1").hexdigest()[:24]
     request = AgentExecutionRequest(
@@ -8475,6 +8482,7 @@ async def test_existing_github_refresh_failure_keeps_coordinator_retry_authority
         )
         retained["lease"] = coordinator._hosts.lease
         coordinator._github_token = AsyncMock(return_value="selectedTokenB")
+        coordinator._github_action_authority_error = AsyncMock(return_value=None)
         coordinator._execute = AsyncMock()
         coordinator._run_store.bind_profile_authorization = AsyncMock(
             wraps=coordinator._run_store.bind_profile_authorization

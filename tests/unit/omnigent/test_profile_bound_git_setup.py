@@ -700,15 +700,17 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
     async def assert_refresh_deferred():
         previous = hosts.read_bytes()
         runtime._run.reset_mock()
-        await runtime._launch_on_demand(**arguments)
+        with pytest.raises(OmnigentOAuthHostError) as raised:
+            await runtime._launch_on_demand(**arguments)
+        assert raised.value.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
         assert hosts.read_bytes() == previous
         assert not any(
             call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
         )
         assert {path: path.read_bytes() for path in preserved} == before
 
-    # Broader legacy recovery remains deferred, without mutation or an exception
-    # that could cause the coordinator to clean up an active host.
+    # Without durable save authority, incompatible hosts return the preserving
+    # retry handoff and must not proceed under their old credential.
     for key, value in (
         ("GH_TOKEN", "legacyToken"),
         ("GITHUB_TOKEN", "legacyToken"),
@@ -736,7 +738,9 @@ async def test_existing_projected_host_refreshes_gh_and_git_without_recreation(
     saved_hosts = hosts.with_suffix(".saved")
     hosts.rename(saved_hosts)
     runtime._run.reset_mock()
-    await runtime._launch_on_demand(**arguments)
+    with pytest.raises(OmnigentOAuthHostError) as raised:
+        await runtime._launch_on_demand(**arguments)
+    assert raised.value.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
     assert not hosts.exists()
     assert not any(
         call.kwargs.get("input_bytes") for call in runtime._run.await_args_list
