@@ -2115,3 +2115,68 @@ async def test_missing_ci_budget_preserves_real_waits_and_progress(
     assert len(harness.child_payloads) == (0 if scenario == "expiry" else 1)
     if scenario != "expiry":
         assert result["latestHeadSha"] == final_head
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_restored", [False, True])
+async def test_superseding_request_is_retained_before_completion(
+    monkeypatch, already_restored
+):
+    from moonmind.schemas.temporal_models import MergeAutomationStartInput
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+    first = {
+        "provider": "codex",
+        "headSha": HEAD_1,
+        "requestKey": "recorded-request",
+        "requestCommentId": 5,
+        "requestedAt": "2026-08-24T22:00:00Z",
+    }
+    second = {**first, "requestCommentId": 7, "requestedAt": "2026-08-24T22:10:00Z"}
+    payload["activeReviewRequest"] = second if already_restored else first
+    payload["reviewCycles"] = [
+        {
+            "cycle": 1,
+            **first,
+            "status": "superseded" if already_restored else "requested",
+        }
+    ]
+    if already_restored:
+        payload["reviewCycles"].append({"cycle": 2, **second, "status": "requested"})
+    payload = MergeAutomationStartInput.model_validate(payload).model_dump(
+        by_alias=True, mode="json"
+    )
+    selected = {
+        "automatedReviewRequestCommentId": 7,
+        "automatedReviewRequestedAt": second["requestedAt"],
+        "readinessObservationId": "selected-request-poll",
+    }
+    harness = _Harness(
+        monkeypatch,
+        readiness=[
+            _awaiting_review(HEAD_1, **selected),
+            _ready(
+                HEAD_1,
+                **selected,
+                automatedReviewCompletionKind="issue_comment",
+                automatedReviewCompletionId=8,
+                automatedReviewCompletedAt="2026-08-24T22:11:00Z",
+            ),
+        ],
+        child_results=[
+            {"status": "success", "mergeAutomationDisposition": "review_clean"}
+        ],
+    )
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+    assert result["status"] == "review_clean"
+    assert harness.request_payloads == []
+    assert harness.readiness_payloads[1]["activeReviewRequest"]["requestCommentId"] == 7
+    first_cycle, second_cycle = result["reviewLoop"]["cycleRecords"]
+    assert first_cycle["status"] == "superseded"
+    assert first_cycle["requestCommentId"] == 5
+    assert first_cycle.get("completionId") is None
+    assert second_cycle["status"] == "completed"
+    assert second_cycle["requestCommentId"] == 7
+    assert second_cycle["requestedAt"] == second["requestedAt"]
+    assert second_cycle["completionId"] == 8

@@ -115,6 +115,9 @@ MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH = (
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
+MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_PATCH_PREFIX = (
+    "merge-automation-selected-review-request-v1:"
+)
 MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
     "merge-automation-actionable-ci-failure-v1:"
 )
@@ -1710,11 +1713,70 @@ class MoonMindMergeAutomationWorkflow:
         await self._write_review_cycle_artifact(cycle)
         return None
 
+    def _reconcile_selected_review_request(self, evaluation: Mapping[str, Any]) -> None:
+        """Retain a superseding provider request before settling its result.
+
+        The GitHub Activity owns request selection. Keep each observed request
+        in the existing cycle ledger so restored state never attributes B's
+        completion to A. Old Activity results and recorded histories keep their
+        original interpretation.
+        """
+
+        active = self._active_review_request
+        selected_id = evaluation.get("automatedReviewRequestCommentId")
+        selected_at = evaluation.get("automatedReviewRequestedAt")
+        observation_id = evaluation.get("readinessObservationId")
+        if (
+            active is None
+            or not isinstance(selected_id, int)
+            or isinstance(selected_id, bool)
+            or selected_id <= 0
+            or selected_id == active.get("requestCommentId")
+            or _parse_review_timestamp(selected_at) is None
+            or evaluation.get("headSha") != active.get("headSha")
+            or evaluation.get("automatedReviewRequestStale") is True
+            or not isinstance(observation_id, str)
+            or not observation_id.strip()
+        ):
+            return
+        # Reuse the Activity's observation identity so an old consumer's
+        # recorded branch stays unchanged while a fresh poll can adopt B.
+        observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
+        if not workflow.patched(
+            MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_PATCH_PREFIX + observation_key
+        ):
+            return
+        if not self._review_cycles:
+            self._review_cycles.append({"cycle": 1, **active, "status": "requested"})
+        previous = self._review_cycles[-1]
+        if previous.get("status") == "requested":
+            previous["status"] = "superseded"
+        selected = {
+            "provider": active["provider"],
+            "headSha": active["headSha"],
+            "requestKey": active["requestKey"],
+            "requestCommentId": selected_id,
+            "requestedAt": selected_at,
+        }
+        self._review_cycles.append(
+            {
+                "cycle": len(self._review_cycles) + 1,
+                **selected,
+                "status": "requested",
+                "progressSignature": previous.get("progressSignature"),
+                "completionKind": None,
+                "completionId": None,
+                "completedAt": None,
+            }
+        )
+        self._active_review_request = selected
+
     def _settle_active_review_request(self, evaluation: Any) -> None:
         """Bind an observed review result (or staleness) to the active request."""
 
         if not self._active_review_request or not isinstance(evaluation, Mapping):
             return
+        self._reconcile_selected_review_request(evaluation)
         cycle = self._review_cycles[-1] if self._review_cycles else None
         if self._finish_mode() == FINISH_MODE_REVIEW_ONLY:
             # The provider activity owns classification and request matching.
