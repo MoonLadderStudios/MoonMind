@@ -1011,7 +1011,13 @@ async def _admit_repository_plan_inputs(
         if review_only:
             operations = ("read", "review_request")
         elif publish_mode in {"auto", "pr"} or resolver_publishes:
-            operations = ("read", "write", "branch_write", "review_request")
+            operations = (
+                "read",
+                "write",
+                "branch_write",
+                "review_request",
+                "merge_request",
+            )
         elif publish_mode == "branch":
             operations = ("read", "write", "branch_write")
         slots["collaboration"] = ("collaboration", operations)
