@@ -72,6 +72,7 @@ async def resolver_test_client(*, additional_search_attributes=None):
         name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
         for name in ("mm_state", "mm_entry", "mm_owner_type", "mm_owner_id", "mm_repo")
     }
+    required_attributes["mm_provider_profile"] = IndexedValueType.INDEXED_VALUE_TYPE_TEXT
     required_attributes.update(additional_search_attributes or {})
     for attempt in range(30):
         try:
