@@ -134,7 +134,8 @@ def pytest_handlecrashitem(crashitem, report):
             file=sys.__stderr__,
             flush=True,
         )
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError also covers closed streams and UnicodeEncodeError.
         pass  # Diagnostic output must not replace the original crash failure.
 
 
