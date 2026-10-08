@@ -4,6 +4,7 @@ import inspect
 import os
 import signal
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -125,6 +126,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             and not _item_has_marker(item, "requires_credentials")
         ):
             item.add_marker(pytest.mark.unit_fast)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_handlecrashitem(crashitem, report):
+    """Expose the lost test before xdist recovery can delay its failure summary."""
+    try:
+        print(
+            f"xdist-crash {report.node.gateway.id} {crashitem}",
+            file=sys.__stderr__,
+            flush=True,
+        )
+    except (OSError, ValueError):
+        # ValueError also covers closed streams and UnicodeEncodeError.
+        pass  # Diagnostic output must not replace the original crash failure.
 
 
 @pytest.fixture
