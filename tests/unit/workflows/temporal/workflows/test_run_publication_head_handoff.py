@@ -86,6 +86,9 @@ async def test_request_carries_only_accepted_workflow_publication(
             "repository": repository,
             "branch": "candidate",
             "headSha": "a" * 40,
+            # The authored base keeps a later PR step from stacking on its
+            # own candidate.
+            "baseBranch": "main",
         }
         if patched and status == "pushed" and repository == workflow._repo
         else None

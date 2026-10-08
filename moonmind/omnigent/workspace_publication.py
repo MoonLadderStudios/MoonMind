@@ -151,6 +151,34 @@ def publication_failure_is_transient(message: str) -> bool:
     return bool(_TRANSIENT_REMOTE_FAILURE.search(message or ""))
 
 
+def _owned_candidate_authored_base(
+    accepted_published_head: Mapping[str, Any] | None,
+    *,
+    current_workflow_id: str,
+    repository: str,
+    candidate_branch: str,
+) -> str | None:
+    """Return the authored base when the workspace is on this run's candidate.
+
+    Only the run-owned accepted head can name its candidate and the base it was
+    published over. Handoffs recorded before that base was carried return
+    ``None`` and keep their original publication path.
+    """
+
+    if not isinstance(accepted_published_head, Mapping):
+        return None
+    if (
+        accepted_published_head.get("workflowId") != current_workflow_id
+        or accepted_published_head.get("repository") != repository
+        or accepted_published_head.get("branch") != candidate_branch
+    ):
+        return None
+    authored_base = str(accepted_published_head.get("baseBranch") or "").strip()
+    if not authored_base or authored_base == candidate_branch:
+        return None
+    return authored_base
+
+
 class OmnigentWorkspacePublicationService:
     """Publish and remotely verify one typed Omnigent sandbox workspace."""
 
@@ -689,13 +717,87 @@ class OmnigentWorkspacePublicationService:
                     f"refs/remotes/origin/{normalized_base}",
                 ]
             )
+        published = None
+        # A later PR step may start on this workflow's own accepted candidate.
+        # That candidate is the publication destination, never its own base:
+        # fast-forward it and keep comparing against the authored base it was
+        # first published over, so the PR targets that base instead of a stack.
+        authored_base = (
+            _owned_candidate_authored_base(
+                accepted_published_head,
+                current_workflow_id=current_workflow_id,
+                repository=repository,
+                candidate_branch=normalized_base,
+            )
+            if normalized_mode == "pr"
+            else None
+        )
+        if authored_base is not None:
+            await run_command(["git", "check-ref-format", "--branch", authored_base])
+            await run_command(
+                [
+                    "git",
+                    "fetch",
+                    "--no-tags",
+                    "origin",
+                    f"+refs/heads/{authored_base}:refs/remotes/origin/{authored_base}",
+                ]
+            )
+            extended = await PublishService().publish(
+                job_id=uuid5(NAMESPACE_URL, publication_identity),
+                instruction="Publish completed Omnigent repository work",
+                # Branch mode verifies fast-forward ancestry and leases the
+                # exact remote candidate tip, so another actor's update fails.
+                publish_mode="branch",
+                publish_base_branch=normalized_base,
+                publication_branch_name=normalized_base,
+                runtime_mode="omnigent",
+                repo_dir=safe_workspace,
+                run_command=run_command,
+                repo=str(repository or "").strip() or None,
+                github_token=token or None,
+                bound_credential=bound_credential,
+                publish_existing_commits=True,
+                verify_remote=True,
+            )
+            if extended is not None and extended.status == "skipped":
+                # Unchanged candidate: reuse requires the exact remote tip.
+                await self._verified_no_commit_publication(
+                    run_command=run_command,
+                    base_branch=normalized_base,
+                )
+            elif (
+                extended is None
+                or extended.status != "published"
+                or not extended.branch_pushed
+                or not extended.remote_verified
+            ):
+                raise HarnessPlatformError(
+                    "repository publication did not produce authoritative remote evidence",
+                    code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                )
+            head = await run_command(["git", "rev-parse", "HEAD"])
+            ahead = await run_command(
+                ["git", "rev-list", "--count", f"origin/{authored_base}..HEAD"]
+            )
+            published = PublishResult(
+                mode="branch",
+                status="published",
+                reason="Extended the workflow's accepted candidate.",
+                branch_name=normalized_base,
+                base_branch=authored_base,
+                head_sha=head.stdout.strip(),
+                branch_pushed=True,
+                remote_verified=True,
+                commits_ahead_of_base=int(ahead.stdout.strip()),
+            )
         # A later publication step may restore the exact already-published
         # candidate and create its PR without changing tracked files. Keep that
         # accepted branch: generating a new one here strands the existing PR
         # and makes the subsequent exact-head lookup search the wrong branch.
-        published = None
         if (
-            normalized_mode == "pr"
+            published is None
+            and normalized_mode == "pr"
             and isinstance(accepted_published_head, Mapping)
             and accepted_published_head.get("workflowId") == current_workflow_id
             and accepted_published_head.get("repository") == repository
@@ -806,7 +908,7 @@ class OmnigentWorkspacePublicationService:
                 selector=result["push_branch"],
                 github_token=token,
                 expected_head_sha=result["push_head_sha"],
-                expected_base_branch=normalized_base,
+                expected_base_branch=result["push_base_branch"],
                 expected_draft=False,
                 **(
                     {"endpoint": github_endpoint}
