@@ -420,7 +420,6 @@ async def test_legacy_recovery_captures_current_dirty_and_untracked_work_before_
 async def test_worker_restart_after_save_recaptures_newer_work_without_rollback(
     tmp_path, monkeypatch, cpu_millis
 ):
-    import asyncio
     import io
     import tarfile
 

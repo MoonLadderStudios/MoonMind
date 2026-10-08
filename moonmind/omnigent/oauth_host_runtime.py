@@ -3044,7 +3044,7 @@ class OmnigentOAuthHostRuntime:
             row = await store.get_existing(request.idempotency_key)
             if row is None or row.host_lease_ref != host_lease.lease_id:
                 raise blocked("bridge/host ownership changed")
-            receipt = await store.record_host_credential_recovery(
+            await store.record_host_credential_recovery(
                 request=request, host_lease_ref=host_lease.lease_id, phase="waiting",
             )
             publisher = OmnigentWorkspacePublicationService(
@@ -3180,7 +3180,7 @@ class OmnigentOAuthHostRuntime:
                     # transcript quiet window, delayed-tool and slow-read rules.
                     # Never substitute two immediate equal snapshots for it.
                     class CurrentSession:
-                        async def get_session(_self, observed_session_id):
+                        async def get_session(self, observed_session_id):
                             if observed_session_id != session_id:
                                 raise blocked("current session observation authority changed")
                             return await current_snapshot()
