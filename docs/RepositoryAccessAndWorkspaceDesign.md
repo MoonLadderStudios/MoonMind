@@ -319,7 +319,11 @@ Server-side repository readers (`GitHubService.read_pull_request`,
 admitted for the work. A caller supplies that connection or names the admitted
 run. Tools and Activities name the run that owns them. A merge gate acting for
 its parent run names the parent. The reader takes the run's recorded
-`connectionRef` from its canonical parameters. A child workflow started by a
+`connectionRef` from its canonical parameters. A routed run's parameters name
+no connection, so the reader takes the connection its frozen execution plan's
+repository binding admitted: the collaboration binding, else the source
+binding. A plan that bound no repository authority admitted only the default
+connection, and an unreadable plan fails. A child workflow started by a
 run, such as an agent step, merge gate, or resolver or remediation child, has
 no canonical record of its own. It acts with the nearest recorded run on its
 Temporal parent chain, read from the worker's Temporal client. A chain that
@@ -329,7 +333,9 @@ deployment declaration. Selection uses the launch selector, so a deleted,
 disabled, or unassigned connection fails there.
 
 The selected connection's endpoint must be trusted before any credential is
-read. An App connection issues through the bound acquirer for exactly the
+read. A pull-request URL is read only through the connection that serves its
+host, so a PR on one host is never validated with another host's repository
+facts. An App connection issues through the bound acquirer for exactly the
 requested operation. A PAT connection reads only its own SecretRef. A missing
 or unreadable credential fails without substituting an ambient token. A run
 that authored anonymous access reads with no credential and cannot mutate.
