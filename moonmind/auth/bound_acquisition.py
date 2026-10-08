@@ -1156,7 +1156,7 @@ class BoundCredentialAcquirer:
         effective_binding = binding
         if issuance.expires_at is not None:
             effective_binding = binding.model_copy(
-                update={"expiresAt": issuance.expires_at.isoformat()}
+                update={"expires_at": issuance.expires_at.isoformat()}
             )
         # Persist issuance evidence before exposing material: a crash after
         # return must leave an authoritative audit record.
@@ -1265,6 +1265,20 @@ class BoundCredentialAcquirer:
         effective = expires - timedelta(seconds=self._margin + self._skew)
         return effective <= datetime.now(timezone.utc)
 
+    async def _get_valid_cached(
+        self, key: tuple[Any, ...], *, active: ActiveRevision
+    ) -> _CacheEntry | None:
+        cached = await self._cache.get(key)
+        if cached is not None and (
+            cached.binding.credential_revision != active.credential_revision
+            or cached.binding.connection_revision != active.connection_revision
+            or cached.binding.policy_revision != active.policy_revision
+            or self._binding_expired(cached.binding)
+        ):
+            self._cache.invalidate(key)
+            return None
+        return cached
+
     def _verify_issuance(
         self, *, issuance: Issuance, binding: BindingMetadata
     ) -> None:
@@ -1325,31 +1339,20 @@ class BoundCredentialAcquirer:
             )
 
         key = self._renewal_key(snapshot, active=active, owner=owner)
-        cached = await self._cache.get(key)
+        cached = await self._get_valid_cached(key, active=active)
         if cached is not None:
             # Cached entries already passed post-issuance verification for the
             # identical renewal identity; revalidate revisions and expiry.
-            if (
-                cached.binding.credential_revision != active.credential_revision
-                or cached.binding.connection_revision != active.connection_revision
-                or cached.binding.policy_revision != snapshot.policy_revision
-            ):
-                self._cache.invalidate(key)
-            elif self._binding_expired(cached.binding):
-                self._cache.invalidate(key)
-            else:
-                # Preserve the current operation identity: the cached binding
-                # carries the first request's operation_id, so re-attribute
-                # telemetry/client construction to this operation.
-                binding = cached.binding.model_copy(
-                    update={"operationId": request.operation_id}
-                )
-                credential = EphemeralCredential(
-                    cached.credential.use_now(bytes)
-                )
-                return AcquiredCredential(
-                    binding=binding, credential=credential, cache_hit=True
-                )
+            # Preserve the current operation identity: the cached binding
+            # carries the first request's operation_id, so re-attribute
+            # telemetry/client construction to this operation.
+            binding = cached.binding.model_copy(
+                update={"operation_id": request.operation_id}
+            )
+            credential = EphemeralCredential(cached.credential.use_now(bytes))
+            return AcquiredCredential(
+                binding=binding, credential=credential, cache_hit=True
+            )
 
         # A default change cannot reroute an admitted attempt: the key above
         # pins endpoint/revisions/scope/owner, so a changed default simply
@@ -1375,7 +1378,7 @@ class BoundCredentialAcquirer:
                 # never clears a credential still held by another call.
                 return AcquiredCredential(
                     binding=entry.binding.model_copy(
-                        update={"operationId": request.operation_id}
+                        update={"operation_id": request.operation_id}
                     ),
                     credential=EphemeralCredential(entry.credential.use_now(bytes)),
                     cache_hit=True,
@@ -1394,7 +1397,7 @@ class BoundCredentialAcquirer:
                     )
                 return AcquiredCredential(
                     binding=shared_entry.binding.model_copy(
-                        update={"operationId": request.operation_id}
+                        update={"operation_id": request.operation_id}
                     ),
                     credential=EphemeralCredential(
                         shared_entry.credential.use_now(bytes)
@@ -1408,7 +1411,7 @@ class BoundCredentialAcquirer:
             if cached_retry is not None:
                 return AcquiredCredential(
                     binding=cached_retry.binding.model_copy(
-                        update={"operationId": request.operation_id}
+                        update={"operation_id": request.operation_id}
                     ),
                     credential=EphemeralCredential(
                         cached_retry.credential.use_now(bytes)
@@ -1433,7 +1436,7 @@ class BoundCredentialAcquirer:
                     )
                 return AcquiredCredential(
                     binding=entry.binding.model_copy(
-                        update={"operationId": request.operation_id}
+                        update={"operation_id": request.operation_id}
                     ),
                     credential=EphemeralCredential(entry.credential.use_now(bytes)),
                     cache_hit=True,
@@ -1442,6 +1445,36 @@ class BoundCredentialAcquirer:
         # Leader path: no cache/database lock is held during network issuance;
         # only the in-flight placeholder plus a short-lived shared lease
         # timestamp coordinate waiters.
+        try:
+            # Another worker may have published and released its claim after
+            # our initial miss. Reuse that winner before issuing again, and
+            # settle our new flight so local waiters and shared claims clear.
+            cached = await self._get_valid_cached(key, active=active)
+            if cached is not None:
+                acquired = AcquiredCredential(
+                    binding=cached.binding.model_copy(
+                        update={"operation_id": request.operation_id}
+                    ),
+                    credential=EphemeralCredential(cached.credential.use_now(bytes)),
+                    cache_hit=True,
+                )
+                await self._cache.settle_inflight(key, owner_id=leader_id, entry=cached)
+                return acquired
+        except (asyncio.CancelledError, Exception) as exc:
+            await self._cache.settle_inflight(
+                key,
+                owner_id=leader_id,
+                entry=None,
+                error=(
+                    exc
+                    if isinstance(exc, BoundAccessError)
+                    else BoundAccessError(
+                        BOUND_UNAVAILABLE, "renewal cache recheck failed"
+                    )
+                ),
+            )
+            raise
+
         last_error: BoundAccessError | None = None
         for _attempt in range(self._max_attempts):
             generation = self._cache.next_generation(key)
