@@ -1403,7 +1403,7 @@ class RepositoryConnectionService:
     async def _is_unscoped_migrated_default(
         self, connection: RepositoryConnection
     ) -> bool:
-        """Whether this is migration 391's mapping and still has no assignment.
+        """Whether migration 391's mapping has never been explicitly scoped.
 
         The migration writes its ``connection.create`` audit identity only
         when the default row is its own mapping; it keeps an operator's
@@ -1423,6 +1423,20 @@ class RepositoryConnectionService:
             )
         ).first()
         if migrated is None:
+            return False
+        # Explicit assignment management permanently replaces the migration's
+        # unscoped bootstrap. Removing the final grant must not restore it.
+        scoped = (
+            await self._session.execute(
+                select(RepositoryConnectionAuditEvent.id).where(
+                    RepositoryConnectionAuditEvent.connection_id == connection.id,
+                    RepositoryConnectionAuditEvent.action.in_(
+                        ("assignment.set", "assignment.remove")
+                    ),
+                )
+            )
+        ).first()
+        if scoped is not None:
             return False
         assigned = (
             await self._session.execute(
