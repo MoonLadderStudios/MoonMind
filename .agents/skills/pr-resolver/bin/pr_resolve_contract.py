@@ -32,6 +32,7 @@ REVIEW_REQUEST_REASONS = {
 }
 
 NON_RETRYABLE_REASONS = {
+    "automated_review_request_failed",
     "ci_infra_rerun_exhausted",
     "ci_infra_rerun_failed",
     "comment_policy_not_enforced",
