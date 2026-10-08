@@ -93,6 +93,7 @@ async def test_scheduled_skill_snapshot_reaches_agent_launch(
         run_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=manifest["incidentWorkflowId"],
             run_id="replay-run",
             namespace="default",

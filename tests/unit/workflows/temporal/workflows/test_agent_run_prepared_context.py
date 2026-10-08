@@ -16,6 +16,7 @@ def _configure_workflow_runtime(monkeypatch):
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-agent-run-prepared-context",
             "run_id": "run-prepared-context",

@@ -69,6 +69,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "agent-run-1",
             "run_id": "run-1",
@@ -781,6 +782,7 @@ async def test_remediation_lease_identities_survive_the_execution_handoff(
         agent_run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default", workflow_id=owner_id, run_id="run-1",
             search_attributes={}, parent=None,
         ),

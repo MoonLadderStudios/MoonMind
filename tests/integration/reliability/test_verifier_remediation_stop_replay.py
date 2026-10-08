@@ -156,7 +156,7 @@ async def test_verifier_stop_survives_publication_and_both_controllers(
             monkeypatch.setattr(
                 run_module.workflow,
                 "info",
-                lambda: SimpleNamespace(workflow_id="parent", run_id="run"),
+                lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="parent", run_id="run"),
             )
             parent = run_module.MoonMindRunWorkflow()
             parent._initialize_remediation_loop_controller(

@@ -41,6 +41,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-agent-run-1",
             "run_id": "run-1",
@@ -1926,6 +1927,7 @@ async def test_agent_run_starts_deferred_codex_session_only_after_slot_assignmen
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-agent-run-1",
             "run_id": "run-1",

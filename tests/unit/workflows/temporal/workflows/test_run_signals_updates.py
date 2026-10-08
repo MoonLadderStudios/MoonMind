@@ -1156,6 +1156,7 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-terminal",
             "run_id": "run-terminal",
@@ -1227,6 +1228,7 @@ async def test_record_terminal_state_supports_snake_case_finish_outcome(monkeypa
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-terminal-snake",
             "run_id": "run-terminal-snake",
@@ -1316,7 +1318,7 @@ async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
@@ -1547,7 +1549,7 @@ async def test_legacy_wait_for_dependencies_raises_dependency_specific_failure(m
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
@@ -1584,7 +1586,7 @@ async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypa
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
@@ -1667,7 +1669,7 @@ async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch)
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
@@ -1704,7 +1706,7 @@ async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
     )
     monkeypatch.setattr(workflow, "info", lambda: workflow_info())
     monkeypatch.setattr(
