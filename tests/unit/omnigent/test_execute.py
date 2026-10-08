@@ -630,7 +630,21 @@ def test_marked_tool_progress_requires_terminal_assistant_evidence() -> None:
     )
 
 
-def test_terminal_assistant_closes_stale_call_before_turn_diff() -> None:
+@pytest.mark.parametrize(
+    "harness",
+    [
+        "codex-native",
+        "claude-native",
+        "opencode-native",
+        "custom",
+        "codex-native-ui",
+        None,
+    ],
+)
+@pytest.mark.parametrize("has_output", [True, False])
+def test_terminal_assistant_closes_stale_call_before_turn_diff(
+    harness, has_output
+) -> None:
     """Regression for the stalled implementation turn in workflow db2c38f9."""
 
     marker = """MoonMind-Omnigent-Run:
@@ -638,6 +652,7 @@ def test_terminal_assistant_closes_stale_call_before_turn_diff() -> None:
   idempotencyKey: implementation-1"""
     snapshot = {
         "status": "idle",
+        "harness": harness,
         "active_response_id": None,
         "items": [
             {
@@ -669,7 +684,14 @@ def test_terminal_assistant_closes_stale_call_before_turn_diff() -> None:
         ],
     }
 
-    assert _snapshot_confirms_current_turn_terminal(snapshot, marker=marker)
+    if not has_output:
+        snapshot["items"].pop()
+    state = _marked_turn_item_state(snapshot, marker=marker)
+    assert state["terminalAssistantAfterWork"] is (harness == "codex-native")
+    assert state["unfinishedToolCall"] is (harness != "codex-native" and not has_output)
+    assert _snapshot_confirms_current_turn_terminal(snapshot, marker=marker) is (
+        harness == "codex-native"
+    )
 
 
 @pytest.mark.asyncio
