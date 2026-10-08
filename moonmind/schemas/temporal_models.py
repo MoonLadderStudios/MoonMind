@@ -39,6 +39,7 @@ from moonmind.statuses.step_ledger import (
     step_execution_to_ledger_status,
 )
 from moonmind.statuses.temporal_status import TemporalStatusValue
+from moonmind.utils.logging import redact_sensitive_text
 
 # MoonLadderStudios/MoonMind#4192: the native ManifestIngest product is
 # retired. MoonMind.ManifestIngest is intentionally absent from the live
@@ -2125,6 +2126,29 @@ class ReadinessBlockerModel(BaseModel):
     retryable: bool = Field(True, alias="retryable")
     source: str | None = Field(None, alias="source")
 
+    provider_failure: dict[str, Any] | None = Field(
+        None, alias="providerFailure", exclude_if=lambda value: value is None
+    )
+
+    @field_validator("provider_failure", mode="before")
+    @classmethod
+    def _compact_provider_failure(cls, value: Any) -> dict[str, Any] | None:
+        from moonmind.workflows.provider_failures import (
+            provider_failure_event_from_metadata,
+        )
+
+        if not isinstance(value, Mapping):
+            return None
+        # Use the canonical codec to discard raw bodies and regenerate the
+        # operator summary. Only compact scalar evidence belongs in history.
+        compact = {
+            key: redact_sensitive_text(item)[:500] if isinstance(item, str) else item
+            for key, item in value.items()
+            if isinstance(item, (str, int)) and not isinstance(item, bool)
+        }
+        event = provider_failure_event_from_metadata(compact)
+        return event.to_metadata() if event is not None else None
+
     @field_validator("summary")
     @classmethod
     def _summary_required(cls, value: str) -> str:
@@ -2132,6 +2156,30 @@ class ReadinessBlockerModel(BaseModel):
         if not candidate:
             raise ValueError("summary must be a non-empty string")
         return candidate[:500]
+
+class AutomatedReviewFailureModel(BaseModel):
+    """Compact identity of a provider refusal, separate from review completion."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    kind: Literal["issue_comment"] = Field(..., alias="kind")
+    id: int = Field(..., alias="id", gt=0, strict=True)
+    failed_at: str = Field(..., alias="failedAt")
+    provider_error_class: str = Field(
+        ...,
+        alias="providerErrorClass",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+    @field_validator("failed_at")
+    @classmethod
+    def _aware_failure_timestamp(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("failedAt must carry a timezone")
+        return value
 
 class ReadinessEvidenceModel(BaseModel):
     """Compact result of evaluating external PR readiness."""
@@ -2148,6 +2196,12 @@ class ReadinessEvidenceModel(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_request_comment_id: int | None = Field(
+        None, alias="automatedReviewRequestCommentId", gt=0
+    )
+    automated_review_requested_at: str | None = Field(
+        None, alias="automatedReviewRequestedAt"
+    )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"
     )
@@ -2156,6 +2210,9 @@ class ReadinessEvidenceModel(BaseModel):
     )
     automated_review_completed_at: str | None = Field(
         None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="automatedReviewRequestFailure", exclude_if=lambda value: value is None
     )
     automated_review_request_stale: bool | None = Field(
         None, alias="automatedReviewRequestStale"
@@ -2215,6 +2272,9 @@ class AutomatedReviewCycleModel(BaseModel):
     completion_kind: str | None = Field(None, alias="completionKind")
     completion_id: int | None = Field(None, alias="completionId")
     completed_at: str | None = Field(None, alias="completedAt")
+    request_failure: AutomatedReviewFailureModel | None = Field(
+        None, alias="requestFailure", exclude_if=lambda value: value is None
+    )
     status: str = Field("requested", alias="status")
     progress_signature: str | None = Field(None, alias="progressSignature")
 
