@@ -5202,6 +5202,80 @@ async def test_runtime_completion_requires_assistant_after_latest_tool(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_runtime_completion_ignores_native_turn_diff_instrumentation(
+    tmp_path,
+) -> None:
+    def assistant(text: str) -> dict:
+        return {
+            "type": "message",
+            "data": {
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            },
+        }
+
+    user = {"type": "message", "data": {"role": "user", "content": []}}
+    tool_call = {
+        "type": "function_call",
+        "data": {"name": "shell", "call_id": "exec-1"},
+    }
+    tool_output = {
+        "type": "function_call_output",
+        "data": {"call_id": "exec-1", "output": "ok"},
+    }
+    # Codex-native mirrors the turn's working-tree diff after its final answer.
+    turn_diff = [
+        {
+            "type": "function_call",
+            "data": {"name": "turn_diff", "call_id": "codex_turn_diff_turn-1"},
+        },
+        {
+            "type": "function_call_output",
+            "data": {"call_id": "codex_turn_diff_turn-1", "output": "diff"},
+        },
+    ]
+    client = SimpleNamespace(
+        get_session=AsyncMock(
+            side_effect=[
+                {
+                    "status": "idle",
+                    "items": [
+                        user,
+                        tool_call,
+                        tool_output,
+                        assistant("Done"),
+                        *turn_diff,
+                    ],
+                },
+                {
+                    "status": "idle",
+                    "items": [
+                        user,
+                        assistant("Working"),
+                        tool_call,
+                        tool_output,
+                        *turn_diff,
+                    ],
+                },
+            ]
+        )
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=client,
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    answered = await runtime.inspect_session_completion("session-1")
+    tool_only = await runtime.inspect_session_completion("session-1")
+
+    assert answered["terminalAssistantAfterWork"] is True
+    assert answered["toolResultCount"] == 1
+    assert tool_only["terminalAssistantAfterWork"] is False
+    assert tool_only["toolResultCount"] == 1
+
+
+@pytest.mark.asyncio
 async def test_coordinator_records_returned_runner_failure_in_authority_chain() -> None:
     """A runner that returns a failed result (not raising) still records evidence.
 

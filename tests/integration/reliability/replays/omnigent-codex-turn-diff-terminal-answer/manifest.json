@@ -1,0 +1,14 @@
+{
+  "incidentWorkflowId": "mm:a81dd46f-d6a2-4b70-96bf-7943dba4b846-2026-10-07T21:42:19Z",
+  "failureShape": "codex-native mirrored its evidence-only turn_diff function_call/function_call_output pair after the final assistant answer; the profile-bound publication gate counted that pair as trailing tool work, so every completed turn that changed files received a same-session repository continuation until integration.omnigent.execute reached its six-hour StartToClose timeout",
+  "sessionStatus": "idle",
+  "items": [
+    {"id": "item-user", "type": "message", "status": "completed", "response_id": "codex_turn-1", "data": {"role": "user", "content": [{"type": "input_text", "text": "task"}]}},
+    {"id": "item-preamble", "type": "message", "status": "completed", "response_id": "codex_turn-1", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "I will inspect the repository."}]}},
+    {"id": "item-call", "type": "function_call", "status": "completed", "response_id": "codex_turn-1", "data": {"name": "shell", "arguments": "{}", "call_id": "exec-1"}},
+    {"id": "item-output", "type": "function_call_output", "status": "completed", "response_id": "codex_turn-1", "data": {"call_id": "exec-1", "output": "bounded replay output"}},
+    {"id": "item-answer", "type": "message", "status": "completed", "response_id": "codex_turn-1", "data": {"role": "assistant", "content": [{"type": "output_text", "text": "Saved the candidate; remaining requirements are recorded in the handoff."}]}},
+    {"id": "item-turn-diff-call", "type": "function_call", "status": "completed", "response_id": "codex_turn-1", "data": {"name": "turn_diff", "arguments": "{}", "call_id": "codex_turn_diff_turn-1"}},
+    {"id": "item-turn-diff-output", "type": "function_call_output", "status": "completed", "response_id": "codex_turn-1", "data": {"call_id": "codex_turn_diff_turn-1", "output": "diff --git a/README.md b/README.md\n"}}
+  ]
+}
