@@ -664,8 +664,11 @@ RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH = (
 # histories retain their original immediate idle completion and memo commands.
 RUN_ISSUE_SEARCH_CAPACITY_RETRY_PATCH = "run-issue-search-capacity-retry-v1"
 ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT = timedelta(minutes=30)
-ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL = timedelta(seconds=30)
-ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL = timedelta(minutes=5)
+# The search is not queued at the ProviderProfileManager, so it only starts in
+# the gap between one holder's release and the next request. Those gaps last
+# about a minute when other workflows re-request a busy slot; a steady recheck
+# observes them, where a backed-off one sleeps through every gap in the budget.
+ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL = timedelta(seconds=30)
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = "run-ungated-continuation-disposition-v1"
 RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Expose the workflow-owned continuation capability to the portable Skill at
@@ -16626,7 +16629,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         }
         self._publish_context["capacityWait"] = wait_context
         deadline = workflow.now() + ISSUE_SEARCH_CAPACITY_WAIT_TIMEOUT
-        interval = ISSUE_SEARCH_CAPACITY_RETRY_INITIAL_INTERVAL
         current_result = execution_result
         while capacity_deferred(current_result):
             remaining = deadline - workflow.now()
@@ -16661,7 +16663,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             try:
                 await workflow.wait_condition(
                     lambda: self._cancel_requested or self._paused,
-                    timeout=min(interval, remaining),
+                    timeout=min(ISSUE_SEARCH_CAPACITY_RECHECK_INTERVAL, remaining),
                 )
             except asyncio.TimeoutError:
                 # Timeout is the expected path for periodic capacity rechecks.
@@ -16689,7 +16691,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             outputs = self._get_from_result(current_result, "outputs")
             if isinstance(outputs, Mapping) and outputs.get("capacityEvidence"):
                 wait_context["lastCapacityEvidence"] = outputs["capacityEvidence"]
-            interval = min(interval * 2, ISSUE_SEARCH_CAPACITY_RETRY_MAX_INTERVAL)
 
         self._waiting_reason = None
         self._set_state(

@@ -13,7 +13,7 @@ RESOLVER_CORE_VERSION = "1.0.0"
 # immutable package so workflow code never reads mutable filesystem state
 # during replay.
 RESOLVER_CORE_DIGEST = (
-    "sha256:c80866c7af0cd640d37a12ee24a181cebfc03851580e582a0fc391636bedf4e5"
+    "sha256:e8d69f368d451b48835052fe92eda1c06f0fa48aa7272749f4275436d6cf74b4"
 )
 
 
