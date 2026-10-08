@@ -55,6 +55,7 @@ pytest-timeout = { version = "~=2.4.0", optional = true }
 # alongside any change to this pin. 0.11.0 is the first release supporting
 # pytest 9.x.
 pytest-split = { version = "^0.11.0", optional = true }
+jsonschema = { version = "^4.26.0", optional = true }
 aiosqlite = { version = ">=0.19.0,<0.23.0", optional = true }
 typer = ">=0.23.1,<0.28.0"
 click = "8.5.0"
@@ -66,7 +67,7 @@ opentelemetry-exporter-otlp = "^1.25.0"
 opentelemetry-instrumentation-fastapi = ">=0.46b0,<1.0"
 
 [tool.poetry.extras]
-tests = ["pytest", "pytest-mock", "pytest-asyncio", "pytest-xdist", "pytest-timeout", "aiosqlite", "pytest-split"]
+tests = ["pytest", "pytest-mock", "pytest-asyncio", "pytest-xdist", "pytest-timeout", "aiosqlite", "pytest-split", "jsonschema"]
 
 [tool.poetry.scripts]
 moonmind = "moonmind.cli:main"
