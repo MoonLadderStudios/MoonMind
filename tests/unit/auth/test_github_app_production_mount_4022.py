@@ -491,6 +491,7 @@ def test_read_path_consumes_app_connection_with_bound_headers() -> None:
 def test_admitted_pr_reader_uses_app_connection_over_ambient_token(monkeypatch) -> None:
     """#4010: the run's selected App B issues the PR read, not ambient A."""
 
+    from api_service.db.models import TemporalExecutionCanonicalRecord
     from moonmind.auth import github_app_wiring as wiring
     from moonmind.workflows.adapters.github_service import GitHubService
     from moonmind.workflows.temporal.runtime import managed_api_key_resolve as resolve
@@ -499,15 +500,27 @@ def test_admitted_pr_reader_uses_app_connection_over_ambient_token(monkeypatch) 
     conn = _app_connection()
     selected: list[tuple[str, str]] = []
 
-    async def _access(workflow_id):
-        assert workflow_id == "mm:app-run"
-        return conn.id, False
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:app-run",
+        run_id="run:app",
+        parameters={"workspace": {"repository": "acme/repo", "connectionRef": conn.id}},
+    )
+
+    class _Session:
+        async def get(self, model, workflow_id):
+            assert model is TemporalExecutionCanonicalRecord
+            assert workflow_id == "mm:app-run"
+            return record
+
+    @asynccontextmanager
+    async def _sessions():
+        yield _Session()
 
     async def _load(connection_ref, *, repository=None):
         selected.append((connection_ref, repository))
         return conn
 
-    monkeypatch.setattr(resolve, "load_admitted_repository_access", _access)
+    monkeypatch.setattr("api_service.db.base.async_session_maker", _sessions)
     monkeypatch.setattr(resolve, "load_repository_connection_for_launch", _load)
     real_factory = wiring.build_bound_acquirer_for_connection
 
@@ -899,6 +912,7 @@ def test_admitted_app_merge_issues_only_merge_scope(monkeypatch, allowed, merged
     sends no request.
     """
 
+    from api_service.db.models import TemporalExecutionCanonicalRecord
     from moonmind.auth import github_app_wiring as wiring
     from moonmind.workflows.adapters.github_service import GitHubService
     from moonmind.workflows.temporal.runtime import managed_api_key_resolve as resolve
@@ -906,14 +920,26 @@ def test_admitted_app_merge_issues_only_merge_scope(monkeypatch, allowed, merged
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
     conn = _app_connection(allowedOperations=allowed)
 
-    async def _access(workflow_id):
-        assert workflow_id == "mm:app-run"
-        return conn.id, False
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:app-run",
+        run_id="run:app",
+        parameters={"workspace": {"repository": "acme/repo", "connectionRef": conn.id}},
+    )
+
+    class _Session:
+        async def get(self, model, workflow_id):
+            assert model is TemporalExecutionCanonicalRecord
+            assert workflow_id == "mm:app-run"
+            return record
+
+    @asynccontextmanager
+    async def _sessions():
+        yield _Session()
 
     async def _load(connection_ref, *, repository=None):
         return conn
 
-    monkeypatch.setattr(resolve, "load_admitted_repository_access", _access)
+    monkeypatch.setattr("api_service.db.base.async_session_maker", _sessions)
     monkeypatch.setattr(resolve, "load_repository_connection_for_launch", _load)
     issued: list[dict] = []
     post, get = _provider_edge("ghs_opaque_merge_b")
