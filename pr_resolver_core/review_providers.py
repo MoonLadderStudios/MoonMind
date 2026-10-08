@@ -229,23 +229,22 @@ class ReviewRequest:
     created_at: datetime
 
 
-def latest_review_request(
+def _review_requests(
     provider: AutomatedReviewProvider,
     comments: Iterable[Any],
     *,
     head_sha: str,
     not_before: datetime | None = None,
-) -> ReviewRequest | None:
-    """Select requests once for both the portable snapshot and GitHub gate.
+) -> Iterable[ReviewRequest]:
+    """Recognize explicit requests once for every resolver host.
 
     Hosts supply a head timestamp or the active request as the lower bound.
     REST issue-comment collections omit ``type``; portable inventories must
     explicitly identify any non-issue records so they cannot become requests.
     """
 
-    latest = None
     if not head_sha:
-        return None
+        return
     for comment in comments:
         if not isinstance(comment, Mapping):
             continue
@@ -264,11 +263,68 @@ def latest_review_request(
         commit = str(comment.get("commit_id") or "").strip()
         if commit and commit != head_sha:
             continue
+        yield ReviewRequest(comment=comment, created_at=created_at)
+
+
+def latest_review_request(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    head_sha: str,
+    not_before: datetime | None = None,
+) -> ReviewRequest | None:
+    """Select the causally latest explicit request for the unchanged head."""
+    latest = None
+    for request in _review_requests(
+        provider, comments, head_sha=head_sha, not_before=not_before
+    ):
         if latest is None or _comment_is_after(
-            created_at, comment.get("id"), latest.created_at, latest.comment.get("id")
+            request.created_at,
+            request.comment.get("id"),
+            latest.created_at,
+            latest.comment.get("id"),
         ):
-            latest = ReviewRequest(comment=comment, created_at=created_at)
+            latest = request
     return latest
+
+
+def review_requests_after(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    head_sha: str,
+    request_comment_id: object,
+    requested_at: datetime,
+) -> list[ReviewRequest]:
+    """Retain every identifiable request from the active receipt onward."""
+    anchor_id = _comment_id(request_comment_id)
+    if anchor_id is None:
+        raise ValueError("The active review request has no valid comment identity.")
+    requests: dict[int, ReviewRequest] = {}
+    for request in _review_requests(provider, comments, head_sha=head_sha):
+        identifier = _comment_id(request.comment.get("id"))
+        if identifier is None:
+            raise ValueError("A review request has no valid comment identity.")
+        if identifier == anchor_id:
+            if request.created_at != requested_at:
+                raise ValueError(
+                    "The active review request timestamp is contradictory."
+                )
+        elif not _comment_is_after(
+            request.created_at, identifier, requested_at, anchor_id
+        ):
+            continue
+        prior = requests.get(identifier)
+        if prior is not None and prior.created_at != request.created_at:
+            raise ValueError("A review request has contradictory timestamps.")
+        requests[identifier] = request
+    return sorted(
+        requests.values(),
+        key=lambda request: (
+            request.created_at,
+            _comment_id(request.comment.get("id")),
+        ),
+    )
 
 
 def _request_reply_time(

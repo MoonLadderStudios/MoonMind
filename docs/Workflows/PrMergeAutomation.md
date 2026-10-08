@@ -347,6 +347,15 @@ keep their recorded interpretation through an observation-scoped Temporal
 patch. A previously adopted request may finish after upgrade without consuming
 another cycle; a fresh superseding request still checks the existing bound.
 
+Readiness carries the ordered, deduplicated explicit request receipts from the
+retained active request through the selected latest request. Each unseen receipt
+consumes a cycle, including requests superseded between polls. The gate checks
+the budget before each adoption, retains intermediate requests as superseded,
+and attributes completion only to the latest adopted request. Contradictory
+identities or timestamps remain unavailable evidence. Older observations without
+these receipts and previously recorded decisions retain their interpretation
+through the observation-scoped workflow patch.
+
 A no-op fix pass is successful only when the latest required review covers the current head and no actionable comments remain. Merge finish continues until merged/already-merged plus required tracker effects. Fix-only finishes at verified review-clean without merge. Neither changes its finish mode at runtime to make a gate green.
 
 ## 12. Merge Gate Evaluation
