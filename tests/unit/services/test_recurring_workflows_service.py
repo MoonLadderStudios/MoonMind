@@ -57,6 +57,21 @@ async def recurring_db(tmp_path: Path):
     finally:
         await engine.dispose()
 
+@pytest.fixture(autouse=True)
+def _managed_default_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep runtime-less fixtures on a plan-free managed default.
+
+    These tests exercise scheduling mechanics with targets that name no
+    runtime. Under an Omnigent default such a target is admitted through plan
+    compilation (MoonLadderStudios/MoonMind#3935), which the tests for that
+    behavior opt into explicitly.
+    """
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+
+
 @pytest.fixture
 def mock_temporal_adapter():
     adapter = MagicMock()
@@ -283,6 +298,159 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
     assert scheduled_parameters["agentProfileSnapshot"] == snapshot
     assert scheduled_parameters["omnigent"] == initial_parameters["omnigent"]
     assert scheduled_parameters["omnigentExecutionPlan"] == plan_binding
+
+
+async def test_create_definition_compiles_a_plan_for_a_default_omnigent_runtime(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: an omitted runtime that defaults to
+    Omnigent is admitted exactly like an explicit one, so the schedule launches
+    the plan-bound realizer instead of the plan-less session supervisor."""
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    default_resolver = AsyncMock(return_value=snapshot)
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_default_agent_profile_snapshot",
+        default_resolver,
+    )
+    plan_binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "b" * 64,
+        "planDigest": "sha256:" + "b" * 64,
+        "planArtifactRef": "art_plan",
+        "taskInputSnapshotRef": "art_task",
+        "taskInputSnapshotDigest": "sha256:" + "c" * 64,
+    }
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=SimpleNamespace(model_dump=lambda **_kwargs: dict(plan_binding)),
+            artifact_refs=("art_profile", "art_skills", "art_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service."
+        "compile_and_persist_execution_plan",
+        compile_plan,
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service."
+        "persist_json_artifact",
+        AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-openai-oauth",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        await session.flush()
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        # The raw target `tools/single_user_journey_checks.py` creates.
+        definition = await service.create_definition(
+            name="Default runtime schedule",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=None,
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "task": {"instructions": "Recurring default-runtime check."},
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "publishMode": "none",
+                },
+            },
+            policy=None,
+            actor=SimpleNamespace(id=uuid4()),
+        )
+
+    default_resolver.assert_awaited_once()
+    assert default_resolver.await_args.kwargs["provider_profile_ref"] is None
+    compile_plan.assert_awaited_once()
+    initial_parameters = definition.target["initialParameters"]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["omnigentExecutionPlan"] == plan_binding
+    assert initial_parameters["publishMode"] == "none"
+    scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
+        "workflow_input"
+    ]["initial_parameters"]
+    assert scheduled_parameters["targetRuntime"] == "omnigent"
+    assert scheduled_parameters["omnigentExecutionPlan"] == plan_binding
+
+
+async def test_create_definition_leaves_a_default_managed_runtime_plan_free(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-Omnigent deployment default is not routed through plan admission."""
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    default_resolver = AsyncMock()
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_default_agent_profile_snapshot",
+        default_resolver,
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session, temporal_client_adapter=mock_temporal_adapter
+        )
+        definition = await service.create_definition(
+            name="Managed default schedule",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 6 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=None,
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {"task": {"instructions": "Queue job"}},
+            },
+            policy=None,
+        )
+
+    default_resolver.assert_not_awaited()
+    initial_parameters = definition.target["initialParameters"]
+    assert "targetRuntime" not in initial_parameters
+    assert "omnigentExecutionPlan" not in initial_parameters
 
 
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:

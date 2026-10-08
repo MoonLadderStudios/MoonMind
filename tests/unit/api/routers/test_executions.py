@@ -20669,17 +20669,13 @@ async def test_mm3935_raw_branch_keeps_an_explicit_managed_runtime(
         service._client_adapter.start_workflow.assert_awaited_once()
 
 
-def test_mm3935_cli_run_payload_reaches_the_plan_owner(
-    client: tuple[TestClient, AsyncMock, SimpleNamespace],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`moonmind workflow run` compiles the same immutable plan as Create."""
+def _mm3935_post_through_plan_owner(
+    test_client: TestClient,
+    service: AsyncMock,
+    payload: dict[str, Any],
+) -> tuple[Any, AsyncMock, OmnigentExecutionPlanBinding]:
+    """POST one create request with the deployment-default Agent Profile."""
 
-    from moonmind.workflow_cli import build_execution_payload
-
-    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
-
-    test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
     provider_profile = SimpleNamespace(
         profile_id="codex-openai-oauth",
@@ -20747,16 +20743,32 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
             return_value=SimpleNamespace(),
         ),
     ):
-        response = test_client.post(
-            "/api/executions",
-            json=build_execution_payload(
-                instructions="Make the bounded deterministic change.",
-                title="CLI run",
-                repository="MoonLadderStudios/MoonMind",
-                publish_mode="none",
-                idempotency_key="mm3935-cli",
-            ),
-        )
+        response = test_client.post("/api/executions", json=payload)
+    return response, compile_plan, plan_binding
+
+
+def test_mm3935_cli_run_payload_reaches_the_plan_owner(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`moonmind workflow run` compiles the same immutable plan as Create."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    test_client, service, _user = client
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        build_execution_payload(
+            instructions="Make the bounded deterministic change.",
+            title="CLI run",
+            repository="MoonLadderStudios/MoonMind",
+            publish_mode="none",
+            idempotency_key="mm3935-cli",
+        ),
+    )
 
     assert response.status_code == 201, response.text
     compile_plan.assert_awaited_once()
@@ -20773,6 +20785,49 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
     )
     assert kwargs["title"] == "CLI run"
     assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+def test_mm3935_journey_submission_reaches_the_plan_owner(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Compose journey's deferred task is admitted by the plan owner.
+
+    ``tools/single_user_journey_checks.py`` runs in integration CI against a
+    default install, whose runtime default is Omnigent. Its exact payload must
+    be accepted, persist the plan, and keep its deferred start and title.
+    """
+
+    from tools.single_user_journey_checks import journey_submission
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    scheduled_for = datetime.now(UTC) + timedelta(hours=1)
+    test_client, service, _user = client
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        journey_submission(
+            title="single-user journey fresh",
+            repository="MoonLadderStudios/MoonMind",
+            scheduled_for=scheduled_for,
+            idempotency_key="mm3935-journey",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = kwargs["initial_parameters"]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    assert kwargs["title"] == "single-user journey fresh"
+    assert kwargs["idempotency_key"] == "mm3935-journey"
+    assert kwargs["scheduled_for"] == scheduled_for
+    assert kwargs["start_delay"] is not None
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ class _Execution:
         self.statuses = statuses
         self.reads = 0
         self.preset: dict[str, Any] = {}
+        self.submissions: list[Any] = []
 
     def next(self) -> dict[str, Any]:
         status = self.statuses[min(self.reads, len(self.statuses) - 1)]
@@ -54,10 +55,11 @@ def api_server():
                 self._send(200, {"sections": ["ok"]})
 
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             if self.path.endswith("/cancel"):
                 self._send(202, execution.next())
             elif self.path == "/api/executions":
+                execution.submissions.append(json.loads(body))
                 self._send(201, {"workflowId": "mm:journey", "runId": "run-1"})
             else:
                 self._send(201, {})
@@ -98,6 +100,48 @@ def test_execution_failure_before_cancellation_fails_populate(
 
     assert code == 1
     assert "closed before cancellation" in capsys.readouterr().err
+
+
+def test_populate_submits_the_workflow_create_task_envelope(api_server, tmp_path):
+    """MoonLadderStudios/MoonMind#3935: the raw UserWorkflow branch rejects an
+    Omnigent default, so the journey submits the envelope that persists the
+    execution plan, leaving runtime and profiles to the deployment defaults."""
+
+    base, execution = api_server
+    execution.statuses = [
+        {"status": "failed", "closeStatus": "failed", "summary": "stop here"},
+    ]
+
+    journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--label",
+            "fresh",
+            "--timeout",
+            "20",
+        ]
+    )
+
+    assert len(execution.submissions) == 2
+    first, redelivered = execution.submissions
+    assert redelivered == first
+    assert first["type"] == "task"
+    assert "workflowType" not in first and "initialParameters" not in first
+    payload = first["payload"]
+    assert payload["repository"] == "o/r"
+    assert payload["publishMode"] == "none"
+    assert payload["task"]["title"] == "single-user journey fresh"
+    assert payload["task"]["instructions"]
+    assert payload["schedule"]["mode"] == "once"
+    assert payload["schedule"]["scheduledFor"]
+    assert payload["idempotencyKey"].startswith("single-user-journey-fresh-")
+    selections = json.dumps(payload)
+    for selection in ("targetRuntime", "agentProfile", "providerProfile"):
+        assert selection not in selections
 
 
 FUTURE = "2999-01-01T00:00:00+00:00"

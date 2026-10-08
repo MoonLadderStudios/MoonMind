@@ -280,6 +280,7 @@ async def test_ordinary_recurring_schedule_still_runs(tmp_path: Path) -> None:
                 target={
                     "workflowType": "MoonMind.UserWorkflow",
                     "initialParameters": {
+                        "targetRuntime": "codex",
                         "task": {
                             "instructions": "ordinary work",
                             "publish": {"mode": "none"},

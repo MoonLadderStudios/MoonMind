@@ -140,6 +140,10 @@ or disabled retrieval values are removed using the ordinary execution
 admission contract. Historical profile snapshots and artifact references are
 retained; rejection does not rewrite an existing definition.
 
+A new target that omits the runtime while the deployment default is Omnigent is
+admitted as an Omnigent schedule, with its plan compiled at creation like an
+explicit `targetRuntime: omnigent` target.
+
 For generic Omnigent schedules, every occurrence resolves the current promoted default —
 Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
 work. There is no pinned runtime-provider target on a schedule: the schedule carries no
