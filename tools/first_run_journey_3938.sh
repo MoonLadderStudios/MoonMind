@@ -163,7 +163,7 @@ compose() {
 }
 
 redact() {
-  sed -E -e 's/sk-[A-Za-z0-9_.-]+/***/g' -e 's/ghp_[A-Za-z0-9_]+/***/g' \
+  sed -u -E -e 's/sk-[A-Za-z0-9_.-]+/***/g' -e 's/(ghp_|github_pat_)[A-Za-z0-9_]+/***/g' \
     -e 's/(key=)[^[:space:];&]+/\1***/g'
 }
 
@@ -218,10 +218,59 @@ record_provenance() {
   } | redact | tee -a "$LOG_DIR/provenance.log"
 }
 
+# Keep early pull/create evidence and the final diagnostics with receipt timestamps.
+# The Linux CI runner uses unbuffered sed above so quiet phases retain their timing.
+record_startup_output() {
+  python3 -u -c '
+from collections import deque
+from datetime import datetime, timezone
+import sys
+
+limit = 5000
+tail = deque(maxlen=40)
+count = 0
+sys.stdin.reconfigure(errors="replace")
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    for line in sys.stdin:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        stamped = f"{timestamp} {line.rstrip(chr(10))}\n"
+        count += 1
+        tail.append((count, stamped))
+        if count <= limit:
+            output.write(stamped)
+            output.flush()
+    retained_tail = [line for index, line in tail if index > limit]
+    omitted = max(0, count - limit - len(retained_tail))
+    if omitted:
+        output.write(f"startup output truncated: {count} lines; {omitted} omitted between first {limit} and final {len(tail)}\n")
+    output.writelines(retained_tail)
+for _, line in tail:
+    sys.stdout.write(line)
+' "$1"
+}
+
+compose_startup() {
+  local phase="$1" attempt="$2" started="$SECONDS"
+  local output_file="$LOG_DIR/compose-startup-$phase-$attempt.log"
+  local -a statuses
+  compose up -d --wait --wait-timeout 600 2>&1 | redact | record_startup_output "$output_file"
+  statuses=("${PIPESTATUS[@]}")
+  if (( statuses[1] != 0 || statuses[2] != 0 )); then
+    echo "Error: startup diagnostics failed; refusing to retry Compose for a logging failure." >&2
+    exit 1
+  fi
+  if ! printf "compose-startup phase=%s attempt=%s elapsed_seconds=%s exit_status=%s\n" \
+    "$phase" "$attempt" "$((SECONDS - started))" "${statuses[0]}" | tee -a "$output_file"; then
+    echo "Error: startup diagnostics summary failed." >&2
+    exit 1
+  fi
+  return "${statuses[0]}"
+}
+
 bring_up() {
-  local attempts="${1:-1}" attempt=1
+  local attempts="${1:-1}" attempt=1 phase="${2:-candidate}"
   echo "Bringing up $PROJECT_NAME on $MOONMIND_IMAGE..." | redact
-  until compose up -d --wait --wait-timeout 600 2>&1 | redact | tail -n 40; do
+  until compose_startup "$phase" "$attempt"; do
     if (( attempt >= attempts )); then
       echo "Error: compose up failed for $MOONMIND_IMAGE." >&2
       exit 1
@@ -439,7 +488,7 @@ else
   # and its 30s healthcheck interval can report unhealthy before the restarted
   # workers are observed ready. Wait again rather than fail on a release that
   # recovers on its own; the candidate still gets a single wait.
-  bring_up 3
+  bring_up 3 source
   checks populate before-upgrade
   cancel_from_dashboard before-upgrade
   checks credential before-upgrade
