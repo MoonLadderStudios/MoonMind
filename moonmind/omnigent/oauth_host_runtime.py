@@ -12,7 +12,7 @@ import shutil
 import tarfile
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -691,6 +691,7 @@ class OmnigentOAuthHostRuntime:
         required_capabilities: tuple[str, ...] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
         github_token: str | None = None,
+        github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
         repository_source: str = "",
@@ -758,6 +759,7 @@ class OmnigentOAuthHostRuntime:
             workspace_checkpoint_restore_ref=workspace_checkpoint_restore_ref,
             attachment_refs=attachment_refs,
             github_token=github_token,
+            github_token_resolver=github_token_resolver,
             artifact_gateway=artifact_gateway,
             omnigent_isolation_verified=(
                 launch.get("hostMode") == "on_demand_docker"
@@ -2975,6 +2977,7 @@ class OmnigentOAuthHostRuntime:
         workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
         github_token: str | None = None,
+        github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         artifact_gateway: Any | None = None,
         omnigent_isolation_verified: bool = False,
     ) -> Path:
@@ -3160,6 +3163,14 @@ class OmnigentOAuthHostRuntime:
             # reuse of a partial directory.
             try:
                 if not already_materialized:
+                    # Source authority is acquired only for a GitHub clone that
+                    # must actually run, never to reuse a completed workspace.
+                    if (
+                        github_token_resolver is not None
+                        and self._normalize_repository_source(source)[1]
+                        == "github_https"
+                    ):
+                        github_token = await github_token_resolver()
                     materialization = await self._materialize_repository(
                         workspace,
                         repository_source=source,

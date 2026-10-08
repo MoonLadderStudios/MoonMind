@@ -1211,10 +1211,17 @@ async def test_github_credential_projection_transports_secret_only_on_stdin(
 class _ProjectionBackend:
     """Docker double that records the projection writer and fails on request."""
 
-    def __init__(self, *, existing: bool, fail_writer: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        existing: bool,
+        fail_writer: bool = False,
+        inspect_error: str = "",
+    ) -> None:
         self.calls: list[tuple[list[str], dict]] = []
         self.existing = existing
         self.fail_writer = fail_writer
+        self.inspect_error = inspect_error
         self.digest = hashlib.sha256(b"lease-owner-1").hexdigest()[:32]
 
     async def run(self, argv, **kwargs):
@@ -1222,6 +1229,8 @@ class _ProjectionBackend:
         if argv[1:3] == ["volume", "create"]:
             self.existing = True
         if argv[1:3] == ["volume", "inspect"]:
+            if self.inspect_error:
+                return 1, "", self.inspect_error
             if not self.existing:
                 return 1, "", "Error: no such volume"
             return 0, self.digest, ""
@@ -1347,6 +1356,83 @@ async def test_github_projection_interrupted_refresh_keeps_complete_issuance(
     )
     assert _real_gh_token(config) == "selected-token-B2"
     assert oct((config / "hosts.yml").stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.asyncio
+async def test_github_projection_overlapping_writers_keep_hosts_yml_atomic(
+    monkeypatch, tmp_path
+) -> None:
+    # Overlapping same-owner writers run as PID 1 in separate containers, so a
+    # PID-derived temp name collides. Subshells of one shell share ``$$`` and
+    # reproduce that collision without PID namespaces.
+    backend = _ProjectionBackend(existing=False)
+    await _materialize_projection(monkeypatch, backend, "selected-token-B")
+    writer = _projection_writer(backend, tmp_path / "volume")
+    script, arguments = writer[2], writer[4:]
+    config = tmp_path / "volume"
+    first_input, second_input = tmp_path / "first.fifo", tmp_path / "second.fifo"
+    os.mkfifo(first_input)
+    os.mkfifo(second_input)
+    both = subprocess.Popen(
+        [
+            "sh",
+            "-c",
+            f'({script}) <"{first_input}" & first=$!; '
+            f'({script}) <"{second_input}" & second=$!; '
+            'wait "$first"; first_code=$?; wait "$second"; second_code=$?; '
+            'echo "$first_code $second_code"',
+            "--",
+            *arguments,
+        ],
+        stdout=subprocess.PIPE,
+    )
+    first = await asyncio.to_thread(open, first_input, "wb")
+    second = await asyncio.to_thread(open, second_input, "wb")
+    first.write(b"selected-token-B1-")
+    first.flush()
+    for _ in range(200):
+        if config.is_dir() and any(config.iterdir()):
+            break
+        await asyncio.sleep(0.01)
+    second.write(b"selected-token-B2")
+    second.close()
+    for _ in range(200):
+        if (config / "hosts.yml").exists():
+            break
+        await asyncio.sleep(0.01)
+    assert _real_gh_token(config) == "selected-token-B2"
+    first.write(b"complete")
+    first.close()
+    output, _ = await asyncio.to_thread(both.communicate)
+
+    assert output.split() == [b"0", b"0"]
+    assert _real_gh_token(config) == "selected-token-B1-complete"
+    assert [path.name for path in config.iterdir()] == ["hosts.yml"]
+
+
+@pytest.mark.asyncio
+async def test_github_projection_inspect_failure_never_creates_or_removes(
+    monkeypatch,
+) -> None:
+    # An inspect failure other than absence is not evidence that this call may
+    # create (and so later remove) the volume: a live projection may exist.
+    backend = _ProjectionBackend(
+        existing=True,
+        fail_writer=True,
+        inspect_error="Cannot connect to the Docker daemon",
+    )
+
+    with pytest.raises(HarnessPlatformError) as error:
+        await _materialize_projection(monkeypatch, backend, "selected-token-B")
+
+    assert error.value.code == (
+        HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+    )
+    assert not any(
+        argv[1:3] in (["volume", "create"], ["volume", "rm"])
+        for argv, _kwargs in backend.calls
+    )
+    assert not any(kwargs.get("input_bytes") for _argv, kwargs in backend.calls)
 
 
 @pytest.mark.asyncio
