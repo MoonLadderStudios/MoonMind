@@ -388,6 +388,13 @@ worker's slots and holds one slot with an unfinished `mark_running`: the
 workflow worker still processes the cancellation, the canceled terminal
 persists through the free slot, and the late running handoff cannot reopen
 the canceled turn (`mark_turn_running` leaves terminal turns unchanged).
+The same module separately exercises overlapping PostgreSQL transactions:
+terminal persistence holds the branch/turn locks while a running claim waits,
+then both cancellation and saved-success commits remain intact after that
+claim resumes. The running claim reuses `lock_turn_execution` so the terminal
+check refreshes cached rows under the same branch-then-turn lock order.
+Duplicate/divergent terminal deliveries, stale claims and database outages
+are direct-handler checks in that module, separate from its worker journeys.
 The stdlib decision rehearsals (`test_checkpoint_drain_saturation_3949.py`
 and the gate-level rehearsal in `test_checkpoint_compat_drain_3949.py`)
 remain decision-level checks, not execution evidence.
