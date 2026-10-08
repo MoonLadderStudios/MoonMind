@@ -617,7 +617,10 @@ Key notes:
 
 ## 11.4 `MoonMind.OmnigentSession` lifecycle
 
-One newly admitted profile-bound Omnigent execution is a deterministic child of
+A plan-bound Omnigent execution runs through its recorded realizer and does not
+start this workflow. `MoonMind.OmnigentSession` is retained for AgentRuns that
+carry no persisted execution plan: replayed or in-flight histories, and exact
+reruns of them. Each such session is a deterministic child of
 `MoonMind.AgentRun`. It repeatedly loads canonical state and observation
 frontiers, persists the pure reconciler decision, executes its bounded fenced
 command, and waits for either a safe wake signal or the next authoritative
@@ -628,7 +631,7 @@ summaries; provider payloads, credentials, transcripts, and mutable host paths
 remain outside workflow history.
 
 A separately patched, bounded admission decision freezes the feature
-generation for each new session and supports enabled, exact-owner canary, and
+generation for each plan-less session and supports enabled, exact-owner canary, and
 disabled-new-selection modes without changing ownership of admitted histories.
 Exhausted phases persist typed terminal evidence and continue through the
 reconciler's ordered cleanup. Exhausted cleanup preserves the primary result,

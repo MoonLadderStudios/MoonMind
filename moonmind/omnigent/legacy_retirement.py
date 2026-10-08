@@ -1505,13 +1505,8 @@ def assert_architecture_exceptions_are_owned(
 # every temporary flag has a declared retirement trigger.
 LEGACY_RETIREMENT_COMPLETE = "legacy_retirement_complete"
 TEMPORARY_ROLLOUT_FLAGS: dict[str, str] = {
-    "omnigent_session_supervisor_enabled": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_shadow": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_generation": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_allowed_owner_ids": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_allowed_execution_profile_refs": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_allowed_launch_policy_refs": LEGACY_RETIREMENT_COMPLETE,
-    "omnigent_session_supervisor_allowed_provider_profile_ids": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_rollback_mode": LEGACY_RETIREMENT_COMPLETE,
 }
 

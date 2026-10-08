@@ -116,6 +116,7 @@ from api_service.services.provider_profile_runtime import (
     ProviderProfileRuntimeMismatchError,
     load_provider_profile_for_runtime,
     require_provider_profile_runtime,
+    resolve_launch_target_profile_selection,
 )
 from api_service.services.remediation_capabilities import (
     project_remediation_action_inputs,
@@ -285,7 +286,10 @@ from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
+from moonmind.workflows.executions.runtime_defaults import (
+    normalize_runtime_id,
+    resolve_default_workflow_runtime,
+)
 from moonmind.workflows.executions.runtime_inheritance import (
     ExecutionPrincipal,
     RuntimeInheritanceError,
@@ -14827,6 +14831,26 @@ def _validate_execution_fanout_batch_target(
             )
 
 
+def _raw_request_defaults_to_omnigent(
+    *, workflow_type: str, parameters: Mapping[str, Any]
+) -> bool:
+    """Return whether a raw user workflow leaves its runtime to an Omnigent default.
+
+    MoonLadderStudios/MoonMind#3935: the raw branch never compiles the
+    immutable Omnigent execution plan, so an omitted runtime that defaults to
+    Omnigent must meet the same product boundary as an explicit one instead of
+    reaching the legacy no-plan session supervisor.
+    """
+
+    if workflow_type != "MoonMind.UserWorkflow":
+        return False
+    if resolve_launch_target_profile_selection(
+        {"initialParameters": parameters}
+    ).runtime_ids:
+        return False
+    return resolve_default_workflow_runtime(settings.workflow) == "omnigent"
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
@@ -14923,7 +14947,12 @@ async def create_execution(
         raw_direct_runtime = str(
             skill_validation.parameters.get("targetRuntime") or ""
         ).strip()
-        if raw_direct_runtime and normalize_runtime_id(raw_direct_runtime) == "omnigent":
+        if (
+            raw_direct_runtime and normalize_runtime_id(raw_direct_runtime) == "omnigent"
+        ) or _raw_request_defaults_to_omnigent(
+            workflow_type=request.workflow_type,
+            parameters=skill_validation.parameters,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={

@@ -448,23 +448,40 @@ MoonMind.AgentRun
           -> Provider Profile release last
 ```
 
-Newly admitted profile-bound sessions use this durable supervisor. Existing
-AgentRun histories retain the legacy profile-bound activity behind a Temporal
-patch boundary so replay does not transfer ownership in flight. The supervisor
-input contains only immutable owner identities, a compiled-intent artifact ref
-and digest, the initial turn-attempt identity, and frozen feature/compatibility
-versions; provider content, credentials, and mutable host paths stay outside
-workflow history.
+New Omnigent work has one lifecycle owner: the persisted execution plan's
+recorded realizer. Workflow Create, `moonmind workflow run`, recurring
+schedules, and Omnigent child plans all submit through the task/workflow
+envelope, which resolves the Agent Profile and persists the immutable plan
+before scheduling. A raw `workflowType`/`initialParameters` request that names
+Omnigent, or omits the runtime when the deployment default is Omnigent, is
+rejected with `omnigent_product_boundary_required` instead of reaching a
+plan-less lane. Session admission returns `realizer_managed_lifecycle` for
+`generic-omnigent-host@1`, and `codex-profile-bound@1` keeps its recorded
+coordinator, so both run through the one
+`integration.omnigent.profile_bound_execute` boundary. That boundary launches
+the host and session, delivers the first turn, and owns the terminal result and
+cleanup. AgentRun does not start a second supervisor around it.
 
-New-session admission is a distinct bounded Activity behind its own replay
-patch. The decision freezes the admitted feature generation and evaluates an
-operator mode of `enabled`, `canary`, or `disabled`; canary selection uses an
-exact AgentRun owner allowlist, and an optional execution-profile allowlist can
-narrow either enabled mode. A configured generation mismatch fails closed.
-The admission Activity is not re-evaluated by an already admitted child, so
-disabling new selection routes only later AgentRuns to the legacy owner and
-cannot disable replay, query, cancellation, cleanup, or historical reads for
-an admitted session.
+The durable supervisor is retained compatibility for AgentRuns that carry no
+persisted plan: in-flight and replayed histories admitted before plan
+admission, and exact reruns of those executions. The supervisor input contains
+only immutable owner identities, a compiled-intent artifact ref and digest, the
+initial turn-attempt identity, and frozen feature/compatibility versions;
+provider content, credentials, and mutable host paths stay outside workflow
+history. Existing AgentRun histories also retain the legacy profile-bound
+activity behind a Temporal patch boundary, so replay does not transfer
+ownership in flight.
+
+For that retained lane, plan-less admission is a distinct bounded Activity
+behind its own replay patch. It freezes the admitted feature generation and
+evaluates an operator mode of `enabled`, `canary`, or `disabled`. Canary
+selection uses an exact AgentRun owner allowlist, and an optional
+execution-profile allowlist can narrow either enabled mode. A configured
+generation mismatch fails closed. An already admitted child does not
+re-evaluate admission, so disabling new selection cannot disable replay, query,
+cancellation, cleanup, or historical reads for an admitted session. Remove the
+plan-less branch and its admission flags when no retained execution without a
+persisted plan can still be replayed or exactly rerun.
 
 ### 7.2 Why the identity stays external
 
