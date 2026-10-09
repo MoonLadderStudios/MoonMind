@@ -183,6 +183,7 @@ async def test_checkpoint_list_uses_owned_execution_ledger(
             ("artifact://art_before_publish", "before_publication"),
         }
         assert all(x["runId"] == record.run_id for x in response.json()["items"])
+        assert all(x["logicalStepId"] == "assess" for x in response.json()["items"])
         assert all(x["executionOrdinal"] == 1 for x in response.json()["items"])
         load.assert_awaited_once()
 

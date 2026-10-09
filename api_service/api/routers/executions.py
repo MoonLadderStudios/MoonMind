@@ -2198,15 +2198,20 @@ def _checkpoint_summaries_from_record(
             ordinal_value = int(execution_ordinal)
         digest_value = str(digest or "").strip() or None
         if key in seen:
-            if digest_value:
-                for item in items:
-                    if (
-                        item.checkpoint_ref == ref_value
-                        and item.checkpoint_boundary == boundary_value
-                        and not item.checkpoint_digest
-                    ):
+            for item in items:
+                if (
+                    item.checkpoint_ref == ref_value
+                    and item.checkpoint_boundary == boundary_value
+                ):
+                    if digest_value and not item.checkpoint_digest:
                         item.checkpoint_digest = digest_value
-                        break
+                    if not item.logical_step_id:
+                        item.logical_step_id = (
+                            str(logical_step_id or "").strip() or None
+                        )
+                    if item.execution_ordinal is None:
+                        item.execution_ordinal = ordinal_value
+                    break
             return
         seen.add(key)
         items.append(
