@@ -333,7 +333,7 @@ def workflow_run(
         None, "--publish-mode", help="Publication intent: auto, none, branch, or pr."
     ),
     param: list[str] | None = typer.Option(
-        None, "--param", help="Extra task field as key=value (repeatable)."
+        None, "--param", help="Extra task input as key=value (repeatable)."
     ),
     request_id: str | None = typer.Option(
         None,

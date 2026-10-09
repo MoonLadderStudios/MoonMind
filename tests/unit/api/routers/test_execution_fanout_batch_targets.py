@@ -23,6 +23,7 @@ from api_service.api.routers.executions import (
     get_temporal_client,
     router,
 )
+from api_service.db.base import get_async_session
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
@@ -47,6 +48,11 @@ def batch_client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
 
     app.dependency_overrides[_get_service] = _override_batch_service
     app.dependency_overrides[get_temporal_client] = _override_batch_temporal_client
+    # Each child is a fresh request: its idempotency key names no admitted
+    # execution yet.
+    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
+        get=AsyncMock(return_value=None)
+    )
     user = _override_user_dependencies(app, is_superuser=False)
     # Fan-out tests authenticate via the execution-scoped bearer; the
     # session fallback must not deny the request before that boundary.

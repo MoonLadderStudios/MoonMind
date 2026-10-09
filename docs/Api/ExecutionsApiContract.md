@@ -239,7 +239,7 @@ New managed and agent-owned publication results are derived from accepted `moonm
 
 Task-shaped envelopes are covered in section 16 and use the same admission compiler.
 
-A direct UserWorkflow request cannot select Omnigent. It returns 422 `omnigent_product_boundary_required` when it names `targetRuntime: omnigent` or names no runtime while the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling. `moonmind workflow run` submits that envelope.
+A direct UserWorkflow request cannot select Omnigent. It returns 422 `omnigent_product_boundary_required` when any canonical runtime field (`targetRuntime`, `task.targetRuntime`, or a `runtime.mode` block) names Omnigent, or when it names no runtime while the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling. `moonmind workflow run` submits that envelope, carrying `--param key=value` extras in `task.inputs`. A task-shaped request whose `idempotencyKey` already names an admitted execution returns that execution before any preset, Provider Profile, or runtime-default resolution, so an uncertain submission can be reconciled even after that catalog state changes.
 
 ### 9.2 Validation
 

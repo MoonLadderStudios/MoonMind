@@ -1683,6 +1683,17 @@ class RecurringWorkflowsService:
         )
 
         definition_id = uuid4()
+        # Admit before the definition joins the session: artifact persistence
+        # commits the shared session, so a later plan or Temporal failure
+        # could otherwise leave a committed definition without a schedule.
+        admitted_target = await self._admit_omnigent_schedule_target(
+            definition_id=definition_id,
+            target=target_payload,
+            agent_profile_selection=agent_profile_selection,
+            actor=actor,
+        )
+        if admitted_target is not None:
+            target_payload = admitted_target
         definition = RecurringWorkflowDefinition(
             id=definition_id,
             name=name_text,
@@ -1704,16 +1715,6 @@ class RecurringWorkflowsService:
         )
         self._session.add(definition)
         await self._session.flush()
-
-        admitted_target = await self._admit_omnigent_schedule_target(
-            definition_id=definition_id,
-            target=definition.target,
-            agent_profile_selection=agent_profile_selection,
-            actor=actor,
-        )
-        if admitted_target is not None:
-            definition.target = admitted_target
-            await self._session.flush()
 
         workflow_type, workflow_input = self._workflow_bundle_for_target(
             definition_id=definition_id,
