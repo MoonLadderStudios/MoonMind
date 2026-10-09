@@ -379,8 +379,10 @@ def build_execution_payload(
                 "use auto, none, branch, or pr."
             )
         task["publish"] = {"mode": normalized_publish}
-    for key, value in dict(extra_params or {}).items():
-        task.setdefault(key, value)
+    if extra_params:
+        # The task envelope keeps only canonical task fields; extras travel in
+        # the preserved ``task.inputs`` map instead of being silently dropped.
+        task["inputs"] = dict(extra_params)
     request_payload: dict[str, Any] = {"task": task}
     if repo:
         request_payload["repository"] = repo

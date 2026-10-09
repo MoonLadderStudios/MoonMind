@@ -412,6 +412,117 @@ async def test_create_definition_compiles_a_plan_for_a_default_omnigent_runtime(
     assert scheduled_parameters["omnigentExecutionPlan"] == plan_binding
 
 
+async def test_create_definition_failure_after_admission_leaves_no_definition(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Artifact persistence commits its session; a later failure must not
+    leave a committed definition that reconciliation could launch or a retry
+    could duplicate."""
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service.resolve_default_agent_profile_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    plan_binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "b" * 64,
+        "planDigest": "sha256:" + "b" * 64,
+        "planArtifactRef": "art_plan",
+        "taskInputSnapshotRef": "art_task",
+        "taskInputSnapshotDigest": "sha256:" + "c" * 64,
+    }
+    monkeypatch.setattr(
+        "api_service.services.omnigent_execution_plan_service."
+        "compile_and_persist_execution_plan",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                binding=SimpleNamespace(
+                    model_dump=lambda **_kwargs: dict(plan_binding)
+                ),
+                artifact_refs=("art_profile", "art_skills", "art_plan"),
+                resolved_skillset_ref="art_skills",
+            )
+        ),
+    )
+    mock_temporal_adapter.create_schedule.side_effect = RuntimeError(
+        "temporal unavailable"
+    )
+
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex-openai-oauth",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                )
+            )
+            await session.commit()
+
+            async def _persist_and_commit(**_kwargs):
+                # TemporalArtifactService.create() commits the shared session.
+                await session.commit()
+                return ("art_task", "sha256:" + "c" * 64)
+
+            monkeypatch.setattr(
+                "api_service.services.omnigent_execution_plan_service."
+                "persist_json_artifact",
+                _persist_and_commit,
+            )
+            service = RecurringWorkflowsService(
+                session,
+                temporal_client_adapter=mock_temporal_adapter,
+                artifact_service=SimpleNamespace(),
+            )
+            with pytest.raises(RecurringWorkflowValidationError):
+                await service.create_definition(
+                    name="Default runtime schedule",
+                    description=None,
+                    enabled=True,
+                    schedule_type="cron",
+                    cron="0 6 * * *",
+                    timezone="UTC",
+                    scope_type="personal",
+                    scope_ref=None,
+                    owner_user_id=None,
+                    target={
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {
+                            "task": {"instructions": "Recurring check."},
+                        },
+                    },
+                    policy=None,
+                    actor=SimpleNamespace(id=uuid4()),
+                )
+            await session.rollback()
+
+        async with session_maker() as session:
+            stored = (
+                await session.execute(select(RecurringWorkflowDefinition))
+            ).scalars().all()
+    assert stored == []
+
+
 async def test_create_definition_leaves_a_default_managed_runtime_plan_free(
     tmp_path: Path,
     mock_temporal_adapter,
