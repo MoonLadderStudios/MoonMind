@@ -1396,6 +1396,23 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
     assert "X-MoonMind-Agent-Run-Identifier" not in headers
 
 
+_BATCH_EXECUTION_REF = "batch:run:node-1:execution:1"
+
+
+def _batch_terminal_evidence(workspace: Path) -> Any:
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    return evaluate_terminal_evidence(
+        {
+            "contractId": "batch_pr_resolver_fanout.v1",
+            "relativePath": "artifacts/batch_pr_resolver_result.json",
+            "expectedSchemaVersion": "moonmind.batch-pr-resolver-result.v1",
+            "executionRef": _BATCH_EXECUTION_REF,
+        },
+        workspace_path=str(workspace),
+    )
+
+
 def _run_main_with_discovery(
     module: dict[str, Any],
     tmp_path: Path,
@@ -1406,7 +1423,7 @@ def _run_main_with_discovery(
 ) -> tuple[dict[str, Any], list[int]]:
     spool = tmp_path / "artifacts"
     monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
-    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "batch:run:node-1:execution:1")
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", _BATCH_EXECUTION_REF)
     context = tmp_path / "task_context.json"
     context.write_text(json.dumps(task_context or {}))
     monkeypatch.setattr(
@@ -1483,6 +1500,10 @@ def test_pull_request_list_reports_selected_prs_that_are_not_open(
 
     assert submitted == [4765]
     assert summary["skipped"] == [{"pr": 4800, "reason": "not-open"}]
+    # Every selected target is accounted for, so the managed terminal-evidence
+    # boundary accepts the result instead of rejecting it after queueing.
+    assert summary["requested"] == 2
+    assert _batch_terminal_evidence(tmp_path).satisfied
 
 
 def test_pull_request_selection_is_inherited_from_task_context(
@@ -1503,6 +1524,31 @@ def test_pull_request_selection_is_inherited_from_task_context(
     assert summary["selection"] == "4725"
 
 
+def test_pull_request_selection_is_inherited_from_canonical_skill_inputs(
+    tmp_path, monkeypatch
+):
+    """Canonical tasks carry Skill inputs under ``skill.inputs``, not ``args``."""
+    module = _load_module()
+
+    summary, submitted = _run_main_with_discovery(
+        module,
+        tmp_path,
+        monkeypatch,
+        [],
+        [4724, 4725, 4765],
+        task_context={
+            "skill": {
+                "id": "batch-pr-resolver",
+                "ids": ["batch-pr-resolver"],
+                "inputs": {"pullRequests": "4724-4725"},
+            }
+        },
+    )
+
+    assert submitted == [4724, 4725]
+    assert summary["selection"] == "4724-4725"
+
+
 def test_omitted_pull_request_selection_queues_every_open_pr(tmp_path, monkeypatch):
     module = _load_module()
 
@@ -1519,7 +1565,9 @@ def test_invalid_pull_request_selection_fails_before_discovery(
     tmp_path, monkeypatch, spec
 ):
     module = _load_module()
-    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(tmp_path))
+    spool = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", _BATCH_EXECUTION_REF)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1530,5 +1578,15 @@ def test_invalid_pull_request_selection_fails_before_discovery(
         raise AssertionError("discovery must not run for an invalid selection")
 
     module["main"].__globals__["_run_pr_list"] = discover
-    with pytest.raises(ValueError, match="pull request selection"):
-        asyncio.run(module["main"]())
+    assert asyncio.run(module["main"]()) == 2
+
+    summary = json.loads((spool / "batch_pr_resolver_result.json").read_text())
+    assert summary["status"] == "failed"
+    assert summary["failureCode"] == "BATCH_FANOUT_INPUT_INVALID"
+    assert "pull request selection" in summary["failureMessage"]
+    assert summary["created"] == 0 and summary["queued"] == []
+    # The managed boundary reports the readable validation error, not an
+    # incomplete contract left behind by the pre-discovery "running" marker.
+    evidence = _batch_terminal_evidence(tmp_path)
+    assert evidence.failure_code == "BATCH_FANOUT_INPUT_INVALID"
+    assert "pull request selection" in evidence.metadata["terminalFailureMessage"]

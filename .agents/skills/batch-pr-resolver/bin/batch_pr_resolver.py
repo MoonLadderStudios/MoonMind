@@ -489,13 +489,14 @@ def _inherited_skill_arg(args: argparse.Namespace, key: str) -> str | None:
         if not isinstance(context, dict):
             continue
         skill = context.get("skill")
-        inputs = skill.get("args") if isinstance(skill, dict) else None
-        if not isinstance(inputs, dict):
-            inputs = context.get("inputs")
-        if isinstance(inputs, dict):
-            value = _runtime_text(inputs.get(key))
-            if value:
-                return value
+        skill = skill if isinstance(skill, dict) else {}
+        # Canonical tasks carry Skill inputs under ``inputs``; ``args`` is the
+        # legacy spelling, and a top-level ``inputs`` predates both.
+        for inputs in (skill.get("inputs"), skill.get("args"), context.get("inputs")):
+            if isinstance(inputs, dict):
+                value = _runtime_text(inputs.get(key))
+                if value:
+                    return value
     return None
 
 
@@ -998,9 +999,33 @@ async def main() -> int:
     )
 
     selection = _resolve_pull_request_selection(args)
-    selected_ranges = (
-        _parse_pull_request_selection(selection) if selection is not None else None
-    )
+    try:
+        selected_ranges = (
+            _parse_pull_request_selection(selection) if selection is not None else None
+        )
+    except ValueError as exc:
+        # Bind the readable validation error to this execution so the managed
+        # boundary reports it instead of the "running" marker written above.
+        _write_artifacts(
+            artifacts_dir / "batch_pr_resolver_result.json",
+            {
+                **contract,
+                "status": "failed",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "repository": repo,
+                "state": args.state,
+                "selection": selection,
+                "requested": 0,
+                "created": 0,
+                "queued": [],
+                "skipped": [],
+                "errors": [],
+                "failureCode": "BATCH_FANOUT_INPUT_INVALID",
+                "failureMessage": str(exc)[:1024],
+            },
+        )
+        print(f"error: {exc}", flush=True)
+        return 2
     open_prs = _run_pr_list(repo=repo, state=args.state)
     not_open: list[dict[str, Any]] = []
     if selected_ranges is not None:
@@ -1046,7 +1071,8 @@ async def main() -> int:
             "effort": runtime.effort,
             "executionProfileRef": runtime.provider_profile,
         },
-        "requested": len(open_prs),
+        # Selected numbers that are not open are skipped targets too.
+        "requested": len(open_prs) + len(not_open),
         "created": len(created),
         "queued": created,
         "skipped": skipped,
@@ -1071,9 +1097,6 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
-    except ValueError as exc:
-        print(f"error: {exc}", flush=True)
-        raise SystemExit(2)
     except Exception:
         print("error: batch-pr-resolver failed. See logs for details.", flush=True)
         raise SystemExit(1)
