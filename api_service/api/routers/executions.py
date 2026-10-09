@@ -19,6 +19,8 @@ from typing import Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from moonmind.core.artifacts import canonical_artifact_ref
+
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
     is_historical_workflow_type,
@@ -2037,7 +2039,7 @@ def _branch_comparison_record(
 def _checkpoint_ref_artifact_value(ref: object) -> str:
     if isinstance(ref, Mapping):
         ref = ref.get("artifactRef") or ref.get("checkpointRef") or ref.get("ref")
-    return str(ref or "").strip()
+    return canonical_artifact_ref(str(ref or ""))
 
 
 async def _latest_branch_turn_for_step_execution(

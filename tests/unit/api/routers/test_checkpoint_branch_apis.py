@@ -19,7 +19,9 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import (
     _checkpoint_branch_git_context,
+    _checkpoint_summaries_from_record,
     _get_service,
+    _validate_branch_source,
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
@@ -44,6 +46,38 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     build_branch_turn_execution_identity,
 )
+
+
+@pytest.mark.parametrize("prefix", ["", "artifact:", "artifact://"])
+def test_checkpoint_projection_accepts_durable_capture_reference_shapes(prefix):
+    ref = prefix + "art_capture1"
+    record = SimpleNamespace(
+        workflow_id="mm:capture-owner", run_id="capture-run", memo={},
+        parameters={"steps": [{
+            "logicalStepId": "assess", "executionOrdinal": 1,
+            "checkpointRefsByBoundary": {"after_execution": {
+                "artifactRef": ref, "checkpointDigest": "sha256:" + "1" * 64,
+            }},
+        }]},
+        finish_summary_json={},
+    )
+    items = _checkpoint_summaries_from_record(record)
+    assert len(items) == 1
+    assert items[0].checkpoint_ref == "artifact://art_capture1"
+    assert items[0].checkpoint_digest == "sha256:" + "1" * 64
+    assert items[0].logical_step_id == "assess"
+    # Shape adaptation retains the original run and digest admission guards.
+    source = SimpleNamespace(
+        workflow_id=record.workflow_id, run_id=record.run_id,
+        checkpoint_ref=items[0].checkpoint_ref, checkpoint_boundary="after_execution",
+        checkpoint_digest=items[0].checkpoint_digest,
+    )
+    _validate_branch_source(workflow_id=record.workflow_id, record=record, source=source)
+    source.checkpoint_digest = "sha256:" + "2" * 64
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        _validate_branch_source(workflow_id=record.workflow_id, record=record, source=source)
+    assert error.value.detail["code"] == "checkpoint_digest_mismatch"
 
 
 def _record_like(user: SimpleNamespace) -> SimpleNamespace:
