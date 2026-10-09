@@ -111,6 +111,104 @@ async def service(session_factory):
     return CanonicalTurnCommandService(OmnigentControlPlaneStore(session_factory))
 
 
+@pytest.mark.asyncio
+async def test_profile_bound_retry_preserves_parked_command_and_original_stall(
+    service, monkeypatch
+) -> None:
+    """A stalled delivery cannot be redispatched under its parked command.
+
+    ASUS's 2026-10-09 06:00 implementation failed this way: the canonical
+    boundary parked a stall, then the remaining-budget retry reused its key
+    and replaced the original failure with a binding conflict. Exercise the
+    real journal and the SDK's failure serialization between those owners.
+    """
+    from datetime import datetime, timezone
+
+    from temporalio.api.failure.v1 import Failure
+    from temporalio.converter import DataConverter
+    from temporalio.exceptions import ActivityError, RetryState
+
+    from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
+    from moonmind.omnigent.execute import _MarkedTurnStalledError
+    from moonmind.omnigent.realizers.turn_delivery import deliver_canonical_turn
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.temporal.workflows import agent_run
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="wf-parked-turn-retry",
+        idempotencyKey="implementation:execution:1",
+    )
+    activity_calls = 0
+    provider_calls = 0
+    original_activity_error = None
+
+    async def stalled_provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        raise _MarkedTurnStalledError("marked turn made no observable progress")
+
+    async def execute_activity(**_kwargs):
+        nonlocal activity_calls, original_activity_error
+        activity_calls += 1
+        try:
+            await deliver_canonical_turn(
+                service,
+                request=request,
+                plan=None,
+                command_type="execute_admitted_plan",
+                operation=stalled_provider,
+            )
+        except Exception as exc:
+            failure = Failure()
+            await DataConverter.default.encode_failure(exc, failure)
+            activity_error = ActivityError(
+                "Activity task failed",
+                scheduled_event_id=111,
+                started_event_id=871,
+                identity="test-worker",
+                activity_type="integration.omnigent.execute",
+                activity_id=str(activity_calls),
+                retry_state=RetryState.MAXIMUM_ATTEMPTS_REACHED,
+            )
+            activity_error.__cause__ = await DataConverter.default.decode_failure(failure)
+            if original_activity_error is None:
+                original_activity_error = activity_error
+            raise activity_error
+
+    run = agent_run.MoonMindAgentRun()
+    monkeypatch.setattr(run, "_execute_omnigent_with_admitted_capacity", execute_activity)
+    monkeypatch.setattr(run, "_workflow_patch_enabled", lambda _patch_id: True)
+    monkeypatch.setattr(
+        agent_run.workflow, "now", lambda: datetime(2026, 10, 9, tzinfo=timezone.utc)
+    )
+
+    with pytest.raises(ActivityError) as raised:
+        await run._execute_profile_bound_with_remaining_budget(
+            act_name="integration.omnigent.execute",
+            request=request,
+            admission=None,
+            parent_info=None,
+            stc_seconds=21600,
+            admit_capacity_before_activity=True,
+            execution_plan_admission=True,
+        )
+
+    assert raised.value is original_activity_error
+    assert raised.value.cause.type == "_MarkedTurnStalledError"
+    assert activity_calls == provider_calls == 1
+    async with service._store.transaction() as repos:
+        command = await repos.commands.get_by_idempotency_key(
+            canonical_turn_command_key(request.correlation_id, request.idempotency_key)
+        )
+        assert command.status == "delivery_unknown"
+        assert command.delivery_ambiguous is True
+        assert command.provider_receipt_id is None
+        assert command.result_ref is None
+        assert command.revision == 3
+
+
 def _bootstrap(**overrides) -> CanonicalSessionBootstrap:
     payload = {
         "provider": "omnigent",

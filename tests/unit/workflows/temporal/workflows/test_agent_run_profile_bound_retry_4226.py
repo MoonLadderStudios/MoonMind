@@ -190,3 +190,59 @@ async def test_exhausted_budget_reraises_without_second_attempt(
         )
 
     assert stc_calls == [21600]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        "_MarkedTurnStalledError",
+        "OmnigentSessionStillRunningError",
+        "OmnigentSameSessionContinuationRequired",
+    ],
+)
+@pytest.mark.parametrize("patched", [True, False])
+async def test_reconciliation_required_failure_preserves_original_or_legacy_retry(
+    monkeypatch: pytest.MonkeyPatch, error_type: str, patched: bool
+) -> None:
+    """Retained histories keep their old retry; new runs require reconciliation."""
+    from temporalio.exceptions import ApplicationError
+
+    original_error = ApplicationError("existing provider work is ambiguous", type=error_type)
+    calls = 0
+
+    async def execute_activity(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise original_error
+        return ({"legacy_retry": True}, None)
+
+    run = agent_run_module.MoonMindAgentRun()
+    monkeypatch.setattr(run, "_execute_omnigent_with_admitted_capacity", execute_activity)
+    monkeypatch.setattr(run, "_workflow_patch_enabled", lambda _patch_id: patched)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "now",
+        lambda: datetime(2026, 10, 9, tzinfo=timezone.utc),
+    )
+    kwargs = dict(
+        act_name="integration.omnigent.execute",
+        request=object(),
+        admission=None,
+        parent_info=None,
+        stc_seconds=21600,
+        admit_capacity_before_activity=True,
+        execution_plan_admission=True,
+    )
+
+    if patched:
+        with pytest.raises(ApplicationError) as raised:
+            await run._execute_profile_bound_with_remaining_budget(**kwargs)
+        assert raised.value is original_error
+        assert calls == 1
+    else:
+        assert await run._execute_profile_bound_with_remaining_budget(**kwargs) == (
+            {"legacy_retry": True}, None
+        )
+        assert calls == 2
