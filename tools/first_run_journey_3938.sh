@@ -583,7 +583,8 @@ else
   # workers are observed ready. Wait again rather than fail on a release that
   # recovers on its own; the candidate still gets a single wait.
   bring_up 3 source
-  checks populate before-upgrade
+  # Work saved by the old release uses the request that release accepts.
+  checks populate before-upgrade --pre-upgrade-release
   cancel_from_dashboard before-upgrade
   checks credential before-upgrade
   checks verify before-upgrade

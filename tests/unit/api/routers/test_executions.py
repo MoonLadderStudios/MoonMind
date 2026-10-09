@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest.mock import AsyncMock, Mock, call, patch
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from fastapi import FastAPI, HTTPException, Response
@@ -9640,6 +9640,9 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
         search_attributes={},
     )
 
+    test_client.app.dependency_overrides[get_async_session] = lambda: (
+        SimpleNamespace(get=AsyncMock(return_value=None))
+    )
     response = test_client.post(
         "/api/executions",
         headers={
@@ -9698,6 +9701,9 @@ def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
         "recovery_source": {"failed_step_id": "forged-step"},
         "agentProfileSnapshot": {"agentId": "forged-agent"},
     }
+    test_client.app.dependency_overrides[get_async_session] = lambda: (
+        SimpleNamespace(get=AsyncMock(return_value=None))
+    )
     response = test_client.post(
         "/api/executions",
         headers={
@@ -9794,7 +9800,10 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
     )
     db_session = SimpleNamespace(
         get=AsyncMock(
-            side_effect=[provider_profile, None, provider_profile, None]
+            # The idempotency reservation finds no admitted execution
+            # before the caller's Provider Profile and the plan compiler
+            # load it.
+            side_effect=[None, provider_profile, provider_profile, None]
         ),
         commit=AsyncMock(),
         refresh=AsyncMock(),
@@ -20583,9 +20592,9 @@ async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_confli
 ) -> None:
     """A nested ``omnigent`` mode does not waive the other authored runtime.
 
-    Deferring to the Omnigent facade is only safe when the payload names nothing
-    else; here ``targetRuntime`` still names a managed runtime that the Omnigent
-    selection service never sees.
+    Neither runtime launches: the nested mode wins the worker's precedence, and
+    MoonLadderStudios/MoonMind#3935 admits Omnigent only through the plan
+    owner, so the raw branch rejects any payload that names it.
     """
 
     async with _mm3788_raw_branch_context(
@@ -20603,11 +20612,8 @@ async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_confli
                 ),
             )
 
-        assert exc_info.value.status_code == 409
-        detail = exc_info.value.detail
-        assert detail["code"] == "provider_profile_runtime_mismatch"
-        assert detail["profileRuntime"] == "codex_cli"
-        assert detail["selectedRuntime"] == "claude_code"
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
@@ -20647,6 +20653,348 @@ async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
             "runtime and cannot be used with runtime 'codex_cli'."
         )
         service._client_adapter.start_workflow.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#3935 — an Omnigent execution has one lifecycle
+# owner: the task/workflow envelope that compiles and persists the immutable
+# execution plan. The raw branch never compiles a plan, so a request that
+# leaves the runtime to the Omnigent default must not reach the legacy no-plan
+# session supervisor through it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting the runtime is the documented default, not a second lane."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3935_raw_default_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                # The pre-#3935 `moonmind workflow run --provider-profile` body.
+                payload={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "idempotencyKey": "mm3935-raw-default",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Run with the default runtime.",
+                            "providerProfileRef": "codex_minimax_team",
+                        },
+                        "providerProfileRef": "codex_minimax_team",
+                    },
+                },
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial_parameters",
+    [
+        {"task": {"instructions": "Nested mode.", "runtime": {"mode": "omnigent"}}},
+        {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
+        {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
+    ],
+    ids=["nested-runtime-mode", "nested-target-runtime", "runtime-mode"],
+)
+async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
+    tmp_path,
+    initial_parameters: dict[str, Any],
+) -> None:
+    """Every canonical runtime field is the same Omnigent selection."""
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3935_raw_nested_omnigent"
+    ) as (session, service, user):
+        with pytest.raises(HTTPException) as exc_info:
+            await _mm3788_post_raw_execution(
+                service=service,
+                session=session,
+                user=user,
+                payload={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "idempotencyKey": "mm3935-raw-nested",
+                    "initialParameters": initial_parameters,
+                },
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3935_raw_branch_keeps_an_explicit_managed_runtime(
+    tmp_path,
+) -> None:
+    """A named non-Omnigent runtime is not affected by the Omnigent default."""
+
+    async with _mm3788_raw_branch_context(
+        tmp_path, db_name="mm3935_raw_managed"
+    ) as (session, service, user):
+        response = await _mm3788_post_raw_execution(
+            service=service,
+            session=session,
+            user=user,
+            payload=_mm3788_raw_execution_request(
+                target_runtime="codex_cli", profile_id="codex_minimax_team"
+            ),
+        )
+
+        assert response.workflow_id.startswith("mm:")
+        service._client_adapter.start_workflow.assert_awaited_once()
+
+
+def _mm3935_post_through_plan_owner(
+    test_client: TestClient,
+    service: AsyncMock,
+    payload: dict[str, Any],
+) -> tuple[Any, AsyncMock, OmnigentExecutionPlanBinding]:
+    """POST one create request with the deployment-default Agent Profile."""
+
+    service.create_execution.return_value = _build_execution_record()
+    provider_profile = SimpleNamespace(
+        profile_id="codex-openai-oauth",
+        provider_id="openai",
+        runtime_id="codex_cli",
+        default_model=None,
+        default_effort=None,
+    )
+    db_session = SimpleNamespace(
+        # The idempotency reservation finds no admitted record; the plan
+        # compiler then loads the default Agent Profile's Provider Profile.
+        get=AsyncMock(side_effect=[None, provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "codex-openai-oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "upstream-codex-agent",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_cli_plan",
+        taskInputSnapshotRef="art_cli_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=plan_binding,
+            artifact_refs=("art_profile", "art_skills", "art_cli_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions."
+            "resolve_default_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "persist_json_artifact",
+            new=AsyncMock(return_value=("art_cli_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "compile_and_persist_execution_plan",
+            new=compile_plan,
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post("/api/executions", json=payload)
+    return response, compile_plan, plan_binding
+
+
+def test_mm3935_cli_run_payload_reaches_the_plan_owner(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`moonmind workflow run` compiles the same immutable plan as Create."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    test_client, service, _user = client
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        build_execution_payload(
+            instructions="Make the bounded deterministic change.",
+            title="CLI run",
+            repository="MoonLadderStudios/MoonMind",
+            publish_mode="none",
+            idempotency_key="mm3935-cli",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = kwargs["initial_parameters"]
+    assert initial_parameters["requestType"] == "task"
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    assert initial_parameters["instructions"] == (
+        "Make the bounded deterministic change."
+    )
+    assert kwargs["title"] == "CLI run"
+    assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+def test_mm3935_cli_extra_params_survive_plan_admission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--param key=value` reaches the persisted task instead of being dropped."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    test_client, service, _user = client
+    response, compile_plan, _plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        build_execution_payload(
+            instructions="Honor the extra constraint.",
+            extra_params={"customConstraint": "value"},
+            idempotency_key="mm3935-cli-params",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["workflow"]["inputs"] == {"customConstraint": "value"}
+
+
+def test_mm3935_cli_retry_reconciles_before_mutable_admission(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uncertain CLI submission reconciles to its admitted workflow.
+
+    The first attempt was admitted but its acknowledgment was lost; before the
+    operator retries with the same request ID the named Provider Profile is
+    deleted. The retry must return the admitted workflow, not an admission
+    error from current catalog state.
+    """
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    test_client, service, user = client
+    admitted = _build_execution_record()
+    looked_up: list[tuple[Any, Any]] = []
+
+    async def _get(model: Any, key: Any) -> Any:
+        looked_up.append((model, key))
+        if model is TemporalExecutionCanonicalRecord:
+            return admitted
+        return None
+
+    test_client.app.dependency_overrides[get_async_session] = lambda: (
+        SimpleNamespace(get=_get, commit=AsyncMock(), refresh=AsyncMock())
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        json=build_execution_payload(
+            instructions="Make the bounded deterministic change.",
+            provider_profile="deleted-profile",
+            idempotency_key="mm3935-cli-retry",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["workflowId"] == admitted.workflow_id
+    assert looked_up == [
+        (
+            TemporalExecutionCanonicalRecord,
+            f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:mm3935-cli-retry')}",
+        )
+    ]
+    service.create_execution.assert_not_awaited()
+
+
+def test_mm3935_journey_submission_reaches_the_plan_owner(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Compose journey's deferred task is admitted by the plan owner.
+
+    ``tools/single_user_journey_checks.py`` runs in integration CI against a
+    default install, whose runtime default is Omnigent. Its exact payload must
+    be accepted, persist the plan, and keep its deferred start and title.
+    """
+
+    from tools.single_user_journey_checks import journey_submission
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+
+    scheduled_for = datetime.now(UTC) + timedelta(hours=1)
+    test_client, service, _user = client
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        journey_submission(
+            title="single-user journey fresh",
+            scheduled_for=scheduled_for,
+            idempotency_key="mm3935-journey",
+        ),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = kwargs["initial_parameters"]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    assert kwargs["title"] == "single-user journey fresh"
+    assert kwargs["idempotency_key"] == "mm3935-journey"
+    assert kwargs["scheduled_for"] == scheduled_for
+    assert kwargs["start_delay"] is not None
 
 
 # ---------------------------------------------------------------------------

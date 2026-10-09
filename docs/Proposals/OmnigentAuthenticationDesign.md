@@ -28,7 +28,7 @@ The ordinary user signs in to MoonMind without selecting an authentication backe
 
 The proposal does not make Omnigent a drop-in enterprise identity platform or assume parity with every Keycloak feature. It does not move model-provider OAuth enrollment, GitHub credentials, orchestration, authorization, or workflow data into Omnigent's accounts system. It does not require another always-on authentication container or a fork of Omnigent Server.
 
-Explicit local no-auth operation may remain an advanced deployment posture. It is never a fallback for missing configuration, failed authentication, or an unavailable identity service. Changing the existing default posture requires its own explicit adoption decision and secure first-run behavior.
+The bundled Omnigent server currently defaults to its single-user no-auth posture (`OMNIGENT_AUTH_ENABLED=0`). That is an explicit operator decision so a default install needs no Omnigent credential. Adopting this proposal therefore includes re-enabling Omnigent login by default, with a qualified MoonMind service credential and secure first-run behavior. No-auth operation is never a fallback for failed authentication or an unavailable identity service.
 
 ## REVIEW-201 Source baseline and limits
 
