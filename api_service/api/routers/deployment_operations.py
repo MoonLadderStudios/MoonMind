@@ -28,11 +28,7 @@ from api_service.services.deployment_operations import (
 )
 from moonmind.config.settings import settings
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.executions.routing import TemporalSubmitDisabledError
-from moonmind.workflows.temporal import (
-    TemporalExecutionService,
-    TemporalExecutionValidationError,
-)
+from moonmind.workflows.temporal import TemporalExecutionService
 from moonmind.workflows.skills.deployment_tools import DEPLOYMENT_UPDATE_TOOL_NAME
 
 
@@ -58,33 +54,31 @@ class DeploymentUpdateRequest(BaseModel):
     pause_work: bool = Field(False, alias="pauseWork")
     prune_old_images: bool = Field(False, alias="pruneOldImages")
     reason: str | None = None
-    operation_kind: Literal["update", "rollback"] = Field("update", alias="operationKind")
-    rollback_source_action_id: str | None = Field(
-        None, alias="rollbackSourceActionId"
+    # One operator intent. Resubmitting it after a lost or failed response
+    # reattaches to the same controller operation instead of starting another.
+    request_id: str | None = Field(
+        None, alias="requestId", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$"
     )
-    confirmation: str | None = None
 
 
 DeploymentActionStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 
 
 class DeploymentUpdateResponse(BaseModel):
-    """The accepted update and who owns it.
-
-    A controller-owned update is identified by its durable controller
-    ``operationId``; ``taskId``/``workflowId`` are set only for the
-    transitional workflow updater, never manufactured for a local operation.
-    """
+    """The accepted update, identified by its durable controller operation."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    deployment_update_run_id: str = Field(..., alias="deploymentUpdateRunId")
-    task_id: str | None = Field(None, alias="taskId")
-    workflow_id: str | None = Field(None, alias="workflowId")
-    operation_id: str | None = Field(None, alias="operationId")
-    owner: Literal["controller", "workflow"]
+    operation_id: str = Field(..., alias="operationId")
+    owner: Literal["controller"]
     status: DeploymentActionStatus
 
 
@@ -351,8 +345,7 @@ def _rollback_target_from_summary(
             repository=policy.repository,
             reference=reference,
             mode=policy.allowed_modes[0],
-            reason="Validate rollback target",
-            operation_kind="update",
+            reason="Validate earlier image",
         )
     except DeploymentOperationError:
         return None
@@ -425,11 +418,22 @@ def _recent_action_from_execution_record(
         policy=policy,
     )
     evidence_ref = artifact_refs[0] if artifact_refs else None
+    # Workflow-backed rows are read-only history: rolling back through the
+    # retired workflow updater is unavailable. An earlier image is an
+    # ordinary controller update.
     eligibility = RollbackEligibilityDecision(
-        eligible=target_image is not None,
-        target_image=target_image,
+        eligible=False,
+        target_image=None,
         source_action_id=action_id,
-        reason=None if target_image else "Before-state evidence is missing.",
+        reason=(
+            "Rollback through the retired workflow updater is unavailable; "
+            + (
+                f"update to {target_image.repository}:{target_image.reference} "
+                "instead."
+                if target_image
+                else "update to an earlier image instead."
+            )
+        ),
         evidence_ref=evidence_ref,
     )
     return DeploymentRecentAction(
@@ -597,7 +601,6 @@ def _stack_state(
 async def submit_deployment_update(
     payload: DeploymentUpdateRequest,
     service: DeploymentOperationsService = Depends(_get_deployment_service),
-    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: User = Depends(get_current_user()),
 ) -> DeploymentUpdateResponse:
     _require_admin(user)
@@ -608,44 +611,17 @@ async def submit_deployment_update(
             reference=payload.image.reference,
             mode=payload.mode,
             reason=payload.reason,
-            operation_kind=payload.operation_kind,
-            confirmation=payload.confirmation,
-            rollback_source_action_id=payload.rollback_source_action_id,
         )
-    except DeploymentOperationError as exc:
-        raise _policy_error(exc) from exc
-    try:
         queued = await service.queue_update(
-            execution_service=execution_service,
             policy=policy,
             submission=DeploymentUpdateSubmission(
                 stack=policy.stack,
                 repository=payload.image.repository,
                 reference=payload.image.reference,
-                mode=payload.mode,
-                remove_orphans=payload.remove_orphans,
-                wait=payload.wait,
-                run_smoke_check=payload.run_smoke_check,
-                pause_work=payload.pause_work,
-                prune_old_images=payload.prune_old_images,
                 reason=payload.reason,
-                requested_by_user_id=getattr(user, "id", None),
-                operation_kind=payload.operation_kind,
-                rollback_source_action_id=payload.rollback_source_action_id,
-                confirmation=payload.confirmation,
-                before_build_id=resolve_moonmind_build_id(),
+                request_id=payload.request_id,
             ),
         )
-    except TemporalSubmitDisabledError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "temporal_submit_disabled", "message": str(exc)},
-        ) from exc
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"code": "deployment_update_queue_invalid", "message": str(exc)},
-        ) from exc
     except DeploymentOperationError as exc:
         raise _policy_error(exc) from exc
     return DeploymentUpdateResponse(**queued)
@@ -687,7 +663,7 @@ async def get_deployment_stack_state(
         raise _policy_error(exc) from exc
     controller = await asyncio.to_thread(service.observe_controller, policy.stack)
     # Controller operations first; workflow-backed updates stay readable as
-    # history of the transitional updater.
+    # history of the retired workflow updater.
     history = service.recent_actions(policy.stack) or await _recent_actions_from_executions(
         execution_service=execution_service,
         policy=policy,

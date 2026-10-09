@@ -1097,11 +1097,9 @@ def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
         "tools/update-moonmind.sh",
         ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
         ".agents/skills/update-moonmind/scripts/update_release.py",
-        "tests/unit/test_update_moonmind_transport.py",
-        "tests/integration/host_update/test_host_updater_transport.py",
     ],
 )
-def test_host_updater_transport_changes_select_real_docker_qualification(
+def test_host_updater_changes_select_integration_qualification(
     changed_path: str,
 ) -> None:
     assert _outputs([changed_path])["integration_ci"] == "true"
@@ -1127,16 +1125,12 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
     [
         ("tests/integration/api/test_routes.py", {"hermetic"}),
         (
-            "tests/integration/host_update/test_host_updater_transport.py",
-            {"host-update-transport"},
-        ),
-        (
             "tests/integration/host_update/test_journal_transition.py",
             {"controller-journey"},
         ),
         (
             "tests/integration/host_update/conftest.py",
-            {"hermetic", "host-update-transport", "controller-journey"},
+            {"hermetic", "controller-journey"},
         ),
         (
             "tools/first_run_journey_3938.sh",
@@ -1288,7 +1282,7 @@ def test_unknown_host_update_inputs_preserve_hermetic_collection(path):
     import json
 
     lanes = json.loads(_outputs([path])["integration_matrix"])["suite"]
-    assert set(lanes) == {"hermetic", "host-update-transport", "controller-journey"}
+    assert set(lanes) == {"hermetic", "controller-journey"}
 
 
 def test_journal_transition_actor_selects_its_exact_invocation_owner():

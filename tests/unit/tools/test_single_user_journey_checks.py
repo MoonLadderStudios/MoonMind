@@ -343,16 +343,20 @@ class _Operations:
     """Settings Operations and execution reads for the controller journey."""
 
     def __init__(self) -> None:
+        self.update_status = 503
         self.update_response: dict[str, Any] = {
-            "deploymentUpdateRunId": "depupd_run1",
-            "taskId": "mm:legacy",
-            "workflowId": "mm:legacy",
-            "operationId": None,
-            "owner": "workflow",
-            "status": "QUEUED",
+            "detail": {
+                "code": "deployment_controller_not_installed",
+                "message": "The standalone deployment controller is not installed.",
+                "repairCommand": "./tools/update-moonmind.sh",
+            }
         }
         self.execution: dict[str, Any] = {"workflowId": "mm:legacy", "status": "canceled"}
-        self.controller: dict[str, Any] = {"installed": False, "reachable": False}
+        self.controller: dict[str, Any] = {
+            "installed": False,
+            "reachable": False,
+            "message": "Run the host update command (./tools/update-moonmind.sh).",
+        }
         self.actions: list[dict[str, Any]] = []
         self.requests: list[tuple[str, str]] = []
 
@@ -423,7 +427,7 @@ def operations_api():
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             operations.requests.append(("POST", self.path))
             if self.path == "/api/v1/operations/deployment/update":
-                self._send(202, operations.update_response)
+                self._send(operations.update_status, operations.update_response)
             elif self.path.endswith("/cancel"):
                 self._send(202, operations.execution)
             else:
@@ -444,59 +448,67 @@ def _phase(phase, base, state_file):
     )
 
 
-def test_history_records_a_workflow_backed_update_before_the_controller(
+def test_controller_absent_refuses_the_dashboard_update_with_the_repair_route(
     operations_api, tmp_path
 ):
     base, operations = operations_api
     operations.actions = [_history_row()]
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 0
+    assert _phase("controller_absent", base, state_file) == 0
     state = json.loads(state_file.read_text())
-    assert state["deploymentHistory"] == {
-        "workflowId": "mm:legacy",
-        "status": "CANCELED",
-        "runDetailUrl": "/workflows/mm:legacy",
-    }
+    # Pre-existing workflow-backed history stays readable and is recorded.
+    assert state["workflowHistory"] == ["/workflows/mm:legacy"]
     assert state["controller"]["repository"] == REPOSITORY
-    assert ("POST", "/api/executions/mm%3Alegacy/cancel") in operations.requests
+    assert not any(path.endswith("/cancel") for _, path in operations.requests)
 
 
-def test_history_update_already_owned_by_a_controller_fails(
+def test_controller_absent_update_accepted_by_a_workflow_fails(
+    operations_api, tmp_path, capsys
+):
+    base, operations = operations_api
+    operations.update_status = 202
+    operations.update_response = {
+        "deploymentUpdateRunId": "depupd_run1",
+        "workflowId": "mm:legacy",
+        "owner": "workflow",
+        "status": "QUEUED",
+    }
+    state_file = tmp_path / "state.json"
+
+    assert _phase("controller_absent", base, state_file) == 1
+    assert "workflow" in capsys.readouterr().err
+
+
+def test_controller_absent_without_the_repair_route_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
     operations.update_response = {
-        **operations.update_response,
-        "owner": "controller",
-        "operationId": "ui-early",
-        "workflowId": None,
+        "detail": {"code": "deployment_controller_unavailable", "message": "down"}
     }
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 1
-    assert "transitional workflow updater" in capsys.readouterr().err
+    assert _phase("controller_absent", base, state_file) == 1
+    assert "repair route" in capsys.readouterr().err
 
 
-def test_history_update_that_completed_fails(operations_api, tmp_path, capsys):
-    """No application-owned updater may run while the journey holds history."""
+def test_controller_absent_when_a_controller_is_installed_fails(
+    operations_api, tmp_path, capsys
+):
     base, operations = operations_api
-    operations.execution = {"workflowId": "mm:legacy", "status": "completed"}
+    operations.controller = {"installed": True, "reachable": True}
     state_file = tmp_path / "state.json"
 
-    assert _phase("deployment_history", base, state_file) == 1
-    assert "completed" in capsys.readouterr().err
+    assert _phase("controller_absent", base, state_file) == 1
+    assert "already installed" in capsys.readouterr().err
 
 
 def _dashboard_controller_state(state_file, **controller: Any) -> None:
     state_file.write_text(
         json.dumps(
             {
-                "deploymentHistory": {
-                    "workflowId": "mm:legacy",
-                    "status": "CANCELED",
-                    "runDetailUrl": "/workflows/mm:legacy",
-                },
+                "workflowHistory": ["/workflows/mm:legacy"],
                 "controller": {
                     "repository": REPOSITORY,
                     "reference": "journey-controller",

@@ -12,6 +12,7 @@ import { WorkflowColumnFilterButton, WorkflowColumnHeader } from '../components/
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { navigateTo } from '../lib/navigation';
+import { newRequestId } from '../lib/requestId';
 import {
   clearRecurringScheduleFocusRequest,
   readRecurringScheduleFocusRequest,
@@ -166,16 +167,6 @@ const SchedulesBootDataSchema = z
       .optional(),
   })
   .passthrough();
-
-function newRunNowRequestId(): string {
-  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  // getRandomValues remains available on supported HTTP LAN/VPN origins.
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
 function RunNowResult({ run }: { run: ScheduleRun }) {
   const href = run.temporalWorkflowId
@@ -1087,7 +1078,7 @@ function ScheduleDetailPage({
   const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
-      runNowRequestId.current ??= newRunNowRequestId();
+      runNowRequestId.current ??= newRequestId();
       const response = await fetch(runNowEndpoint, {
         method: 'POST',
         credentials: 'include',
@@ -1780,7 +1771,7 @@ function ScheduleRowActions({
   const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
-      runNowRequestId.current ??= newRunNowRequestId();
+      runNowRequestId.current ??= newRequestId();
       const response = await fetch(runNowEndpoint, {
         method: 'POST', credentials: 'include',
         headers: { 'Idempotency-Key': runNowRequestId.current },

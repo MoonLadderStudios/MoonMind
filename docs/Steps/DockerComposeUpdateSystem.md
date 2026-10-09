@@ -94,22 +94,9 @@ Each caller names its own controller operation identity (`ui-…` from Settings 
 POST /api/v1/operations/deployment/operations/{operationId}/retry
 ```
 
-It asks the controller for its fresh bounded attempt and keeps prior errors. The response carries `operationId` and `owner`; `taskId`/`workflowId` are set only for a workflow-backed update. Controller unavailable, credential rejected, busy, and refused requests are distinct errors, and none of them starts another updater. The API reaches the controller over the deployment's private `deployment-controller-network` (joined by the API and the deployment-control worker only) using the identity and bearer secret in the read-only deployment state mount; the secret never reaches the browser. That state (`deploy/state/controller`: the bearer secret and the operation records the controller applies on restart) is visible only to the API (read-only) and the deployment-control worker. The agent runtime, which hosts managed Skills and mounts the checkout and deployment state for other duties, sees an empty read-only view of it. When the endpoint does not answer, the dashboard says so and points to the host command instead of accepting work.
+It asks the controller for its fresh bounded attempt and keeps prior errors. The response carries the controller `operationId`, `owner` (`controller`), and status; it never manufactures a workflow or task identity. A missing, unreadable, or unrecognized controller status is reported as `UNKNOWN`, never as queued or finished. The dashboard sends one `requestId` per update intent and resends it after an unanswered or server-error submission, so the controller reattaches to `ui-<requestId>`; a refusal or acceptance ends that intent. Workflow-backed history rows stay readable, but rolling one back through the retired workflow updater is unavailable; an earlier image is an ordinary controller update. Controller unavailable, credential rejected, busy, and refused requests are distinct errors, and none of them starts another updater. The API reaches the controller over the deployment's private `deployment-controller-network` (joined by the API and the deployment-control worker only) using the identity and bearer secret in the read-only deployment state mount; the secret never reaches the browser. That state (`deploy/state/controller`: the bearer secret and the operation records the controller applies on restart) is visible only to the API (read-only) and the deployment-control worker. The agent runtime, which hosts managed Skills and mounts the checkout and deployment state for other duties, sees an empty read-only view of it. When the endpoint does not answer, the dashboard says so and points to the host command instead of accepting work.
 
-Until a deployment installs a working controller, Settings Operations uses the transitional workflow updater, the same rule as the host entrypoint in section 11.2. That path is removed once the default install provides the controller.
-
-The updated submission clients refresh an installed older controller without
-active-journal transition support before submitting a new update. Settings Operations queues its
-existing durable deployment-control workflow for this prerequisite; that
-trusted submitter invokes the same host-owned bootstrap, then submits the
-requested target to the refreshed controller. The API keeps read-only state
-access. An unavailable endpoint is still reported as unavailable, and no
-application component takes over the controller's stack operation.
-Before queuing this prerequisite, the API reads the deployment worker's
-existing readiness endpoint and verifies its bootstrap method, executable
-tool activity, and configured deployment queue. A pinned worker that lacks
-that method is refused before any workflow is queued; its image pin remains
-unchanged, and the host update command can refresh the controller independently.
+Without an installed controller, Settings Operations refuses an update with `deployment_controller_not_installed` (HTTP 503) and the host repair route `./tools/update-moonmind.sh`, which installs the controller and updates through it (section 11.2). An installed controller without active-journal transition support is refused with `deployment_controller_refresh_required` and the same route; the host entrypoint refreshes it outside any open operation. Submission needs neither Temporal nor the deployment worker, the API keeps read-only controller state, and no application component starts another updater or takes over the controller's stack operation.
 Once the controller supports the method, API updates need no worker readiness
 or version agreement.
 
@@ -352,31 +339,11 @@ so safe refusal does not automatically recover that first-forward API request.
 The automatic continuation requires the updated host entrypoint, or updated API
 and deployment-worker code that can invoke the existing bootstrap owner.
 
-The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity, and the API reaches the same port under the controller's alias on `deployment-controller-network`. That network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target (Settings Operations, the workflow adapter) uses the target the controller derives: the MoonMind Compose project bootstrap recorded in the controller identity (else `COMPOSE_PROJECT_NAME` from the deployment `.env`), `COMPOSE_FILE` from that `.env` (else `docker-compose.yaml` plus its override) in its read-only checkout mount, and the services that selection renders minus the Docker transport substrate. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. Until a deployment installs a working controller, the host entrypoint updates through the application-owned updater when no controller secret exists, or when bootstrap left a secret but no reachable endpoint, operation record, or Compose container. A controller with recorded work retains recovery authority, explicit controller selection is never bypassed, and `--legacy-direct` is refused once a controller owns the deployment. This fallback is removed once the entrypoint can install a published controller image itself.
+The controller runs as one small service in its own Compose project with a configured restart policy, a durable host state directory, and a direct Docker socket mount (a proxy is acceptable only if controller-owned in that separate project), so an update can replace its submitting worker and survive target-project shutdown. Local durable ownership, selected target, progress, deadline, and attempt budget survive restarts of MoonMind and of the controller itself: on restart the controller inspects Docker and converges only unfinished work toward the same target. A caller timing out reattaches to that operation rather than duplicating mutation. The controller exposes one small authenticated local endpoint backed by a deployment-owned secret; no agent receives the socket or unrestricted controller access. The host entrypoint derives the installed endpoint port from the controller's deployment-owned identity, and the API reaches the same port under the controller's alias on `deployment-controller-network`. That network is named `<compose project>_deployment-controller-network` unless `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides it, so independent deployments on one host never share the alias. A submission that names no Compose target (Settings Operations, the workflow adapter) uses the target the controller derives: the MoonMind Compose project bootstrap recorded in the controller identity (else `COMPOSE_PROJECT_NAME` from the deployment `.env`), `COMPOSE_FILE` from that `.env` (else `docker-compose.yaml` plus its override) in its read-only checkout mount, and the services that selection renders minus the Docker transport substrate. Post-apply verification accepts a run-to-completion service (such as `init-db`) that exited 0; any other non-running service fails its check. The legacy ephemeral application-owned updater container is retired through the cutover in §11.4; it is not a second supported owner. When no controller secret exists, or bootstrap left a secret but no reachable endpoint, operation record, or Compose container, the host entrypoint installs and starts the controller itself with `deploy/controller/bootstrap.py` taken from the selected release image, which runs the controller from that same application image (the separate controller image is not published), and then submits through it. No application-owned updater runs from the host. A legacy writer still active from an earlier release is reconciled by the controller's cutover check, which defers instead of competing. A controller with recorded work retains recovery authority, explicit controller selection is never bypassed, and `--dry-run` installs nothing.
 
-Before the transitional host path hands off a release, it verifies Docker
-access from a one-off using the updater service's rendered environment and
-networks. Host Docker access alone does not establish that the child can
-reach its transport. When the configured endpoint is `docker-proxy` and the
-probe fails, a trusted one-off using the same rendered deployment state mount
-holds the existing deployment kernel lock while the host repairs the transport.
-The host rechecks access under that lease, then starts only the proxy without
-recreating an existing container and retries readiness. If it remains unavailable (including a
-stale Docker Desktop/WSL socket bind), the host recreates only the proxy once
-and verifies access again. The lease is rechecked after each mutation and before
-accepting readiness; an abnormal holder exit blocks handoff even when cleanup
-confirms its container is gone. A working proxy stays intact. Explicit external
-Docker endpoints retain their settings and never trigger local proxy repair.
-Recovery uses the same selected Compose files, project, and deployment-owned
-settings as the handoff; failure stops before release handoff with the original
-redacted diagnostics. The detached updater continues to exclude its own
-transport from subsequent fleet recreation. Compose acquires a distinct worker
-image using the deployment's original pull policy, platform, and build configuration
-before probes and the lease holder use `pull_policy: never`. Acquisition failure
-stops before transport recovery, so registry failures cannot trigger proxy repair.
-A workflow caller without an installed controller cannot restore
-its unavailable Docker transport through that same endpoint; it reports
-`runner_unavailable`, and the independent host entrypoint restores the transport.
+A workflow caller without an installed controller reports
+`runner_unavailable`; the independent host entrypoint installs the controller,
+which uses its own Docker transport.
 
 ### 11.3 Runner image policy
 
