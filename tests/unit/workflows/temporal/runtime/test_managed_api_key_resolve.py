@@ -373,23 +373,31 @@ async def test_ghcr_pull_credentials_bound_to_ghcr_registry() -> None:
 
     assert GHCR_REGISTRY == "ghcr.io"
 
+
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
-    async def _fake_resolve(_secret_name: str) -> str:
+    attempted: list[str] = []
+
+    async def _fake_resolve(_cls, _session, secret_name: str):
+        attempted.append(secret_name)
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.setattr(
+        app_settings.github, "github_token_secret_ref", "db://github-pat"
+    )
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
-        _fake_resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_fake_resolve)
     )
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
+    assert attempted == ["github-pat"]
+
 
 class _FakeStatusResult:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
@@ -574,7 +582,7 @@ def _default_connection(credential: dict[str, object]):
 def _record_default_connection(monkeypatch: pytest.MonkeyPatch, connection) -> list[str]:
     loaded: list[str] = []
 
-    async def _load(connection_ref: str):
+    async def _load(connection_ref: str, **_kwargs: object):
         loaded.append(connection_ref)
         return connection
 
@@ -646,7 +654,7 @@ async def test_unreadable_default_connection_is_not_treated_as_absent(
     _clear_deployment_github_env(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
 
-    async def _unreadable(_connection_ref: str):
+    async def _unreadable(_connection_ref: str, **_kwargs: object):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(
@@ -661,6 +669,7 @@ async def test_unreadable_default_connection_is_not_treated_as_absent(
 async def test_failed_configured_reference_does_not_search_other_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
     _clear_deployment_github_env(monkeypatch)
@@ -671,14 +680,12 @@ async def test_failed_configured_reference_does_not_search_other_sources(
     )
     attempted: list[str] = []
 
-    async def _resolve(ref: str, **_kwargs: object) -> str:
-        attempted.append(ref)
+    async def _resolve(_cls, _session, slug: str):
+        attempted.append(f"db://{slug}")
         raise ValueError("secret store unavailable")
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_managed_api_key_reference",
-        _resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_resolve)
     )
 
     assert await resolve_github_token_for_launch({}) is None
@@ -756,7 +763,7 @@ async def test_default_connection_loader_cancellation_propagates(
 ) -> None:
     _clear_deployment_github_env(monkeypatch)
 
-    async def _cancelled(_connection_ref: str):
+    async def _cancelled(_connection_ref: str, **_kwargs: object):
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(
@@ -872,7 +879,7 @@ async def test_deleted_default_connection_does_not_fall_back_to_declaration(
     _clear_deployment_github_env(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "declared-token")
 
-    async def _deleted(connection_ref: str):
+    async def _deleted(connection_ref: str, **_kwargs: object):
         raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
 
     monkeypatch.setattr(
@@ -1110,8 +1117,10 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
             .values(request_id="migration:391:legacy-github-credential")
         )
     try:
-        selected = await managed_api_key_resolve_module.select_git_connection_for_launch(
-            DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
+        selected = (
+            await managed_api_key_resolve_module.select_git_connection_for_launch(
+                DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
+            )
         )
     finally:
         await engine.dispose()
