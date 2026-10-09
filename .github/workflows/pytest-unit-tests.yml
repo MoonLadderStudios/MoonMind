@@ -36,6 +36,14 @@ jobs:
       frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
       frontend_browser_firefox: ${{ steps.select.outputs.frontend_browser_firefox }}
       full_frontend: ${{ steps.select.outputs.full_frontend }}
+      backend_matrix: ${{ steps.select.outputs.backend_matrix }}
+      integration_matrix: ${{ steps.select.outputs.integration_matrix }}
+      ownership_full: ${{ steps.select.outputs.ownership_full }}
+      integration_hermetic: ${{ steps.select.outputs.integration_hermetic }}
+      integration_host_update_transport: ${{ steps.select.outputs.integration_host_update_transport }}
+      integration_fresh_journey: ${{ steps.select.outputs.integration_fresh_journey }}
+      integration_upgrade_journey: ${{ steps.select.outputs.integration_upgrade_journey }}
+      integration_controller_journey: ${{ steps.select.outputs.integration_controller_journey }}
       generated_contracts: ${{ steps.detect-openapi.outputs.generated_contracts }}
     steps:
       - name: Check out code
@@ -85,9 +93,8 @@ jobs:
   preflight-policy:
     # Static repository policy checks run in parallel with test selection so they
     # are off the serial tail of required CI (MoonLadderStudios/MoonMind#3326).
-    # The always-run MoonSpec projection drift gate and exclusive shard
-    # ownership verifier are static invariants too, so they run here instead
-    # of on runners whose setup cost more than the checks themselves.
+    # MoonSpec projection stays unconditional. Real shard-ownership collection
+    # runs when its inputs change, without adding another runner.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -166,10 +173,14 @@ jobs:
         run: |
           echo "Unable to resolve the exact changed-file set; deployment safety cannot be validated." >&2
           exit 1
+      - name: Select ownership verification
+        id: ownership
+        run: python3 tools/select_test_suites.py < /tmp/changed-files.txt
       - name: Verify exclusive backend shard ownership
-        # Always runs (MoonLadderStudios/MoonMind#3950): exclusive shard
-        # ownership is a static repository invariant, so targeted PRs are
-        # gated too.
+        # Real collection and the installed split plugin remain the proof.
+        # Production-only diffs cannot change test ownership; collection inputs
+        # and unknown/full events always run the complete verifier.
+        if: steps.ownership.outputs.ownership_full == 'true'
         run: python tools/verify_test_shard_ownership.py
       # The policy scans and ownership collection above walk the working
       # tree, so MoonSpec is initialized only after them.
@@ -198,7 +209,7 @@ jobs:
             echo "- status token audit (\`--fail-on-unknown\`)"
             echo "- GitHub workflow display-name guard"
             echo "- AgentSession deployment safety (exact changed files)"
-            echo "- exclusive backend shard ownership"
+            echo "- exclusive backend shard ownership: full=${{ steps.ownership.outputs.ownership_full }}"
             echo "- vendored MoonSpec projection"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload status token audit
@@ -309,26 +320,7 @@ jobs:
     timeout-minutes: ${{ matrix.job_minutes }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
-      matrix:
-        include:
-          - suite: unit-fast
-            job_minutes: 15
-          - suite: api-component
-            job_minutes: 15
-          - suite: temporal-boundary
-            job_minutes: 15
-          - suite: reliability-shard-1
-            shard: "1"
-            job_minutes: 20
-          - suite: reliability-shard-2
-            shard: "2"
-            job_minutes: 20
-          - suite: reliability-shard-3
-            shard: "3"
-            job_minutes: 20
-          - suite: reliability-shard-4
-            shard: "4"
-            job_minutes: 20
+      matrix: ${{ fromJSON(needs.select-test-suites.outputs.backend_matrix) }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -877,7 +869,8 @@ jobs:
     # integration-ci the last required job in most PR runs (~20 min median,
     # the sum of all five); every row owns an isolated Compose project, so
     # parallel rows keep the same coverage and the slowest row bounds the
-    # job. Like backend-matrix, native fail-fast cancels sibling rows after a
+    # job. Selection now instantiates only affected rows; shared/unknown inputs
+    # retain all five. Like backend-matrix, native fail-fast cancels siblings after a
     # definitive failure except on schedules, which keep collecting evidence.
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
@@ -885,13 +878,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
-      matrix:
-        suite:
-          - hermetic
-          - host-update-transport
-          - fresh-journey
-          - upgrade-journey
-          - controller-journey
+      matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -1385,10 +1372,79 @@ jobs:
     steps:
       - name: Aggregate required backend results
         shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -uo pipefail
 
           failures=0
+
+          # Validate the complete selector contract independently of matrix
+          # success. An empty/malformed matrix must never erase selected work.
+          if ! python3 - <<'PY_GATE'
+          import json
+          import os
+          import sys
+
+          try:
+              outputs = json.loads(os.environ["NEEDS_JSON"])["select-test-suites"]["outputs"]
+              keys = (
+                  "unit_fast", "unit_slow", "api_component", "temporal_boundary",
+                  "integration_ci", "reliability_journey", "exact_artifact",
+                  "omnigent_conformance", "full_backend", "frontend_static",
+                  "frontend_browser_chromium", "frontend_browser_firefox",
+                  "full_frontend", "ownership_full", "integration_hermetic",
+                  "integration_host_update_transport", "integration_fresh_journey",
+                  "integration_upgrade_journey", "integration_controller_journey",
+              )
+              if any(outputs.get(key) not in ("true", "false") for key in keys):
+                  raise ValueError("missing or malformed boolean selection")
+              full_groups = {
+                  "full_backend": (
+                      "unit_fast", "unit_slow", "api_component", "temporal_boundary",
+                      "integration_ci", "reliability_journey", "exact_artifact",
+                      "omnigent_conformance", "ownership_full", "integration_hermetic",
+                      "integration_host_update_transport", "integration_fresh_journey",
+                      "integration_upgrade_journey", "integration_controller_journey",
+                  ),
+                  "full_frontend": ("frontend_static", "frontend_browser_chromium",
+                                    "frontend_browser_firefox"),
+              }
+              for flag, members in full_groups.items():
+                  if outputs[flag] == "true" and any(outputs[key] != "true" for key in members):
+                      raise ValueError(f"{flag} omits required selections")
+              backend = [
+                  {"suite": suite, "job_minutes": 15}
+                  for key, suite in (("unit_fast", "unit-fast"),
+                                     ("api_component", "api-component"),
+                                     ("temporal_boundary", "temporal-boundary"))
+                  if outputs[key] == "true"
+              ]
+              if outputs["reliability_journey"] == "true":
+                  backend.extend({"suite": f"reliability-shard-{n}", "shard": str(n),
+                                  "job_minutes": 20} for n in range(1, 5))
+              integration = [
+                  suite for key, suite in (
+                      ("integration_hermetic", "hermetic"),
+                      ("integration_host_update_transport", "host-update-transport"),
+                      ("integration_fresh_journey", "fresh-journey"),
+                      ("integration_upgrade_journey", "upgrade-journey"),
+                      ("integration_controller_journey", "controller-journey"),
+                  ) if outputs[key] == "true"
+              ]
+              if json.loads(outputs["backend_matrix"]) != {"include": backend}:
+                  raise ValueError("backend matrix does not contain exactly the selected rows")
+              if json.loads(outputs["integration_matrix"]) != {"suite": integration}:
+                  raise ValueError("integration matrix does not contain exactly the selected lanes")
+              if (outputs["integration_ci"] == "true") != bool(integration):
+                  raise ValueError("integration aggregate disagrees with lane selection")
+          except (KeyError, TypeError, ValueError) as error:
+              print(f"::error::Invalid suite selection: {error}")
+              sys.exit(1)
+          PY_GATE
+          then
+            failures=$((failures + 1))
+          fi
 
           {
             echo "## Required backend CI"
@@ -1419,6 +1475,9 @@ jobs:
                 echo "::error::$name was selected but ended with result=$result"
                 failures=$((failures + 1))
               fi
+            elif [[ "$selected" != "false" ]]; then
+              echo "::error::$name has malformed selection=$selected"
+              failures=$((failures + 1))
             elif [[ "$result" != "skipped" ]]; then
               echo "::error::$name was not selected but ended with result=$result (expected skipped)"
               failures=$((failures + 1))
@@ -1428,7 +1487,7 @@ jobs:
           require_always "select-test-suites" "${{ needs.select-test-suites.result }}"
           # Always-run static invariants (MoonLadderStudios/MoonMind#3950):
           # preflight-policy owns repository policy, the MoonSpec projection,
-          # and exclusive shard ownership. It has no selection gate, so it is
+          # and selected exclusive shard ownership. It has no job gate, so it is
           # aggregated unconditionally; gating shard ownership on full_backend
           # tripped a success-but-unselected failure on every targeted PR.
           require_always "preflight-policy" "${{ needs.preflight-policy.result }}"

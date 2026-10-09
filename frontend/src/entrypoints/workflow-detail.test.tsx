@@ -8868,6 +8868,7 @@ describe('Workflow Detail Entrypoint', () => {
       });
       expect(publishBody).toEqual({
         savedWorkRef: 'art-saved-work',
+        admissionGeneration: expect.any(String),
         sourceRunId: '01-run',
         destination: {
           repository: 'Owner/Repo',
