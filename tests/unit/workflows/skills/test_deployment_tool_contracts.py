@@ -133,31 +133,21 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     assert image_schema["additionalProperties"] is False
     assert "resolvedDigest" in image_schema["properties"]
 
-    # The tool only submits and observes the standalone controller, so its
-    # result is the controller operation, not the retired in-app updater's.
     output_schema = definition.output_schema
     assert output_schema["required"] == [
-        "owner",
-        "operationId",
         "status",
+        "stack",
         "requestedImage",
-    ]
-    assert output_schema["additionalProperties"] is False
-    assert output_schema["properties"]["owner"]["enum"] == ["controller"]
-    assert output_schema["properties"]["status"]["enum"] == [
-        "SUCCEEDED",
-        "PARTIALLY_VERIFIED",
-        "FAILED",
-        "SUPERSEDED",
-        "UNKNOWN",
-    ]
-    assert not {
         "updatedServices",
         "runningServices",
-        "beforeStateArtifactRef",
-        "verificationArtifactRef",
-        "audit",
-    }.intersection(output_schema["properties"])
+    ]
+    assert output_schema["properties"]["status"]["enum"] == [
+        "SUCCEEDED",
+        "FAILED",
+        "PARTIALLY_VERIFIED",
+    ]
+    assert "verificationArtifactRef" in output_schema["properties"]
+    assert "audit" in output_schema["properties"]
 
 
 def test_ops_diagnose_stack_tool_definition_matches_mm925_contract() -> None:
@@ -290,52 +280,6 @@ def test_ops_diagnose_stack_plan_rejects_arbitrary_command_inputs(
 
     with pytest.raises(PlanValidationError, match=f"Unexpected field '{field}'"):
         validate_plan_payload(payload=payload, registry_snapshot=snapshot)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("operationKind", "rollback"),
-        ("rollbackSourceActionId", "depupd_recent"),
-        ("confirmation", "Rollback to ghcr.io/moonladderstudios/moonmind:stable"),
-    ],
-)
-def test_retired_rollback_inputs_are_refused_by_the_tool_contract(
-    field: str, value: str
-) -> None:
-    snapshot = _snapshot()
-    payload = _valid_plan_payload(snapshot)
-    payload["nodes"][0]["inputs"][field] = value
-
-    with pytest.raises(PlanValidationError, match=f"Unexpected field '{field}'"):
-        validate_plan_payload(payload=payload, registry_snapshot=snapshot)
-
-
-def test_a_later_step_can_reference_the_controller_operation_identity() -> None:
-    snapshot = _snapshot()
-    payload = _valid_plan_payload(snapshot)
-    follow_up = dict(payload["nodes"][0])
-    follow_up["id"] = "observe-moonmind-deployment"
-    follow_up["inputs"] = {
-        **follow_up["inputs"],
-        "reason": {
-            "ref": {
-                "node": "update-moonmind-deployment",
-                "json_pointer": "/outputs/operationId",
-            }
-        },
-    }
-    payload["nodes"].append(follow_up)
-    payload["edges"] = [
-        {"from": "update-moonmind-deployment", "to": "observe-moonmind-deployment"}
-    ]
-
-    validated = validate_plan_payload(payload=payload, registry_snapshot=snapshot)
-
-    assert validated.topological_order == (
-        "update-moonmind-deployment",
-        "observe-moonmind-deployment",
-    )
 
 
 def test_deployment_update_tool_definition_rejects_agent_exposed_ops_runtime() -> None:

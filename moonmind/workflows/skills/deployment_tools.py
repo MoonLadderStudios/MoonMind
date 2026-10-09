@@ -124,41 +124,54 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
                     "pauseWork": {"type": "boolean"},
                     "pruneOldImages": {"type": "boolean"},
                     "reason": {"type": "string"},
+                    "operationKind": {
+                        "type": "string",
+                        "enum": ["update", "rollback"],
+                    },
+                    "rollbackSourceActionId": {"type": "string"},
+                    "confirmation": {"type": "string"},
                 },
             }
         },
         "outputs": {
-            # The tool submits and observes the standalone controller
-            # operation (MoonLadderStudios/MoonMind#4502); its result is that
-            # operation, in the controller's Operations vocabulary.
             "schema": {
                 "type": "object",
-                "required": ["owner", "operationId", "status", "requestedImage"],
+                "required": [
+                    "status",
+                    "stack",
+                    "requestedImage",
+                    "updatedServices",
+                    "runningServices",
+                ],
                 "additionalProperties": False,
                 "properties": {
-                    "owner": {"type": "string", "enum": ["controller"]},
-                    "operationId": {"type": "string"},
                     "status": {
                         "type": "string",
-                        "enum": [
-                            "SUCCEEDED",
-                            "PARTIALLY_VERIFIED",
-                            "FAILED",
-                            "SUPERSEDED",
-                            "UNKNOWN",
-                        ],
+                        "enum": ["SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"],
                     },
+                    "stack": {"type": "string"},
                     "requestedImage": {"type": "string"},
-                    "installedImage": {"type": "string"},
                     "resolvedDigest": {"type": "string"},
-                    "verification": {
+                    "afterBuildId": {"type": "string"},
+                    "updatedServices": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "runningServices": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "additionalProperties": True,
                         },
                     },
-                    "retryAllowed": {"type": "boolean"},
+                    "beforeStateArtifactRef": {"type": "string"},
+                    "afterStateArtifactRef": {"type": "string"},
+                    "commandLogArtifactRef": {"type": "string"},
+                    "verificationArtifactRef": {"type": "string"},
+                    "audit": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
                     "failure": {
                         "type": "object",
                         "required": ["class", "reason", "retryable"],

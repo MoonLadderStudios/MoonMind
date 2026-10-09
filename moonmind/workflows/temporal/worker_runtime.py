@@ -3045,7 +3045,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 container_job_backend=container_job_backend,
             )
         if topology.fleet == DEPLOYMENT_FLEET:
-            register_deployment_update_tool_handler(dispatcher)
+            register_deployment_update_tool_handler(
+                dispatcher,
+                executor=_build_deployment_update_executor(),
+            )
             register_ops_diagnose_stack_tool_handler(
                 dispatcher,
                 executor=_build_ops_diagnosis_executor(),
