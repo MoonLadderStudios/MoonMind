@@ -75,7 +75,10 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import (
+    HOST_CREDENTIAL_RECOVERY_ERROR, HOST_CREDENTIAL_RECOVERY_KEY,
+    OmnigentOAuthHostError,
+)
 from moonmind.omnigent.oauth_hosts import (
     HEARTBEAT_HOST_STATES,
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
@@ -89,8 +92,10 @@ from moonmind.omnigent.stock_agents import (
 )
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
+    authored_anonymous_source,
     authored_checkout_commit,
     authored_github_mutation_required,
+    authored_github_operations,
     authored_repository_mutation_required,
     authored_repository_source,
     authored_required_capabilities,
@@ -309,6 +314,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         policy_authority: ExecutionPolicyAuthorityPort | None = None,
         execution_attempts: ExecutionAttemptPort | None = None,
         turn_command_service: Any | None = None,
+        workspace_preservation: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -353,6 +359,13 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._policy_authority = policy_authority
         self._attempts = execution_attempts
         self._turn_commands = turn_command_service
+        from moonmind.omnigent.workspace_publication import (
+            OmnigentWorkspacePublicationService,
+        )
+
+        self._workspace_preservation = workspace_preservation or OmnigentWorkspacePublicationService(
+            artifact_gateway=artifact_gateway,
+        )
 
     @staticmethod
     def _canonical_digest(value: Mapping[str, Any]) -> str:
@@ -810,6 +823,29 @@ class OmnigentProfileBoundExecutionCoordinator:
         )
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        # Validate before binding an existing recovery host: rejecting ambiguous
+        # actions must not claim or clean up the only surviving workspace.
+        try:
+            github_operations = authored_github_operations(request)
+        except WorkspaceIntentCompilationError as exc:
+            return AgentRunResult(
+                summary=str(exc),
+                failureClass="user_error",
+                providerErrorCode=exc.code,
+                retryRecommendation="declare_github_operations",
+            )
+        action_credential_required = "gh" in self._required_capabilities(request) or any(
+            operation != "read" for operation in github_operations
+        )
+        if action_credential_required:
+            denied = await self._github_action_authority_error(request)
+            if denied is not None:
+                return AgentRunResult(
+                    summary=f"selected GitHub action is unavailable: {denied.safe_summary}",
+                    failureClass="user_error",
+                    providerErrorCode="github_auth_unavailable",
+                    retryRecommendation="correct_github_action_authority",
+                )
         recorded_plan = self._require_recorded_plan_request(request)
         if recorded_plan is not None:
             request = bind_omnigent_model_selection(
@@ -911,6 +947,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         workspace_locator_payload: Mapping[str, Any] | None = None
         terminal_status = "completed"
         attempt_cleanup_deferred_code: str | None = None
+        credential_preservation_pending = False
         # Bounded, credential-free evidence accumulated across the run so the
         # unified authority chain (MoonLadderStudios/MoonMind#3561) can be emitted
         # once at terminal, covering both success and every failure path.
@@ -1371,7 +1408,31 @@ class OmnigentProfileBoundExecutionCoordinator:
                     expected_status="allocating",
                     new_status="starting",
                 )
-            github_token = await self._github_token(request)
+            github_token: str | None = None
+            github_token_resolved = False
+            github_publication_token_resolved = False
+
+            async def resolve_github_token(
+                *, for_publication: bool = False
+            ) -> str | None:
+                nonlocal github_token, github_token_resolved, github_publication_token_resolved
+                if for_publication and not github_publication_token_resolved:
+                    # Source-read acquisition cannot authorize a later write.
+                    # Acquire at the existing publication boundary with only
+                    # destination requirements, including for prepared work.
+                    github_token = await self._github_token(
+                        request, for_publication=True
+                    )
+                    github_token_resolved = True
+                    github_publication_token_resolved = True
+                elif not github_token_resolved:
+                    github_token = await self._github_token(request)
+                    github_token_resolved = True
+                return github_token
+
+            # The host owner reserves destination publication before acquiring
+            # agent-facing credentials. Clone-only authority stays lazy and is
+            # acquired only when workspace materialization is necessary.
             current_stage = "container_start"
             await emit(current_stage, "started")
             workspace_locator_payload = (
@@ -1394,12 +1455,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                 artifact_gateway=self._artifact_service,
                 evidence_request=request,
                 cleanup_authority_store=self._run_store,
-                target_repository=str(
-                    (request.parameters or {}).get("repository") or ""
-                ).strip(),
+                recovery_artifact_gateway=self._artifact_gateway,
+                target_repository=self._repository_source(request),
                 required_capabilities=self._required_capabilities(request),
                 execution_fanout_authorization=fanout_authorization,
                 github_token=github_token,
+                github_token_resolver=resolve_github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
                 # A remediation workspace is already materialized and authorized by
@@ -1543,6 +1604,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "providerProfileId": profile_id,
                     "credentialGeneration": host_lease.credential_generation,
                     "omnigentHostId": host_id,
+                    "githubCredentialExposure": preflight.get(
+                        "githubCredentialExposure", "unknown"
+                    ),
                 },
             )
             if preflight.get("mountedTools", {}).get("status") == "ready":
@@ -1860,22 +1924,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 runtime=provider_runtime,
                                 attempt_ordinal=self._attempts.current_attempt(),
                             ):
-                                publication = await self._workspace_publication.publish_workspace(
-                                    workspace_locator=workspace_locator_payload or {},
-                                    current_workflow_id=workflow_id,
-                                    current_step_execution_id=(
-                                        step_execution_id or request.idempotency_key
-                                    ),
-                                    publication_identity=request.idempotency_key,
-                                    publish_mode=publish_mode,
-                                    base_branch=self._starting_branch(request),
-                                    repository=str(
-                                        (request.parameters or {}).get("repository") or ""
-                                    ).strip(),
-                                    github_token=github_token,
-                                    accepted_published_head=(
-                                        request.parameters or {}
-                                    ).get("acceptedPublishedHead"),
+                                publication = (
+                                    await self._workspace_publication.publish_workspace(
+                                        workspace_locator=workspace_locator_payload
+                                        or {},
+                                        current_workflow_id=workflow_id,
+                                        current_step_execution_id=(
+                                            step_execution_id or request.idempotency_key
+                                        ),
+                                        publication_identity=request.idempotency_key,
+                                        publish_mode=publish_mode,
+                                        base_branch=self._starting_branch(request),
+                                        repository=self._repository_source(request),
+                                        github_token=await resolve_github_token(
+                                            for_publication=True
+                                        ),
+                                        accepted_published_head=(
+                                            request.parameters or {}
+                                        ).get("acceptedPublishedHead"),
+                                    )
                                 )
                         except Exception as exc:
                             code = str(
@@ -2329,9 +2396,80 @@ class OmnigentProfileBoundExecutionCoordinator:
                     remediation_action="retry_after_provider_cooldown",
                     metadata={"providerProfileId": profile_id},
                 )
+            recovered_bridge = (
+                await self._run_store.get_existing(request.idempotency_key)
+                if hasattr(self._run_store, "get_existing") else None
+            )
+            recovery_metadata = getattr(recovered_bridge, "metadata_", None)
+            credential_recovery = (
+                recovery_metadata.get(HOST_CREDENTIAL_RECOVERY_KEY)
+                if isinstance(recovery_metadata, Mapping) else None
+            )
+            if credential_recovery and credential_recovery.get("phase") != "completed":
+                # Only current terminal evidence plus a new canonical save can
+                # release the preservation fence. A pre-recreation checkpoint
+                # cannot establish preservation after the resumed turn worked.
+                reservation = preflight.get("githubProjectionReservation")
+                try:
+                    if reservation is not None:
+                        await self._run_store.validate_github_projection(
+                            request=request,
+                            host_lease_ref=host_lease.lease_id,
+                            reservation=reservation,
+                        )
+                    saved = await self._workspace_preservation.save_request_workspace(
+                        request
+                    )
+                    terminal_ref = await self._write_plan_runtime_evidence(
+                        request=request,
+                        name="github-host-recovery-terminal.json",
+                        payload=result.model_dump(mode="json", by_alias=True),
+                    )
+                    await self._run_store.record_host_credential_recovery(
+                        request=request,
+                        host_lease_ref=host_lease.lease_id,
+                        phase="completed",
+                        checkpoint=saved,
+                        terminal_ref=terminal_ref,
+                        expected_projection_reservation=reservation,
+                    )
+                except Exception as exc:
+                    # A newer retry may have completed while this delivery was
+                    # saving. Its completed receipt is never this stale actor's
+                    # permission to enter ordinary destructive cleanup.
+                    raise OmnigentOAuthHostError(
+                        "terminal recovery save lost its delivery authority; retain owned work",
+                        code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                    ) from exc
+                result.metadata["savedWorkspaceCheckpoint"] = saved
             return result
         except (Exception, asyncio.CancelledError) as exc:
             authority_error = exc
+            recovery_error = None
+            if host_lease is not None and hasattr(self._run_store, "get_existing"):
+                try:
+                    recovered_bridge = await self._run_store.get_existing(request.idempotency_key)
+                    recovery_metadata = getattr(recovered_bridge, "metadata_", None)
+                    credential_recovery = (
+                        recovery_metadata.get(HOST_CREDENTIAL_RECOVERY_KEY)
+                        if isinstance(recovery_metadata, Mapping) else None
+                    )
+                    preservation_pending = bool(
+                        credential_recovery and credential_recovery.get("phase") != "completed"
+                    )
+                except Exception:  # noqa: BLE001 - unavailable authority cannot grant destructive cleanup
+                    # Unavailable preservation authority cannot grant cleanup.
+                    # The original error remains the cause and lifecycle code.
+                    preservation_pending = True
+                if preservation_pending:
+                    credential_preservation_pending = True
+                    attempt_cleanup_deferred_code = HOST_CREDENTIAL_RECOVERY_ERROR
+                    if not isinstance(exc, asyncio.CancelledError):
+                        recovery_error = OmnigentOAuthHostError(
+                            "host credential recovery remains pending after " + type(exc).__name__,
+                            code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                        )
+                        authority_error = recovery_error
             prepared_host_evidence = getattr(
                 exc, "prepared_host_evidence", None
             )
@@ -2350,6 +2488,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 attempt_cleanup_deferred_code = "activity_cancelled"
             elif isinstance(exc, OmnigentSessionStillRunningError):
                 attempt_cleanup_deferred_code = "ambiguous_terminal_state"
+            elif (
+                isinstance(exc, OmnigentOAuthHostError)
+                and exc.code == "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+            ):
+                # Refresh failed on an already owned, running host. The same
+                # Activity retry must retain its bridge, workspace, and leases;
+                # ordinary launch cleanup would destroy that recovery path.
+                attempt_cleanup_deferred_code = exc.code
             elif (
                 isinstance(exc, OmnigentOAuthHostError)
                 and exc.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
@@ -2409,6 +2555,8 @@ class OmnigentProfileBoundExecutionCoordinator:
                         diagnostics_ref=persisted_diagnostics_ref(exc),
                         ignore_errors=True,
                     )
+            if recovery_error is not None:
+                raise recovery_error from exc
             raise
         finally:
             safe_to_release_provider = host_lease is None
@@ -2490,12 +2638,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     else None
                                 ),
                                 launch_evidence_ref=(
-                                    str(preflight.get("egressEvidenceRef") or "") or None
+                                    str(preflight.get("egressEvidenceRef") or "")
+                                    or None
                                     if isinstance(preflight, Mapping)
                                     else None
                                 ),
                                 evidence_request=request,
                                 artifact_gateway=self._artifact_service,
+                                cleanup_authority_store=self._run_store,
                             )
                         authority_cleanup_evidence = dict(cleanup_evidence or {})
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
@@ -2904,7 +3054,12 @@ class OmnigentProfileBoundExecutionCoordinator:
             ).strip()
             await emit(
                 "terminal",
-                terminal_status,
+                (
+                    "waiting"
+                    if credential_preservation_pending
+                    or attempt_cleanup_deferred_code == HOST_CREDENTIAL_RECOVERY_ERROR
+                    else terminal_status
+                ),
                 metadata={
                     "cleanupCompleted": safe_to_release_provider,
                     "leaseReleased": lease_released,
@@ -3157,7 +3312,21 @@ class OmnigentProfileBoundExecutionCoordinator:
         return evidence
 
     @classmethod
-    async def _github_token(cls, request: AgentExecutionRequest) -> str | None:
+    async def _github_action_authority_error(cls, request: AgentExecutionRequest) -> Any:
+        """Check action authority without reading a secret or touching saved work."""
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+            validate_default_github_connection_operations,
+        )
+
+        return await validate_default_github_connection_operations(
+            repo=cls._repository_source(request) or None,
+            required_operations=authored_github_operations(request),
+        )
+
+    @classmethod
+    async def _github_token(
+        cls, request: AgentExecutionRequest, *, for_publication: bool = False
+    ) -> str | None:
         gh_required = "gh" in cls._required_capabilities(request)
         # A GitHub repository source must be cloned into the sandbox before the
         # host launches. Private repositories require a credential for that clone
@@ -3169,21 +3338,54 @@ class OmnigentProfileBoundExecutionCoordinator:
         clone_needs_credential = cls._github_repository_source(request) is not None
         if not gh_required and not clone_needs_credential:
             return None
-        from moonmind.auth.github_credentials import resolve_github_credential
-
-        repository = str((request.parameters or {}).get("repository") or "").strip()
-        resolved = await resolve_github_credential(repo=repository or None)
-        token = str(resolved.token or "").strip() if resolved else ""
-        if not token:
+        if authored_anonymous_source(request):
+            # Anonymous source admission omits collaboration authority even if
+            # gh was requested; reject before looking up or projecting a PAT.
             if gh_required:
                 raise OmnigentOAuthHostError(
-                    "GitHub credential is required for mounted gh readiness",
+                    "anonymous repository access cannot provide authenticated gh",
                     code="github_auth_unavailable",
                 )
-            # A public GitHub clone can proceed unauthenticated; a private clone
-            # fails fast with an actionable error at materialization.
             return None
-        return token
+        from moonmind.auth.github_credentials import GitHubCredentialSource
+        from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+        # The profile-bound realizer admits only the default repository
+        # connection (see the execution-plan admission), so it reads only that
+        # connection's credential. Ambient worker tokens are never consulted
+        # while git-default is recorded (MoonLadderStudios/MoonMind#4011).
+        repository = cls._repository_source(request)
+        try:
+            required_operations = authored_github_operations(
+                request, for_publication=for_publication
+            )
+        except WorkspaceIntentCompilationError as exc:
+            raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+        resolved = (
+            await (
+                managed_api_key_resolve.resolve_default_github_connection_credential(
+                    repo=repository or None, required_operations=required_operations
+                )
+            )
+        )
+        token = str(resolved.token or "").strip()
+        if token:
+            return token
+        if resolved.source != GitHubCredentialSource.MISSING:
+            # A selected credential that failed is the result: it never
+            # downgrades to an anonymous or ambient-token clone.
+            raise OmnigentOAuthHostError(
+                f"selected GitHub credential is unavailable: {resolved.safe_summary}",
+                code="github_auth_unavailable",
+            )
+        if gh_required:
+            raise OmnigentOAuthHostError(
+                "GitHub credential is required for mounted gh readiness",
+                code="github_auth_unavailable",
+            )
+        # Nothing is configured, so no credential was selected: a public clone
+        # proceeds unauthenticated and a private clone fails at materialization.
+        return None
 
     @classmethod
     def _github_repository_source(cls, request: AgentExecutionRequest) -> str | None:

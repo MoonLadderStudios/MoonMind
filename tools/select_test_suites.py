@@ -508,9 +508,19 @@ EXACT_ARTIFACT_EXACT = {
     "moonmind/omnigent/exact_artifact_conformance.py",
     "tools/omnigent_exact_artifact_probe.py",
     "tools/run_omnigent_exact_artifact_conformance.py",
+    # Credential-free recovery executes these owners inside the candidate image.
+    "tools/ci/run_credential_free_host_recovery.py",
+    "tests/unit/tools/test_run_credential_free_host_recovery.py",
+    "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+    "moonmind/omnigent/oauth_host_runtime.py",
+    "moonmind/omnigent/bridge_store.py",
+    "moonmind/omnigent/workspace_publication.py",
+    "tools/register_omnigent_agent.py",
 }
 
 EXACT_ARTIFACT_PREFIXES = (
+    "moonmind/omnigent/host_services/",
+    "services/omnigent/agents/opencode-native-ui/",
     "api_service/docker/",
     "docker/",
 )

@@ -78,6 +78,9 @@ from moonmind.omnigent.host_capacity import (
     GenericHostCapacityAdmission,
 )
 from moonmind.omnigent.host_runtime import PreparedHostInputs
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+)
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
@@ -492,6 +495,11 @@ def _build_realizer(
             return ()
 
     class HostRuntime:
+        async def validate_repository_intent(self, *, request, plan):
+            await OmnigentGithubCredentialService(None).validate_repository_intent(
+                request=request, plan=plan
+            )
+
         async def prepare(self, **kwargs):
             await kwargs["authority_sink"](
                 {"kind": "skills", "cleanupRef": f"skill-cleanup:{run}"}

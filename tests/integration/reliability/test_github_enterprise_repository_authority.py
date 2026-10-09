@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -186,6 +187,8 @@ async def test_enterprise_cli_projection_uses_admitted_host(
     )
     owner_ref = "enterprise-lease-owner"
     config_dir = tmp_path / "gh-config"
+    runtime_uid = os.getuid() or 1000
+    runtime_gid = os.getgid() or 1000
     calls = []
 
     class Backend:
@@ -196,17 +199,19 @@ async def test_enterprise_cli_projection_uses_admitted_host(
             if argv[1] == "run":
                 script_index = argv.index("-ceu") + 1
                 script = argv[script_index].replace("/config", str(config_dir))
-                # The test exercises the real file writer, retaining its
-                # permissions while leaving Docker's root ownership handoff
-                # outside this credential-format boundary.
-                script = script.replace('chown -R "$1:$2"', "true")
+                # Exercise the real atomic writer and ownership checks with
+                # this process's identity; CI runners need not use UID 1000.
                 completed = subprocess.run(
                     ["sh", "-ceu", script, *argv[script_index + 1 :]],
-                    input=kwargs["input_bytes"],
+                    input=kwargs.get("input_bytes"),
                     capture_output=True,
                     check=True,
                 )
-                return completed.returncode, "", ""
+                return (
+                    completed.returncode,
+                    completed.stdout.decode(),
+                    completed.stderr.decode(),
+                )
             return 0, "", ""
 
     credentials = OmnigentGithubCredentialService(
@@ -220,17 +225,27 @@ async def test_enterprise_cli_projection_uses_admitted_host(
         resolved_tools=plan.payload.resolvedTools,
         owner_ref=owner_ref,
         writer_image_ref="test-writer-image",
-        runtime_uid=1000,
-        runtime_gid=1000,
+        runtime_uid=runtime_uid,
+        runtime_gid=runtime_gid,
         plan=plan,
+        projection_reservation={
+            "ownerRef": owner_ref,
+            "revision": 1,
+            "reservationId": "00000000-0000-4000-8000-000000000001",
+        },
+        projection_verifier=AsyncMock(),
     )
-    assert attachment == anticipated
+    assert all(attachment[key] == value for key, value in anticipated.items())
     assert attachment["accessMode"] == "read-only"
     hosts = (config_dir / "hosts.yml").read_text()
-    assert hosts.startswith("github.enterprise.test:\n")
+    assert hosts.split("\n", 1)[1].startswith("github.enterprise.test:\n")
     assert "oauth_token: selected-secret-canary\n" in hosts
     assert "ambient-secret-canary" not in hosts
     assert "selected-secret-canary" not in json.dumps([argv for argv, _ in calls])
+    for path, mode in ((config_dir, 0o700), (config_dir / "hosts.yml", 0o600)):
+        metadata = path.stat()
+        assert (metadata.st_uid, metadata.st_gid) == (runtime_uid, runtime_gid)
+        assert metadata.st_mode & 0o777 == mode
 
 
 @pytest.mark.parametrize(

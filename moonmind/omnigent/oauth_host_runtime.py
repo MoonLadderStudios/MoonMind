@@ -12,7 +12,7 @@ import shutil
 import tarfile
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +23,14 @@ from moonmind.omnigent.execution_profiles import validate_effective_launch_snaps
 from moonmind.omnigent.git_identity import ensure_workspace_git_identity
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.host_failures import (
+    HOST_CREDENTIAL_RECOVERY_ERROR,
+    HOST_CREDENTIAL_RECOVERY_KEY,
+    OmnigentOAuthHostError,
+)
+from moonmind.omnigent.host_services.github_credentials import (
+    github_projection_script,
+)
 from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
@@ -96,9 +103,7 @@ from moonmind.workflows.skills.run_projection import (
     verify_skill_projection,
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
-from moonmind.workflows.temporal.runtime.git_auth import (
-    build_github_token_git_environment,
-)
+from moonmind.workflows.temporal.runtime.git_auth import build_isolated_git_environment
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -185,6 +190,8 @@ _DEFAULT_HOST_PATH = (
 _RUNNER_PROXY_ENV_NAMES = tuple(
     proxy_env.partition("=")[0] for proxy_env in omnigent_proxy_env()
 )
+_GITHUB_CONFIG_HOME = "/home/app/.cache/moonmind-xdg"
+_GITHUB_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 _RUNNER_GITHUB_ENV_NAMES = (
     "XDG_CONFIG_HOME",
     "GH_PROMPT_DISABLED",
@@ -687,10 +694,12 @@ class OmnigentOAuthHostRuntime:
         artifact_gateway: Any | None = None,
         evidence_request: AgentExecutionRequest | None = None,
         cleanup_authority_store: Any | None = None,
+        recovery_artifact_gateway: Any | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
         github_token: str | None = None,
+        github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
         repository_source: str = "",
@@ -737,12 +746,66 @@ class OmnigentOAuthHostRuntime:
                 "execution fan-out requires a run-dedicated Omnigent host",
                 code="OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED",
             )
+        github_projection_reservation = None
+        gh_required = "gh" in normalized_capabilities
+        if gh_required and binding.host_launch_profile_ref:
+            try:
+                if (
+                    evidence_request is None
+                    or cleanup_authority_store is None
+                    or github_token_resolver is None
+                    or github_token is not None
+                ):
+                    raise OmnigentOAuthHostError(
+                        "GitHub projection requires a durable reservation before value acquisition"
+                    )
+                github_projection_reservation = (
+                    await cleanup_authority_store.reserve_github_projection(
+                        request=evidence_request,
+                        host_lease_ref=host_lease.lease_id,
+                    )
+                )
+                await self.reserve_github_projection(
+                    host_lease=host_lease,
+                    effective_launch=launch,
+                    reservation=github_projection_reservation,
+                )
+                await cleanup_authority_store.validate_github_projection(
+                    request=evidence_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+                github_token = await github_token_resolver()
+                if not github_token:
+                    raise OmnigentOAuthHostError(
+                        "selected GitHub credential is unavailable"
+                    )
+                await cleanup_authority_store.validate_github_projection(
+                    request=evidence_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+            except Exception as exc:
+                # No workspace, skill, or live-host mutation has happened. The
+                # coordinator's existing deferred-cleanup handoff retains this
+                # owner and its saved work when reserve/acquisition is uncertain.
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation or acquisition failed; retain owned work for retry",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
             resolved_skillset_ref=resolved_skillset_ref,
             artifact_gateway=artifact_gateway,
         )
         egress_attestation = await self._attest_egress(launch)
+        await self._restore_preserved_workspace_if_missing(
+            request=evidence_request,
+            store=cleanup_authority_store,
+            artifact_gateway=recovery_artifact_gateway,
+            host_lease=host_lease,
+            expected_projection_reservation=github_projection_reservation,
+        )
         workspace_source = await self._prepare_workspace(
             workspace_locator=workspace_locator,
             current_workflow_id=current_workflow_id,
@@ -758,6 +821,7 @@ class OmnigentOAuthHostRuntime:
             workspace_checkpoint_restore_ref=workspace_checkpoint_restore_ref,
             attachment_refs=attachment_refs,
             github_token=github_token,
+            github_token_resolver=github_token_resolver,
             artifact_gateway=artifact_gateway,
             omnigent_isolation_verified=(
                 launch.get("hostMode") == "on_demand_docker"
@@ -774,6 +838,11 @@ class OmnigentOAuthHostRuntime:
         launched_container_name: str | None = None
         retained_host = False
         static_compose_env: Mapping[str, str] | None = None
+        # Routing isolation is not confinement: a projected gh credential is
+        # readable by arbitrary agent code in the host, so report it as such
+        # rather than as a confined grant (RepositoryAccessAndWorkspaceDesign
+        # QUALITY-003, MoonLadderStudios/MoonMind#4011).
+        github_credential_exposure = "not_projected"
         if binding.host_launch_profile_ref:
             container_job_environment = self._container_job_environment(
                 binding=binding,
@@ -794,7 +863,7 @@ class OmnigentOAuthHostRuntime:
             host_runtime_environment = self._host_runtime_environment(
                 container_job_environment
             )
-            if "gh" in {item.strip().lower() for item in required_capabilities}:
+            if gh_required:
                 await self._initialize_required_tools(
                     image_ref=str(launch["hostImageRef"])
                 )
@@ -812,12 +881,21 @@ class OmnigentOAuthHostRuntime:
                     skill_projection=skill_projection,
                     runtime_scripts=runtime_scripts,
                     current_step_execution_id=current_step_execution_id,
-                    github_token=github_token,
+                    # A clone-only credential stays with the trusted clone above;
+                    # agent code receives the admitted credential only when the
+                    # step declares gh (MoonLadderStudios/MoonMind#4011).
+                    github_token=github_token if gh_required else None,
+                    github_projection_reservation=github_projection_reservation,
                     container_job_environment=host_runtime_environment,
                     effective_launch=launch,
                     egress_attestation=egress_attestation,
+                    recovery_request=evidence_request,
+                    recovery_store=cleanup_authority_store,
+                    recovery_artifact_gateway=recovery_artifact_gateway,
                 )
             ) is True
+            if github_token and gh_required:
+                github_credential_exposure = "agent_readable_unconfined"
         else:
             daemon_workspace_root = await self._resolve_daemon_workspace_root()
             daemon_workspace_source = daemon_visible_workspace_path(
@@ -885,6 +963,12 @@ class OmnigentOAuthHostRuntime:
                     if retained_cleanup_evidence is not None
                     else launch_ref
                 ),
+                "githubCredentialExposure": github_credential_exposure,
+                **(
+                    {"githubProjectionReservation": dict(github_projection_reservation)}
+                    if github_projection_reservation is not None
+                    else {}
+                ),
             }
 
         try:
@@ -902,6 +986,12 @@ class OmnigentOAuthHostRuntime:
                 }
             )
             existing_authority = None
+            replacing_launch_ref = None
+            credential_recovery = None
+            if (cleanup_authority_store is not None and evidence_request is not None
+                    and hasattr(cleanup_authority_store, "get_existing")):
+                recovery_row = await cleanup_authority_store.get_existing(evidence_request.idempotency_key)
+                credential_recovery = (getattr(recovery_row, "metadata_", None) or {}).get(HOST_CREDENTIAL_RECOVERY_KEY)
             if cleanup_authority_store is not None and hasattr(
                 cleanup_authority_store, "get_egress_cleanup_authority"
             ):
@@ -910,6 +1000,14 @@ class OmnigentOAuthHostRuntime:
                         host_lease_ref=host_lease.lease_id
                     )
                 )
+            if credential_recovery and credential_recovery.get("replacementEgressPending"):
+                if isinstance(existing_authority, Mapping):
+                    replacing_launch_ref = str(existing_authority["launchEvidenceRef"])
+                    existing_authority = None
+                # A worker may lose the new container's first authority bind.
+                # It is still a replacement even when already running and the
+                # legacy host had no durable egress evidence to replace.
+                retained_host = False
             if isinstance(existing_authority, Mapping):
                 stored_launch = existing_authority.get("effectiveLaunch")
                 stored_evidence = existing_authority.get("egressEvidence")
@@ -1007,6 +1105,12 @@ class OmnigentOAuthHostRuntime:
                             egress_evidence=egress_evidence,
                             launch_evidence_ref=launch_ref,
                             phase="launched",
+                            expected_projection_reservation=github_projection_reservation,
+                            **(
+                                {"replaces_launch_evidence_ref": replacing_launch_ref}
+                                if replacing_launch_ref
+                                else {}
+                            ),
                         )
 
             observed_egress = await self._attest_launched_workload_egress(
@@ -1052,6 +1156,7 @@ class OmnigentOAuthHostRuntime:
                             egress_evidence=egress_evidence,
                             launch_evidence_ref=launch_ref,
                             phase="attested",
+                            expected_projection_reservation=github_projection_reservation,
                         )
                     except (Exception, asyncio.CancelledError):
                         if retained_host:
@@ -1158,6 +1263,27 @@ class OmnigentOAuthHostRuntime:
             host_id = str(
                 host.get("id") or host.get("host_id") or host.get("hostId") or ""
             )
+            if credential_recovery and credential_recovery.get("phase") != "completed":
+                if credential_recovery.get("omnigentHostId") not in {None, host_id}:
+                    raise OmnigentOAuthHostError(
+                        "credential recovery registered a different host",
+                        code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                    )
+                if github_projection_reservation is not None:
+                    try:
+                        await cleanup_authority_store.validate_github_projection(
+                            request=evidence_request,
+                            host_lease_ref=host_lease.lease_id,
+                            reservation=github_projection_reservation,
+                        )
+                    except Exception as exc:
+                        raise OmnigentOAuthHostError(
+                            "credential recovery resume delivery authority changed",
+                            code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                        ) from exc
+                await self._resume_preserved_session(
+                    credential_recovery, expected_host_id=host_id,
+                )
             if adapter["harness"] not in self._ready_host_harnesses(host):
                 raise OmnigentOAuthHostError(
                     f"registered host does not advertise {adapter['harness']}",
@@ -1205,6 +1331,11 @@ class OmnigentOAuthHostRuntime:
             validated["workspaceMountAttested"] = True
             validated["skillDeliveryAttested"] = True
             validated["restrictedEgressAttested"] = True
+            validated["githubCredentialExposure"] = github_credential_exposure
+            if github_projection_reservation is not None:
+                validated["githubProjectionReservation"] = dict(
+                    github_projection_reservation
+                )
             # Preserve only bounded, non-secret fields required to prove the
             # exact registered host against an immutable execution plan. The
             # full provider host object is deliberately not returned.
@@ -1243,6 +1374,118 @@ class OmnigentOAuthHostRuntime:
                     prepared_host_evidence=evidence,
                 ) from exc
             raise
+
+    async def _restore_preserved_workspace_if_missing(
+        self,
+        *,
+        request,
+        store,
+        artifact_gateway,
+        host_lease,
+        expected_projection_reservation=None,
+    ):
+        """Let the canonical restorer recover only the saved, stopped candidate."""
+        if request is None or store is None or not hasattr(store, "get_existing"):
+            return
+        row = await store.get_existing(request.idempotency_key)
+        metadata = getattr(row, "metadata_", None)
+        receipt = metadata.get(HOST_CREDENTIAL_RECOVERY_KEY) if isinstance(metadata, Mapping) else None
+        if not receipt or receipt.get("phase") == "completed":
+            return
+        if (row.host_lease_ref != host_lease.lease_id
+                or receipt.get("hostLeaseRef") != host_lease.lease_id
+                or receipt.get("credentialGeneration") != host_lease.credential_generation
+                or receipt.get("ownerIdempotencyKey") != request.idempotency_key):
+            raise OmnigentOAuthHostError("preserved workspace authority changed", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        from moonmind.omnigent.workspace_publication import (
+            OmnigentWorkspacePublicationService,
+        )
+        async def validate_delivery():
+            if (
+                metadata.get("githubProjectionReservation") is not None
+                or expected_projection_reservation is not None
+            ):
+                try:
+                    await store.validate_github_projection(
+                        request=request,
+                        host_lease_ref=host_lease.lease_id,
+                        reservation=expected_projection_reservation,
+                    )
+                except Exception as exc:
+                    raise OmnigentOAuthHostError(
+                        "preserved workspace delivery authority changed",
+                        code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                    ) from exc
+
+        await validate_delivery()
+        publisher = OmnigentWorkspacePublicationService(self._workspace_root, artifact_gateway=artifact_gateway)
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python((request.workspace_spec or {}).get("workspaceLocator"))
+        if not isinstance(locator, SandboxWorkspaceLocator):
+            raise OmnigentOAuthHostError("preserved workspace authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        workspace = publisher.resolve_request_workspace(request, must_exist=False)
+        if workspace.exists():
+            # Never restore an earlier save over a surviving current workspace.
+            publisher.resolve_request_workspace(request)
+            return
+        container_name = host_lease.container_name or deterministic_host_container_name(host_lease.lease_id)
+        stopped_save = receipt.get("phase") == "saved" or (
+            receipt.get("phase") == "recreated"
+            and receipt.get("replacementEgressPending") is True
+        )
+        if (
+            not stopped_save
+            or await self.container_exists(container_name)
+            or not (receipt.get("checkpoint") or {}).get("checkpointRef")
+        ):
+            raise OmnigentOAuthHostError(
+                "current workspace missing without a trustworthy stopped-host save",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        await validate_delivery()
+        await publisher.restore_saved_request_workspace(request, receipt["checkpoint"])
+        publisher.resolve_request_workspace(request)
+
+    async def _resume_preserved_session(self, receipt, *, expected_host_id):
+        """Use Omnigent's same-session retry owner, without replaying input."""
+        session_id = receipt.get("omnigentSessionId")
+        if not session_id:
+            return
+
+        async def observe():
+            snapshot = await self._client.get_session(session_id)
+            if (str(snapshot.get("host_id") or snapshot.get("hostId") or "") != expected_host_id
+                    or str(snapshot.get("id") or snapshot.get("session_id") or snapshot.get("sessionId") or "") != session_id):
+                raise OmnigentOAuthHostError(
+                    "credential recovery session/host authority changed",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            return snapshot.get("runner_online") is True
+
+        if await observe():
+            return
+        # Pinned upstream routes_events owns single-flight readiness recovery:
+        # it launches a replacement runner on this host, re-initializes the
+        # existing provider session, and never persists/replays user input.
+        # An uncertain response is reconciled by observation on Activity retry.
+        await self._client.post_event(session_id, {"type": "retry_session", "data": {}})
+        for attempt in range(HOST_REGISTRATION_ATTEMPTS):
+            if await observe():
+                return
+            if attempt + 1 < HOST_REGISTRATION_ATTEMPTS:
+                await asyncio.sleep(HOST_REGISTRATION_INTERVAL_SECONDS)
+        raise OmnigentOAuthHostError(
+            "credential recovery is waiting for its original provider session",
+            code=HOST_CREDENTIAL_RECOVERY_ERROR,
+        )
+
+    async def save_request_workspace(self, request, *, artifact_gateway):
+        """Preserve the current candidate through the canonical checkpoint owner."""
+        from moonmind.omnigent.workspace_publication import (
+            OmnigentWorkspacePublicationService,
+        )
+        return await OmnigentWorkspacePublicationService(
+            self._workspace_root, artifact_gateway=artifact_gateway,
+        ).save_request_workspace(request)
 
     async def publish_workspace(
         self,
@@ -2224,6 +2467,7 @@ class OmnigentOAuthHostRuntime:
             AgentExecutionRequest | OmnigentEgressEvidenceRequestIdentity | None
         ) = None,
         artifact_gateway: Any | None = None,
+        cleanup_authority_store: Any | None = None,
     ) -> dict[str, Any]:
         attachment_identity = str(
             (egress_evidence or {}).get("attachmentIdentity") or ""
@@ -2293,6 +2537,14 @@ class OmnigentOAuthHostRuntime:
                 await self.assert_container_owned(
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
+            await self._retire_github_projection(
+                host_lease=host_lease,
+                container_name=container_name,
+                effective_launch=(
+                    effective_launch or host_lease.effective_launch_snapshot or {}
+                ),
+                cleanup_authority_store=cleanup_authority_store,
+            )
             await self._containers.remove_initializer(
                 container_name=container_name, lease_id=host_lease.lease_id
             )
@@ -2461,11 +2713,43 @@ class OmnigentOAuthHostRuntime:
         runtime_scripts: Path,
         current_step_execution_id: str,
         github_token: str | None = None,
+        github_projection_reservation: Mapping[str, Any] | None = None,
         container_job_environment: Mapping[str, str] | None = None,
         effective_launch: Mapping[str, Any],
         egress_attestation: EgressAttestation,
+        recovery_request: AgentExecutionRequest | None = None,
+        recovery_store: Any | None = None,
+        recovery_artifact_gateway: Any | None = None,
     ) -> bool:
         """Launch a host, returning whether an owned running host was retained."""
+        recovery_receipt = None
+
+        async def validate_projection() -> None:
+            if (
+                not github_projection_reservation
+                or github_projection_reservation.get("ownerRef")
+                != f"host-lease:{host_lease.lease_id}"
+                or recovery_request is None
+                or recovery_store is None
+            ):
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation owner is unavailable",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            try:
+                await recovery_store.validate_github_projection(
+                    request=recovery_request,
+                    host_lease_ref=host_lease.lease_id,
+                    reservation=github_projection_reservation,
+                )
+            except Exception as exc:
+                raise OmnigentOAuthHostError(
+                    "GitHub projection reservation owner changed",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
+
+        if github_token:
+            await validate_projection()
         # An existing container for this lease recovers without re-admission:
         # the run was already admitted under its persisted launch authority,
         # so historical shared-CPU bindings keep their recovery path here.
@@ -2474,17 +2758,93 @@ class OmnigentOAuthHostRuntime:
             await self.assert_container_owned(
                 container_name=container_name, lease_id=host_lease.lease_id
             )
+            if github_token:
+                if await self._existing_github_projection_is_compatible(container_name):
+                    try:
+                        await validate_projection()
+                        await self._project_github_credential(
+                            github_token,
+                            github_projection_reservation=github_projection_reservation,
+                            cache_volume=f"{container_name}-cache",
+                            host_image_ref=str(effective_launch["hostImageRef"]),
+                            runtime_uid=int(effective_launch["runtimeUid"]),
+                            runtime_gid=int(effective_launch["runtimeGid"]),
+                        )
+                    except Exception as exc:
+                        # Stop this attempt before gh can use the old issuance,
+                        # retaining the live host for the existing retry owner.
+                        raise OmnigentOAuthHostError(
+                            "existing host GitHub projection refresh failed; "
+                            "retain the host for retry",
+                            code="OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED",
+                        ) from exc
+                else:
+                    await self._preserve_legacy_github_host(
+                        request=recovery_request,
+                        store=recovery_store,
+                        artifact_gateway=recovery_artifact_gateway,
+                        host_lease=host_lease,
+                        container_name=container_name,
+                        workspace_source=workspace_source,
+                        effective_launch=effective_launch,
+                        github_projection_reservation=github_projection_reservation,
+                    )
+                    # The owned container is now stopped with a fresh save.
+                    # Normal launch below retains the same state/artifact/cache
+                    # volumes, host identity, session, and immutable policy.
+                    return await self._launch_on_demand(
+                        binding=binding,
+                        host_lease=host_lease,
+                        container_name=container_name,
+                        workspace_source=workspace_source,
+                        skill_projection=skill_projection,
+                        runtime_scripts=runtime_scripts,
+                        current_step_execution_id=current_step_execution_id,
+                        github_token=github_token,
+                        github_projection_reservation=github_projection_reservation,
+                        container_job_environment=container_job_environment,
+                        effective_launch=effective_launch,
+                        egress_attestation=egress_attestation,
+                        recovery_request=recovery_request,
+                        recovery_store=recovery_store,
+                        recovery_artifact_gateway=recovery_artifact_gateway,
+                    )
             return True
+        if (recovery_store is not None and recovery_request is not None
+                and hasattr(recovery_store, "get_existing")):
+            row = await recovery_store.get_existing(recovery_request.idempotency_key)
+            recovery = (getattr(row, "metadata_", None) or {}).get(HOST_CREDENTIAL_RECOVERY_KEY)
+            if recovery and recovery.get("phase") != "completed":
+                # A worker may die after stop or save. Re-capture the current
+                # owned bytes instead of treating an old receipt as current.
+                recovery_receipt = await self._preserve_legacy_github_host(
+                    request=recovery_request,
+                    store=recovery_store,
+                    artifact_gateway=recovery_artifact_gateway,
+                    host_lease=host_lease,
+                    container_name=container_name,
+                    workspace_source=workspace_source,
+                    effective_launch=effective_launch,
+                    github_projection_reservation=github_projection_reservation,
+                )
         cpu_millis = int(effective_launch["limits"]["cpuMillis"])
         if cpu_millis < 1:
-            raise OmnigentOAuthHostError(
-                "launch policy requires a positive explicit CPU limit; "
-                "historical shared-CPU (cpuMillis=0) bindings cannot be "
-                "recreated after their container is gone — migrate the "
-                "binding to a fixed-limit successor after its lease drains",
-                code="OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE",
-            )
-        cpu_args = ["--cpus", str(cpu_millis / 1000)]
+            if recovery_receipt is None:
+                raise OmnigentOAuthHostError(
+                    "launch policy requires a positive explicit CPU limit; "
+                    "no retained finite live-host authority is available",
+                    code="OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE",
+                )
+            if (not recovery_receipt
+                    or recovery_receipt.get("hostLeaseRef") != host_lease.lease_id
+                    or recovery_receipt.get("credentialGeneration") != host_lease.credential_generation):
+                raise OmnigentOAuthHostError(
+                    "finite live CPU authority is unavailable for host recreation",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            cpu_args = self._retained_cpu_args(recovery_receipt.get("retainedCpuLimit"))
+        else:
+            cpu_args = ["--cpus", str(cpu_millis / 1000)]
         mount = binding.credential_mount_ref
         adapter = self._runtime_adapter(binding)
         state_volume = f"{container_name}-state"
@@ -2698,14 +3058,23 @@ class OmnigentOAuthHostRuntime:
             child_env["OMNIGENT_API_TOKEN"] = token
             args.extend(["--env", "OMNIGENT_API_TOKEN"])
         if github_token:
-            child_env["GH_TOKEN"] = github_token
+            # The admitted credential reaches gh as lease-private config in the
+            # host's own cache volume, never as a container variable that
+            # Docker would record in Config.Env (MoonLadderStudios/MoonMind#4011).
+            await validate_projection()
+            await self._project_github_credential(
+                github_token,
+                github_projection_reservation=github_projection_reservation,
+                cache_volume=cache_volume,
+                host_image_ref=host_image_ref,
+                runtime_uid=int(effective_launch["runtimeUid"]),
+                runtime_gid=int(effective_launch["runtimeGid"]),
+            )
             runner_env_passthrough.extend(_RUNNER_GITHUB_ENV_NAMES)
             args.extend(
                 [
                     "--env",
-                    "GH_TOKEN",
-                    "--env",
-                    "XDG_CONFIG_HOME=/home/app/.cache/moonmind-xdg",
+                    f"XDG_CONFIG_HOME={_GITHUB_CONFIG_HOME}",
                     "--env",
                     "GH_PROMPT_DISABLED=1",
                     "--env",
@@ -2740,10 +3109,625 @@ class OmnigentOAuthHostRuntime:
         args.append(str(adapter["start_script"]))
         try:
             await self._run(*args, env=child_env)
+            if cpu_millis < 1:
+                observed_cpu = await self._observe_finite_host_cpu(container_name)
+                retained_cpu = recovery_receipt["retainedCpuLimit"]
+                if {k: v for k, v in observed_cpu.items() if k != "sourceContainerId"} != {
+                    k: v for k, v in retained_cpu.items() if k != "sourceContainerId"
+                }:
+                    await self.assert_container_owned(
+                        container_name=container_name, lease_id=host_lease.lease_id,
+                    )
+                    await self._run("docker", "stop", "--time", "20", container_name)
+                    raise OmnigentOAuthHostError(
+                        "recreated host did not retain its observed finite CPU quota",
+                        code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                    )
         except BaseException:
-            await self._run("docker", "rm", "-f", container_name, check=False)
+            if recovery_receipt is None:
+                await self._run("docker", "rm", "-f", container_name, check=False)
             raise
         return False
+
+    @staticmethod
+    def _retained_cpu_args(limit):
+        """Render only a positive finite, observed Docker limit, without rounding."""
+        if not isinstance(limit, Mapping):
+            raise OmnigentOAuthHostError("finite live CPU authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        def positive(value):
+            return type(value) is int and 0 < value <= 2**63 - 1
+        if positive(limit.get("nanoCpus")):
+            value = limit["nanoCpus"]
+            args = ["--cpus", f"{value // 1000000000}.{value % 1000000000:09d}"]
+        elif positive(limit.get("cpuQuota")) and positive(limit.get("cpuPeriod")):
+            args = ["--cpu-quota", str(limit["cpuQuota"]), "--cpu-period", str(limit["cpuPeriod"])]
+        else:
+            raise OmnigentOAuthHostError("finite live CPU authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        cpuset = limit.get("cpusetCpus", "")
+        if not isinstance(cpuset, str) or (cpuset and not re.fullmatch(r"[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*", cpuset)):
+            raise OmnigentOAuthHostError("observed CPU set is invalid", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        if cpuset:
+            for item in cpuset.split(","):
+                first, _, last = item.partition("-")
+                if int(first) > int(last or first) or int(last or first) > 2**31 - 1:
+                    raise OmnigentOAuthHostError("observed CPU set is invalid", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+            args.extend(["--cpuset-cpus", cpuset])
+        return args
+
+    async def _observe_finite_host_cpu(self, container_name):
+        code, output, _ = await self._run(
+            "docker", "inspect", "--format",
+            '{"sourceContainerId":"{{.Id}}","nanoCpus":{{.HostConfig.NanoCpus}},'
+            '"cpuQuota":{{.HostConfig.CpuQuota}},"cpuPeriod":{{.HostConfig.CpuPeriod}},'
+            '"cpusetCpus":"{{.HostConfig.CpusetCpus}}"}', container_name, check=False,
+        )
+        if code != 0:
+            raise OmnigentOAuthHostError("finite live CPU authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        value = json.loads(output)
+        nano, quota, period = (value.get(key) for key in ("nanoCpus", "cpuQuota", "cpuPeriod"))
+        finite_nano = type(nano) is int and nano > 0
+        finite_quota = type(quota) is int and type(period) is int and quota > 0 and period > 0
+        # Docker forbids contradictory quota/--cpus flags. Preserve the actual
+        # stricter configured limit using exact integer comparison.
+        if finite_nano and (not finite_quota or nano * period <= quota * 1000000000):
+            limit = {"nanoCpus": nano}
+        elif finite_quota:
+            limit = {"cpuQuota": quota, "cpuPeriod": period}
+        else:
+            raise OmnigentOAuthHostError("finite live CPU authority unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        if not value.get("sourceContainerId"):
+            raise OmnigentOAuthHostError("live CPU container identity unavailable", code=HOST_CREDENTIAL_RECOVERY_ERROR)
+        limit.update(sourceContainerId=value["sourceContainerId"], cpusetCpus=value.get("cpusetCpus", ""))
+        self._retained_cpu_args(limit)
+        return limit
+
+    async def _legacy_recovery_identity(self, *, container_name, host_lease):
+        """Inspect only the live identity labels needed by this retained lease."""
+        code, output, _ = await self._run(
+            "docker", "inspect", "--format",
+            '{"containerId":"{{.Id}}","name":"{{.Name}}",'
+            '"kind":"{{index .Config.Labels "moonmind.kind"}}",'
+            '"hostLeaseRef":"{{index .Config.Labels "moonmind.host_lease_id"}}",'
+            '"credentialGeneration":"{{index .Config.Labels "moonmind.credential_generation"}}",'
+            '"providerProfileId":"{{index .Config.Labels "moonmind.provider_profile_id"}}"}',
+            container_name, check=False,
+        )
+        observed = json.loads(output) if code == 0 else {}
+        expected = {
+            "name": "/" + container_name, "kind": "omnigent-oauth-host",
+            "hostLeaseRef": host_lease.lease_id,
+            "credentialGeneration": str(host_lease.credential_generation),
+            "providerProfileId": host_lease.provider_profile_id,
+        }
+        if (any(observed.get(key) != value for key, value in expected.items())
+                or not re.fullmatch(r"[0-9a-f]{64}", str(observed.get("containerId", "")))
+                or (host_lease.container_id and host_lease.container_id != observed["containerId"])):
+            raise OmnigentOAuthHostError(
+                "live host recovery authority differs from its retained lease",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        return {**expected, "containerId": observed["containerId"]}
+
+    async def _preserve_legacy_github_host(
+        self,
+        *,
+        request,
+        store,
+        artifact_gateway,
+        host_lease,
+        container_name,
+        workspace_source,
+        effective_launch,
+        github_projection_reservation=None,
+    ) -> dict[str, Any]:
+        """Save current work and stop only its obsolete credential consumer.
+
+        This is preparation for the normal launcher, not a new session/recovery
+        owner. Any uncertainty retains the bridge, lease, container and volumes
+        for the bounded, heartbeated Activity retry.
+        """
+        from moonmind.omnigent.execute import (
+            _await_marked_turn_terminal,
+            _first_message_marker,
+            _marked_turn_item_state,
+            _persisted_pre_dispatch_item_ids,
+            _snapshot_projects_active_response,
+            _snapshot_projects_inactive_turn,
+        )
+        from moonmind.omnigent.workspace_publication import (
+            OmnigentWorkspacePublicationService,
+        )
+
+        def blocked(reason):
+            return OmnigentOAuthHostError(
+                "legacy host credential recovery retained current work: " + reason,
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+
+        if request is None or store is None or artifact_gateway is None:
+            raise blocked("durable save authority is unavailable")
+        try:
+            row = await store.get_existing(request.idempotency_key)
+            if row is None or row.host_lease_ref != host_lease.lease_id:
+                raise blocked("bridge/host ownership changed")
+            previous = (getattr(row, "metadata_", None) or {}).get(
+                HOST_CREDENTIAL_RECOVERY_KEY
+            ) or {}
+            # Continue from the durable milestone. A stopped retry may capture
+            # newer current bytes without regressing saved/recreated progress.
+            progress = (
+                previous.get("phase")
+                if previous.get("phase") in {"saved", "recreated"}
+                else "waiting"
+            )
+
+            async def record_progress(*, phase=progress, **updates):
+                return await store.record_host_credential_recovery(
+                    request=request,
+                    host_lease_ref=host_lease.lease_id,
+                    phase=phase,
+                    expected_projection_reservation=github_projection_reservation,
+                    **updates,
+                )
+
+            await record_progress()
+            publisher = OmnigentWorkspacePublicationService(
+                self._workspace_root, artifact_gateway=artifact_gateway,
+            )
+            if publisher.resolve_request_workspace(request) != workspace_source:
+                raise blocked("current workspace authority changed")
+            running = await self.container_exists(container_name)
+            if running:
+                await self.assert_container_owned(
+                    container_name=container_name, lease_id=host_lease.lease_id,
+                )
+                live_identity = await self._legacy_recovery_identity(
+                    container_name=container_name, host_lease=host_lease,
+                )
+                receipt = await record_progress(
+                    source_container_id=live_identity["containerId"]
+                )
+                if int(effective_launch["limits"]["cpuMillis"]) < 1:
+                    cpu_limit = await self._observe_finite_host_cpu(container_name)
+                    if cpu_limit["sourceContainerId"] != live_identity["containerId"]:
+                        raise blocked("live host recovery authority changed before CPU observation")
+                    receipt = await record_progress(retained_cpu_limit=cpu_limit)
+                code, output, _ = await self._run(
+                    "docker", "inspect", "--format", "{{json .Mounts}}",
+                    container_name, check=False,
+                )
+                mounts = json.loads(output) if code == 0 else []
+                for suffix, destination in (
+                    ("state", "/home/app/.omnigent"),
+                    ("artifacts", "/artifacts"), ("cache", "/home/app/.cache"),
+                ):
+                    selected = [m for m in mounts if m.get("Destination") == destination]
+                    if len(selected) != 1 or not (
+                        selected[0].get("Type") == "volume"
+                        and selected[0].get("Name") == f"{container_name}-{suffix}"
+                        and selected[0].get("RW") is True
+                    ):
+                        raise blocked("retained host volume authority is unavailable")
+                workspace_mounts = [m for m in mounts if m.get("Destination") == "/workspaces/run"]
+                expected_workspace = resolve_daemon_attachment_source(
+                    workspace_volume=self._workspace_volume, path=workspace_source,
+                )
+                if len(workspace_mounts) != 1 or workspace_mounts[0].get("RW") is not True:
+                    raise blocked("live workspace attachment is unavailable")
+                actual_workspace = workspace_mounts[0]
+                if expected_workspace["kind"] == "bind":
+                    if (actual_workspace.get("Type") != "bind"
+                            or actual_workspace.get("Source") != expected_workspace["sourceRef"]):
+                        raise blocked("live workspace differs from current save authority")
+                else:
+                    code, configured, _ = await self._run(
+                        "docker", "inspect", "--format", "{{json .HostConfig.Mounts}}",
+                        container_name, check=False,
+                    )
+                    configured_mounts = json.loads(configured) if code == 0 else []
+                    matching = [m for m in configured_mounts if m.get("Target") == "/workspaces/run"]
+                    if len(matching) != 1 or not (
+                        matching[0].get("Type") == "volume"
+                        and matching[0].get("Source") == expected_workspace["sourceRef"]
+                        and (matching[0].get("VolumeOptions") or {}).get("Subpath") == expected_workspace["subPath"]
+                    ):
+                        raise blocked("live workspace volume subpath authority differs")
+                if any(str(m.get("Destination", "")).startswith("/workspaces/run/") for m in mounts):
+                    raise blocked("live workspace has an unpreserved nested attachment")
+                session_id = receipt.get("omnigentSessionId")
+                marker = str(getattr(row, "first_message_marker", None) or _first_message_marker(request=request))
+                baseline_item_ids = _persisted_pre_dispatch_item_ids(row)
+
+                from moonmind.omnigent.bridge_store import (
+                    FIRST_MESSAGE_NOT_PREPARED,
+                    FIRST_MESSAGE_PREPARED,
+                )
+                never_dispatched = (
+                    getattr(row, "first_message_state", None)
+                    in {FIRST_MESSAGE_NOT_PREPARED, FIRST_MESSAGE_PREPARED}
+                    and not any(getattr(row, field, None) for field in (
+                        "first_message_posted_at", "first_message_post_attempted_at",
+                        "first_message_pending_id", "first_message_item_id",
+                    ))
+                )
+
+                latest_snapshot = {}
+
+                async def current_snapshot():
+                    nonlocal latest_snapshot
+                    snapshot = await self._client.get_session(session_id)
+                    if (str(snapshot.get("host_id") or snapshot.get("hostId") or "") != str(row.omnigent_host_id)
+                            or str(snapshot.get("id") or snapshot.get("session_id") or snapshot.get("sessionId") or "") != session_id):
+                        raise blocked("current provider session/host identity differs from its bridge")
+                    latest_snapshot = snapshot
+                    return snapshot
+
+                def inactive_signature(snapshot):
+                    from moonmind.omnigent.bridge_artifacts import OmnigentContractError
+                    try:
+                        inactive = _snapshot_projects_inactive_turn(snapshot)
+                    except OmnigentContractError:
+                        return None
+                    if _snapshot_projects_active_response(snapshot) or not inactive:
+                        return None
+                    if never_dispatched and snapshot.get("items") == [] and not snapshot.get("pending_inputs"):
+                        return ("not_dispatched",)
+                    state = _marked_turn_item_state(snapshot, marker=marker, baseline_item_ids=baseline_item_ids)
+                    if state["progress"] and state["boundarySource"] and not state["unfinishedToolCall"]:
+                        return state["signature"]
+                    return None
+
+                async def inactive_snapshot():
+                    if not session_id:
+                        return ("not_dispatched",) if never_dispatched else None
+                    return inactive_signature(await current_snapshot())
+
+                signature = await inactive_snapshot()
+                if signature != ("not_dispatched",):
+                    # The terminal observer's heartbeat asserts dispatch. Do
+                    # not invoke it for an ambiguous, never-observed post.
+                    observed_turn = _marked_turn_item_state(
+                        latest_snapshot, marker=marker, baseline_item_ids=baseline_item_ids,
+                    )
+                    if (not getattr(row, "first_message_posted_at", None)
+                            and not observed_turn["boundarySource"]):
+                        raise blocked("first-message dispatch remains ambiguous")
+                    timeout = int(effective_launch["limits"]["timeoutSeconds"])
+                    if not session_id or timeout <= 0:
+                        raise blocked("current turn has not reached a trustworthy inactive boundary")
+                    # An assistant preamble is merely a candidate. Reuse the
+                    # existing current-turn reconciliation owner, including its
+                    # transcript quiet window, delayed-tool and slow-read rules.
+                    # Never substitute two immediate equal snapshots for it.
+                    class CurrentSession:
+                        async def get_session(self, observed_session_id):
+                            if observed_session_id != session_id:
+                                raise blocked("current session observation authority changed")
+                            return await current_snapshot()
+
+                    _, terminal_snapshot = await _await_marked_turn_terminal(
+                        client=CurrentSession(), session_id=session_id, marker=marker,
+                        baseline_item_ids=baseline_item_ids, event_count=0,
+                        terminal_status="completed", timeout_seconds=timeout,
+                    )
+                    signature = inactive_signature(terminal_snapshot)
+                    if signature is None:
+                        raise blocked("current turn has not reached a trustworthy inactive boundary")
+                # Save before stopping, then re-observe the exact current turn.
+                # A new/active turn racing capture invalidates stop permission.
+                saved = await publisher.save_request_workspace(request)
+                await record_progress(
+                    checkpoint=saved if progress == "waiting" else None,
+                )
+                if await inactive_snapshot() != signature:
+                    raise blocked("current turn changed while saving")
+                await self.assert_container_owned(
+                    container_name=container_name, lease_id=host_lease.lease_id,
+                )
+                if await self._legacy_recovery_identity(container_name=container_name, host_lease=host_lease) != live_identity:
+                    raise blocked("live host recovery authority changed while saving")
+                if receipt.get("retainedCpuLimit") and await self._observe_finite_host_cpu(container_name) != receipt["retainedCpuLimit"]:
+                    raise blocked("live CPU authority changed during preservation")
+                # Recheck delivery ownership after quiescence/capture waits,
+                # and stop the observed immutable container, never a replacement
+                # that has since acquired the same deterministic name.
+                await record_progress()
+                await self._run(
+                    "docker", "stop", "--time", "20", live_identity["containerId"]
+                )
+                if await self.container_exists(container_name):
+                    raise blocked("owned host stop is not confirmed")
+            # The stopped host cannot advance the workspace. This is the save
+            # used by restart recovery; a pre-stop checkpoint never authorizes
+            # restoration or deletion of a newer live candidate.
+            saved = await publisher.save_request_workspace(request)
+            return await record_progress(
+                phase="recreated" if progress == "recreated" else "saved",
+                checkpoint=saved,
+                replacement_egress_pending=True,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, OmnigentOAuthHostError) and exc.code == HOST_CREDENTIAL_RECOVERY_ERROR:
+                raise
+            raise blocked(type(exc).__name__) from exc
+
+    async def _existing_github_projection_is_compatible(
+        self, container_name: str
+    ) -> bool:
+        """Confirm the existing consumer wiring without reading any token."""
+
+        try:
+            code, output, _error = await self._run(
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Mounts}}",
+                container_name,
+                check=False,
+            )
+            if code != 0:
+                return False
+            mounts = json.loads(output)
+            if not isinstance(mounts, list):
+                return False
+            cache_mounted = False
+            for mount in mounts:
+                if not isinstance(mount, Mapping):
+                    return False
+                target = str(mount.get("Destination") or "").rstrip("/")
+                if target == "/home/app/.cache":
+                    cache_mounted = (
+                        mount.get("Type") == "volume"
+                        and mount.get("Name") == f"{container_name}-cache"
+                        and mount.get("RW") is True
+                    )
+                    if not cache_mounted:
+                        return False
+                elif target.startswith("/home/app/.cache/"):
+                    # A nested mount could hide the volume-backed projection
+                    # from the running host while the writer updates the volume.
+                    return False
+            if not cache_mounted:
+                return False
+            code, _output, _error = await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "/bin/sh",
+                "-ceu",
+                f'test "${{XDG_CONFIG_HOME:-}}" = "{_GITHUB_CONFIG_HOME}"; '
+                f'test "${{GH_CONFIG_DIR:-{_GITHUB_CONFIG_HOME}/gh}}" '
+                f'= "{_GITHUB_CONFIG_HOME}/gh"; '
+                'test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}'
+                '${GH_ENTERPRISE_TOKEN:-}${GITHUB_ENTERPRISE_TOKEN:-}"; '
+                'case ",${OMNIGENT_RUNNER_ENV_PASSTHROUGH:-}," in '
+                "*,XDG_CONFIG_HOME,*) ;; *) exit 1 ;; esac; "
+                f'test ! -L "{_GITHUB_CONFIG_HOME}"; '
+                f'test ! -L "{_GITHUB_CONFIG_HOME}/gh"; '
+                f'test -f "{_GITHUB_CONFIG_HOME}/gh/hosts.yml"',
+                check=False,
+            )
+            return code == 0
+        except Exception:  # noqa: BLE001 - unknown probes cannot authorize mutation
+            # An unavailable probe is not permission to mutate or tear down an
+            # existing host. Preserve the preexisting recovery path unchanged.
+            return False
+
+    async def _retire_github_projection(
+        self,
+        *,
+        host_lease: OmnigentHostLease,
+        container_name: str,
+        effective_launch: Mapping[str, Any],
+        cleanup_authority_store: Any | None,
+    ) -> None:
+        """Fence pending writers before the cleanup owner deletes a cache."""
+        reservation = None
+        if cleanup_authority_store is not None:
+            reservation = (
+                await cleanup_authority_store.get_github_projection_cleanup_authority(
+                    host_lease_ref=host_lease.lease_id,
+                    expected_last_heartbeat_at=host_lease.last_heartbeat_at,
+                    expected_provider_lease_id=host_lease.provider_lease_id,
+                    expected_credential_generation=host_lease.credential_generation,
+                )
+            )
+        if not await self._volume_present(f"{container_name}-cache"):
+            return
+        # Historical cleanup has no stamp to claim. Its distinct action refuses
+        # a volume if any newer reservation or installed stamp is present.
+        if reservation is None:
+            from uuid import NAMESPACE_URL, uuid5
+
+            reservation = {
+                "ownerRef": f"host-lease:{host_lease.lease_id}",
+                "revision": 1,
+                "reservationId": str(
+                    uuid5(NAMESPACE_URL, f"legacy-cleanup:{host_lease.lease_id}")
+                ),
+            }
+            action = "retire_legacy"
+        else:
+            if reservation.get("ownerRef") != f"host-lease:{host_lease.lease_id}":
+                raise OmnigentOAuthHostError(
+                    "GitHub cleanup reservation owner changed",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                )
+            action = "retire"
+        try:
+            await self._run_github_projection(
+                action=action,
+                reservation=reservation,
+                cache_volume=f"{container_name}-cache",
+                host_image_ref=str(effective_launch.get("hostImageRef") or self._image),
+                runtime_uid=int(effective_launch.get("runtimeUid", 1000)),
+                runtime_gid=int(effective_launch.get("runtimeGid", 1000)),
+            )
+        except Exception as exc:
+            raise OmnigentOAuthHostError(
+                "GitHub projection cleanup authority is unavailable; retain host resources",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            ) from exc
+
+    async def reserve_github_projection(
+        self,
+        *,
+        host_lease: OmnigentHostLease,
+        effective_launch: Mapping[str, Any],
+        reservation: Mapping[str, Any],
+    ) -> None:
+        """Install the durable destination fence before acquiring its value."""
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+        if await self.container_exists(container_name):
+            await self.assert_container_owned(
+                container_name=container_name, lease_id=host_lease.lease_id
+            )
+        if reservation.get("ownerRef") != f"host-lease:{host_lease.lease_id}":
+            raise OmnigentOAuthHostError(
+                "GitHub projection reservation owner changed",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        cache_volume = f"{container_name}-cache"
+        uid, gid = int(effective_launch["runtimeUid"]), int(
+            effective_launch["runtimeGid"]
+        )
+        image = str(effective_launch["hostImageRef"])
+        # Fresh Docker volumes start root-owned. Initialize only the cache root;
+        # the runtime identity creates its private config directories below it.
+        await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "0:0",
+            "--network",
+            "none",
+            *structured_container_security_args(),
+            "--cap-add",
+            "CHOWN",
+            "--cap-add",
+            "FOWNER",
+            "--read-only",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
+            "--entrypoint",
+            "/bin/sh",
+            image,
+            "-ceu",
+            'chown "$1:$2" /home/app/.cache; chmod 0700 /home/app/.cache',
+            "--",
+            str(uid),
+            str(gid),
+        )
+        await self._run_github_projection(
+            action="reserve",
+            reservation=reservation,
+            cache_volume=cache_volume,
+            host_image_ref=image,
+            runtime_uid=uid,
+            runtime_gid=gid,
+        )
+
+    async def _run_github_projection(
+        self,
+        *,
+        action: str,
+        reservation: Mapping[str, Any],
+        cache_volume: str,
+        host_image_ref: str,
+        runtime_uid: int,
+        runtime_gid: int,
+        input_bytes: bytes | None = None,
+    ) -> tuple[int, str, str]:
+        cleanup = action in {"retire", "retire_legacy"}
+        # Cleanup must also inspect an abandoned, root-owned empty cache. The
+        # helper can access only this lease's mounted cache and never a network.
+        cleanup_capabilities = (
+            ("--cap-add", "DAC_OVERRIDE", "--cap-add", "CHOWN", "--cap-add", "FOWNER")
+            if cleanup
+            else ()
+        )
+        return await self._run(
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "--user",
+            "0:0" if cleanup else f"{runtime_uid}:{runtime_gid}",
+            "--network",
+            "none",
+            *structured_container_security_args(),
+            *cleanup_capabilities,
+            "--read-only",
+            "--mount",
+            f"type=volume,src={cache_volume},dst=/home/app/.cache",
+            "--entrypoint",
+            "/bin/sh",
+            host_image_ref,
+            "-ceu",
+            github_projection_script(f"{_GITHUB_CONFIG_HOME}/gh", action=action),
+            "--",
+            str(runtime_uid),
+            str(runtime_gid),
+            "github.com",
+            json.dumps(dict(reservation), sort_keys=True, separators=(",", ":")),
+            **({"input_bytes": input_bytes} if input_bytes is not None else {}),
+        )
+
+    async def _project_github_credential(
+        self,
+        github_token: str,
+        *,
+        cache_volume: str,
+        host_image_ref: str,
+        runtime_uid: int,
+        runtime_gid: int,
+        github_projection_reservation: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Publish exactly the reservation that preceded value acquisition.
+
+        Token bytes and their stamp share one atomic hosts.yml replacement.
+        Lost acknowledgments reconcile only the installed non-secret stamp;
+        they never allocate newer authority to an already acquired value.
+        """
+        if not github_projection_reservation:
+            raise OmnigentOAuthHostError(
+                "GitHub projection reservation is required",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        if not _GITHUB_TOKEN_PATTERN.fullmatch(github_token):
+            raise OmnigentOAuthHostError(
+                "GitHub credential contains unsupported characters",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        arguments = {
+            "reservation": github_projection_reservation,
+            "cache_volume": cache_volume,
+            "host_image_ref": host_image_ref,
+            "runtime_uid": runtime_uid,
+            "runtime_gid": runtime_gid,
+        }
+        try:
+            await self._run_github_projection(
+                action="publish", input_bytes=github_token.encode(), **arguments
+            )
+        except Exception as exc:
+            try:
+                code, output, _ = await self._run_github_projection(
+                    action="inspect", **arguments
+                )
+                installed = json.loads(output) if code == 0 else None
+            except Exception:  # noqa: BLE001 - an unavailable stamp is not confirmation
+                installed = None
+            if installed != dict(github_projection_reservation):
+                raise OmnigentOAuthHostError(
+                    "GitHub publication is unconfirmed; retain owned work for retry",
+                    code=HOST_CREDENTIAL_RECOVERY_ERROR,
+                ) from exc
 
     def _container_job_environment(
         self,
@@ -2975,6 +3959,7 @@ class OmnigentOAuthHostRuntime:
         workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
         github_token: str | None = None,
+        github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         artifact_gateway: Any | None = None,
         omnigent_isolation_verified: bool = False,
     ) -> Path:
@@ -3160,6 +4145,12 @@ class OmnigentOAuthHostRuntime:
             # reuse of a partial directory.
             try:
                 if not already_materialized:
+                    if (
+                        github_token_resolver is not None
+                        and self._normalize_repository_source(source)[1]
+                        == "github_https"
+                    ):
+                        github_token = await github_token_resolver()
                     materialization = await self._materialize_repository(
                         workspace,
                         repository_source=source,
@@ -3298,11 +4289,13 @@ class OmnigentOAuthHostRuntime:
         commit = str(checkout_commit or "").strip()
         workspace.parent.mkdir(parents=True, exist_ok=True)
 
-        git_env = dict(os.environ)
-        if source_kind == "github_https" and github_token:
-            git_env = build_github_token_git_environment(
-                github_token, base_env=os.environ
-            )
+        # Only the admitted credential reaches Git: ambient tokens, helpers,
+        # headers, askpass and config overrides are excluded for selected and
+        # anonymous clones alike (MoonLadderStudios/MoonMind#4011).
+        git_env = build_isolated_git_environment(
+            github_token if source_kind == "github_https" else None,
+            base_env=os.environ,
+        )
 
         clone_args = ["git", "clone"]
         # A remote clone can fetch just the authored branch; a local source keeps
@@ -4505,10 +5498,12 @@ class OmnigentOAuthHostRuntime:
         *args: str,
         env: Mapping[str, str] | None = None,
         check: bool = True,
+        input_bytes: bytes | None = None,
     ) -> tuple[int, str, str]:
         return_code, stdout, stderr = await run_runtime_command(
             args,
             env=env,
+            input_bytes=input_bytes,
             timeout_seconds=600,
             output_limit_bytes=4096,
         )

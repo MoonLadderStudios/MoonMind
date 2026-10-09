@@ -197,6 +197,10 @@ class DeploymentSkillLoader(SkillLoader):
                         required_skills=list(required_skills),
                         required_capabilities=list(required_capabilities),
                         implementation=implementation,
+                        publish=metadata.get("publish"),
+                        side_effect=metadata.get(
+                            "sideEffect", metadata.get("side_effect")
+                        ),
                         provenance=AgentSkillProvenance(
                             source_kind=AgentSkillSourceKind.DEPLOYMENT
                         ),
@@ -239,6 +243,10 @@ def _scan_for_skills(
                         source_path=str(item),
                     ),
                     terminal_contract=terminal_contract,
+                    publish=_publish_metadata_from_frontmatter(
+                        frontmatter, owner=item.name
+                    ) or None,
+                    side_effect=side_effect or None,
                 )
             )
     return results

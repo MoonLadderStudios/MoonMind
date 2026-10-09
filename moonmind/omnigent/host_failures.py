@@ -16,6 +16,9 @@ from typing import Any
 
 from moonmind.utils.logging import redact_sensitive_text
 
+HOST_CREDENTIAL_RECOVERY_KEY = "githubCredentialRecovery"
+HOST_CREDENTIAL_RECOVERY_ERROR = "OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED"
+
 
 class OmnigentOAuthHostError(RuntimeError):
     code = "OMNIGENT_OAUTH_HOST_ERROR"

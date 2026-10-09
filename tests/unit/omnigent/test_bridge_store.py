@@ -1082,6 +1082,27 @@ async def test_initial_retrieval_appends_bounded_lifecycle_evidence(store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("exposure", ["not_projected", "agent_readable_unconfined"])
+async def test_github_credential_exposure_persists_in_lifecycle(store, exposure):
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.record_lifecycle_event(
+        "idem-1",
+        event_type="credential_preflight",
+        status="ready",
+        metadata={"githubCredentialExposure": exposure},
+    )
+    events = await store.list_events(row.bridge_session_id)
+    event = next(item for item in events if item.event_type == "credential_preflight")
+    assert event.metadata_["metadata"]["githubCredentialExposure"] == exposure
+
+
+@pytest.mark.asyncio
 async def test_workspace_resolution_metadata_persists_through_allowlist(store):
     row = await store.get_or_create(
         request=_request(),

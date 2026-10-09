@@ -309,3 +309,42 @@ def test_write_operation_requires_mutation_without_publication() -> None:
     )
 
     assert authored_repository_mutation_required(request) is True
+
+
+def test_fan_out_side_effect_is_not_repository_mutation() -> None:
+    request = _request(
+        skill={"name": "batch-pr-resolver", "sideEffect": {"kind": "enqueue_children"}},
+        parameters={
+            "repository": "https://github.com/acme/widgets.git",
+            "publishMode": "none",
+            "skill": {"sideEffect": {"kind": "enqueue_children"}},
+        }
+    )
+
+    assert authored_repository_mutation_required(request) is False
+
+
+def test_merge_side_effect_remains_repository_mutation() -> None:
+    request = _request(
+        skill={"name": "pr-resolver", "sideEffect": {"kind": "merge_pull_request"}},
+        parameters={
+            "repository": "https://github.com/acme/widgets.git",
+            "publishMode": "none",
+            "skill": {"sideEffect": {"kind": "merge_pull_request"}},
+        }
+    )
+
+    assert authored_repository_mutation_required(request) is True
+
+
+def test_conflicting_side_effect_projections_remain_rejected() -> None:
+    request = _request(
+        parameters={
+            "repository": "https://github.com/acme/widgets.git",
+            "publishMode": "none",
+            "skill": {"sideEffect": {"kind": "enqueue_children"}},
+        }
+    )
+
+    with pytest.raises(WorkspaceIntentCompilationError, match="conflicts across"):
+        authored_repository_mutation_required(request)

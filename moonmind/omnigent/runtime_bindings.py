@@ -391,6 +391,86 @@ def _validate_initial_binding(existing: StableRuntimeBinding, proposed: StableRu
             code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT)
 
 
+async def reserve_github_projection(
+    store: StableRuntimeBindingStore, binding: StableRuntimeBinding
+) -> tuple[StableRuntimeBinding, dict[str, Any]]:
+    """Persist an ordered publication claim using the existing binding CAS.
+
+    Binding revisions survive workers and credential caches. This receipt is
+    reserved before acquisition and follows that invocation's value unchanged.
+    A losing CAS has no credential or destination side effects to reconcile.
+    """
+    from uuid import uuid4
+
+    if binding.state in {
+        RuntimeBindingState.planned,
+        RuntimeBindingState.draining,
+        RuntimeBindingState.failed,
+        RuntimeBindingState.cleanup_pending,
+        RuntimeBindingState.cleaned,
+    }:
+        raise HarnessPlatformError(
+            "GitHub projection owner is being cleaned",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+        )
+    reservation = {
+        "ownerRef": f"{binding.bindingId}:{binding.fencingGeneration}",
+        "revision": binding.revision + 1,
+        "reservationId": str(uuid4()),
+    }
+    updated = await store.update(
+        binding.bindingId,
+        expected_revision=binding.revision,
+        expected_fencing_generation=binding.fencingGeneration,
+        updates={
+            "cleanupAuthorityRefs": [
+                *binding.cleanupAuthorityRefs,
+                {
+                    "kind": "github_projection_reservation",
+                    "projectionReservation": reservation,
+                },
+            ]
+        },
+    )
+    return updated, reservation
+
+
+async def validate_github_projection(
+    store: StableRuntimeBindingStore, binding_id: str, reservation: dict[str, Any]
+) -> None:
+    """Recheck the existing durable owner after filesystem and provider waits."""
+    current = await store.get(binding_id)
+    if current is None or current.state in {
+        RuntimeBindingState.planned,
+        RuntimeBindingState.draining,
+        RuntimeBindingState.failed,
+        RuntimeBindingState.cleanup_pending,
+        RuntimeBindingState.cleaned,
+    }:
+        raise HarnessPlatformError(
+            "GitHub projection owner is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+        )
+    latest = next(
+        (
+            item.get("projectionReservation")
+            for item in reversed(current.cleanupAuthorityRefs)
+            if isinstance(item, dict)
+            and item.get("kind") == "github_projection_reservation"
+        ),
+        None,
+    )
+    if (
+        latest != reservation
+        or reservation.get("ownerRef")
+        != f"{current.bindingId}:{current.fencingGeneration}"
+    ):
+        raise HarnessPlatformError(
+            "GitHub projection reservation fence changed",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+        )
+
+
 class InMemoryStableRuntimeBindingStore:
     def __init__(self) -> None:
         self._bindings: dict[str, StableRuntimeBinding] = {}
