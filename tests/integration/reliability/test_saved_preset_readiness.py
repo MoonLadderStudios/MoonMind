@@ -110,7 +110,7 @@ async def boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(run_module.workflow, "execute_activity", execute)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
     monkeypatch.setattr(
-        run_module.workflow, "info", lambda: SimpleNamespace(continued_run_id=None)
+        run_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id=None)
     )
     workflow = run_module.MoonMindRunWorkflow()
     workflow._owner_id = OWNER
@@ -216,7 +216,7 @@ async def test_existing_history_and_continuation_keep_admitted_progress(
         monkeypatch.setattr(
             run_module.workflow,
             "info",
-            lambda: SimpleNamespace(continued_run_id="old-run"),
+            lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id="old-run"),
         )
     else:
         saved.pop("system")
@@ -487,7 +487,7 @@ async def test_continued_run_keeps_pinned_search_behavior(boundary, monkeypatch)
     monkeypatch.setattr(
         run_module.workflow,
         "info",
-        lambda: SimpleNamespace(continued_run_id="old-run"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", continued_run_id="old-run"),
     )
     assert (
         await workflow._run_planning_stage(

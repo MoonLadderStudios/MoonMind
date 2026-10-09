@@ -234,6 +234,7 @@ class _Harness:
             merge_automation_module.workflow,
             "info",
             lambda: SimpleNamespace(
+                task_queue="mm.workflow.user.v2",
                 workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
                 run_id=OWNER_RUN_ID,
                 parent=SimpleNamespace(workflow_id="wf-parent", run_id="run-parent"),
@@ -1863,6 +1864,7 @@ async def test_review_only_requires_actual_owning_temporal_parent_before_activit
         merge_automation_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
             run_id=OWNER_RUN_ID,
             parent=parent,

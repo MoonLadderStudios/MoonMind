@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         ARTIFACTS_TASK_QUEUE,
         INTEGRATIONS_TASK_QUEUE,
         WORKFLOW_TASK_QUEUE,
+        get_workflow_child_task_queue,
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.temporal.workflows.merge_gate import (
@@ -193,7 +194,9 @@ class MoonMindMergeAutomationWorkflow:
     @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
-            return settings.temporal.user_workflow_v2_task_queue
+            return get_workflow_child_task_queue(
+                workflow.info().task_queue, settings.temporal
+            )
         return WORKFLOW_TASK_QUEUE
 
     @staticmethod

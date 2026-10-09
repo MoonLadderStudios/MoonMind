@@ -16,6 +16,7 @@ def test_instructions_only_agent_receives_resolved_inputs_as_data(monkeypatch, p
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id="document-journey",
             run_id="run-973",
@@ -68,6 +69,7 @@ def test_agent_input_handoff_does_not_duplicate_existing_inputs(
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id="document-journey",
             run_id="run-973",
@@ -112,6 +114,7 @@ def test_agent_input_handoff_preserves_opaque_instruction_refs(monkeypatch, sour
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id="document-journey",
             run_id="run-973",

@@ -16,9 +16,8 @@ Providing owners:
   (`build_default_activity_catalog`) with worker bindings in
   `moonmind/workflows/temporal/activity_runtime.py`
   (`validate_activity_catalog_runtime_bindings`)
-- Worker construction: `moonmind/workflows/temporal/worker_entrypoint.py`
-  and `moonmind/workflows/temporal/worker_runtime.py` via
-  `moonmind/workflows/temporal/workers.py`
+- Worker construction: `moonmind/workflows/temporal/worker_runtime.py`
+  via `moonmind/workflows/temporal/workers.py`
 - Search Attributes: `moonmind/workflows/temporal/service.py`,
   `moonmind/workflows/temporal/scheduled_start.py`,
   `moonmind/workflows/temporal/workflows/run.py`, and
@@ -67,11 +66,13 @@ New workflow starts use `mm.workflow.user.v2`. The workflow fleet polls:
 
 - `mm.workflow.user.v2`
 - `mm.workflow`
+- `mm.workflow.merge_automation`
 
 A pre-patch replay queue is polled only when it differs from the
-start queue (`get_workflow_poll_task_queues`); otherwise the fleet
-polls the start queue alone. This conditional queue is routing
-plumbing for in-flight histories, not product semantics.
+start queue (`get_workflow_poll_task_queues`). This conditional queue
+is routing plumbing for in-flight histories, not product semantics.
+The merge-automation lane is polled by the same worker process with
+its own workflow-task budget.
 
 ## Workflow-queue handler routing
 

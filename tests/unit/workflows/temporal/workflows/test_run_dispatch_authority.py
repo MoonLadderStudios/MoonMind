@@ -110,6 +110,7 @@ async def test_run_rejects_untrusted_registry_authority(monkeypatch, attack, pat
         run_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id="workflow-1",
             run_id="run-1",
