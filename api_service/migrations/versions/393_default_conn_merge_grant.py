@@ -11,7 +11,8 @@ merging resolver launch failed with
 
 This revision adds ``merge_request`` only where the stale 391 mapping is
 still in force: the row carries 391's ``connection.create`` audit identity,
-is active, and still allows exactly the original four operations. An
+is active, has never been updated (policy revision 1), and still allows
+exactly the original four operations. An
 assignment of that connection gains it only when it granted every one of
 those four operations; an assignment the operator narrowed keeps its scope.
 Connection and assignment revisions are unchanged because no admitted
@@ -89,6 +90,9 @@ def grant_default_connection_merge(bind) -> bool:
         stored is None
         or stored.tombstone
         or stored.lifecycle != "active"
+        # An operator update advances the policy revision; keeping the four
+        # operations then is an explicit choice to leave merge disabled.
+        or stored.policy_revision != 1
         or tuple(_operations(stored.allowed_operations)) != _PRE_MERGE_OPERATIONS
     ):
         return False
