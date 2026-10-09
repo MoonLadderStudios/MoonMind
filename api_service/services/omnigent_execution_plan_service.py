@@ -979,6 +979,7 @@ async def _admit_repository_plan_inputs(
         DEFAULT_GIT_CONNECTION_REF,
         RepositoryIdentity,
         admit_scoped_route,
+        authored_repository_access,
         github_repository_name_from_value,
     )
 
@@ -1043,21 +1044,10 @@ async def _admit_repository_plan_inputs(
         # Local/content sources never acquire repository transport credentials.
         return result
     repository = github_repository_name_from_value(source.repository_ref)
-    authored = workspace.get("workspaceSource") or {}
-    source_target = authored.get("repositoryTarget") or target
-    connection_ref = str(
-        (
-            source_target.get("connectionRef")
-            if isinstance(source_target, Mapping)
-            else None
-        )
-        or authored.get("connectionRef")
-        or workspace.get("connectionRef")
-        or ""
-    ).strip()
+    connection_ref, anonymous = authored_repository_access(initial_parameters)
     mode = (
         AccessMode.ANONYMOUS
-        if authored.get("accessMode") == "anonymous"
+        if anonymous
         else (AccessMode.EXPLICIT if connection_ref else AccessMode.ROUTED)
     )
     publication = workflow.get("publish") or {}

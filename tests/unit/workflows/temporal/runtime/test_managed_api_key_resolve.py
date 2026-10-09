@@ -1442,3 +1442,157 @@ async def test_profile_bound_publication_accepts_exact_assignment_operations(
         ) == ("selected-only")
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Admitted repository access of a recorded run (MoonLadderStudios/MoonMind#4010)
+# ---------------------------------------------------------------------------
+
+_PLAN_DIGEST = "a" * 64
+_PLAN_BINDING = {
+    "planRef": f"omnigent-execution-plan:sha256:{_PLAN_DIGEST}",
+    "planDigest": f"sha256:{_PLAN_DIGEST}",
+    "planArtifactRef": "artifact:plan",
+    "taskInputSnapshotRef": "artifact:task-input",
+    "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+}
+
+
+def _repository_binding(connection_ref: str, role: str) -> dict[str, str]:
+    return {
+        "authorityKind": "repository_connection",
+        "connectionRef": connection_ref,
+        "repositoryAccessSnapshotRef": "repository-access-snapshot:sha256:" + "c" * 64,
+        "materializerRef": "repository-broker@1",
+        "repositoryRole": role,
+    }
+
+
+def _recorded_run(monkeypatch, parameters, *, plan_bindings=None, plan_error=None):
+    """Answer the canonical-record and frozen-plan reads at their seams."""
+
+    from api_service.db import base as db_base
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
+    loaded: list[str] = []
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, _model, workflow_id):
+            if workflow_id != "mm:run":
+                return None
+            return SimpleNamespace(parameters=parameters)
+
+    async def load(self, plan_ref):
+        loaded.append(plan_ref)
+        if plan_error is not None:
+            raise plan_error
+        if plan_bindings is None:
+            return None
+        return SimpleNamespace(
+            payload=SimpleNamespace(credentialBindings=dict(plan_bindings))
+        )
+
+    monkeypatch.setattr(db_base, "async_session_maker", lambda: _Session())
+    monkeypatch.setattr(SessionExecutionPlanStore, "load", load)
+    return loaded
+
+
+async def test_routed_run_acts_with_the_connection_its_plan_admitted(monkeypatch):
+    """Routed admission omits connectionRef; the frozen plan binding names it."""
+
+    loaded = _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={
+            "model": {"authorityKind": "model", "providerProfileRef": "p"},
+            "source": _repository_binding("repository-connection:routed-b", "source_read"),
+            "collaboration": _repository_binding(
+                "repository-connection:routed-b", "collaboration"
+            ),
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:routed-b", False)
+    assert loaded == [_PLAN_BINDING["planRef"]]
+
+
+async def test_routed_run_prefers_its_collaboration_connection(monkeypatch):
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={
+            "source": _repository_binding("repository-connection:reader", "source_read"),
+            "collaboration": _repository_binding(
+                "repository-connection:collaborator", "collaboration"
+            ),
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:collaborator", False)
+
+
+async def test_routed_plan_without_repository_bindings_uses_default(monkeypatch):
+    """A plan that bound no repository authority admitted only the default."""
+
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={},
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("", False)
+
+
+@pytest.mark.parametrize("plan_error", [None, RuntimeError("db unavailable")])
+async def test_unreadable_routed_plan_is_unavailable_authority(monkeypatch, plan_error):
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_error=plan_error,
+    )
+
+    with pytest.raises(RepositoryContractError, match="no other connection"):
+        await managed_api_key_resolve_module.load_admitted_repository_access("mm:run")
+
+
+async def test_authored_connection_is_used_without_reading_the_plan(monkeypatch):
+    loaded = _recorded_run(
+        monkeypatch,
+        {
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:explicit",
+                "repository": {"name": "acme/repo"},
+            },
+            "omnigentExecutionPlan": _PLAN_BINDING,
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:explicit", False)
+    assert loaded == []

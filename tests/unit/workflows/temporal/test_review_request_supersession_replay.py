@@ -205,6 +205,24 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         "resolve_github_token",
         AsyncMock(return_value=("synthetic-token", None)),
     )
+    # The gate reads with its owning run's admitted connection: the default,
+    # unrecorded here, so the deployment declaration supplies the fixture token.
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "acquire_admitted_repository_use",
+        AsyncMock(return_value=(None, None)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_admitted_repository_access",
+        AsyncMock(return_value=("", False)),
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-token")
 
     @activity.defn(name="merge_automation.evaluate_readiness")
     async def evaluate(payload):
