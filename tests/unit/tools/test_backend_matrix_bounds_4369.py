@@ -38,9 +38,20 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
 DOCS = REPO_ROOT / "docs" / "Development" / "BackendTestSelection.md"
 
 
-def _run_pytest(probe: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _run_pytest(
+    probe: Path, *args: str, timeout: int = 60
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args, str(probe)],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *args,
+            str(probe),
+        ],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -65,7 +76,10 @@ def test_stuck_body_interrupted_by_installed_timeout(tmp_path: Path) -> None:
     elapsed = time.monotonic() - start
     assert proc.returncode != 0
     assert elapsed < 25
-    assert "Timeout" in proc.stdout + proc.stderr or "timeout" in (proc.stdout + proc.stderr).lower()
+    assert (
+        "Timeout" in proc.stdout + proc.stderr
+        or "timeout" in (proc.stdout + proc.stderr).lower()
+    )
 
 
 def test_stuck_async_wait_interrupted_by_installed_timeout(tmp_path: Path) -> None:
@@ -189,12 +203,21 @@ def test_fast_lanes_use_tight_per_test_timeouts() -> None:
 
 def test_fast_lanes_have_explicit_step_bounds() -> None:
     steps = _workflow_steps()
-    for name in (
-        "Run selected unit suite",
-        "Run API/component suite",
-        "Run Temporal boundary suite",
+    matrix = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
+    by_suite = {row["suite"]: row for row in matrix}
+    for name, suite, measured_seconds in (
+        # Slowest observed unit-fast test step on main (433s) overran a
+        # 7-minute bound; a step bound must leave headroom over it.
+        ("Run selected unit suite", "unit-fast", 433),
+        ("Run API/component suite", "api-component", 0),
+        ("Run Temporal boundary suite", "temporal-boundary", 0),
     ):
-        assert steps[name].get("timeout-minutes") == 7, name
+        bound = steps[name].get("timeout-minutes")
+        assert isinstance(bound, int), name
+        assert bound * 60 >= measured_seconds * 1.2, name
+        # Setup (~2-3 minutes) and bounded reporting (2-minute caps) fit
+        # inside the row's job budget after a full-length test step.
+        assert bound + 3 + 2 <= by_suite[suite]["job_minutes"], name
 
 
 def test_ordinary_validation_uses_maxfail_but_schedules_collect() -> None:
@@ -342,8 +365,12 @@ def test_stack_dump_precedes_timeout_under_xdist(tmp_path: Path) -> None:
 
 def _reliability_deadline_options() -> tuple[str, str]:
     run = _workflow_steps()["Run hermetic reliability shard"]["run"]
-    invocation = re.search(r'timeout ([^\n]*?)"\$\{step_budget\}s" python -m pytest', run)
-    assert invocation is not None, "reliability pytest must run under the shell deadline"
+    invocation = re.search(
+        r'timeout ([^\n]*?)"\$\{step_budget\}s" python -m pytest', run
+    )
+    assert (
+        invocation is not None
+    ), "reliability pytest must run under the shell deadline"
     options = invocation.group(1)
     signal_match = re.search(r"--signal=(\w+)", options)
     kill_match = re.search(r"--kill-after=(\d+)s", options)
@@ -353,7 +380,13 @@ def _reliability_deadline_options() -> tuple[str, str]:
 
 
 def _run_under_deadline(
-    command: list[str], *, signal_name: str, kill_after: str, budget: str, log: Path, env=None
+    command: list[str],
+    *,
+    signal_name: str,
+    kill_after: str,
+    budget: str,
+    log: Path,
+    env=None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``command`` the way the reliability step does: deadline, tee, PIPESTATUS."""
     quoted = " ".join(shlex.quote(part) for part in command)
@@ -384,7 +417,9 @@ def test_reliability_deadline_grace_fits_inside_native_step_bound() -> None:
     assert max(budgets) + int(kill_after) < step["timeout-minutes"] * 60
 
 
-def test_reliability_deadline_hard_kills_a_process_ignoring_interrupts(tmp_path: Path) -> None:
+def test_reliability_deadline_hard_kills_a_process_ignoring_interrupts(
+    tmp_path: Path,
+) -> None:
     signal_name, _ = _reliability_deadline_options()
     start = time.monotonic()
     proc = _run_under_deadline(
@@ -406,7 +441,9 @@ def test_reliability_deadline_hard_kills_a_process_ignoring_interrupts(tmp_path:
     assert elapsed < 10
 
 
-def test_reliability_deadline_interrupt_keeps_junit_teardown_and_stack(tmp_path: Path) -> None:
+def test_reliability_deadline_interrupt_keeps_junit_teardown_and_stack(
+    tmp_path: Path,
+) -> None:
     signal_name, _ = _reliability_deadline_options()
     probe_dir = tmp_path / "probe"
     probe_dir.mkdir()
@@ -470,7 +507,9 @@ def _summary_for_status(tmp_path: Path, status: str | None, outcome: str) -> str
 
     tmp_path.mkdir(parents=True, exist_ok=True)
     log = tmp_path / "pytest.log"
-    log.write_text("tests/integration/reliability/test_x.py::test_journey\n", encoding="utf-8")
+    log.write_text(
+        "tests/integration/reliability/test_x.py::test_journey\n", encoding="utf-8"
+    )
     status_file = tmp_path / "status.txt"
     if status is not None:
         status_file.write_text(f"{status}\n", encoding="utf-8")
@@ -507,7 +546,9 @@ def test_summary_distinguishes_cooperative_deadline_hard_kill_and_unavailable(
     ordinary = _summary_for_status(tmp_path / "d", "1", "failure")
 
     def termination(markdown: str) -> str:
-        line = next(line for line in markdown.splitlines() if line.startswith("- Termination:"))
+        line = next(
+            line for line in markdown.splitlines() if line.startswith("- Termination:")
+        )
         return line.lower()
 
     assert "cooperative" in termination(cooperative)
