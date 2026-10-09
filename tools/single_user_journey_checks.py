@@ -277,6 +277,35 @@ def journey_submission(
     }
 
 
+def pre_upgrade_submission(
+    *,
+    title: str,
+    repository: str,
+    scheduled_for: datetime,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """The deferred task ``populate`` saves on the release being upgraded.
+
+    The upgrade journey proves that work saved by the old release survives the
+    update, so it uses the UserWorkflow request that release accepts.
+    """
+
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "title": title,
+        "initialParameters": {
+            "instructions": (
+                "Single-user journey check: acknowledge this run in one short "
+                "sentence."
+            ),
+            "repository": repository,
+            "publishMode": "none",
+        },
+        "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
+        "idempotencyKey": idempotency_key,
+    }
+
+
 def populate(
     api: Api,
     state: dict[str, Any],
@@ -284,6 +313,7 @@ def populate(
     label: str,
     timeout: float,
     defer_seconds: float,
+    pre_upgrade_release: bool = False,
 ) -> None:
     catalog = api.json("GET", "/api/v1/settings/catalog")
     if not catalog:
@@ -308,7 +338,10 @@ def populate(
     # workflow's first task.
     scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
     title = f"single-user journey {label}"
-    submission = journey_submission(
+    build_submission = (
+        pre_upgrade_submission if pre_upgrade_release else journey_submission
+    )
+    submission = build_submission(
         title=title,
         repository=repository,
         scheduled_for=scheduled_for,
@@ -1096,6 +1129,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--defer-seconds", type=float, default=150.0)
     parser.add_argument("--api-log", type=Path)
+    parser.add_argument(
+        "--pre-upgrade-release",
+        action="store_true",
+        help="populate the release an upgrade starts from with its own request",
+    )
     args = parser.parse_args(argv)
 
     api = Api(args.api_base)
@@ -1111,6 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
                 label=args.label,
                 timeout=args.timeout,
                 defer_seconds=args.defer_seconds,
+                pre_upgrade_release=args.pre_upgrade_release,
             )
         elif args.phase == "canceled":
             canceled(api, state, timeout=args.timeout)

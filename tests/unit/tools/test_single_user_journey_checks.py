@@ -144,6 +144,44 @@ def test_populate_submits_the_workflow_create_task_envelope(api_server, tmp_path
         assert selection not in selections
 
 
+def test_pre_upgrade_populate_saves_work_the_old_release_accepts(
+    api_server, tmp_path
+):
+    """The upgrade journey saves work on the release it upgrades from, so it
+    submits that release's own UserWorkflow request, not the candidate's."""
+
+    base, execution = api_server
+    execution.statuses = [
+        {"status": "failed", "closeStatus": "failed", "summary": "stop here"},
+    ]
+
+    journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--label",
+            "before-upgrade",
+            "--timeout",
+            "20",
+            "--pre-upgrade-release",
+        ]
+    )
+
+    first = execution.submissions[0]
+    assert first["workflowType"] == "MoonMind.UserWorkflow"
+    assert first["title"] == "single-user journey before-upgrade"
+    parameters = first["initialParameters"]
+    assert parameters["repository"] == "o/r"
+    assert parameters["publishMode"] == "none"
+    assert parameters["instructions"]
+    assert first["schedule"]["mode"] == "once"
+    assert first["idempotencyKey"].startswith("single-user-journey-before-upgrade-")
+    assert "type" not in first and "payload" not in first
+
+
 FUTURE = "2999-01-01T00:00:00+00:00"
 
 
