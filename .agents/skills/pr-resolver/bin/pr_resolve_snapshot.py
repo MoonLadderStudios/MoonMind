@@ -34,6 +34,7 @@ from pr_resolver_core.review_providers import (  # noqa: E402
     AUTOMATED_REVIEW_PROVIDERS,
     automatic_review_reaction,
     automatic_review_reply,
+    automatic_review_request,
     has_explicit_finding_severity,
     is_automated_review_provider_login,
     is_review_request_comment,
@@ -142,6 +143,7 @@ def run_command(
     initial_delay_seconds=1.0,
     max_delay_seconds=8.0,
     paginated=False,
+    records_key=None,
 ):
     resolved_cmd = _resolve_command(cmd)
     env = _build_subprocess_env()
@@ -176,7 +178,7 @@ def run_command(
             if output.strip() == "" and not paginated:
                 return {}
             if paginated:
-                return _decode_paginated_records(output)
+                return _decode_paginated_records(output, records_key=records_key)
             return json.loads(output)
         except FileNotFoundError:
             print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
@@ -875,17 +877,32 @@ def _resolve_automatic_review_commit(
         or str(base_repo.get("full_name") or "").lower() != pr_repo.lower()
     ):
         return None
-    commits = _fetch_review_collection(
-        f"repos/{pr_repo}/pulls/{pr_number}/commits?per_page=100"
-    )
-    if (
-        not isinstance(count, int)
-        or isinstance(count, bool)
-        or count <= 0
-        or any(
-            not re.fullmatch(r"[0-9a-f]{40}", str(commit.get("sha") or ""))
-            for commit in commits
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        raise RuntimeError("Malformed PR commit inventory for automatic review")
+    if count > 250:
+        # The PR commits endpoint is capped even with pagination. An exact-SHA
+        # comparison supports all pages; the PR's count still proves coverage.
+        base_sha = str((pull.get("base") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise RuntimeError("Missing exact PR base for automatic review inventory")
+        commits = run_command(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{pr_repo}/compare/{base_sha}...{head_sha}?per_page=100",
+            ],
+            "Unable to collect the complete automatic review commit inventory.",
+            paginated=True,
+            records_key="commits",
         )
+    else:
+        commits = _fetch_review_collection(
+            f"repos/{pr_repo}/pulls/{pr_number}/commits?per_page=100"
+        )
+    if any(
+        not re.fullmatch(r"[0-9a-f]{40}", str(commit.get("sha") or ""))
+        for commit in commits
     ):
         raise RuntimeError("Malformed PR commit inventory for automatic review")
     shas = {commit["sha"] for commit in commits}
@@ -1068,11 +1085,26 @@ def build_automated_review_evidence(
 
     automatic_summary = None
     automatic_failure = None
-    if not completion_kind and request_comment is None and head_committed_at is not None:
+    if not completion_kind and request_comment is None:
         summary = latest_automatic_review_summary(
             record, comments, repository=str(pr_repo or ""), pr_number=pr_number
         )
-        if summary is not None and summary.completed_at > head_committed_at:
+        if summary is not None:
+            later_request = automatic_review_request(
+                record, comments, summary=summary, head_sha=normalized_head
+            )
+            if later_request is not None:
+                request_comment = later_request.comment
+                request_at = later_request.created_at
+                reply = latest_review_reply(
+                    record,
+                    comments,
+                    requested_at=request_at,
+                    head_sha=normalized_head,
+                    request_comment_id=request_comment.get("id"),
+                )
+                summary = None
+        if summary is not None:
             resolved_commit = _resolve_automatic_review_commit(
                 pr_repo=summary.repository,
                 pr_number=summary.pr_number,
@@ -1089,7 +1121,6 @@ def build_automated_review_evidence(
                     comments,
                     summary=summary,
                     head_sha=normalized_head,
-                    head_committed_at=head_committed_at,
                 )
                 reaction = automatic_review_reaction(
                     record,
@@ -1097,9 +1128,8 @@ def build_automated_review_evidence(
                         provider=record.provider, reactions=reactions_for_pr
                     ),
                     summary=summary,
-                    not_before=max(
-                        head_committed_at,
-                        auto_reply.created_at if auto_reply else head_committed_at,
+                    not_before=(
+                        auto_reply.created_at if auto_reply else summary.completed_at
                     ),
                 )
                 automatic_summary = {
@@ -1114,7 +1144,9 @@ def build_automated_review_evidence(
                     ),
                 }
                 if unknown_feedback is not None:
-                    automatic_summary["supersededByCommentId"] = unknown_feedback.get("id")
+                    automatic_summary["supersededByCommentId"] = unknown_feedback.get(
+                        "id"
+                    )
                     automatic_summary["feedbackUnclassified"] = True
                 if (
                     auto_reply

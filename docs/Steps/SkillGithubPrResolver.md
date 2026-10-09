@@ -132,6 +132,12 @@ summary without manufacturing an explicit request. The registered bot must
 publish the supported completed Code Review table on the exact repository/PR.
 An abbreviated reviewed commit is accepted only after the complete PR commit
 inventory proves one match and GitHub resolves it to the exact current head.
+For PRs above 250 commits, a paginated exact base/head comparison supplies the
+inventory instead of the capped PR endpoint; count or uniqueness failures stay
+blocked. Automatic chronology uses GitHub's comment/completion/reaction times
+and exact-SHA binding, independently of author-controlled Git commit dates.
+An undated or malformed explicit request makes chronology unavailable; later
+dated requests retain precedence even when Git commit dates are skewed.
 A provider PR thumbs-up must follow both completion and the summary update.
 Reaction actors labeled User require an authoritative account lookup matching
 their exact login, numeric ID and node ID with a Bot account.
