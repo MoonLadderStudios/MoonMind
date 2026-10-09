@@ -1019,8 +1019,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                 selected_profile_ref = str(
                     binding.execution_profile_ref or f"omnigent-{provider_slug}@1"
                 )
+                # The binding records the last launch's policy, and startup
+                # bootstrap moves an idle binding to a newer version after an
+                # update. An admitted plan stays the Run's launch authority, so
+                # its later and recovered Step Executions keep their policy.
                 selected_policy_ref = str(
-                    binding.launch_policy_ref
+                    admitted_policy_ref
+                    or binding.launch_policy_ref
                     or (
                         f"{provider_slug}-on-demand@1"
                         if binding.host_launch_profile_ref
