@@ -97,6 +97,7 @@ def run_json_command(
                 )
                 time.sleep(delay)
                 continue
+            break
         except FileNotFoundError as exc:
             raise RuntimeError(f"Required command not found: {command[0]}") from exc
 
@@ -298,6 +299,10 @@ def main() -> int:
             "thread_inventory_complete", False
         ),
         "comments": comments_payload.get("comments", []),
+        "reviews": comments_payload.get("reviews", []),
+        "review_evidence_precedes_inventory": comments_payload.get(
+            "review_evidence_precedes_inventory", False
+        ),
     }
 
     json_output = json.dumps(

@@ -97,15 +97,36 @@ def normalize_reviewer_login(login: object) -> str:
     return normalized
 
 
-# Finding severity for the Fix and Review Loop. Only P0/critical and P1/high
-# findings keep the loop going with another remediation + review cycle. A
-# finding that carries only P2/medium-or-below severity ends the loop: it is
-# not actionable and a clean response carrying only such trailing findings
-# still counts as a clean review.
-#
-# High-severity detection is restricted to structured priority/severity
-# labels (for example `[P1]`, `priority: high`, or `severity: critical`)
-# so prose adjectives in explicitly low-priority findings (for example
+# Severity identifies findings in provider-authored summary/reply bodies; it
+# never disposes of them. Every priority uses the same applicability rules.
+# Severity also decides whether a provider's clean result completes its review:
+# P2/medium-or-below text after the clean result still completes it, while those
+# findings stay actionable through the comment inventory.
+_SEVERITY_P_RE = re.compile(
+    r"\bP\s*[0-9]\b|\bsev\s*[0-9]\b",
+    re.IGNORECASE,
+)
+_SEVERITY_TEXT_RE = re.compile(
+    r"\bseverity\s*[:=\-]\s*(critical|high|major|severe|urgent|blocker|medium|low|minor|nit|info|p[0-9])\b"
+    r"|\bpriority\s*[:=\-]\s*(critical|high|highest|urgent|blocker|medium|low|minor|p[0-9])\b"
+    r"|\[(critical|high|major|severe|urgent|blocker|medium|low|minor|nit|info|p[0-9]|sev[0-9])\]"
+    r"|^(critical|high|medium|low|minor|nit)\s*[:\-]"
+    r"|\b(critical|high|medium|low|minor)\s+(severity|priority)\b"
+    r"|\b(severity|priority)\s+(critical|high|medium|low|minor)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def has_explicit_finding_severity(body: object) -> bool:
+    """Identify marked findings without deciding whether they still apply."""
+
+    text = str(body or "")
+    return bool(_SEVERITY_P_RE.search(text) or _SEVERITY_TEXT_RE.search(text))
+
+
+# High-severity detection is restricted to structured priority/severity labels
+# (for example `[P1]`, `priority: high`, or `severity: critical`) so prose
+# adjectives in explicitly low-priority findings (for example
 # `[P2] Avoid high memory usage`) cannot promote them back to high.
 _HIGH_SEVERITY_P_RE = re.compile(
     r"\bP\s*[01]\b|\bsev\s*[01]\b",
@@ -120,23 +141,7 @@ _HIGH_SEVERITY_TEXT_RE = re.compile(
     r"|\b(severity|priority)\s+(critical|high)\b",
     re.IGNORECASE | re.MULTILINE,
 )
-_LOW_SEVERITY_P_RE = re.compile(
-    r"\bP\s*[2-9]\b|\bsev\s*[2-9]\b",
-    re.IGNORECASE,
-)
-_LOW_SEVERITY_TEXT_RE = re.compile(
-    r"\bseverity\s*[:=\-]\s*(medium|low|minor|nit|info)\b"
-    r"|\bpriority\s*[:=\-]\s*(medium|low|minor|p[2-9])\b"
-    r"|\[(medium|low|minor|nit|info|p[2-9])\]"
-    r"|^(medium|low|minor|nit)\s*[:\-]"
-    r"|\b(medium|low|minor)\s+(severity|priority)\b"
-    r"|\b(severity|priority)\s+(medium|low|minor)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
-_LOW_SEVERITY_BARE_RE = re.compile(
-    r"\bnits?\b",
-    re.IGNORECASE,
-)
+_NIT_RE = re.compile(r"\bnits?\b", re.IGNORECASE)
 
 
 def has_high_severity_finding(body: object) -> bool:
@@ -148,27 +153,16 @@ def has_high_severity_finding(body: object) -> bool:
     )
 
 
-def has_low_severity_marker(body: object) -> bool:
-    """Return True when *body* carries an explicit P2/medium-or-below marker."""
-
-    text = str(body or "")
-    return bool(
-        _LOW_SEVERITY_P_RE.search(text)
-        or _LOW_SEVERITY_TEXT_RE.search(text)
-        or _LOW_SEVERITY_BARE_RE.search(text)
-    )
-
-
 def is_low_severity_only_finding(body: object) -> bool:
     """Return True when *body* is explicitly low severity and nothing higher.
 
-    Findings without any severity marker are conservatively treated as
-    requiring review (return False) so unmarked feedback is never silently
-    dropped from the Fix and Review Loop.
+    Text without any severity marker is conservatively treated as requiring
+    review (return False) so unmarked feedback never completes a review.
     """
 
     text = str(body or "")
-    return has_low_severity_marker(text) and not has_high_severity_finding(text)
+    marked = has_explicit_finding_severity(text) or bool(_NIT_RE.search(text))
+    return marked and not has_high_severity_finding(text)
 
 
 def is_automated_review_provider_login(provider: object, login: object) -> bool:
