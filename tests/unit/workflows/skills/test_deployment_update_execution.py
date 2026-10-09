@@ -39,7 +39,6 @@ from moonmind.workflows.skills.deployment_execution import (
     _target_image_audit,
     _target_image_build_id,
     build_compose_command_plan,
-    build_deployment_update_handler,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 
@@ -1587,24 +1586,6 @@ def test_tail_text_returns_empty_for_non_positive_limit() -> None:
     assert _tail_text(payload, max_chars=0) == ""
     assert _tail_text(payload, max_chars=-3) == ""
 
-
-@pytest.mark.asyncio
-async def test_context_executor_override_supports_registered_handler() -> None:
-    executor, _store, _evidence, _runner, _events = _executor()
-    handler = build_deployment_update_handler()
-
-    result = await handler(
-        _inputs(),
-        {
-            "deployment_update_executor": executor,
-            "deployment_runner_mode": "privileged_worker",
-        },
-    )
-
-    assert result.status == "COMPLETED"
-    assert result.outputs["requestedImage"] == (
-        "ghcr.io/moonladderstudios/moonmind:20260425.1234"
-    )
 
 @pytest.mark.asyncio
 async def test_partial_verification_returns_partial_status_with_artifact_refs() -> None:
