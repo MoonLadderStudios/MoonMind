@@ -152,6 +152,69 @@ def test_no_argument_host_command_submits_the_controller_operation(
     assert (repo / "docker-compose.yaml").read_text() == "services: {api: {}}\n"
 
 
+@pytest.mark.parametrize("reachable", [True, False])
+def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
+    installed, monkeypatch, reachable
+):
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", "ghcr.io/org/moonmind:explicit-old")
+    repo, controller = installed()
+    request = update._controller_call
+    bootstrapped = False
+    commands = []
+
+    def old_health(url, secret, method, path, *args, **kwargs):
+        if path == "/v1/healthz" and not bootstrapped:
+            if not reachable:
+                raise update.ControllerUnreachableError("controller recreation interrupted")
+            return 200, {"status": "ok"}
+        if method == "POST":
+            assert bootstrapped
+        return request(url, secret, method, path, *args, **kwargs)
+
+    def run(command, **kwargs):
+        nonlocal bootstrapped
+        commands.append(command)
+        if command[:3] == ["docker", "compose", "config"]:
+            return json.dumps({"services": {"api": {}}})
+        if command[:2] == ["docker", "ps"]:
+            return "installed-api"
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Image": "sha256:source",
+                        "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                    }
+                ]
+            )
+        if command[:2] == ["docker", "run"]:
+            assert "sha256:source" in command
+            assert "--network=none" in command
+            return json.dumps({"bootstrap.py": "# shipped host lifecycle source"})
+        assert "ensure" in command
+        assert controller.applied == []
+        assert Path(command[1]).read_text() == "# shipped host lifecycle source"
+        bootstrapped = True
+        return ""
+
+    monkeypatch.setattr(update, "_controller_call", old_health)
+    monkeypatch.setattr(update, "run", run)
+    record = {
+        "project": "moonmind",
+        "image": IMAGE,
+        "inputs": {},
+        "context": {"idempotency_key": "host-update:bootstrap-test"},
+    }
+    assert (
+        update._submit_via_controller(
+            record, repo, controller_url=controller.url, secret_file=None
+        )
+        == 0
+    )
+    assert bootstrapped
+    assert len(controller.applied) == 1
+
+
 def test_host_lost_acknowledgment_observes_instead_of_resubmitting(
     installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
