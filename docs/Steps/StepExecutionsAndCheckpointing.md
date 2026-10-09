@@ -112,6 +112,28 @@ The manifest and the checkpoint are **separate artifacts with separate roles**:
 
 The manifest references checkpoints by ref (`workspace.checkpointBeforeRef`, `workspace.checkpointAfterRef`); checkpoints never embed manifests. Recovery requires a valid checkpoint, not a manifest. A manifest without checkpoints is evidence-only and cannot satisfy a workspace policy that demands restorable state.
 
+### 2.2 Durable checkpoint capture and reads
+
+Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`,
+and `artifact://art_...`) to the durable URI representation used by Omnigent
+checkpoint identities. They preserve captured artifact bytes and compute evidence
+digests from those bytes. A bare first-message SHA-256 receives its typed prefix;
+malformed or unavailable capture retains a negative recovery-capability projection.
+Structured plan references retain their artifact ID and SHA-256 rather than a
+string representation of the reference object.
+
+New checkpoint and workspace artifacts link to the actual Temporal Activity's
+workflow and run. Reads carry that trusted workflow scope through the existing
+artifact authorization policy. Caller-supplied capture identities cannot select a
+different workflow or run. Checkpoint discovery includes the owning run's step
+ledger, preserves declared boundaries and attempt ordinals, and rejects a ledger
+from another execution. Recovery compares artifact reference aliases while still
+requiring source membership and completed artifact metadata.
+
+Recovery and claim release still require their original input, plan, integrity,
+capability, side-effect, and cleanup evidence. These representation adapters do not
+repair historical evidence or supply implementation-verification proof.
+
 ---
 
 ## 3. Desired-State Summary

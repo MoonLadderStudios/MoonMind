@@ -16356,8 +16356,8 @@ class TemporalCheckpointActivities:
         omnigent_checkpoint = model.omnigent
         if omnigent_checkpoint is None and model.omnigent_capture is not None:
             try:
-                omnigent_checkpoint = await self._materialize_omnigent_checkpoint_identity(
-                    model
+                omnigent_checkpoint = (
+                    await self._materialize_omnigent_checkpoint_identity(model)
                 )
             except ValidationError:
                 # Preserve the checkpoint and a negative capability projection
@@ -16412,7 +16412,10 @@ class TemporalCheckpointActivities:
 
         capture = dict(model.omnigent_capture or {})
         for field in (
-            "externalStateRef", "captureManifestRef", "terminalRef", "diagnosticsRef"
+            "externalStateRef",
+            "captureManifestRef",
+            "terminalRef",
+            "diagnosticsRef",
         ):
             if isinstance(capture.get(field), str):
                 capture[field] = canonical_artifact_ref(capture[field])
@@ -16430,9 +16433,7 @@ class TemporalCheckpointActivities:
             )
         )
         workspace_digest = str(
-            model.workspace.archive_digest
-            or model.workspace.workspace_digest
-            or ""
+            model.workspace.archive_digest or model.workspace.workspace_digest or ""
         ).strip()
         required = (
             external_ref,
