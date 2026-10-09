@@ -2312,15 +2312,41 @@ def _checkpoint_summaries_from_record(
 async def _load_execution_checkpoint_summaries(
     *,
     record: Any,
-    temporal_client: Client,
+    temporal_client_adapter: TemporalClientAdapter,
 ) -> list[CheckpointSummaryModel]:
+    persisted_checkpoints = _checkpoint_summaries_from_record(record)
     if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
-        return _checkpoint_summaries_from_record(record)
-    ledger = await _load_execution_step_ledger(
-        temporal_client=temporal_client,
-        workflow_id=record.workflow_id,
-        fallback_record=record,
-    )
+        return persisted_checkpoints
+    try:
+        temporal_client = await asyncio.wait_for(
+            temporal_client_adapter.get_client(),
+            timeout=_step_ledger_query_timeout_seconds(record),
+        )
+    except (RPCError, TimeoutError, RuntimeError, OSError) as exc:
+        logger.warning(
+            "Serving persisted checkpoints for %s: Temporal connection unavailable (%s)",
+            record.workflow_id,
+            type(exc).__name__,
+        )
+        return persisted_checkpoints
+    try:
+        ledger = await _load_execution_step_ledger(
+            temporal_client=temporal_client,
+            workflow_id=record.workflow_id,
+            fallback_record=record,
+        )
+    except HTTPException as exc:
+        if (
+            exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE
+            or not isinstance(exc.detail, Mapping)
+            or exc.detail.get("code") != "temporal_unavailable"
+        ):
+            raise
+        logger.info(
+            "Serving persisted checkpoints for %s: Temporal ledger unavailable",
+            record.workflow_id,
+        )
+        return persisted_checkpoints
     if ledger.workflow_id != record.workflow_id or ledger.run_id != record.run_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -14622,7 +14648,9 @@ async def create_remediation_checkpoint_branch(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
-    temporal_client: Client = Depends(get_temporal_client),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     links = await service.list_remediation_targets(workflow_id)
@@ -14674,7 +14702,7 @@ async def create_remediation_checkpoint_branch(
             },
         )
     target_checkpoints = await _load_execution_checkpoint_summaries(
-        record=target_record, temporal_client=temporal_client
+        record=target_record, temporal_client_adapter=temporal_client_adapter
     )
     target_checkpoint = _checkpoint_summary_for_ref(target_checkpoints, checkpoint_ref)
     workspace_policy = payload.workspacePolicy
@@ -16615,7 +16643,9 @@ async def list_execution_checkpoints(
     workflow_id: str,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
-    temporal_client: Client = Depends(get_temporal_client),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointListResponse:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user, allow_historical=True
@@ -16623,7 +16653,7 @@ async def list_execution_checkpoints(
     return CheckpointListResponse(
         items=await _load_execution_checkpoint_summaries(
             record=record,
-            temporal_client=temporal_client,
+            temporal_client_adapter=temporal_client_adapter,
         )
     )
 
@@ -16669,7 +16699,9 @@ async def create_checkpoint_branch(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
-    temporal_client: Client = Depends(get_temporal_client),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointBranchModel:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
@@ -16680,7 +16712,7 @@ async def create_checkpoint_branch(
         source=payload.source,
         checkpoints=await _load_execution_checkpoint_summaries(
             record=record,
-            temporal_client=temporal_client,
+            temporal_client_adapter=temporal_client_adapter,
         ),
     )
     _validate_branch_policy(
