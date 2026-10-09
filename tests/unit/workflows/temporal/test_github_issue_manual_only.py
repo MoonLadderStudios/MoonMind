@@ -300,7 +300,7 @@ async def test_manual_only_blocker_result_completes_run_without_implementation(m
     monkeypatch.setattr(
         run_module.workflow,
         "info",
-        type("Info", (), {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}}),
+        type("Info", (), {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}}),
     )
     monkeypatch.setattr(
         run_module.workflow,

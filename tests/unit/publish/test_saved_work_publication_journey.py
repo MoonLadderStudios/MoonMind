@@ -487,6 +487,7 @@ async def journey(
                 workflow_module.workflow,
                 "info",
                 lambda: SimpleNamespace(
+                    task_queue="mm.workflow.user.v2",
                     workflow_id="mm:source:saved-work-publication:x",
                     run_id=state.run_id,
                 ),

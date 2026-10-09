@@ -485,7 +485,7 @@ def test_omnigent_trusted_origins_render_local_and_public_defaults():
     )
 
 
-def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
+def test_workflow_worker_service_serves_every_workflow_lane_in_one_process():
     compose = _load_compose()
     services = compose["services"]
 
@@ -493,9 +493,11 @@ def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
     assert "temporal-worker-workflow-merge-automation" not in services
 
     workflow_worker = services["temporal-worker-workflow"]
+    # MoonMind#3937: the merge-automation lane is a second SDK Worker in the
+    # one worker_runtime process, not a supervised second interpreter.
     assert workflow_worker["entrypoint"] == [
-        "python",
-        "/app/services/temporal/scripts/start-workflow-worker-group.py",
+        "/bin/sh",
+        "/app/services/temporal/scripts/start-worker.sh",
     ]
 
     workflow_env = _env_map(workflow_worker["environment"])

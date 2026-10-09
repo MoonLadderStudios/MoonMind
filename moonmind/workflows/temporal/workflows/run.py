@@ -244,6 +244,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_TASK_QUEUE,
     TemporalActivityRoute,
     build_default_activity_catalog,
+    get_workflow_child_task_queue,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -1513,7 +1514,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     def _workflow_child_task_queue(self) -> str:
         if workflow.patched(RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
-            return settings.temporal.user_workflow_v2_task_queue
+            return get_workflow_child_task_queue(
+                workflow.info().task_queue, settings.temporal
+            )
         return WORKFLOW_TASK_QUEUE
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:

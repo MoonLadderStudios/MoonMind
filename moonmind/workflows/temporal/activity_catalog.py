@@ -58,7 +58,8 @@ def get_workflow_poll_task_queues(
     New workflow starts use the hard-switch start contract queue.  In-flight
     histories may still contain pre-patch child-workflow commands recorded on
     TEMPORAL_WORKFLOW_TASK_QUEUE, so the workflow fleet must keep polling that
-    queue until those histories have drained.
+    queue until those histories have drained.  The merge-automation lane is
+    polled by the same process with its own workflow-task budget.
     """
 
     cfg = temporal_settings or settings.temporal
@@ -69,9 +70,27 @@ def get_workflow_poll_task_queues(
         else ""
     )
     merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
-    if replay_queue and replay_queue != start_queue and start_queue != merge_queue:
-        return (start_queue, replay_queue)
-    return (start_queue,)
+    queues = (start_queue, replay_queue, merge_queue)
+    return tuple(dict.fromkeys(queue for queue in queues if queue))
+
+
+def get_workflow_child_task_queue(
+    current_task_queue: str,
+    temporal_settings: TemporalSettings | None = None,
+) -> str:
+    """Resolve the queue for a replay-patched child of a workflow.
+
+    Descendants of merge-automation lane workflows stay on that lane; every
+    other parent routes children to the user-workflow start queue.  Derived
+    from the parent's own queue so it is deterministic and independent of
+    which process hosts the lane.
+    """
+
+    cfg = temporal_settings or settings.temporal
+    merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
+    if current_task_queue == merge_queue:
+        return merge_queue
+    return str(cfg.user_workflow_v2_task_queue).strip()
 
 
 class TemporalActivityCatalogError(ValueError):
@@ -1921,6 +1940,7 @@ __all__ = [
     "WORKFLOW_TASK_QUEUE",
     "build_default_activity_catalog",
     "get_workflow_task_queue",
+    "get_workflow_child_task_queue",
     "get_workflow_poll_task_queues",
     "skill_policy_as_route",
 ]

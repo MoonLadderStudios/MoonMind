@@ -112,7 +112,7 @@ async def test_workflow_runs_only_publication_phases_and_restores_exact_candidat
     monkeypatch.setattr(
         workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="destination", run_id="run"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="destination", run_id="run"),
     )
 
     result = await MoonMindPublicationRecoveryWorkflow().run(_contract())
@@ -165,7 +165,7 @@ async def test_matching_existing_pr_reconciles_without_restore_or_mutation(
     monkeypatch.setattr(
         workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="destination", run_id="run"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="destination", run_id="run"),
     )
 
     result = await MoonMindPublicationRecoveryWorkflow().run(_contract(remote=True))
