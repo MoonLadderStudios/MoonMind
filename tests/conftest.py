@@ -208,17 +208,26 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
 # ── atexit cleanup for orphaned Temporal test-server processes ──────────────
 #
-# ``WorkflowEnvironment.start_time_skipping()`` spawns a ``temporal-test-server``
-# child. Normal shutdown uses atexit as a fallback; pytest-timeout's fatal
-# thread callback must clean up before os._exit bypasses context managers.
+# The SDK spawns ``temporal-test-server`` for time skipping and a Temporal CLI
+# ``server start-dev`` child for local testing. Normal shutdown uses atexit as
+# a fallback; pytest-timeout's fatal thread callback must clean up before
+# os._exit bypasses context managers.
 
 
 def _kill_owned_temporal_servers() -> None:
-    """Terminate ``temporal-test-server`` subprocesses owned by this process."""
+    """Terminate SDK Temporal server subprocesses owned by this process."""
     my_pid = os.getpid()
     try:
         out = subprocess.check_output(
-            ["pgrep", "-P", str(my_pid), "-f", "temporal-test-server"],
+            [
+                "pgrep",
+                "-P",
+                str(my_pid),
+                "-f",
+                # The SDK supports a caller-supplied CLI executable path.
+                # Match its server invocation while retaining the parent fence.
+                r"temporal-test-server|^.+ server start-dev( |$)",
+            ],
             text=True,
             timeout=2,
         )
