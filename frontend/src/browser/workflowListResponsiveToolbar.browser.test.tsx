@@ -299,7 +299,10 @@ describe('workflow list recorded Provider Profile', () => {
     expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
   });
 
-  it('opens the Provider Profile column filter by keyboard and returns focus on Escape', async () => {
+  it.each([
+    { key: 'Enter', sequence: '{Enter}' },
+    { key: 'Space', sequence: '[Space]' },
+  ])('opens the Provider Profile column filter with $key and returns focus on Escape', async ({ sequence }) => {
     mockRows(rows);
     await page.viewport(DESKTOP.width, DESKTOP.height);
     const { unmount } = renderWithClient(<WorkflowListPage payload={payload} />);
@@ -310,7 +313,8 @@ describe('workflow list recorded Provider Profile', () => {
       name: 'Provider Profile filter. No filter applied.',
     });
     filterButton.focus();
-    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(document.activeElement).toBe(filterButton));
+    await userEvent.keyboard(sequence);
     const popover = await screen.findByRole('dialog', { name: 'Provider Profile filter' });
     await waitFor(() => expect(popover.contains(document.activeElement)).toBe(true));
     expect(await within(popover).findByRole('checkbox', { name: 'Pending selection (1)' })).toBeTruthy();

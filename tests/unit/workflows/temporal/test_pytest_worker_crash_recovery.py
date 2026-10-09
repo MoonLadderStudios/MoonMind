@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
+from temporalio.testing import WorkflowEnvironment
 
 pytestmark = pytest.mark.slow
 
@@ -54,8 +57,10 @@ async def operation(name, module_socket, *, wait=False, class_directory=None):
                 try:
                     parent = next(int(line.split()[1]) for line in (path / "status").read_text().splitlines()
                                   if line.startswith("PPid:"))
-                    command = (path / "cmdline").read_bytes()
-                    if parent == os.getpid() and b"temporal-test-server" in command:
+                    command = (path / "cmdline").read_bytes().split(bytes([0]))
+                    is_server = (b"temporal-test-server" in command[0]
+                                 or command[1:3] == [b"server", b"start-dev"])
+                    if parent == os.getpid() and is_server:
                         children.append(int(path.name))
                 except (OSError, StopIteration):
                     pass
@@ -131,7 +136,13 @@ async def test_debugger_suppression_keeps_real_temporal_alive(module_socket, mon
 
 
 def _run_fixture(
-    tmp_path: Path, crash_source: str, *, completed_files: int = 0, quiet: bool = False
+    tmp_path: Path,
+    crash_source: str,
+    *,
+    completed_files: int = 0,
+    quiet: bool = False,
+    local_server: bool = False,
+    dev_server_existing_path: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess, list[dict]]:
     assert Path(
         "/proc"
@@ -141,7 +152,16 @@ def _run_fixture(
     receipts = tmp_path / "receipts"
     receipts.mkdir()
     shutil.copyfile(CONFTEST, tests / "conftest.py")
-    (tests / "probe.py").write_text(COMMON)
+    common = COMMON
+    if local_server:
+        start = (
+            f"start_local(dev_server_existing_path={str(dev_server_existing_path)!r})"
+            if dev_server_existing_path is not None
+            else "start_local()"
+        )
+        common = common.replace("start_time_skipping()", start)
+        crash_source = crash_source.replace("start_time_skipping()", start)
+    (tests / "probe.py").write_text(common)
     (tests / "test_a_control.py").write_text(CONTROL)
     for index in range(completed_files):
         (tests / f"test_b_prelude_{index}.py").write_text(
@@ -201,9 +221,9 @@ def _run_fixture(
         for record in records:
             for pid in record["servers"]:
                 try:
-                    if (
-                        b"temporal-test-server"
-                        in Path(f"/proc/{pid}/cmdline").read_bytes()
+                    command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                    if b"temporal-test-server" in command[0] or (
+                        command[1:3] == [b"server", b"start-dev"]
                     ):
                         active_owned.append(pid)
                 except FileNotFoundError:
@@ -224,14 +244,17 @@ def _run_fixture(
             pass
 
 
-@pytest.mark.parametrize("with_pending_sibling", [False, True])
+@pytest.mark.parametrize(
+    "with_pending_sibling, local_server", [(False, False), (True, False), (True, True)]
+)
 def test_thread_timeout_preserves_failure_and_file_scoped_remaining_coverage(
-    tmp_path: Path, with_pending_sibling: bool
+    tmp_path: Path, with_pending_sibling: bool, local_server: bool
 ) -> None:
     result, records = _run_fixture(
         tmp_path,
         PENDING if with_pending_sibling else CRASH,
         quiet=not with_pending_sibling,
+        local_server=local_server,
     )
     assert result.returncode == 1, result.stdout
     if with_pending_sibling:
@@ -261,11 +284,43 @@ def test_thread_timeout_preserves_failure_and_file_scoped_remaining_coverage(
         assert by_case["pending"]["class_directory"]
 
 
-def test_thread_timeout_honors_debugger_suppression(tmp_path: Path) -> None:
-    result, records = _run_fixture(tmp_path, DEBUGGER)
+@pytest.mark.parametrize("local_server", [False, True])
+def test_thread_timeout_honors_debugger_suppression(
+    tmp_path: Path, local_server: bool
+) -> None:
+    result, records = _run_fixture(tmp_path, DEBUGGER, local_server=local_server)
     assert result.returncode == 0, result.stdout
     assert "2 passed" in result.stdout
     assert [record["case"] for record in records] == ["control"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debugger", [False, True])
+async def test_custom_cli_cleanup_stays_inside_worker_parent(
+    tmp_path: Path, debugger: bool
+) -> None:
+    # Keep a real CLI server outside the disposable worker's ownership fence.
+    async with await WorkflowEnvironment.start_local() as control:
+        pids = subprocess.check_output(
+            ["pgrep", "-P", str(os.getpid()), "-f", " server start-dev"], text=True
+        ).split()
+        assert len(pids) == 1
+        executable = Path(f"/proc/{pids[0]}/exe").resolve(strict=True)
+        custom_cli = tmp_path / "custom temporal executable"
+        custom_cli.symlink_to(executable)
+        fixture_root = tmp_path / "worker"
+        fixture_root.mkdir()
+        result, records = await asyncio.to_thread(
+            _run_fixture,
+            fixture_root,
+            DEBUGGER if debugger else PENDING,
+            local_server=True,
+            dev_server_existing_path=custom_cli,
+        )
+        assert result.returncode == (0 if debugger else 1), result.stdout
+        assert ("2 passed" if debugger else "1 failed, 3 passed") in result.stdout
+        assert len(records) == (1 if debugger else 4), result.stdout
+        await control.client.workflow_service.get_system_info(GetSystemInfoRequest())
 
 
 def test_completed_files_do_not_leave_replacement_waiting_for_empty_work(

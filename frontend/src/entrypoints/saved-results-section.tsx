@@ -17,6 +17,7 @@ import {
   canPublishSavedWork,
   defaultSavedWorkDestination,
   fetchSavedWorkPublicationOperation,
+  newSavedWorkAdmissionGeneration,
   projectSavedResults,
   publishSavedWork,
   savedResultContinuationKey,
@@ -377,6 +378,31 @@ export function SavedResultsSection({
       sourceRunId: runId,
     };
     if (!request.destination.repository || !request.destination.headBranch) {
+      return;
+    }
+    // Keep uncertain admissions across reloads and selection changes. Only
+    // an explicit submission after matching terminal proof starts a new one.
+    const storageKey = `moonmind.savedWorkPublication:${JSON.stringify([
+      apiBase, workflowId, savedWorkPublicationIdentity(request),
+    ])}`;
+    const knownTerminal =
+      publishOp?.status === 'started' &&
+      publicationOperationQuery.data?.terminal &&
+      publicationOperationQuery.data.workflowId === publishOp.result?.workflowId &&
+      savedWorkPublicationIdentity(publishOp.request) === savedWorkPublicationIdentity(request);
+    try {
+      const retained = window.sessionStorage.getItem(storageKey);
+      const generation = knownTerminal && retained === publishOp.request.admissionGeneration
+        ? null : retained;
+      request.admissionGeneration = generation || newSavedWorkAdmissionGeneration();
+      // Store before POST: a lost acknowledgment must remain reconcilable
+      // after reload, including after a subsequent session/policy refusal.
+      window.sessionStorage.setItem(storageKey, request.admissionGeneration);
+    } catch {
+      setPublishOp({
+        status: 'failed', request,
+        error: 'Publication could not start because this browser could not retain its request. Allow site storage and retry.',
+      });
       return;
     }
     const selection = selectionKeyRef.current;

@@ -36,6 +36,12 @@ unit_slow=true|false
 api_component=true|false
 temporal_boundary=true|false
 integration_ci=true|false
+integration_hermetic=true|false
+integration_host_update_transport=true|false
+integration_fresh_journey=true|false
+integration_upgrade_journey=true|false
+integration_controller_journey=true|false
+ownership_full=true|false
 reliability_journey=true|false
 exact_artifact=true|false
 omnigent_conformance=true|false
@@ -46,13 +52,15 @@ frontend_browser_firefox=true|false
 full_frontend=true|false
 ```
 
+`backend_matrix` and `integration_matrix` additionally contain compact JSON for the selected Actions rows. The integration aggregate is the OR of its five lane decisions. Empty matrices are intentional only when their job is unselected. `ci-required` independently validates every boolean and the exact row inventory, including all four reliability partitions, before accepting native aggregate results. Malformed/missing outputs, omitted or duplicate rows, selector failures, and selected failures/cancellations/timeouts are rejected.
+
 ### Shared Changed-File Helper
 
 `tools/ci/compute_changed_files.sh` owns event-aware base/head resolution for selection, deployment validation, and generated-contract detection. `select-test-suites` runs it once and derives both suite selection and the `generated_contracts` output from the same list. It fetches exact commits as needed from a shallow checkout and emits a two-dot tree diff. Known PR, push, and merge-group changes use their actual base/head. Unavailable history, first pushes, schedules, and manual runs take the conservative unknown-change path. Do not add a second event classifier.
 
 ### Backend Detection
 
-Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. The selector exempts six explicitly audited prose paths from the general Markdown fast-unit rule. Unlisted Markdown retains existing coverage, including executable examples and Skill contracts. Sensitive, mixed, unknown, and full-run changes keep their existing suite decisions; prose exemptions never override them. Always-run preflight policy and ownership checks remain required.
+Backend source, tests, tooling, migrations, and sensitive generated contracts select the fast-unit safety net. The selector exempts six explicitly audited prose paths from the general Markdown fast-unit rule. Unlisted Markdown retains existing coverage, including executable examples and Skill contracts. Sensitive, mixed, unknown, and full-run changes keep their existing suite decisions; prose exemptions never override them. Cheap preflight policy checks remain unconditional. Full ownership collection runs for changed collection inputs as described below.
 
 Frontend selection is independent. Generated API-client changes require static validation. UI source selects static checks and Chromium. Browser tests, styles, configuration, and dependency changes can also require Firefox. Full/unknown paths select full frontend coverage. `test-frontend` aggregates selected frontend jobs even when intentional nonselection leaves both browser jobs skipped.
 
@@ -72,13 +80,19 @@ These journeys test retained user outcomes through real production composition. 
 
 ### Backend Matrix Ownership And Failure Propagation
 
-The current `backend-matrix` contains unit-fast, api-component, temporal-boundary, and four reliability rows. The matrix job is skipped when no primary backend suite is selected. Otherwise its fixed rows use the selector outputs to guard suite-specific setup and test steps. An unselected row doing no pytest work is intentional nonselection, not proof that its tests passed.
+`backend-matrix` instantiates only selected unit-fast, api-component, temporal-boundary, and reliability rows. Reliability selection always emits all four partitions with their existing bounds. A unit-only selection creates one runner instead of seven. The matrix job is skipped when no primary backend suite is selected; it does not create placeholder success rows. Existing suite-specific setup and test guards remain as defense in depth.
 
 Native `strategy.fail-fast` is enabled outside scheduled diagnostics. It can cancel siblings inside this matrix after a failure. It does not cancel unrelated frontend, integration, image, or migration jobs. Scheduled diagnostics keep collecting sibling outcomes within their execution bounds. Superseded-run cancellation remains a separate existing Actions concurrency behavior.
 
 Fast rows retain their suite-specific xdist execution. Unit-fast and Temporal use per-file distribution, while API/component uses per-test distribution. Reliability runs serial pytest within each isolated runner, using its own Compose project, network, database, Temporal, and object-store state. Do not combine matrix fan-out with a new unbounded inner worker pool or shared mutable fixture stack.
 
 The workflow initializes only submodules a selected job needs. In the reviewed implementation, unit-fast initializes MoonSpec and Omnigent fixtures and API/component initializes Omnigent. Do not assume that only the projection job needs a submodule, or initialize every submodule for every row.
+
+### Selective Ownership Preflight
+
+Policy scans, deployment safety, and MoonSpec projection remain unconditional in the existing parallel preflight job. `ownership_full` selects the unchanged real verifier for tests (including fixtures, conftests, markers, plugins and duration data), collection/reporting tools, dependencies, workflow/selector changes, unknown or malformed inputs, and full-main/scheduled/manual events. Known production-only and audited prose changes do not rerun collection. The selector's tested input map is the authority; new collection inputs must extend it.
+
+A selected verification still collects real pytest nodes, proves exactly one logical owner, and invokes the installed pytest-split plugin for all four partitions to prove completeness and disjointness. No replicated partition algorithm or cached assertion substitutes for that proof. The verifier's failure remains a preflight failure.
 
 ### Execution Budgets
 
@@ -183,7 +197,11 @@ If the change removes an authorized obsolete capability, identify the retired wo
 
 ### Hermetic Integration CI Selection
 
-Compose, Docker/runtime infrastructure, database and migration changes, integration tests, and their runner/dependencies select the existing credential-free integration path. Reliability journeys keep their separate owner.
+The integration matrix selects five independent lanes: hermetic, host-update-transport, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Existing row commands, isolated services, fail-fast, report/redaction and cleanup remain unchanged.
+
+The executable dependency map narrows only audited lane-local inputs: ordinary integration tests/fixtures select hermetic; the host transport test selects host-update-transport; the journal transition test selects controller-journey; unclassified host tests/fixtures retain hermetic plus both host lanes; shared journey scripts select all three journeys. Mixed changes union their lanes. The shared changed-file helper includes rename sources and destinations and deleted paths, so removal does not erase an owner.
+
+Unknown/full changes, dependencies, Docker/Compose, shared boot/runtime/auth/config and migration boundaries conservatively retain all five. Generated OpenAPI, its generators, shared client transport and native-chat/Omnigent contracts retain cross-layer coverage. Frontend paths are not blanket exclusions. Reliability journeys keep their separate owner.
 
 - Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion services (`api_service/services/profile_secret_migration.py`, `api_service/services/single_user_conversion.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`).
 - The `integration-ci` job also runs the default Compose product journeys in `tools/first_run_journey_3938.sh`, each on its own matrix row beside the hermetic suite and the host-updater transport row: a fresh instance, and an in-place upgrade to the candidate from an account-era release that predates the guarded single-user conversion. The upgrade deploys that release from its own `docker-compose.yaml`, and the API startup log must show the conversion classifying its data as one eligible operator. A third journey (`--controller`) drives Settings Operations against the real `deploy/controller` server, which runs beside the candidate stack without a Docker daemon so it can never mutate a stack. The dashboard submits, observes the original error and logs, reconnects after the API is replaced without submitting again, and retries. Workflow-backed history stays readable. They drive the real API and compiled dashboard with no seeded person or provider credential and fail on any failed or unobserved step. Their runner (`tools/first_run_journey_3938.sh`, `tools/single_user_journey_checks.py`, `tools/single_user_journey_browser.mjs`) and the routes they drive (executions, artifacts, recurring workflows, and the dashboard pages) select `integration_ci=true`.
@@ -202,7 +220,13 @@ single-test files. When updating the declared xdist dependency, run these cases
 against the native scheduler; remove the override once a released version
 preserves the failed exit, runs each survivor once, and finishes those cases.
 The timeout hook separately retains pytest-timeout 2.4.0's fatal callback and
-cleans only Temporal servers directly owned by that worker. Neither mechanism
+cleans only SDK time-skipping and local dev-server children directly owned by
+that worker. CLI cleanup recognizes `server start-dev` for both SDK-cached and
+caller-supplied executable paths, while retaining the direct-parent boundary.
+Real subprocess cases retain an independently owned control server during a
+fatal worker timeout and debugger suppression. The image-build cache owner
+materializes both SDK-selected binaries before hermetic runtime execution;
+cached-startup coverage disables SDK download egress. Neither mechanism
 fixes the test that caused the original worker failure.
 
 Deployment and both disposable Compose test stacks pin the same multi-platform MinIO community
@@ -272,3 +296,21 @@ The source-destroying checkpoint-resume journey still exercises durable capture/
 Keep path rules and their focused behavior tests together. Use conservative selection when uncertain. Selector changes require full CI because incorrect classification can silently omit tests.
 
 During an authorized architecture removal, update obsolete test ownership, fixture setup, and duration hints with the retired code. Preserve real coverage of supported default journeys, data integrity, and the active-work transition. Do not preserve every historical class or versioning parameter solely because an older issue listed it. Explain moved/retired coverage briefly in the PR instead of building a permanent registry or approval mechanism.
+
+### Deterministic Conformance Deduplication
+
+The deterministic runner has two Python layers and one frontend target. At this revision the Python inventory contains 194 modules in layer 1 and 8 in layer 2. `test_embedded_recovery.py` previously appeared in both: the first layer's integration directory recursively included its 18 collected nodes and the second invoked it explicitly. The first layer now ignores that module; the explicit second-layer invocation remains its single owner and supplies the same report evidence on success or failure. Regression tests check the inventory and evidence attribution. Both Python layers retain the same interpreter, environment, working directory and execution flags.
+
+No wider cross-job result reuse is implemented. Such reuse needs a complete inventory and successful owner evidence for the same head/tree/run/attempt/mode, including all required nodes. Missing, corrupt, truncated, cancelled or skipped-required results must fail reuse. Report redaction and distinct live/exact-artifact checks must remain; a similarly named test or passing job is not equivalence evidence.
+
+### Measurement Status And Deferred Startup Work
+
+Historical observations supplied for this optimization: main run [37839692923](https://github.com/MoonLadderStudios/MoonMind/actions/runs/37839692923) took 20m19, with 26 jobs and 88m25 summed runner time; its final four-second gate queued for 8m17. The auth-only [37790216580](https://github.com/MoonLadderStudios/MoonMind/actions/runs/37790216580) took 13m45, including six no-op backend rows. These are baseline observations, not a matched before/after benchmark. Dynamic selection deterministically removes those six allocations on a unit-only diff; no wall-clock saving is claimed before equivalent passing CI evidence exists. Ownership collection was observed at 104–136 seconds; avoided collection is not necessarily equal critical-path savings.
+
+Historical/candidate upgrade startup observations were 272/319 seconds, with a 92-second image build. The implementation environment lacked Docker/Compose and a daemon; no startup/image benchmark was performed. Startup, readiness cadence, image distribution and upgrade semantics are unchanged. Existing independent builds already read the deployable-image layer cache; distributing one immutable build could save compute but add build/export/upload/download serialization. A worker's three-minute health start period is failure grace, not a mandatory readiness sleep.
+
+A future matched benchmark should alternate baseline and candidate on fresh hosted runners and clean checkouts, distinguish cold/warm caches, and record build arguments, immutable image identity, acquisition/export/distribution, Compose startup, semantic readiness, journey duration and total runner duration. Record individual samples plus median/range. Do not count shifted pull time as a gain. Use the unchanged production target and verify running containers' candidate image IDs; a locally loaded image ID is not necessarily a registry digest reference.
+
+Fresh runners matter: project names alone do not isolate explicitly named workspace/cache volumes, global network defaults, or checkout-mounted state. Each independent sample must have fresh state. Upgrade samples must preserve the historical release's own Compose deployment and saved data through guarded conversion to the exact candidate. Preserve current readiness checks, historical bounded retries, single candidate attempt, rollback/journal checks, cancellation, original errors, bounded redacted logs and cleanup. Successful partial runs and unavailable/cancelled runs are not comparable complete samples.
+
+Required check names and aggregate runners are retained. Without a current protection/ruleset read proving compatibility, queue observations alone do not justify removing required-result linkages or changing repository protection.

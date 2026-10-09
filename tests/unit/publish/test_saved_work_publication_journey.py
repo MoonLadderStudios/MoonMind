@@ -377,6 +377,14 @@ async def journey(
                 repo=repo,
             )
 
+        async def selected_access(
+            connection_ref, *, repository, required_operations=()
+        ):
+            assert connection_ref == "repository-connection:git-default"
+            return managed_api_key_resolve.SelectedGitHubAccess(
+                connection=None, credential=await resolve(repo=repository)
+            )
+
         async def no_source_clone(*_args, **_kwargs):
             raise AssertionError(
                 "publication must not resolve an original-source token"
@@ -400,7 +408,7 @@ async def journey(
             )
 
         monkeypatch.setattr(
-            managed_api_key_resolve, "resolve_default_github_connection_credential", resolve
+            managed_api_key_resolve, "select_github_access_for_launch", selected_access
         )
         monkeypatch.setattr(
             github_credentials, "resolve_github_credential", no_ambient_credential
@@ -577,18 +585,19 @@ async def test_recorded_default_connection_publishes_instead_of_an_ambient_token
     )
     from tests.helpers.repository_connections import (
         github_pat_connection,
+        github_repository_assignment,
         record_repository_connections,
     )
 
-    real_default = managed_api_key_resolve.resolve_default_github_connection_credential
+    real_access = managed_api_key_resolve.select_github_access_for_launch
     real_ambient = github_credentials.resolve_github_credential
     async with journey(
         tmp_path, monkeypatch, destination_files={"README.md": "destination only\n"}
     ) as state:
         monkeypatch.setattr(
             managed_api_key_resolve,
-            "resolve_default_github_connection_credential",
-            real_default,
+            "select_github_access_for_launch",
+            real_access,
         )
         monkeypatch.setattr(
             github_credentials, "resolve_github_credential", real_ambient
@@ -599,6 +608,9 @@ async def test_recorded_default_connection_publishes_instead_of_an_ambient_token
             monkeypatch,
             tmp_path,
             github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_CONNECTION_PAT"),
+            assignments=(
+                github_repository_assignment(DEFAULT_GIT_CONNECTION_REF, REPOSITORY),
+            ),
         )
         try:
             result = await state.run(
@@ -613,9 +625,10 @@ async def test_recorded_default_connection_publishes_instead_of_an_ambient_token
         assert [c["github_token"] for c in state.provider.creates] == [
             "default-connection-token"
         ]
-        assert result["admission"]["authorityRef"].endswith(
-            f":{DEFAULT_GIT_CONNECTION_REF}"
-        )
+        authority = result["admission"]["authorityRef"]
+        assert f":{DEFAULT_GIT_CONNECTION_REF}" in authority
+        assert authority.endswith(":policy:1:credential:1")
+        assert "default-connection-token" not in authority
 
 
 @pytest.mark.asyncio

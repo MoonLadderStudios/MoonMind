@@ -373,6 +373,7 @@ describe('saved results after the source host is gone', () => {
       expect(publishRequests).toEqual([
         {
           savedWorkRef: 'art_saved_manifest',
+          admissionGeneration: expect.any(String),
           sourceRunId: 'saved-run',
           destination: {
             repository: 'MoonLadderStudios/MoonMind',
