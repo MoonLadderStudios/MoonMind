@@ -248,6 +248,16 @@ The race is therefore resolved in one direction:
   credentials whose lease was already released, and the caller cold-restores or
   branches instead.
 
+An execution that exits with a still-active or ambiguous provider observation
+parks its canonical command as `delivery_unknown`. The profile-bound workflow
+retry owner preserves that original failure after the runtime's bounded
+same-session recovery; remaining execution time alone does not authorize another
+delivery of the parked command. Its existing reconciliation owner must establish
+the effect before any further provider mutation. Ordinary transport retries keep
+their remaining-budget behavior. The
+`agent-run-omnigent-profile-bound-reconciliation-v1` replay patch preserves the
+recorded retry for retained histories without reopening or settling their commands.
+
 That fence is only real because every production teardown owner claims the *same*
 aggregate. `moonmind/omnigent/control_plane/cleanup_authority.py` owns that one
 claim, and both owners hold it before releasing anything and settle it after the
