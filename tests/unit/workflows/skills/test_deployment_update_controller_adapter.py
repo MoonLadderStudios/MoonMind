@@ -1,8 +1,9 @@
-"""deployment.update_compose_stack is only a submit/observe adapter once a controller is installed.
+"""deployment.update_compose_stack is only a submit/observe adapter onto the controller.
 
 A workflow that requests the typed update tool must not become a second
 updater beside the standalone controller: it submits the same controller
-operation under its durable execution identity and observes the result.
+operation under its durable execution identity and observes the result, and
+without an installed controller it refuses with the host repair route.
 Runs against the in-process ``deploy/controller`` endpoint.
 """
 
@@ -43,15 +44,6 @@ CONTEXT = {
 }
 
 
-class _NoLegacyRunner:
-    """Any legacy Compose use means the tool became a second updater."""
-
-    def __getattr__(self, name: str):
-        raise AssertionError(
-            f"legacy updater used ({name}) while a controller is installed"
-        )
-
-
 @pytest.fixture
 def controller_factory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -86,13 +78,7 @@ def controller_factory(
 
 
 def _handler():
-    executor = deployment_execution.DeploymentUpdateExecutor(
-        lock_manager=deployment_execution.DeploymentUpdateLockManager(),
-        desired_state_store=deployment_execution.InMemoryDesiredStateStore(),
-        evidence_writer=deployment_execution.InMemoryEvidenceWriter(),
-        runner=_NoLegacyRunner(),
-    )
-    return deployment_execution.build_deployment_update_handler(executor)
+    return deployment_execution.build_deployment_update_handler()
 
 
 def test_tool_submits_and_observes_the_controller_operation(
@@ -367,3 +353,62 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
     again = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
     assert again.outputs["operationId"] == result.outputs["operationId"]
     assert phases == ["select", "up", "migrate"]
+
+
+def test_tool_without_an_installed_controller_refuses_instead_of_updating_in_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Controller absence is a repair route, never permission for another updater."""
+    from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+    from moonmind.workflows.skills.deployment_tools import (
+        DEPLOYMENT_UPDATE_TOOL_NAME,
+        build_deployment_update_tool_definition_payload,
+    )
+    from moonmind.workflows.skills.tool_dispatcher import (
+        ToolActivityDispatcher,
+        execute_tool_activity,
+    )
+    from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
+    from moonmind.workflows.skills.tool_registry import create_registry_snapshot
+
+    state_dir = tmp_path / "controller-state"
+    state_dir.mkdir()
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(state_dir))
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    in_app_updates: list[object] = []
+
+    async def in_app_execute(self, *args, **kwargs):
+        in_app_updates.append(args)
+        raise AssertionError("the in-app Compose updater ran without a controller")
+
+    monkeypatch.setattr(
+        deployment_execution.DeploymentUpdateExecutor, "execute", in_app_execute
+    )
+    dispatcher = ToolActivityDispatcher()
+    deployment_execution.register_deployment_update_tool_handler(dispatcher)
+    snapshot = create_registry_snapshot(
+        skills=(
+            parse_tool_definition(build_deployment_update_tool_definition_payload()),
+        ),
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    with pytest.raises(ToolFailure) as failure:
+        asyncio.run(
+            execute_tool_activity(
+                invocation_payload={
+                    "id": "deploy-moonmind",
+                    "tool": {"type": "skill", "name": DEPLOYMENT_UPDATE_TOOL_NAME},
+                    "inputs": dict(INPUTS),
+                },
+                registry_snapshot=snapshot,
+                dispatcher=dispatcher,
+                context=dict(CONTEXT),
+            )
+        )
+
+    assert failure.value.error_code == "DEPLOYMENT_CONTROLLER_NOT_INSTALLED"
+    assert failure.value.retryable is False
+    assert failure.value.details["failureClass"] == "deployment_controller"
+    assert failure.value.details["repairCommand"] == "./tools/update-moonmind.sh"
+    assert in_app_updates == []
