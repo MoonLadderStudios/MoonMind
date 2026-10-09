@@ -176,6 +176,59 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     expect(branchRequestUrls.length).toBe(0);
   });
 
+  it("shows the default branch delivered with repository options without waiting on metadata", async () => {
+    // Metadata never answers: the branch field must not depend on it when the
+    // repository options already carry the verified default branch.
+    fetchSpy.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/github/branches/metadata")) {
+        metadataRequestUrls.push(url);
+        return new Promise(() => {});
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+    const { dashboardConfig } = mockPayload.initialData as {
+      dashboardConfig: { system: Record<string, unknown> };
+    };
+    const payload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          ...dashboardConfig,
+          system: {
+            ...dashboardConfig.system,
+            repositoryOptions: {
+              items: [
+                {
+                  value: "MoonLadderStudios/MoonMind",
+                  label: "MoonLadderStudios/MoonMind",
+                  source: "default",
+                  defaultBranch: "trunk",
+                },
+              ],
+              error: null,
+            },
+          },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+
+    const branchInput = (await screen.findByLabelText("Branch", {
+      selector: "input",
+    })) as HTMLInputElement;
+    expect(branchInput.placeholder).toBe("Branch");
+    const options = Array.from(
+      document.querySelectorAll<HTMLOptionElement>("#queue-branch-options option"),
+    ).map((option) => option.value);
+    expect(options).toContain("trunk");
+    expect(metadataRequestUrls).toEqual([]);
+  });
+
   it("preserves pasted text with at most one resolve and zero enumeration fetches", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
