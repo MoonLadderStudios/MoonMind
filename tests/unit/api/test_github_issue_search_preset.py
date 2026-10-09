@@ -917,6 +917,182 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
 
 
 @pytest.mark.asyncio
+async def test_blocked_assessment_stops_preset_before_start_with_original_diagnostic(
+    tmp_path, activity_boundary, monkeypatch
+):
+    """Durable assessment evidence survives the real preset/tool failure boundary."""
+    from datetime import datetime, timezone
+
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactActivities,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from tests.unit.workflows.temporal.test_activity_runtime import temporal_db
+    from tests.unit.workflows.temporal.workflows.test_run_deterministic_tool_refs_973 import (
+        _immediate_wait_condition,
+        _mock_plan_payload,
+        _normalize_payload,
+    )
+
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        expanded = await catalog.expand_template(
+            slug=PRESET,
+            scope="global",
+            scope_ref=None,
+            inputs={},
+            context={"repository": REPOSITORY},
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+
+    enabled = {
+        run_module.RUN_DETERMINISTIC_TOOL_REF_RESOLUTION_PATCH,
+        run_module.RUN_FAILED_RESULT_BLOCKER_PATCH,
+        run_module.RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH,
+        run_module.RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        run_module.RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    }
+    monkeypatch.setattr(run_module.workflow, "patched", lambda patch: patch in enabled)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_module.workflow, "upsert_search_attributes", lambda _attrs: None)
+    monkeypatch.setattr(run_module.workflow, "wait_condition", _immediate_wait_condition)
+    monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    info = SimpleNamespace(
+        task_queue="mm.workflow.user.v2",
+        namespace="default",
+        workflow_id="mm:66e24e5f",
+        workflow_run_id="run",
+        run_id="run",
+        search_attributes={},
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: info)
+    monkeypatch.setattr("temporalio.activity.info", lambda: info)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "logger",
+        SimpleNamespace(info=lambda *_args: None, warning=lambda *_args: None),
+    )
+
+    async def no_implementation(*_args, **_kwargs):
+        raise AssertionError("A blocked assessment must not start implementation")
+
+    monkeypatch.setattr(run_module.workflow, "execute_child_workflow", no_implementation)
+    reason = "Mandatory acceptance source is unavailable; restore the missing requirements attachment."
+    dispatched = []
+    results = {}
+    async with temporal_db(tmp_path) as sessions, sessions() as artifact_session:
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(artifact_session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activity_boundary.activities._artifact_service = service
+        assessment, _upload = await service.create(
+            principal="test:issue-search", content_type="application/json"
+        )
+        await service.write_complete(
+            artifact_id=assessment.artifact_id,
+            principal="test:issue-search",
+            payload=json.dumps({"verdict": "BLOCKED", "summary": reason}).encode(),
+            content_type="application/json",
+        )
+        steps = expanded["steps"]
+        load = steps[0]["tool"]
+        claimed = await activity_boundary.execute(load["id"], load["inputs"])
+        assert claimed.status == "COMPLETED", claimed.outputs
+        initial_writes = [
+            request for request in activity_boundary.requests if request.method != "GET"
+        ]
+        assert [(request.method, request.url.path) for request in initial_writes] == [
+            ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
+            ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
+        ]
+        workflow = MoonMindRunWorkflow()
+        workflow._owner_id = "test:issue-search"
+        workflow._repo = REPOSITORY
+        workflow._record_trusted_issue_context(claimed.outputs)
+        # The assessment ran elsewhere: only its durable ref crosses the
+        # boundary. No copied verdict, local assessment file, or prose.
+        workflow._record_assessment_context(
+            {"assessmentArtifactRef": assessment.artifact_id}
+        )
+        nodes = [
+            {
+                "id": name,
+                "tool": {"type": "skill", "name": step["tool"]["id"]},
+                "inputs": step["tool"]["inputs"],
+            }
+            for name, step in zip(("blockers", "start"), steps[2:4], strict=True)
+        ]
+        nodes.append(
+            {
+                "id": "implement",
+                "tool": {"type": "agent_runtime", "name": "omnigent"},
+                "inputs": {"instructions": "Implement the selected issue."},
+            }
+        )
+
+        async def execute_activity(activity_type, payload, **_kwargs):
+            normalized = _normalize_payload(payload)
+            if activity_type == "artifact.read":
+                if normalized["artifact_ref"] == "art:sha256:456":
+                    return json.dumps(activity_boundary.snapshot.to_payload()).encode()
+                return _mock_plan_payload(
+                    nodes,
+                    edges=[
+                        {"from": "blockers", "to": "start"},
+                        {"from": "start", "to": "implement"},
+                    ],
+                )
+            if activity_type == "artifact.create":
+                return await TemporalArtifactActivities(service).artifact_create(**normalized)
+            if activity_type == "artifact.write_complete":
+                return await TemporalArtifactActivities(service).artifact_write_complete(payload)
+            assert activity_type == "mm.tool.execute"
+            invocation = normalized["invocation_payload"]
+            dispatched.append(invocation["id"])
+            result = await activity_boundary.execute(
+                invocation["tool"]["name"], invocation["inputs"]
+            )
+            results[invocation["id"]] = result
+            return result.to_payload()
+
+        monkeypatch.setattr(run_module.workflow, "execute_activity", execute_activity)
+        with pytest.raises(ValueError) as failed:
+            await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+        assert reason in str(failed.value)
+        assert assessment.artifact_id in str(failed.value)
+        assert dispatched == ["blockers"]
+        result = results["blockers"]
+        assert result.status == "FAILED"
+        assert result.outputs["decision"] == "blocked"
+        assert result.outputs["assessmentVerdict"] == "BLOCKED"
+        assert result.outputs["assessmentArtifactRef"] == assessment.artifact_id
+        failed_step = workflow._step_ledger_row_for("blockers")
+        assert failed_step["status"] == "failed"
+        assert reason in failed_step["summary"]
+        assert assessment.artifact_id in failed_step["summary"]
+        assert all(
+            workflow._step_ledger_row_for(name)["status"] not in {"running", "completed"}
+            for name in ("start", "implement")
+        )
+        assert [
+            request for request in activity_boundary.requests if request.method != "GET"
+        ] == initial_writes
+        # Terminal reconciliation owns release, after writer/cleanup proof;
+        # the blocker must neither release the claim nor mark it successful.
+        assert {label["name"] for label in activity_boundary.detail["labels"]} == {
+            "bug", "status: in-progress"
+        }
+        assert workflow._publish_context.get("objectiveOutcome") != "idle"
+
+
+@pytest.mark.asyncio
 async def test_search_pagination_skips_blocked_issues_and_pull_requests(
     activity_boundary,
 ):
