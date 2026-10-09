@@ -8,6 +8,8 @@ under the one ``serve_workers`` owner, so:
 
 - child routing is derived from the queue the parent runs on, giving exactly
   the queues each former process produced;
+- workflow-fleet Activities scheduled by a workflow stay on its lane, so the
+  commands in-flight merge-lane histories recorded replay unchanged;
 - each lane keeps its own workflow-task budget, so a saturated normal lane
   cannot starve merge automation; and
 - every lane's Worker is built by the production construction helper.
@@ -21,9 +23,10 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from contextlib import asynccontextmanager
 
 import pytest
-from temporalio import workflow
+from temporalio import activity, workflow
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.config.settings import settings
@@ -83,6 +86,23 @@ class _LaneParentProbe:
         return {"routed": queue, "childRanOn": child_ran_on}
 
 
+@activity.defn(name="integration.resolve_adapter_metadata")
+async def _adapter_metadata_lane_probe(agent_id: str) -> dict[str, str]:
+    return {"agentId": agent_id, "ranOn": activity.info().task_queue}
+
+
+@workflow.defn(name="MM3937LaneAdapterMetadataProbe")
+class _LaneAdapterMetadataProbe:
+    """Resolves adapter metadata through the production AgentRun routing."""
+
+    @workflow.run
+    async def run(self) -> dict[str, str]:
+        agent_run = MoonMindAgentRun.__new__(MoonMindAgentRun)
+        return await agent_run._execute_routed_activity(
+            "integration.resolve_adapter_metadata", "jules"
+        )
+
+
 _BUSY_LOCK = threading.Lock()
 _BUSY_ENTERED: set[str] = set()
 _BUSY_ACTIVE = [0]
@@ -117,14 +137,7 @@ async def _wait_for(predicate, *, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.05)
 
 
-@pytest.mark.temporal_boundary
-@pytest.mark.asyncio
-async def test_merge_lane_progresses_while_normal_lane_is_saturated():
-    from temporalio.testing import WorkflowEnvironment
-    from temporalio.worker import UnsandboxedWorkflowRunner
-
-    from moonmind.workflows.temporal.worker_lifecycle import serve_workers
-    from moonmind.workflows.temporal.worker_runtime import _build_queue_workers
+def _workflow_fleet_topology():
     from moonmind.workflows.temporal.workers import describe_configured_worker
 
     topology = describe_configured_worker(
@@ -137,7 +150,89 @@ async def test_merge_lane_progresses_while_normal_lane_is_saturated():
         )
     )
     assert topology.task_queues == (USER_V2_QUEUE, REPLAY_QUEUE, MERGE_QUEUE)
+    return topology
 
+
+@asynccontextmanager
+async def _serving(workers):
+    """Serve ``workers`` through the production ``serve_workers`` owner."""
+
+    from moonmind.workflows.temporal.worker_lifecycle import serve_workers
+
+    stop = asyncio.Event()
+    ready = asyncio.Event()
+
+    async def mark_ready():
+        ready.set()
+
+    serving = asyncio.create_task(serve_workers(workers, ready=mark_ready, stop=stop))
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=10)
+        yield
+    finally:
+        stop.set()
+        await asyncio.wait_for(serving, timeout=30)
+
+
+@pytest.mark.temporal_boundary
+@pytest.mark.asyncio
+async def test_workflow_fleet_activity_stays_on_the_parent_lane():
+    """An external AgentRun resolves adapter metadata on its own lane.
+
+    The former merge-lane process built its activity catalog with
+    ``TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`` overridden to the merge queue, so
+    in-flight merge-lane histories recorded this command on that queue.  The
+    shared process must emit the same command or those runs stop replaying.
+    """
+
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner
+
+    from moonmind.workflows.temporal.worker_runtime import _build_queue_workers
+
+    topology = _workflow_fleet_topology()
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        workers = _build_queue_workers(
+            env.client,
+            topology,
+            {
+                "workflows": [_LaneAdapterMetadataProbe],
+                "activities": [_adapter_metadata_lane_probe],
+                "workflow_runner": UnsandboxedWorkflowRunner(),
+            },
+        )
+        async with _serving(workers):
+            for parent_queue, lane_queue in (
+                (MERGE_QUEUE, MERGE_QUEUE),
+                (USER_V2_QUEUE, USER_V2_QUEUE),
+                (REPLAY_QUEUE, USER_V2_QUEUE),
+            ):
+                handle = await env.client.start_workflow(
+                    _LaneAdapterMetadataProbe.run,
+                    id=f"mm3937-adapter-metadata-{parent_queue}",
+                    task_queue=parent_queue,
+                )
+                assert await handle.result() == {
+                    "agentId": "jules",
+                    "ranOn": lane_queue,
+                }
+                history = await handle.fetch_history()
+                assert [
+                    event.activity_task_scheduled_event_attributes.task_queue.name
+                    for event in history.events
+                    if event.HasField("activity_task_scheduled_event_attributes")
+                ] == [lane_queue]
+
+
+@pytest.mark.temporal_boundary
+@pytest.mark.asyncio
+async def test_merge_lane_progresses_while_normal_lane_is_saturated():
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner
+
+    from moonmind.workflows.temporal.worker_runtime import _build_queue_workers
+
+    topology = _workflow_fleet_topology()
     _BUSY_ENTERED.clear()
     _BUSY_PEAK[0] = 0
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -155,23 +250,10 @@ async def test_merge_lane_progresses_while_normal_lane_is_saturated():
             for worker in workers
         ] == [(USER_V2_QUEUE, 2), (REPLAY_QUEUE, 2), (MERGE_QUEUE, 2)]
 
-        stop = asyncio.Event()
-        ready = asyncio.Event()
-
-        async def mark_ready():
-            ready.set()
-
         # Busy runs hold slots in wall-clock time; skipping would expire them.
         with env.auto_time_skipping_disabled():
-            serving = asyncio.create_task(
-                serve_workers(workers, ready=mark_ready, stop=stop)
-            )
-            try:
-                await asyncio.wait_for(ready.wait(), timeout=10)
+            async with _serving(workers):
                 await _assert_merge_lane_progresses(env)
-            finally:
-                stop.set()
-                await asyncio.wait_for(serving, timeout=30)
 
 
 async def _assert_merge_lane_progresses(env) -> None:
