@@ -260,8 +260,18 @@ advance the installed release when a suitable new image is available for a confi
 the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
-shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+shared host image (recreated without draining, checkpointing, or deferring for active sessions), while inactive profiles remain inactive. A MoonMind update
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
+
+Recreating an active host needs no operator draining or checkpointing. The
+updater does not supervise agent recovery: Omnigent reports the interrupted
+turn's host lost (`OMNIGENT_SESSION_HOST_LOST`, `retry_step_execution`), the
+realizer saves the caller-owned workspace before releasing the host, and the
+Run workflow retries only that step as a new, bounded Step Execution that
+restores the saved workspace archive. Completed steps are not repeated. Work
+after the last saved boundary may be repeated. A step whose workspace could not
+be saved restarts from its admitted step inputs, and its retry records that
+limitation. Explicit cancellation starts no retry.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
 The standalone controller delegates selection and migration to the existing
