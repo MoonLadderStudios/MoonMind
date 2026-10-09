@@ -1078,10 +1078,11 @@ jobs:
     # server, and a browser capture proving the compiled native UI baked into
     # the image renders from its hosted boot payload with no root /v1 traffic.
     #
-    # Restart/terminal replay after a fake provider host is removed is NOT
-    # asserted here: this job runs no provider execution, and the
-    # reliability-journey / embedded-recovery gates own that boundary on the
-    # same commit.
+    # A separate credential-free row also replaces a real host container,
+    # reopens SQLite bridge state and reconnects the same session without any
+    # model/user input. Its internal network cannot reach model providers.
+    # Provider execution and the broader concurrency qualification remain
+    # separately owned; this row does not claim those outcomes.
     #
     # It uses no protected credentials and no self-hosted runner, so a Tier-2
     # credentialed canary, Tier-3 post-deployment synthetic, or Tier-4
@@ -1090,7 +1091,7 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.exact_artifact == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60
@@ -1245,6 +1246,98 @@ jobs:
             --runtime-evidence runtime-evidence.json \
             --compatibility-manifest compatibility-manifest.json \
             --output-dir artifacts/omnigent-exact-artifact
+      - name: Verify the pinned recovery runtime source
+        id: recovery-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(git rev-parse HEAD:omnigent)"
+          actual="$(git -C omnigent rev-parse HEAD)"
+          test "$actual" = "$expected"
+          echo "commit=$actual" >> "$GITHUB_OUTPUT"
+      - name: Build the pinned recovery server
+        uses: docker/build-push-action@v6
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          load: true
+          tags: moonmind-test-omnigent-server:candidate
+          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
+          cache-from: type=gha,scope=credential-free-recovery-server
+          cache-to: type=gha,scope=credential-free-recovery-server,mode=max
+      - name: Build the pinned recovery host base
+        uses: docker/build-push-action@v6
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          target: host
+          load: true
+          tags: moonmind-test-omnigent-host-base:candidate
+          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
+          cache-from: type=gha,scope=credential-free-recovery-host
+          cache-to: type=gha,scope=credential-free-recovery-host,mode=max
+      - name: Resolve job-local immutable recovery artifacts
+        id: recovery-images
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A local registry gives the canonical host launcher its real
+          # repository@sha256 identity. Nothing is published off this runner;
+          # 127.0.0.1 works without changing daemon trust/configuration.
+          docker run -d --name moonmind-test-recovery-registry \
+            -p 127.0.0.1:5000:5000 registry:3.0.0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
+            if [[ "$attempt" = 30 ]]; then exit 1; fi
+            sleep 1
+          done
+          pin_local_image() {
+            local source="$1" repository="$2"
+            docker tag "$source" "$repository:candidate"
+            docker push "$repository:candidate" >&2
+            docker image inspect "$repository:candidate" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep -E "^${repository}@sha256:[0-9a-f]{64}$"
+          }
+          server="$(pin_local_image moonmind-test-omnigent-server:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-server)"
+          base="$(pin_local_image moonmind-test-omnigent-host-base:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host-base)"
+          # Use the existing OpenCode host layer and warmed offline plugin
+          # cache over the exact upstream base just built from the gitlink.
+          # The daemon-backed default builder can resolve the loopback registry.
+          docker buildx build --builder default --load \
+            -f services/omnigent/opencode-host/Dockerfile \
+            --build-arg "OMNIGENT_HOST_BASE_IMAGE=$base" \
+            --build-arg "OMNIGENT_BUILD_DIGEST=${base##*@}" \
+            --label "org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}" \
+            --label "moonmind.source.revision=$(git rev-parse HEAD)" \
+            -t moonmind-test-omnigent-host:candidate .
+          host="$(pin_local_image moonmind-test-omnigent-host:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host)"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/moonmind-test-recovery-dependencies"
+          # Pure-Python test tooling is mounted separately into the unchanged
+          # candidate image; no production package/source is installed over it.
+          uv pip install --target "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
+            --only-binary=:all: 'pytest>=9.0.3,<9.2.0' 'pytest-asyncio>=1.3,<2' 'aiosqlite>=0.19,<0.23'
+      - name: Require credential-free exact-image host recovery
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/ci/run_credential_free_host_recovery.py \
+            --moonmind-image "${{ steps.digest.outputs.runnable }}" \
+            --server-image "${{ steps.recovery-images.outputs.server }}" \
+            --host-image "${{ steps.recovery-images.outputs.host }}" \
+            --pr-head "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --base-commit "${{ github.event.pull_request.base.sha || github.event.before || github.sha }}" \
+            --dependencies "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
+            --output-dir artifacts/omnigent-exact-artifact/credential-free-recovery
+      - name: Stop the job-local recovery registry
+        if: always()
+        run: docker rm -fv moonmind-test-recovery-registry || true
       - name: Collect exact-artifact diagnostics
         if: failure()
         shell: bash

@@ -9,6 +9,7 @@ metadata:
     terminalContractId: pr_resolver_terminal.v1
     terminalSchemaVersion: moonmind.pr-resolver-result.v1
   publish:
+    githubOperations: [write, branch_write, review_request]
     mode: auto
     owner: agent
     requiresEvidence: true

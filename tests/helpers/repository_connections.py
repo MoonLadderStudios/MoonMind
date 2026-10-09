@@ -19,7 +19,18 @@ from moonmind.workflows.executions.repository_contract import (
 )
 
 
-def github_pat_connection(connection_id: str, env_key: str) -> RepositoryConnection:
+def github_pat_connection(
+    connection_id: str,
+    env_key: str,
+    *,
+    operations: Sequence[str] = (
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "merge_request",
+    ),
+) -> RepositoryConnection:
     """A system-scope GitHub connection whose PAT is the SecretRef ``env://<key>``."""
 
     return RepositoryConnection.model_validate(
@@ -29,13 +40,7 @@ def github_pat_connection(connection_id: str, env_key: str) -> RepositoryConnect
             "provider": "git",
             "displayName": connection_id,
             "endpointRef": "https://github.com",
-            "allowedOperations": [
-                "read",
-                "write",
-                "branch_write",
-                "review_request",
-                "merge_request",
-            ],
+            "allowedOperations": list(operations),
             "clientPolicy": {
                 "pinnedVersion": "2.46.0",
                 "toolBundleRef": "repository-client:git-system",

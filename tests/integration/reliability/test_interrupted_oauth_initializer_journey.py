@@ -43,16 +43,22 @@ async def test_worker_loss_recovers_initializer_and_preserves_oauth_state(
         container_name + "-" + suffix for suffix in ("state", "artifacts", "cache")
     ]
     backend = DockerCommandBackend()
-    _, image_ref, _ = await backend.run(
-        [
-            "docker",
-            "image",
-            "inspect",
-            "postgres:17",
-            "--format",
-            "{{index .RepoDigests 0}}",
-        ]
-    )
+    # Host cleanup retires the GitHub projection with the production python3
+    # fence program, so the stand-in host image must provide python3 as real
+    # host images do.
+    stand_in_image = "python:3.13-alpine"
+    inspect_image = [
+        "docker",
+        "image",
+        "inspect",
+        stand_in_image,
+        "--format",
+        "{{index .RepoDigests 0}}",
+    ]
+    code, image_ref, _ = await backend.run(inspect_image, check=False)
+    if code != 0:
+        await backend.run(["docker", "pull", stand_in_image])
+        _, image_ref, _ = await backend.run(inspect_image)
     for selector in (
         "OMNIGENT_IMAGE_REF",
         "OMNIGENT_HOST_IMAGE_REF",

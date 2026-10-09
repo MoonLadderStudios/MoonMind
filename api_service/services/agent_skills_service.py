@@ -14,16 +14,19 @@ from api_service.db.models import (
     AgentSkillFormat,
     SkillSet,
 )
-from moonmind.services.skill_resolution import (
-    extract_required_capabilities_from_skill_markdown,
-    extract_required_skill_names_from_skill_markdown,
-)
 from moonmind.capabilities.input_contracts import (
     CapabilityInputContractError,
     contract_from_skill_markdown,
     contract_metadata_for_artifact,
 )
+from moonmind.services.skill_resolution import (
+    extract_publish_metadata_from_skill_markdown,
+    extract_required_capabilities_from_skill_markdown,
+    extract_required_skill_names_from_skill_markdown,
+    extract_side_effect_metadata_from_skill_markdown,
+)
 from moonmind.workflows.temporal import TemporalArtifactService
+
 
 class AgentSkillDuplicateError(ValueError):
     """Raised when creating a skill or skillset with a duplicate slug."""
@@ -144,6 +147,12 @@ class AgentSkillsService:
                 "format": format_str,
                 "required_skills": list(required_skills),
                 "required_capabilities": list(required_capabilities),
+                "publish": extract_publish_metadata_from_skill_markdown(
+                    content, skill_name=skill_slug
+                ),
+                "sideEffect": extract_side_effect_metadata_from_skill_markdown(
+                    content, skill_name=skill_slug
+                ),
                 "source_issue": "MM-1047",
                 "implementation_issue": "MM-1053",
                 "input_schema": input_contract.get("inputSchema", {}),

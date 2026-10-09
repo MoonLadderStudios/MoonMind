@@ -3,12 +3,14 @@ name: fix-merge-conflicts
 description: Sync the branch with the latest PR base branch from `origin`, merge the PR base ref, resolve conflicts end-to-end, then commit and push the current branch.
 metadata:
   publish:
+    githubOperations: [write, branch_write]
     mode: auto
     owner: agent
     requiresEvidence: true
     verifyRemoteHead: exact
   required-capabilities:
     - git
+    - gh
 inputSchema:
   type: object
   required:

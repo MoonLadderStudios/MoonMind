@@ -7981,6 +7981,11 @@ def _session_activities(
     ("selected_ref", "selected_token", "other_token"),
     [
         ("repository-connection:team-b", "token-for-selected-B", "token-for-default-A"),
+        (
+            "repository-connection:git-default",
+            "token-for-default-A",
+            "token-for-selected-B",
+        ),
         # A bare repository selects the default, as an omitted connectionRef does.
         (None, "token-for-default-A", "token-for-selected-B"),
     ],
@@ -8013,7 +8018,7 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
             ),
             github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
-            )
+            ),
         ],
     )
     workspace_root = tmp_path / "agent_jobs"
@@ -8073,7 +8078,7 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
             ),
             github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
-            )
+            ),
         ],
     )
     workspace_root = tmp_path / "agent_jobs"

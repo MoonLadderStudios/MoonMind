@@ -1638,3 +1638,82 @@ async def test_unprofiled_execute_claims_the_canonical_turn_boundary(
     # and the delivered provider session is attached to canonical authority.
     assert cleanup is not None and cleanup.generation >= 1
     assert session.provider_session_ref == "provider-session-unprofiled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_binding", [False, True])
+async def test_projected_host_refresh_failure_reaches_bounded_same_request_retry(
+    monkeypatch, explicit_binding
+):
+    import moonmind.workflows.temporal.workflows.agent_run as agent_run_module
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+    failure = OmnigentOAuthHostError(
+        "existing host GitHub projection refresh failed; retain the host for retry",
+        code="OMNIGENT_GITHUB_PROJECTION_REFRESH_FAILED",
+    )
+    failure.admitted_provider_capacity_cleanup_completed = False
+    result = AgentRunResult(summary="continued on the same host")
+    execute = AsyncMock(side_effect=[failure, result])
+    registry = SimpleNamespace(require=lambda _ref: SimpleNamespace(execute=execute))
+    plan_store = SimpleNamespace(load=AsyncMock(return_value=plan))
+    binding = OmnigentExecutionPlanBinding(
+        planRef=plan.planRef,
+        planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        planArtifactRef="artifact:refresh-plan",
+        taskInputSnapshotRef="artifact:refresh-input",
+        taskInputSnapshotDigest="sha256:" + "a" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-refresh",
+        idempotencyKey="step-refresh",
+        resolvedSkillsetRef="artifact:skills",
+        omnigentExecutionPlan=binding if explicit_binding else None,
+        parameters={"executionPlanRef": plan.planRef},
+    )
+    clocks = iter(
+        [
+            datetime(2026, 10, 8, tzinfo=UTC),
+            datetime(2026, 10, 8, tzinfo=UTC) + timedelta(seconds=20),
+        ]
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: next(clocks))
+    attempts = []
+
+    async def admitted_attempt(**kwargs):
+        attempts.append(kwargs)
+        response = await _try_generic_realizer_dispatch(
+            kwargs["request"],
+            plan_store=plan_store,
+            realizer_registry=registry,
+        )
+        return response, None
+
+    run = agent_run_module.MoonMindAgentRun()
+    monkeypatch.setattr(
+        run, "_execute_omnigent_with_admitted_capacity", admitted_attempt
+    )
+    actual, _ = await run._execute_profile_bound_with_remaining_budget(
+        act_name="integration.omnigent.profile_bound_execute",
+        request=request,
+        admission=object(),
+        parent_info=None,
+        stc_seconds=3600,
+        admit_capacity_before_activity=False,
+        execution_plan_admission=True,
+    )
+    assert actual == result
+    assert [attempt["stc_seconds"] for attempt in attempts] == [3600, 3580]
+    assert all(attempt["request"] is request for attempt in attempts)
+    assert all(attempt["retry_policy"].maximum_attempts == 1 for attempt in attempts)
+    assert execute.await_count == 2
+    assert failure.admitted_provider_capacity_cleanup_completed is False
+    assert [call.args[0].idempotency_key for call in execute.await_args_list] == [
+        "step-refresh",
+        "step-refresh",
+    ]

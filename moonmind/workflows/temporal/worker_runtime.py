@@ -1247,6 +1247,8 @@ def _normalized_agent_skill_payload(
             "contentDigest",
             "inputContractDigest",
             "requiredCapabilities",
+            "publish",
+            "sideEffect",
         )
         if key in skill_payload
     }

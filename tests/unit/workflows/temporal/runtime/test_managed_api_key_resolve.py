@@ -700,6 +700,10 @@ async def test_without_recorded_connection_the_declared_deployment_token_applies
     monkeypatch.setenv("GITHUB_TOKEN", "declared-token")
 
     assert await resolve_github_token_for_launch({}) == "declared-token"
+    publication = await managed_api_key_resolve_module.resolve_default_github_connection_credential(
+        required_operations=("read", "write", "branch_write", "review_request")
+    )
+    assert publication.token == "declared-token"
 
 
 async def test_no_recorded_connection_and_no_declaration_yields_no_token(
@@ -1104,6 +1108,7 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
         record_repository_connections,
     )
 
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "selected-default-token")
     _read_recorded_store(monkeypatch)
     engine = await record_repository_connections(
         monkeypatch,
@@ -1122,16 +1127,321 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
                 DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
             )
         )
+        resolved = await managed_api_key_resolve_module.resolve_default_github_connection_credential(
+            repo="MoonLadderStudios/MoonMind",
+            required_operations=("read", "write", "branch_write", "review_request"),
+        )
     finally:
         await engine.dispose()
 
     assert selected is not None
+    assert resolved.token == "selected-default-token"
     assert selected.allowed_operations == (
         "read",
         "write",
         "branch_write",
         "review_request",
     )
+
+
+async def _record_default_migration_provenance(engine) -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from api_service.db.models import RepositoryConnectionAuditEvent
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+
+    async with async_sessionmaker(engine)() as session:
+        session.add(
+            RepositoryConnectionAuditEvent(
+                request_id="migration:391:legacy-github-credential",
+                actor_ref="system:migration-391",
+                action="connection.create",
+                connection_id=DEFAULT_GIT_CONNECTION_REF,
+                scope_type="system",
+                policy_revision=1,
+                detail_json={"migration": "391_legacy_github_cred_4023"},
+            )
+        )
+        await session.commit()
+
+
+@pytest.mark.parametrize(
+    ("assigned", "migrated"),
+    [(False, False), (True, False), (True, True)],
+    ids=["unassigned-operator", "scoped-operator", "scoped-migration"],
+)
+async def test_default_connection_denies_unassigned_repository_before_reading_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, assigned: bool, migrated: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token")
+    _read_recorded_store(monkeypatch)
+    read_secret = AsyncMock(return_value="selected-default-token")
+    monkeypatch.setattr(
+        managed_api_key_resolve_module,
+        "resolve_managed_api_key_reference",
+        read_secret,
+    )
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
+        assignments=(
+            [
+                github_repository_assignment(
+                    DEFAULT_GIT_CONNECTION_REF, "MoonLadderStudios/MoonMind"
+                )
+            ]
+            if assigned
+            else []
+        ),
+    )
+    try:
+        if migrated:
+            await _record_default_migration_provenance(engine)
+        resolved = await managed_api_key_resolve_module.resolve_default_github_connection_credential(
+            repo="MoonLadderStudios/unassigned"
+        )
+        assert not resolved.resolved
+        assert resolved.source.value == "unresolvable"
+        assert "is not assigned to MoonLadderStudios/unassigned" in resolved.safe_summary
+        read_secret.assert_not_awaited()
+        with pytest.raises(RepositoryContractError, match="is not assigned"):
+            await managed_api_key_resolve_module.select_git_connection_for_launch(
+                DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/unassigned"
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_default_connection_assignment_bounds_repository_operations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "selected-default-token")
+    _read_recorded_store(monkeypatch)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
+        assignments=[
+            github_repository_assignment(
+                DEFAULT_GIT_CONNECTION_REF,
+                "MoonLadderStudios/MoonMind",
+                operations=("read",),
+            )
+        ],
+    )
+    try:
+        selected = await managed_api_key_resolve_module.select_git_connection_for_launch(
+            DEFAULT_GIT_CONNECTION_REF,
+            repository="https://github.com/moonladderstudios/moonmind.git",
+        )
+        resolved = await managed_api_key_resolve_module.resolve_default_github_connection_credential(
+            repo="MoonLadderStudios/MoonMind"
+        )
+    finally:
+        await engine.dispose()
+
+    assert selected.allowed_operations == ("read",)
+    assert resolved.token == "selected-default-token"
+
+
+@pytest.mark.parametrize("assigned", [False, True])
+async def test_default_connection_without_repository_preserves_readiness_and_registry_use(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, assigned: bool
+) -> None:
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    _clear_ghcr_deployment_env(monkeypatch)
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "selected-default-token")
+    monkeypatch.setattr(
+        managed_api_key_resolve_module,
+        "_resolve_github_login_for_token",
+        _login("octocat"),
+    )
+    _read_recorded_store(monkeypatch)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
+        assignments=(
+            [
+                github_repository_assignment(
+                    DEFAULT_GIT_CONNECTION_REF, "MoonLadderStudios/MoonMind"
+                )
+            ]
+            if assigned
+            else []
+        ),
+    )
+    try:
+        resolved = await managed_api_key_resolve_module.resolve_default_github_connection_credential()
+        assert resolved.token == "selected-default-token"
+        assert resolved.repo is None
+        assert await resolve_github_token_for_launch({}) == "selected-default-token"
+        assert await resolve_ghcr_pull_credentials_for_launch() == (
+            "octocat",
+            "selected-default-token",
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("publish_mode", "missing_operation"),
+    [
+        (mode, operation)
+        for mode, operations in (
+            ("branch", ("read", "write", "branch_write")),
+            ("pr", ("read", "write", "branch_write", "review_request")),
+        )
+        for operation in operations
+    ],
+)
+async def test_profile_bound_publication_denies_missing_assignment_operation_before_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, missing_operation
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+    from moonmind.omnigent.profile_bound_execution import (
+        OmnigentProfileBoundExecutionCoordinator,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-must-not-be-used")
+    _read_recorded_store(monkeypatch)
+    read_secret = AsyncMock(return_value="selected-secret-must-not-be-read")
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref", read_secret
+    )
+    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT")
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        connection,
+        assignments=[
+            github_repository_assignment(
+                connection.id,
+                "owner/repo",
+                operations=tuple(
+                    op
+                    for op in connection.allowed_operations
+                    if op != missing_operation
+                ),
+            )
+        ],
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="publication-authority",
+        idempotencyKey="publication-authority",
+        workspaceSpec={"repository": "owner/repo"},
+        parameters={"publishMode": publish_mode, "requiredCapabilities": ["git", "gh"]},
+    )
+    try:
+        with pytest.raises(OmnigentOAuthHostError) as denied:
+            await OmnigentProfileBoundExecutionCoordinator._github_token(request)
+        assert denied.value.code == "github_auth_unavailable"
+        assert missing_operation in str(denied.value)
+        read_secret.assert_not_awaited()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("publish_mode", "operations"),
+    [
+        ("none", ("read",)),
+        ("branch", ("read", "write", "branch_write")),
+        ("pr", ("read", "write", "branch_write", "review_request")),
+    ],
+)
+async def test_profile_bound_publication_accepts_exact_assignment_operations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, publish_mode, operations
+) -> None:
+    from moonmind.omnigent.profile_bound_execution import (
+        OmnigentProfileBoundExecutionCoordinator,
+    )
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+    )
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    _clear_deployment_github_env(monkeypatch)
+    monkeypatch.setenv("SELECTED_PAT", "selected-only")
+    _read_recorded_store(monkeypatch)
+    connection = github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "SELECTED_PAT")
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        connection,
+        assignments=[
+            github_repository_assignment(
+                connection.id, "owner/repo", operations=operations
+            )
+        ],
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="publication-authority",
+        idempotencyKey="publication-authority",
+        workspaceSpec={"repository": "owner/repo"},
+        parameters={"publishMode": publish_mode, "requiredCapabilities": ["git", "gh"]},
+    )
+    try:
+        assert await OmnigentProfileBoundExecutionCoordinator._github_token(
+            request
+        ) == ("selected-only")
+    finally:
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
