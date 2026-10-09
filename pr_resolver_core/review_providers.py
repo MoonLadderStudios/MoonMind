@@ -551,6 +551,31 @@ def _timestamp(value: object) -> datetime | None:
     return _comment_time({"created_at": value})
 
 
+def automatic_review_request(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    summary: AutomaticReviewSummary,
+    head_sha: str,
+) -> ReviewRequest | None:
+    """Fail closed on undated requests and retain requests after completion.
+
+    A malformed request date cannot prove that a rerun predates this result.
+    Git commit dates cannot hide a later server-observed explicit request.
+    """
+    for comment in comments:
+        if not is_review_request_comment(provider, comment):
+            continue
+        commit = str(comment.get("commit_id") or "").strip()
+        if commit and commit != head_sha:
+            continue
+        if _comment_time(comment) is None:
+            raise RuntimeError("Unable to qualify explicit review request chronology")
+    return latest_review_request(
+        provider, comments, head_sha=head_sha, not_before=summary.completed_at
+    )
+
+
 def latest_automatic_review_summary(
     provider: AutomatedReviewProvider,
     comments: Iterable[Any],
@@ -643,7 +668,6 @@ def automatic_review_reply(
     *,
     summary: AutomaticReviewSummary,
     head_sha: str,
-    head_committed_at: datetime,
 ) -> tuple[ReviewReply | None, Mapping[str, Any] | None]:
     """Preserve authoritative replies and flag newer unclassified feedback.
 
@@ -655,7 +679,9 @@ def automatic_review_reply(
     unknown = None
     unknown_at = None
     undated = None
-    lower_bound = max(_comment_time(summary.comment), head_committed_at)
+    # The exact reviewed SHA binds the head; Git author/committer dates cannot
+    # establish when GitHub observed it. Use server comment chronology only.
+    lower_bound = _comment_time(summary.comment)
     for comment in comments:
         if not isinstance(comment, Mapping) or not _provider_bot(
             provider, comment.get("user")

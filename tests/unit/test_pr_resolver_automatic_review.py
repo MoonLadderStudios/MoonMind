@@ -370,6 +370,38 @@ def test_new_explicit_request_supersedes_automatic_completion(
     assert evidence["requestCommentId"] == 6082098612
 
 
+@pytest.mark.parametrize("created_at", [None, "invalid", "2026-10-09T13:45:47"])
+def test_request_with_unknown_chronology_cannot_reuse_automatic_completion(
+    snapshot_module, monkeypatch, captured, created_at
+):
+    request = _feedback(
+        captured, body="@codex review", at="2026-10-09T13:45:47Z", user="operator"
+    )
+    request["created_at"] = created_at
+    captured["comments"].append(request)
+    with pytest.raises(RuntimeError, match="explicit review request chronology"):
+        _evidence(snapshot_module, monkeypatch, captured)
+
+
+def test_later_request_cannot_be_hidden_by_future_git_commit_date(
+    snapshot_module, monkeypatch, captured
+):
+    captured["comments"].append(
+        _feedback(
+            captured, body="@codex review", at="2026-10-09T13:45:47Z", user="operator"
+        )
+    )
+    evidence = _evidence(
+        snapshot_module,
+        monkeypatch,
+        captured,
+        head_committed_at=datetime.fromisoformat("2027-01-01T00:00:00+00:00"),
+    )
+    assert evidence["freshReviewForHead"] is False
+    assert evidence["requestPending"] is True
+    assert evidence["requestCommentId"] == 6082098612
+
+
 @pytest.mark.parametrize(
     "variant", ["full_sha", "reused_comment", "same_second_update", "precise_update"]
 )
@@ -406,25 +438,20 @@ def test_newer_unclassified_provider_feedback_cannot_reuse_old_completion(
     assert evidence["requestFailed"] is False
 
 
-def test_automatic_summary_requires_head_chronology(
-    snapshot_module, monkeypatch, captured
+@pytest.mark.parametrize("head_date", [None, "2027-01-01T00:00:00+00:00"])
+def test_exact_automatic_completion_does_not_trust_author_controlled_commit_dates(
+    snapshot_module, monkeypatch, captured, head_date
 ):
     build = snapshot_module["build_automated_review_evidence"]
     monkeypatch.setitem(
         build.__globals__, "_fetch_head_commit_timestamp", lambda **kwargs: None
     )
+    at = datetime.fromisoformat(head_date) if head_date else None
     assert (
-        _evidence(snapshot_module, monkeypatch, captured, head_committed_at=None)[
+        _evidence(snapshot_module, monkeypatch, captured, head_committed_at=at)[
             "freshReviewForHead"
         ]
-        is False
-    )
-    future = datetime.fromisoformat("2026-10-09T13:46:00+00:00")
-    assert (
-        _evidence(snapshot_module, monkeypatch, captured, head_committed_at=future)[
-            "freshReviewForHead"
-        ]
-        is False
+        is True
     )
 
 
@@ -491,9 +518,99 @@ def test_abbreviated_commit_requires_authoritative_disambiguation(
         assert resolve(**params) == (captured["head_sha"] if change == "none" else None)
 
 
+@pytest.mark.parametrize("change", ["complete", "incomplete", "ambiguous"])
+def test_large_pr_commit_inventory_uses_complete_exact_sha_comparison(
+    snapshot_module, monkeypatch, captured, change
+):
+    resolve = snapshot_module["_resolve_automatic_review_commit"]
+    head = captured["head_sha"]
+    base = "b" * 40
+    commits = [{"sha": f"{i:040x}"} for i in range(300)] + [{"sha": head}]
+    pull = {
+        "number": captured["pr_number"],
+        "head": {"sha": head},
+        "base": {"sha": base, "repo": {"full_name": captured["repository"]}},
+        "commits": len(commits),
+    }
+    if change == "incomplete":
+        commits = commits[:-1]
+    elif change == "ambiguous":
+        commits.append({"sha": head[:7] + "c" * 33})
+        pull["commits"] += 1
+    reads = []
+
+    def read(command, *_args, **kwargs):
+        reads.append(command[-1])
+        if "/compare/" in command[-1]:
+            assert command == [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{captured['repository']}/compare/{base}...{head}?per_page=100",
+            ]
+            assert kwargs["paginated"] is True
+            assert kwargs["records_key"] == "commits"
+            return commits
+        return {"sha": head} if "/commits/" in command[-1] else pull
+
+    monkeypatch.setitem(resolve.__globals__, "run_command", read)
+    monkeypatch.setitem(
+        resolve.__globals__, "_fetch_review_collection", lambda endpoint: commits[:250]
+    )
+    params = {
+        "pr_repo": captured["repository"],
+        "pr_number": captured["pr_number"],
+        "commit_ref": head[:7],
+        "head_sha": head,
+    }
+    if change == "incomplete":
+        with pytest.raises(RuntimeError, match="Incomplete PR commit inventory"):
+            resolve(**params)
+    else:
+        assert resolve(**params) == (head if change == "complete" else None)
+    assert any("/compare/" in endpoint for endpoint in reads)
+
+
+@pytest.mark.parametrize("second_page", ["complete", "missing_key", "non_object"])
+def test_required_command_reads_every_object_page_or_fails(
+    snapshot_module, monkeypatch, second_page
+):
+    first = {"commits": [{"sha": "a" * 40}]}
+    last = {"commits": [{"sha": "b" * 40}]}
+    if second_page == "missing_key":
+        last = {"other": []}
+    elif second_page == "non_object":
+        last = []
+    result = snapshot_module["subprocess"].CompletedProcess(
+        args=["gh"],
+        returncode=0,
+        stdout=json.dumps(first) + "\n" + json.dumps(last),
+        stderr="",
+    )
+    monkeypatch.setattr(snapshot_module["subprocess"], "run", lambda *_a, **_k: result)
+    run = snapshot_module["run_command"]
+    command = ["gh", "api", "--paginate", "repos/example/repo/compare/base...head"]
+    if second_page == "complete":
+        assert run(command, paginated=True, records_key="commits") == [
+            {"sha": "a" * 40},
+            {"sha": "b" * 40},
+        ]
+    else:
+        with pytest.raises(SystemExit):
+            run(command, paginated=True, records_key="commits")
+
+
 @pytest.mark.parametrize(
     "change",
-    ["findings", "issue_findings", "head", "restart", "missing_inventory", "refusal"],
+    [
+        "findings",
+        "issue_findings",
+        "head",
+        "restart",
+        "missing_inventory",
+        "refusal",
+        "request_unknown",
+    ],
 )
 def test_snapshot_refreshes_automatic_completion_before_opening_gate(
     snapshot_module, monkeypatch, tmp_path, captured, change
@@ -585,6 +702,15 @@ def test_snapshot_refreshes_automatic_completion_before_opening_gate(
                         at="2026-10-09T13:45:47Z",
                     )
                 )
+            elif change == "request_unknown":
+                request = _feedback(
+                    captured,
+                    body="@codex review",
+                    at="2026-10-09T13:45:47Z",
+                    user="operator",
+                )
+                request["created_at"] = None
+                comments.append(request)
         return {"comments": comments, "reviews": [], "thread_inventory_complete": True}
 
     monkeypatch.setitem(scope, "run_command", read_comments)
@@ -605,6 +731,11 @@ def test_snapshot_refreshes_automatic_completion_before_opening_gate(
     )
     if change == "head":
         with pytest.raises(SystemExit):
+            main()
+        assert not path.exists()
+        return
+    if change == "request_unknown":
+        with pytest.raises(RuntimeError, match="explicit review request chronology"):
             main()
         assert not path.exists()
         return
