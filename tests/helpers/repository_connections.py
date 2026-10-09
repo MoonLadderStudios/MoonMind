@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -22,7 +23,13 @@ def github_pat_connection(
     connection_id: str,
     env_key: str,
     *,
-    operations: Sequence[str] = ("read", "write", "branch_write", "review_request"),
+    operations: Sequence[str] = (
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "merge_request",
+    ),
 ) -> RepositoryConnection:
     """A system-scope GitHub connection whose PAT is the SecretRef ``env://<key>``."""
 
@@ -53,7 +60,13 @@ def github_repository_assignment(
     connection_id: str,
     repository: str,
     *,
-    operations: Sequence[str] = ("read", "write", "branch_write", "review_request"),
+    operations: Sequence[str] = (
+        "read",
+        "write",
+        "branch_write",
+        "review_request",
+        "merge_request",
+    ),
 ) -> RepositoryAssignment:
     """A verified grant of ``connection_id`` to the GitHub ``owner/name``."""
 
@@ -76,12 +89,14 @@ async def record_repository_connections(
     *connections: RepositoryConnection,
     assignments: Sequence[RepositoryAssignment] = (),
     managed_secrets: Mapping[str, str] | None = None,
+    admitted_runs: Mapping[str, Mapping[str, Any]] | None = None,
 ):
     """Create ``connections`` in a fresh database the launch boundary reads.
 
-    ``assignments`` are granted through the same service, and
-    ``managed_secrets`` maps active managed-secret slugs to their values.
-    Returns the engine; callers dispose it when the test ends.
+    ``assignments`` are granted through the same service,
+    ``managed_secrets`` maps active managed-secret slugs to their values, and
+    ``admitted_runs`` maps run workflow IDs to their recorded canonical
+    parameters. Returns the engine; callers dispose it when the test ends.
     """
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -94,6 +109,8 @@ async def record_repository_connections(
         RepositoryConnectionRecord,
         RepositoryRouteDefault,
         SecretStatus,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
     )
     from api_service.services.repository_connections import (
         RepositoryConnectionService,
@@ -112,6 +129,7 @@ async def record_repository_connections(
                     RepositoryConnectionAssignment.__table__,
                     RepositoryRouteDefault.__table__,
                     RepositoryConnectionAuditEvent.__table__,
+                    TemporalExecutionCanonicalRecord.__table__,
                 ],
             )
         )
@@ -141,7 +159,41 @@ async def record_repository_connections(
                 for slug, value in managed_secrets.items()
             )
             await session.commit()
+    if admitted_runs:
+        async with sessions() as session:
+            session.add_all(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id=workflow_id,
+                    run_id=f"run-{index}",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    entry="user_workflow",
+                    parameters=dict(parameters),
+                )
+                for index, (workflow_id, parameters) in enumerate(admitted_runs.items())
+            )
+            await session.commit()
     monkeypatch.setattr("api_service.db.base.async_session_maker", sessions)
     # ``db://`` references resolve against the same database.
     monkeypatch.setattr("moonmind.auth.resolvers.db_resolver.async_session_maker", sessions)
     return engine
+
+
+class TemporalParentClient:
+    """The worker client's view of each workflow's recorded Temporal parent.
+
+    Install it as ``temporalio.activity.client`` so a child workflow's
+    Activity resolves its owning run the way production reads it.
+    """
+
+    def __init__(self, parents: Mapping[str, str]) -> None:
+        self.parents = dict(parents)
+        self.described: list[str] = []
+
+    def get_workflow_handle(self, workflow_id: str):
+        from types import SimpleNamespace
+
+        async def describe():
+            self.described.append(workflow_id)
+            return SimpleNamespace(parent_id=self.parents.get(workflow_id))
+
+        return SimpleNamespace(describe=describe)

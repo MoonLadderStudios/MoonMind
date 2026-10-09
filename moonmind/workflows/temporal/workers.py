@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -169,6 +169,8 @@ class TemporalWorkerTopology:
     concurrency_limit: int | None
     resource_class: str
     egress_policy: str
+    #: Task queues served with their own budget instead of ``concurrency_limit``.
+    queue_concurrency_limits: dict[str, int | None] = field(default_factory=dict)
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -405,6 +407,31 @@ def _concurrency_limit_for_fleet(
     }[fleet]
 
 
+def _queue_concurrency_limits_for_fleet(
+    fleet: str,
+    *,
+    task_queues: Sequence[str],
+    temporal_settings: TemporalSettings,
+) -> dict[str, int | None]:
+    """Give the merge-automation lane its own workflow-task budget.
+
+    The workflow fleet polls that lane from the same process as the normal
+    lanes; a separate SDK Worker keeps its slots independent (MoonMind#3937).
+    """
+
+    if fleet != WORKFLOW_FLEET:
+        return {}
+    merge_queue = str(temporal_settings.merge_automation_workflow_task_queue).strip()
+    shared_queues = {
+        str(temporal_settings.user_workflow_v2_task_queue).strip(),
+        str(temporal_settings.workflow_task_queue or "").strip(),
+    }
+    if merge_queue not in task_queues or merge_queue in shared_queues:
+        # A merge queue configured as a normal queue keeps the fleet budget.
+        return {}
+    return {merge_queue: temporal_settings.merge_automation_workflow_worker_concurrency}
+
+
 def _fleet_entry(
     catalog: TemporalActivityCatalog, *, fleet: str
 ) -> TemporalWorkerFleet:
@@ -454,6 +481,11 @@ def build_worker_topology(
         ),
         resource_class=_FLEET_RESOURCE_CLASSES[normalized],
         egress_policy=_FLEET_EGRESS_POLICIES[normalized],
+        queue_concurrency_limits=_queue_concurrency_limits_for_fleet(
+            normalized,
+            task_queues=entry.task_queues,
+            temporal_settings=temporal_cfg,
+        ),
     )
 
 

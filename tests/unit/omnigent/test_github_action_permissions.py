@@ -398,7 +398,13 @@ async def test_denied_action_grant_preserves_existing_host_before_binding(
         monkeypatch,
         tmp_path,
         connection,
-        assignments=[github_repository_assignment(connection.id, "owner/repo")],
+        assignments=[
+            github_repository_assignment(
+                connection.id,
+                "owner/repo",
+                operations=("read", "write", "branch_write", "review_request"),
+            )
+        ],
     )
     secret = AsyncMock(return_value="must-not-be-read")
     monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)
@@ -659,7 +665,13 @@ async def test_merge_gate_planner_carries_finish_mode_to_action_boundary(
         monkeypatch,
         tmp_path,
         connection,
-        assignments=[github_repository_assignment(connection.id, "owner/repo")],
+        assignments=[
+            github_repository_assignment(
+                connection.id,
+                "owner/repo",
+                operations=("read", "write", "branch_write", "review_request"),
+            )
+        ],
     )
     secret = AsyncMock(return_value="selected_token")
     monkeypatch.setattr("moonmind.auth.github_credentials._resolve_secret_ref", secret)

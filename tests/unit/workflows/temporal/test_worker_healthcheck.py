@@ -152,22 +152,12 @@ async def test_readiness_fails_closed_until_worker_pollers_start(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slow_identity_scan_does_not_block_http_or_duplicate_on_probes(monkeypatch):
-    """Replay slow bind storage through real child and supervisor HTTP servers."""
-    import importlib.util
-    import sys
+    """Replay slow bind storage through the real worker /readyz server."""
     import threading
-    from pathlib import Path
 
     from moonmind.workflows.temporal import worker_healthcheck as health
     from moonmind.workflows.temporal.worker_code_identity import WorkerCodeIdentity
 
-    spec = importlib.util.spec_from_file_location(
-        "reliability_health_launcher",
-        Path(__file__).resolve().parents[4] / "services/temporal/scripts/start-workflow-worker-group.py",
-    )
-    launcher = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = launcher
-    spec.loader.exec_module(launcher)
     started = threading.Event()
     release = threading.Event()
     scans = []
@@ -182,26 +172,20 @@ async def test_slow_identity_scan_does_not_block_http_or_duplicate_on_probes(mon
     monkeypatch.setattr(health, "_IDENTITY_REFRESH_SECONDS", 0.01)
     monkeypatch.setattr(health, "resolve_checkout_code_identity", slow_scan)
     state = WorkerHealthState(True, True, True, code_revision="initial")
-    child = await start_healthcheck_server(state)
-    class Process:
-        def poll(self):
-            return None
-    parent = launcher.start_health_server(launcher.GroupHealthState(
-        children=[Process()],
-        child_health_urls=[f"http://127.0.0.1:{child.sockets[0].getsockname()[1]}/readyz"],
-    ), port=0)
-    url = f"http://127.0.0.1:{parent.server_port}/readyz"
+    server = await start_healthcheck_server(state)
+    url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/readyz"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def fetch():
         try:
-            with urllib.request.urlopen(url, timeout=1) as response:
+            with opener.open(url, timeout=1) as response:
                 return response.status, json.load(response)
         except urllib.error.HTTPError as exc:
             return exc.code, json.load(exc)
 
     try:
         assert await asyncio.to_thread(started.wait, 2)
-        # Real supervisor probes have a 0.5s child timeout while the scanner is blocked.
+        # Compose probes keep answering while the scanner is blocked.
         results = await asyncio.wait_for(asyncio.gather(*[
             asyncio.to_thread(fetch) for _ in range(4)
         ]), timeout=2)
@@ -211,8 +195,7 @@ async def test_slow_identity_scan_does_not_block_http_or_duplicate_on_probes(mon
         state.identity_checked_at -= health._IDENTITY_MAX_AGE_SECONDS + 1
         code, body = await asyncio.to_thread(fetch)
         assert code == 503
-        assert body["children"][0]["reasonCode"] == "code_identity_expired"
-        assert body["children"][0]["httpStatus"] == 503
+        assert body["reasonCode"] == "code_identity_expired"
         release.set()
         for _ in range(100):
             if state.identity_generation > 1:
@@ -220,10 +203,8 @@ async def test_slow_identity_scan_does_not_block_http_or_duplicate_on_probes(mon
             await asyncio.sleep(0.01)
         code, body = await asyncio.to_thread(fetch)
         assert code == 503
-        assert body["children"][0]["reasonCode"] == "stale_code"
+        assert body["reasonCode"] == "stale_code"
     finally:
         release.set()
-        child.close()
-        await child.wait_closed()
-        await asyncio.to_thread(parent.shutdown)
-        parent.server_close()
+        server.close()
+        await server.wait_closed()

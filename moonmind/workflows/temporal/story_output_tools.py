@@ -8,13 +8,13 @@ import inspect
 import json
 import re
 import time as _time
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 import httpx
+from temporalio import activity as temporal_activity
 
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.models import (
@@ -4731,6 +4731,7 @@ async def update_jira_issue_status(
     if mode == "finalize_after_pr_or_done":
         pr_url = _github_status_pull_request_url(inputs, _context)
         gate = await _objective_verification_payload(inputs, _context)
+        admitted = _admitted_repository_workflow(_context)
         reason = None
         if pr_url:
             repository = _github_repository_from_inputs(inputs)
@@ -4748,7 +4749,7 @@ async def update_jira_issue_status(
             service = github_service_factory()
             pr, reason = await _read_bound_issue_pull_request(
                 service, repository=repository, url=pr_url, issue_ref=issue_key,
-                head_sha=head_sha, branch=branch,
+                head_sha=head_sha, branch=branch, admitted_workflow_id=admitted,
             )
             if not reason and (pr.get("state") != "open" or pr.get("merged") or pr.get("draft")):
                 reason = "The confirmed pull request must be open and ready for review"
@@ -4764,7 +4765,8 @@ async def update_jira_issue_status(
                 # actual published tree, not that earlier HEAD alone.
                 try:
                     published_target = await service.read_repository_target(
-                        repository, f"refs/heads/{_mapping(pr.get('head')).get('ref', '')}"
+                        repository, f"refs/heads/{_mapping(pr.get('head')).get('ref', '')}",
+                        admitted_workflow_id=admitted,
                     )
                 except Exception:
                     published_target = {}
@@ -4780,7 +4782,9 @@ async def update_jira_issue_status(
             reason = await validate_completion_target(
                 gate or {}, repository=repository, source_ref=issue_key,
                 expected_ref=_string(inputs.get("completionTargetRef")),
-                read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+                read_target=lambda repo, ref: github_service_factory().read_repository_target(
+                    repo, ref, admitted_workflow_id=admitted
+                ),
             )
             target_status = "Done"
         if reason:
@@ -6129,38 +6133,60 @@ async def resolve_pull_request_target(
         )
 
     # Only the trusted workflow context may supply repository authority;
-    # tool inputs and selectors cannot choose a credential or plan.
+    # tool inputs and selectors cannot choose a credential or plan. Review-only
+    # merge automation supplies its frozen authority; every other run reads
+    # with the connection admitted for it (MoonLadderStudios/MoonMind#4010).
     if isinstance(context, Mapping) and "repositoryAuthority" in context:
         from moonmind.workflows.temporal.merge_automation_repository_access import (
             merge_automation_repository_token,
         )
 
-        credential_context = merge_automation_repository_token(
+        async with merge_automation_repository_token(
             context["repositoryAuthority"], repository=repository, operation="read"
+        ) as github_token:
+            return await _resolve_pull_request_target(
+                repository=repository,
+                selector=selector,
+                credential={"github_token": github_token},
+                github_service_factory=github_service_factory,
+            )
+    return await _resolve_pull_request_target(
+        repository=repository,
+        selector=selector,
+        credential={"admitted_workflow_id": _admitted_repository_workflow(context)},
+        github_service_factory=github_service_factory,
+    )
+
+
+async def _read_pull_request_with_token(
+    service: GitHubService, *, repository: str, pr_number: int, github_token: str
+) -> Any:
+    headers = service._github_headers(github_token)
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
+        response = await client.get(
+            f"https://api.github.com/repos/{repository}/pulls/{pr_number}",
+            headers=headers,
         )
-    else:
-        credential_context = nullcontext(None)
-    async with credential_context as github_token:
-        return await _resolve_pull_request_target(
-            repository=repository,
-            selector=selector,
-            github_token=github_token,
-            github_service_factory=github_service_factory,
-        )
+        response.raise_for_status()
+        return response.json()
 
 
 async def _resolve_pull_request_target(
     *,
     repository: str,
     selector: str,
-    github_token: str | None,
+    credential: Mapping[str, str],
     github_service_factory: Callable[[], GitHubService],
 ) -> ToolResult:
+    """Resolve and read the pull request with exactly one credential source.
+
+    ``credential`` is either the review-only ``github_token`` or the
+    ``admitted_workflow_id`` whose recorded connection both reads use; a
+    connection that cannot read fails here and no ambient token is tried.
+    """
     service = github_service_factory()
     resolution = await service.resolve_pull_request_selector(
-        repo=repository,
-        selector=selector,
-        **({"github_token": github_token} if github_token is not None else {}),
+        repo=repository, selector=selector, **credential
     )
     if not resolution.resolved or not resolution.pr_number:
         return ToolResult(
@@ -6172,53 +6198,62 @@ async def _resolve_pull_request_target(
             },
         )
 
-    if github_token is not None:
-        token, resolution_error = github_token, None
-    else:
-        token, resolution_error = await service.resolve_github_token(repo=repository)
-    if not token:
+    try:
+        if "github_token" in credential:
+            pr_data = await _read_pull_request_with_token(
+                service,
+                repository=repository,
+                pr_number=resolution.pr_number,
+                github_token=credential["github_token"],
+            )
+        else:
+            pr_data = await service.read_pull_request(
+                repository,
+                f"https://github.com/{repository}/pull/{resolution.pr_number}",
+                admitted_workflow_id=credential["admitted_workflow_id"],
+            )
+    except httpx.HTTPStatusError as exc:
         return ToolResult(
             status="FAILED",
             outputs={
                 "repository": repository,
                 "prNumber": resolution.pr_number,
-                "summary": resolution_error
-                or "GitHub auth is not configured for pull request resolution.",
+                "summary": (
+                    "GitHub pull request fetch failed with HTTP "
+                    f"{exc.response.status_code}."
+                ),
             },
         )
-    headers = service._github_headers(token)
-    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
-        try:
-            response = await client.get(
-                f"https://api.github.com/repos/{repository}/pulls/{resolution.pr_number}",
-                headers=headers,
-            )
-            response.raise_for_status()
-            pr_data = response.json()
-        except httpx.HTTPStatusError as exc:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "repository": repository,
-                    "prNumber": resolution.pr_number,
-                    "summary": (
-                        "GitHub pull request fetch failed with HTTP "
-                        f"{exc.response.status_code}."
-                    ),
-                },
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "repository": repository,
-                    "prNumber": resolution.pr_number,
-                    "summary": (
-                        "GitHub pull request fetch failed: "
-                        f"{exc.__class__.__name__}."
-                    ),
-                },
-            )
+    except (httpx.TransportError, httpx.TimeoutException) as exc:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": (
+                    "GitHub pull request fetch failed: "
+                    f"{exc.__class__.__name__}."
+                ),
+            },
+        )
+    except Exception as exc:
+        if "github_token" in credential:
+            raise
+        from moonmind.utils.logging import redact_sensitive_text
+
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": (
+                    "The admitted repository connection could not read pull "
+                    f"request {repository}#{resolution.pr_number} "
+                    f"({type(exc).__name__}: {redact_sensitive_text(str(exc))}); "
+                    "no other GitHub credential is used."
+                ),
+            },
+        )
 
     if not isinstance(pr_data, dict):
         return ToolResult(
@@ -6822,19 +6857,43 @@ async def _objective_verification_payload(
     return None
 
 
+def _admitted_repository_workflow(context: Mapping[str, Any] | None) -> str:
+    """The run whose recorded repository authority governs these reads.
+
+    A child gate acting for its parent run names it; otherwise the owning
+    Activity supplies it, never a tool's authored inputs.
+    """
+    admitted = _string(_mapping(context).get("admittedWorkflowId"))
+    if admitted:
+        return admitted
+    if temporal_activity.in_activity():
+        return temporal_activity.info().workflow_id
+    return _string(_mapping(context).get("workflow_id"))
+
+
 async def _read_bound_issue_pull_request(
     service: GitHubService, *, repository: str, url: str, issue_ref: str,
-    head_sha: str, branch: str = "",
+    head_sha: str, branch: str = "", admitted_workflow_id: str = "",
 ) -> tuple[Mapping[str, Any], str | None]:
     """Validate the existing publication owner's handoff against GitHub facts."""
     if not repository or not head_sha:
         return {}, "Resolve the published candidate repository and exact head before finalizing its issue"
     try:
-        pr = await service.read_pull_request(repository, url)
-    except Exception:
-        return {}, "Read the matching GitHub pull request through the authorized repository reader"
+        pr = await service.read_pull_request(
+            repository, url, admitted_workflow_id=admitted_workflow_id
+        )
+    except Exception as exc:
+        return {}, (
+            "Read the matching GitHub pull request through the authorized "
+            f"repository reader ({type(exc).__name__})"
+        )
     head = _mapping(pr.get("head"))
-    if head.get("sha") != head_sha or (branch and head.get("ref") != branch):
+    head_repository = _string(_mapping(head.get("repo")).get("full_name"))
+    if (
+        head.get("sha") != head_sha
+        or (branch and head.get("ref") != branch)
+        or head_repository.casefold() != repository.casefold()
+    ):
         return {}, "The pull request does not match the current published candidate"
     text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
     references = [issue_ref]
@@ -6853,6 +6912,7 @@ async def _validate_post_merge_issue_handoff(
     service: GitHubService, *, repository: str, issue_ref: str,
     pull_request: Mapping[str, Any],
     expected_ref: str = "",
+    admitted_workflow_id: str = "",
 ) -> str | None:
     """Validate an actual merge, independently of assessment/verification prose.
 
@@ -6866,6 +6926,7 @@ async def _validate_post_merge_issue_handoff(
         service, repository=repository, url=_string(pull_request.get("url")),
         issue_ref=issue_ref, head_sha=_string(pull_request.get("headSha")),
         branch=_string(pull_request.get("headBranch")),
+        admitted_workflow_id=admitted_workflow_id,
     )
     if reason:
         return reason
@@ -6881,12 +6942,14 @@ async def _validate_post_merge_issue_handoff(
         base_branch = base_branch.removeprefix(prefix)
     try:
         target = await service.read_repository_target(
-            repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else "")
+            repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else ""),
+            admitted_workflow_id=admitted_workflow_id,
         )
         if target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}":
             return "The pull request merged into a different branch than the completion target"
         contained = target.get("revision") == merge_commit or await service.commit_is_ancestor(
-            repository, merge_commit, _string(target.get("revision"))
+            repository, merge_commit, _string(target.get("revision")),
+            admitted_workflow_id=admitted_workflow_id,
         )
     except Exception as exc:
         return (
@@ -8511,13 +8574,16 @@ async def _update_github_issue_status(
                     github_service_factory(), repository=repository,
                     issue_ref=issue_ref, pull_request=merged_pull_request,
                     expected_ref=_string(inputs.get("completionTargetRef")),
+                    admitted_workflow_id=_admitted_repository_workflow(_context),
                 )
             else:
                 gate = await _objective_verification_payload(inputs, _context)
                 reason = await validate_completion_target(
                     gate or {}, repository=repository, source_ref=issue_ref,
                     expected_ref=_string(inputs.get("completionTargetRef")),
-                    read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+                    read_target=lambda repo, ref: github_service_factory().read_repository_target(
+                        repo, ref, admitted_workflow_id=_admitted_repository_workflow(_context)
+                    ),
                 )
             if reason:
                 return ToolResult(status="FAILED", outputs={

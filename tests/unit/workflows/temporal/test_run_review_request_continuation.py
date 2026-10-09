@@ -108,7 +108,7 @@ def test_unsupported_action_is_marked_invalid() -> None:
 def test_ungated_request_review_run_is_not_reported_as_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow_info = type("WorkflowInfo", (), {"parent": None})
+    workflow_info = type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "parent": None})
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     workflow = MoonMindRunWorkflow()

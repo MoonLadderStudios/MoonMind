@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -487,6 +488,87 @@ def test_read_path_consumes_app_connection_with_bound_headers() -> None:
     assert seen["authorization"] == "Bearer ghs_opaque_read_xyz"
 
 
+def test_admitted_pr_reader_uses_app_connection_over_ambient_token(monkeypatch) -> None:
+    """#4010: the run's selected App B issues the PR read, not ambient A."""
+
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+    from moonmind.auth import github_app_wiring as wiring
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve as resolve
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    conn = _app_connection()
+    selected: list[tuple[str, str]] = []
+
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:app-run",
+        run_id="run:app",
+        parameters={"workspace": {"repository": "acme/repo", "connectionRef": conn.id}},
+    )
+
+    class _Session:
+        async def get(self, model, workflow_id):
+            assert model is TemporalExecutionCanonicalRecord
+            assert workflow_id == "mm:app-run"
+            return record
+
+    @asynccontextmanager
+    async def _sessions():
+        yield _Session()
+
+    async def _load(connection_ref, *, repository=None):
+        selected.append((connection_ref, repository))
+        return conn
+
+    monkeypatch.setattr("api_service.db.base.async_session_maker", _sessions)
+    monkeypatch.setattr(resolve, "load_repository_connection_for_launch", _load)
+    real_factory = wiring.build_bound_acquirer_for_connection
+
+    def _factory_with_edge(connection, **kwargs):
+        merged = _factory_kwargs("ghs_opaque_pr_read_b")
+        merged.update({k: v for k, v in kwargs.items() if v not in (None, "", (), [], {})})
+        return real_factory(connection, **merged)
+
+    monkeypatch.setattr(wiring, "build_bound_acquirer_for_connection", _factory_with_edge)
+    seen: list[str] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"number": 7, "base": {"repo": {"full_name": "acme/repo"}}}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None):
+            assert url == "https://api.github.com/repos/acme/repo/pulls/7"
+            seen.append((headers or {}).get("Authorization", ""))
+            return _Response()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient", _Client
+    )
+    result = asyncio.run(
+        GitHubService().read_pull_request(
+            "acme/repo",
+            "https://github.com/acme/repo/pull/7",
+            admitted_workflow_id="mm:app-run",
+        )
+    )
+    assert result["number"] == 7
+    assert selected == [(conn.id, "acme/repo")]
+    assert seen == ["Bearer ghs_opaque_pr_read_b"]
+
+
 def _fake_acquired(token: str):
     class _Credential:
         def use_now(self, fn):
@@ -817,3 +899,105 @@ def test_callback_save_uses_state_bound_intent() -> None:
         assert saved.allowed_repository_ids == tuple(REPOS)
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("allowed", "merged"),
+    [(["read", "merge_request"], True), (["read", "write"], False)],
+)
+def test_admitted_app_merge_issues_only_merge_scope(monkeypatch, allowed, merged) -> None:
+    """#4010: the run's App B merges with a merge-scoped token; never ambient A.
+
+    A connection that does not allow ``merge_request`` issues nothing and
+    sends no request.
+    """
+
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+    from moonmind.auth import github_app_wiring as wiring
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve as resolve
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    conn = _app_connection(allowedOperations=allowed)
+
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:app-run",
+        run_id="run:app",
+        parameters={"workspace": {"repository": "acme/repo", "connectionRef": conn.id}},
+    )
+
+    class _Session:
+        async def get(self, model, workflow_id):
+            assert model is TemporalExecutionCanonicalRecord
+            assert workflow_id == "mm:app-run"
+            return record
+
+    @asynccontextmanager
+    async def _sessions():
+        yield _Session()
+
+    async def _load(connection_ref, *, repository=None):
+        return conn
+
+    monkeypatch.setattr("api_service.db.base.async_session_maker", _sessions)
+    monkeypatch.setattr(resolve, "load_repository_connection_for_launch", _load)
+    issued: list[dict] = []
+    post, get = _provider_edge("ghs_opaque_merge_b")
+
+    async def _recording_post(*, jwt: str, payload: dict):
+        issued.append(dict(payload["permissions"]))
+        return await post(jwt=jwt, payload=payload)
+
+    real_factory = wiring.build_bound_acquirer_for_connection
+
+    def _factory_with_edge(connection, **kwargs):
+        merged_kwargs = _factory_kwargs("ghs_opaque_merge_b", http_post=_recording_post)
+        merged_kwargs.update(
+            {k: v for k, v in kwargs.items() if v not in (None, "", (), [], {})}
+        )
+        return real_factory(connection, **merged_kwargs)
+
+    monkeypatch.setattr(wiring, "build_bound_acquirer_for_connection", _factory_with_edge)
+    seen: list[str] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"merged": True, "sha": "c" * 40}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def put(self, url, headers=None, json=None):
+            assert url == "https://api.github.com/repos/acme/repo/pulls/7/merge"
+            seen.append((headers or {}).get("Authorization", ""))
+            return _Response()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient", _Client
+    )
+    result = asyncio.run(
+        GitHubService().merge_pull_request(
+            pr_url="https://github.com/acme/repo/pull/7",
+            expected_head_sha="a" * 40,
+            admitted_workflow_id="mm:app-run",
+        )
+    )
+
+    assert result.merged is merged
+    if merged:
+        assert issued == [{"pull_requests": "write", "contents": "write"}]
+        assert seen == ["Bearer ghs_opaque_merge_b"]
+    else:
+        assert "does not allow merge_request" in result.summary
+        assert issued == []
+        assert seen == []

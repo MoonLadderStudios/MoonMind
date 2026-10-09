@@ -38,6 +38,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
         ARTIFACTS_TASK_QUEUE,
         INTEGRATIONS_TASK_QUEUE,
+        get_workflow_child_task_queue,
     )
 
 
@@ -742,7 +743,9 @@ class MoonMindPRResolverWorkflow:
                             "MoonMind.AgentRun",
                             request,
                             id=child_id,
-                            task_queue=settings.temporal.user_workflow_v2_task_queue,
+                            task_queue=get_workflow_child_task_queue(
+                                workflow.info().task_queue, settings.temporal
+                            ),
                             cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
                         )
                     finally:

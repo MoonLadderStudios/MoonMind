@@ -766,6 +766,9 @@ def test_snapshot_collects_findings_after_review_completion(
         return observed, "350", []
 
     monkeypatch.setitem(scope, "fetch_pr_data", fetch_pr)
+    monkeypatch.setitem(
+        scope, "_fetch_base_branch", lambda **_kwargs: {"commit": {"sha": "base-head"}}
+    )
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
     monkeypatch.setitem(
@@ -1306,6 +1309,9 @@ def test_snapshot_recomputes_review_after_completed_inventory_refresh(
         "statusCheckRollup": checks,
     }
     monkeypatch.setitem(scope, "fetch_pr_data", lambda _selector: (pr, "350", []))
+    monkeypatch.setitem(
+        scope, "_fetch_base_branch", lambda **_kwargs: {"commit": {"sha": "base-head"}}
+    )
     monkeypatch.setitem(scope, "_fetch_required_status_checks", lambda **_kwargs: [])
     monkeypatch.setitem(scope, "_fetch_commit_check_runs", lambda **_kwargs: checks)
     monkeypatch.setitem(scope, "_fetch_commit_statuses", lambda **_kwargs: [])
@@ -1620,6 +1626,7 @@ def test_refreshed_inventory_rebinds_review_evidence(
 
     replacements = {
         "fetch_pr_data": fetch_pr,
+        "_fetch_base_branch": lambda **kw: {"commit": {"sha": "base-head"}},
         "_fetch_required_status_checks": lambda **kw: [],
         "_fetch_commit_check_runs": lambda **kw: checks,
         "_fetch_commit_statuses": lambda **kw: [],
@@ -1687,7 +1694,11 @@ def test_refreshed_inventory_rebinds_review_evidence(
         ],
     )
     initially_terminal = states[0] in {"CLOSED", "MERGED"}
-    if not initially_terminal and (states[1] != "OPEN" or new_result == "churn"):
+    # Any observed PR field changing during collection, including its state,
+    # also requires a fresh snapshot.
+    if not initially_terminal and (
+        states[1] != "OPEN" or states[0] != states[1] or new_result == "churn"
+    ):
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1

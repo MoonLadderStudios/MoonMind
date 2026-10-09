@@ -116,7 +116,7 @@ def _patch_runtime(monkeypatch, contract, execute) -> None:
     info = type(
         "Info",
         (),
-        {"workflow_id": contract.destination_workflow_id, "run_id": "destination-run"},
+        {"task_queue": "mm.workflow.user.v2", "workflow_id": contract.destination_workflow_id, "run_id": "destination-run"},
     )()
     monkeypatch.setattr(
         "moonmind.workflows.temporal.workflows.control_stop_continuation.workflow.info",

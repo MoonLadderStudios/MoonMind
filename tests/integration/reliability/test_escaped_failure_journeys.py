@@ -2017,6 +2017,7 @@ async def test_successful_batch_fanout_is_compacted_before_publish_activity_deco
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": (
                 "mm:replay-parent:agent:tpl:batch-github-workflows:01:replay"
@@ -2180,6 +2181,7 @@ async def test_omnigent_terminal_result_replays_after_metadata_overflow(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": manifest["incidentChildWorkflowId"],
             "run_id": "01a002c0-2468-70a7-a4fe-084afc817977",
@@ -2582,6 +2584,7 @@ async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
         run_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=manifest["incidentChildWorkflowId"],
             run_id="replay-run",
         ),
@@ -5767,7 +5770,7 @@ async def test_invalid_required_omnigent_checkpoint_blocks_publication(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="workflow-1", run_id="run-1"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="workflow-1", run_id="run-1"),
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -7170,7 +7173,7 @@ async def test_instructionless_inflight_remediation_loop_remains_replayable(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(run_id="inflight-replay-run"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", run_id="inflight-replay-run"),
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -7642,6 +7645,7 @@ async def test_omnigent_required_capability_authority_reaches_adapter(
         run_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id=manifest["incidentWorkflowId"],
             run_id=manifest["incidentRunId"],

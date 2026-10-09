@@ -177,7 +177,9 @@ async def test_compiler_rejects_requested_merge_without_assignment(
     monkeypatch, tmp_path, parameters
 ):
     repository, engine, sessions = await _configure_github_repository_plan_test(
-        monkeypatch, tmp_path
+        monkeypatch,
+        tmp_path,
+        operations=("read", "write", "branch_write", "review_request"),
     )
     try:
         with pytest.raises(ValueError, match="operation|route|authority"):
