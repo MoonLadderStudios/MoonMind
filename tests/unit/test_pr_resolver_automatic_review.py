@@ -48,6 +48,12 @@ def _evidence(snapshot_module, monkeypatch, captured, **overrides):
     monkeypatch.setitem(
         build.__globals__, "_resolve_automatic_review_commit", resolve_commit
     )
+
+    def read_actor(command, *_args, **_kwargs):
+        assert command == ["gh", "api", "users/chatgpt-codex-connector%5Bbot%5D"]
+        return captured["provider_identity"]
+
+    monkeypatch.setitem(build.__globals__, "run_command", read_actor)
     params = {
         "provider": "codex",
         "require_fresh_review": True,
@@ -215,6 +221,55 @@ def test_summary_without_no_findings_reaction_cannot_complete(
         ]
         is False
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("login", "operator"),
+        ("id", 1),
+        ("node_id", "human-node"),
+        ("type", "User"),
+    ],
+)
+def test_reaction_user_type_requires_matching_authoritative_bot_identity(
+    snapshot_module, monkeypatch, captured, field, value
+):
+    captured["provider_identity"][field] = value
+    assert (
+        _evidence(snapshot_module, monkeypatch, captured)["freshReviewForHead"] is False
+    )
+
+
+def test_reaction_bot_identity_lookup_failure_stays_observable(
+    snapshot_module, monkeypatch, captured
+):
+    verify = snapshot_module["_verify_automatic_reaction_actors"]
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("GitHub bot account lookup unavailable")
+
+    monkeypatch.setitem(verify.__globals__, "run_command", unavailable)
+    with pytest.raises(RuntimeError, match="GitHub bot account lookup unavailable"):
+        verify(provider="codex", reactions=captured["reactions"])
+
+
+def test_reaction_identity_is_verified_once_per_collection_without_mutating_raw_evidence(
+    snapshot_module, monkeypatch, captured
+):
+    verify = snapshot_module["_verify_automatic_reaction_actors"]
+    reads = []
+
+    def read_actor(command, *_args, **_kwargs):
+        reads.append(command)
+        return captured["provider_identity"]
+
+    monkeypatch.setitem(verify.__globals__, "run_command", read_actor)
+    raw = captured["reactions"] * 2
+    verified = verify(provider="codex", reactions=raw)
+    assert len(reads) == 1
+    assert all(reaction["user"]["type"] == "Bot" for reaction in verified)
+    assert all(reaction["user"]["type"] == "User" for reaction in raw)
 
 
 @pytest.mark.parametrize("when", ["2026-10-09T13:45:46Z", "2026-10-09T13:45:47Z"])
@@ -493,7 +548,9 @@ def test_snapshot_refreshes_automatic_completion_before_opening_gate(
     )
     reads = []
 
-    def read_comments(*_args, **_kwargs):
+    def read_comments(command, *_args, **_kwargs):
+        if command[-1] == "users/chatgpt-codex-connector%5Bbot%5D":
+            return captured["provider_identity"]
         reads.append(True)
         if len(reads) > 1 and change == "missing_inventory":
             return {}

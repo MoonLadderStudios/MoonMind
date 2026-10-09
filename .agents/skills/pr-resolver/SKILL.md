@@ -295,7 +295,10 @@ metadata flag.
    are qualified. Its commit must be the current head; an abbreviation must
    uniquely match the complete PR commit inventory and resolve to that exact
    SHA through GitHub. The bot's PR thumbs-up must postdate completion and the
-   summary update. Summary tables, old thumbs-up, eyes/start events, human
+   summary update. If a reaction labels its actor as User, accept it only when
+   GitHub's account lookup confirms the exact login, numeric ID, node ID and
+   Bot type; failed lookups stay observable. Summary tables, old thumbs-up,
+   eyes/start events, human
    copies, ambiguous commits, and newer unclassified provider feedback cannot
    open the gate. A newer explicit request still owns its unchanged head, and a
    later provider refusal stays failed until qualified newer completion exists.

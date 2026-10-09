@@ -132,8 +132,10 @@ summary without manufacturing an explicit request. The registered bot must
 publish the supported completed Code Review table on the exact repository/PR.
 An abbreviated reviewed commit is accepted only after the complete PR commit
 inventory proves one match and GitHub resolves it to the exact current head.
-A provider PR thumbs-up must follow both completion and the summary update;
-stale reactions, a newer review start, malformed or ambiguous evidence, and
+A provider PR thumbs-up must follow both completion and the summary update.
+Reaction actors labeled User require an authoritative account lookup matching
+their exact login, numeric ID and node ID with a Bot account.
+Stale reactions, a newer review start, malformed or ambiguous evidence, and
 newer unclassified provider feedback remain blocked. Newer explicit requests
 retain their existing precedence, and later qualified refusals remain failed.
 The automaticSummary projection retains bounded comment, resolved commit,

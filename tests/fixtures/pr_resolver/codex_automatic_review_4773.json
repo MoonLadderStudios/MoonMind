@@ -21,10 +21,19 @@
       "created_at": "2026-10-09T13:45:46Z",
       "id": 556689012,
       "user": {
-        "login": "chatgpt-codex-connector[bot]"
+        "login": "chatgpt-codex-connector[bot]",
+        "id": 199175422,
+        "node_id": "BOT_kgDOC98s_g",
+        "type": "User"
       }
     }
   ],
+  "provider_identity": {
+    "login": "chatgpt-codex-connector[bot]",
+    "id": 199175422,
+    "node_id": "BOT_kgDOC98s_g",
+    "type": "Bot"
+  },
   "commits": [
     {
       "sha": "96dd7a6ed9fcb1c27a8c2bea66c6f54916f32d01"
