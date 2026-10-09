@@ -85,8 +85,10 @@ def probe_route(monkeypatch):
         RepositoryConnectionService, "list_assignments", AsyncMock(return_value=[])
     )
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-must-not-be-used")
-    secret = AsyncMock(return_value="selected-pat-token")
-    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)
+    secret = AsyncMock(
+        return_value=("selected-pat-token", "fixture-selected-pat-revision")
+    )
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref_with_revision", secret)
     state.secret = secret
     monkeypatch.setattr(settings.github, "github_trusted_api_hosts", "ghe.example.com")
 

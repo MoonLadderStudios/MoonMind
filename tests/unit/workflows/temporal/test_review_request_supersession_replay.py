@@ -47,8 +47,24 @@ class _BeforeAdoptionBudget(MoonMindMergeAutomationWorkflow):
     ) -> bool:
         return False
 
+    def _multiple_review_requests_enabled(self, observation_key: str) -> bool:
+        # Published workers predate request receipts.
+        return False
+
     def _review_adoption_blocker(self, evaluation: Any):
         return None
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _BeforeMultipleReviewRequests(MoonMindMergeAutomationWorkflow):
+    def _multiple_review_requests_enabled(self, observation_key: str) -> bool:
+        # Record the consumer that already bounds the selected request, but
+        # cannot retain intermediate requests from the same Activity poll.
+        return False
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -68,11 +84,21 @@ class _CleanFixtureResolver:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_producer", [True, False])
-@pytest.mark.parametrize("max_cycles", [1, 2])
-@pytest.mark.parametrize("old_adopted", [False, True])
-@pytest.mark.parametrize("outcome", ["complete", "refusal"])
+@pytest.mark.parametrize(
+    "max_cycles,old_adopted,outcome,multiple_requests",
+    [
+        *(
+            (max_cycles, old_adopted, outcome, False)
+            for max_cycles in (1, 2)
+            for old_adopted in (False, True)
+            for outcome in ("complete", "refusal")
+        ),
+        # Requests superseded between polls each consume a cycle.
+        (5, False, "complete", True),
+    ],
+)
 async def test_selected_request_survives_worker_upgrade_and_replay(
-    monkeypatch, legacy_producer, max_cycles, old_adopted, outcome
+    monkeypatch, legacy_producer, max_cycles, old_adopted, outcome, multiple_requests
 ):
     repo = "MoonLadderStudios/MoonMind"
     state = {"upgraded": False, "complete": False}
@@ -87,7 +113,13 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         "requestCommentId": 100,
         "requestedAt": "2026-08-24T22:00:00Z",
     }
-    second = {**first, "requestCommentId": 102, "requestedAt": "2026-08-24T22:02:00Z"}
+    second = {
+        **first,
+        "requestCommentId": 104 if multiple_requests else 102,
+        "requestedAt": (
+            "2026-08-24T22:04:00Z" if multiple_requests else "2026-08-24T22:02:00Z"
+        ),
+    }
     provider_user = {"login": "chatgpt-codex-connector[bot]"}
 
     def respond(request):
@@ -125,21 +157,34 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                     "user": provider_user,
                 },
                 {
-                    "id": 102,
+                    "id": second["requestCommentId"],
                     "body": "@codex review",
                     "created_at": second["requestedAt"],
                 },
             ]
+            if multiple_requests:
+                body.insert(
+                    2,
+                    {
+                        "id": 102,
+                        "body": "@codex review",
+                        "created_at": "2026-08-24T22:02:00Z",
+                    },
+                )
             if state["complete"]:
                 body.append(
                     {
-                        "id": 103,
+                        "id": 105 if multiple_requests else 103,
                         "body": (
-                            "Codex Review: Didn't find any major issues. \U0001f680"
+                            "Codex Review: Didn't find any major issues. 🚀"
                             if outcome == "complete"
                             else "You have reached your Codex usage limits for code reviews."
                         ),
-                        "created_at": "2026-08-24T22:03:00Z",
+                        "created_at": (
+                            "2026-08-24T22:05:00Z"
+                            if multiple_requests
+                            else "2026-08-24T22:03:00Z"
+                        ),
                         "user": provider_user,
                     }
                 )
@@ -204,7 +249,8 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
         by_alias=True, mode="json"
     )
     parent_queue = (
-        f"review-request-upgrade-{legacy_producer}-{max_cycles}-{old_adopted}-{outcome}"
+        f"review-request-upgrade-{legacy_producer}-{max_cycles}-{old_adopted}"
+        f"-{outcome}-{multiple_requests}"
     )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     old_worker = _BeforeAdoptionBudget if old_adopted else _BeforeRequestReconciliation
@@ -304,9 +350,19 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                     return
                 pending_history = await wait_for_timer(2)
                 pending = await handle.query(MoonMindMergeAutomationWorkflow.summary)
-            assert pending["reviewLoop"]["activeRequest"]["requestCommentId"] == 102
+            assert (
+                pending["reviewLoop"]["activeRequest"]["requestCommentId"]
+                == second["requestCommentId"]
+            )
             cycles = pending["reviewLoop"]["cycleRecords"]
-            assert [cycle["status"] for cycle in cycles] == ["superseded", "requested"]
+            assert [cycle["status"] for cycle in cycles] == (
+                ["superseded", "superseded", "requested"]
+                if multiple_requests
+                else ["superseded", "requested"]
+            )
+            assert [cycle["requestCommentId"] for cycle in cycles] == (
+                [100, 102, 104] if multiple_requests else [100, 102]
+            )
             restored = MergeAutomationStartInput.model_validate(
                 {
                     **payload,
@@ -314,7 +370,10 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                     "reviewCycles": cycles,
                 }
             )
-            assert restored.active_review_request.request_comment_id == 102
+            assert (
+                restored.active_review_request.request_comment_id
+                == second["requestCommentId"]
+            )
             assert restored.review_cycles[0].request_comment_id == 100
             await Replayer(
                 workflows=[MoonMindMergeAutomationWorkflow],
@@ -335,28 +394,36 @@ async def test_selected_request_survives_worker_upgrade_and_replay(
                 history = await handle.fetch_history()
     assert result["status"] == ("review_clean" if outcome == "complete" else "blocked")
     assert result["reviewLoop"]["activeRequest"] is None
-    first_cycle, second_cycle = result["reviewLoop"]["cycleRecords"]
+    first_cycle, *_, second_cycle = result["reviewLoop"]["cycleRecords"]
     assert (
         first_cycle["status"] == "superseded"
         and first_cycle.get("completionId") is None
     )
     assert first_cycle["requestCommentId"] == 100
-    assert second_cycle["requestCommentId"] == 102
+    assert second_cycle["requestCommentId"] == second["requestCommentId"]
     assert second_cycle["requestedAt"] == second["requestedAt"]
     assert second_cycle["status"] == (
         "completed" if outcome == "complete" else "failed"
     )
-    assert second_cycle.get("completionId") == (103 if outcome == "complete" else None)
+    assert second_cycle.get("completionId") == (
+        (105 if multiple_requests else 103) if outcome == "complete" else None
+    )
     if outcome == "refusal":
         assert result["resolverChildWorkflowIds"] == []
         assert result["blockers"][0]["kind"] == "automated_review_request_failed"
-    assert requests[-1]["activeReviewRequest"]["requestCommentId"] == 102
+    assert (
+        requests[-1]["activeReviewRequest"]["requestCommentId"]
+        == second["requestCommentId"]
+    )
     assert any(
         payload.get("reviewLoop", {}).get("cycleRecords", [])
         == result["reviewLoop"]["cycleRecords"]
         for _, payload in artifacts
     )
-    assert observations[-1]["automatedReviewRequestCommentId"] == 102
+    assert (
+        observations[-1]["automatedReviewRequestCommentId"]
+        == second["requestCommentId"]
+    )
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -381,8 +448,9 @@ class _BeforeSelectedRequestCycleBudget(MoonMindMergeAutomationWorkflow):
 @pytest.mark.parametrize(
     "scenario", ["complete", "pending_complete", "pending_superseded"]
 )
+@pytest.mark.parametrize("multiple_requests", [False, True])
 async def test_selected_request_cycle_budget_preserves_recorded_history(
-    monkeypatch, tmp_path, scenario
+    monkeypatch, tmp_path, scenario, multiple_requests
 ):
     first = {
         "provider": "codex",
@@ -406,7 +474,7 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
         "mergeAutomationConfig": {
             "finishMode": "fix_only",
             "timeouts": {"fallbackPollSeconds": 2},
-            "reviewLoop": {"enabled": True, "maxCycles": 1},
+            "reviewLoop": {"enabled": True, "maxCycles": 3 if multiple_requests else 1},
         },
         "activeReviewRequest": first,
         "reviewCycles": [{"cycle": 1, **first, "status": "requested"}],
@@ -432,7 +500,11 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
             "automatedReviewRequestedAt": (
                 "2026-08-24T22:02:00Z"
                 if state["selected_id"] == 102
-                else "2026-08-24T22:04:00Z"
+                else (
+                    "2026-08-24T22:06:00Z"
+                    if multiple_requests
+                    else "2026-08-24T22:04:00Z"
+                )
             ),
             "automatedReviewCompletionKind": "issue_comment",
             "automatedReviewCompletionId": 103,
@@ -440,6 +512,24 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
             "readinessObservationId": activity.info().activity_id,
             "jiraStatusAllowed": True,
         }
+        if multiple_requests:
+            identifiers = (
+                [100, 101, 102] if state["selected_id"] == 102 else [102, 104, 106]
+            )
+            times = {
+                100: first["requestedAt"],
+                101: "2026-08-24T22:01:00Z",
+                102: "2026-08-24T22:02:00Z",
+                104: "2026-08-24T22:04:00Z",
+                106: "2026-08-24T22:06:00Z",
+            }
+            observation["automatedReviewRequests"] = [
+                {"requestCommentId": identifier, "requestedAt": times[identifier]}
+                for identifier in identifiers
+            ]
+            if state["selected_id"] == 106:
+                observation["automatedReviewCompletionId"] = 107
+                observation["automatedReviewCompletedAt"] = "2026-08-24T22:07:00Z"
         if not state["complete"]:
             observation["blockers"] = [
                 {
@@ -461,7 +551,12 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
     monkeypatch.setattr(
         MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
     )
-    parent_queue = f"review-request-budget-history-{scenario}"
+    parent_queue = f"review-request-budget-history-{scenario}-{multiple_requests}"
+    previous_worker = (
+        _BeforeMultipleReviewRequests
+        if multiple_requests
+        else _BeforeSelectedRequestCycleBudget
+    )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await env.client.operator_service.add_search_attributes(
@@ -493,14 +588,14 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
-                workflows=[_BeforeSelectedRequestCycleBudget],
+                workflows=[previous_worker],
                 workflow_runner=UnsandboxedWorkflowRunner(),
                 max_cached_workflows=0,
             ):
                 old = await env.client.start_workflow(
-                    _BeforeSelectedRequestCycleBudget.run,
+                    previous_worker.run,
                     payload,
-                    id=f"before-selected-request-budget-{scenario}",
+                    id=f"before-selected-request-budget-{scenario}-{multiple_requests}",
                     task_queue=parent_queue,
                 )
                 if scenario == "complete":
@@ -542,6 +637,10 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
             )
             assert (
                 module.MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_CYCLE_BUDGET_PATCH_PREFIX
+                in marker_text
+            ) is multiple_requests
+            assert (
+                module.MERGE_AUTOMATION_MULTIPLE_REVIEW_REQUESTS_PATCH_PREFIX
                 not in marker_text
             )
             await Replayer(
@@ -550,7 +649,7 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
             ).replay_workflow(old_history)
             state["complete"] = True
             if scenario == "pending_superseded":
-                state["selected_id"] = 104
+                state["selected_id"] = 106 if multiple_requests else 104
             async with Worker(
                 env.client,
                 task_queue=parent_queue,
@@ -572,11 +671,15 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
                 history = await current.fetch_history()
             (tmp_path / "current-budget-history.json").write_text(history.to_json())
     assert len(observations) == 2
-    assert result["reviewLoop"]["cycles"] == (1 if scenario == "complete" else 2)
-    if scenario == "pending_complete":
+    assert result["reviewLoop"]["cycles"] == (
+        3
+        if multiple_requests and scenario != "pending_complete"
+        else 1 if scenario == "complete" else 2
+    )
+    if scenario == "pending_complete" or (multiple_requests and scenario == "complete"):
         assert result["status"] == "review_clean"
         assert result["reviewLoop"]["activeRequest"] is None
-        assert result["reviewLoop"]["cycleRecords"][1]["completionId"] == 103
+        assert result["reviewLoop"]["cycleRecords"][-1]["completionId"] == 103
     else:
         assert result["status"] == "blocked"
         assert [b["kind"] for b in result["blockers"]] == [
@@ -586,7 +689,7 @@ async def test_selected_request_cycle_budget_preserves_recorded_history(
         if scenario == "complete":
             assert active == first
         else:
-            assert active["requestCommentId"] == 102
+            assert active["requestCommentId"] == (104 if multiple_requests else 102)
         assert result["reviewLoop"]["cycleRecords"][-1]["status"] == "requested"
         assert result["reviewLoop"]["cycleRecords"][-1].get("completionId") is None
         assert result["resolverChildWorkflowIds"] == []
