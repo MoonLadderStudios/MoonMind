@@ -1627,7 +1627,12 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - OMNIGENT_CONFIG=${OMNIGENT_CONFIG:-}
-      - OMNIGENT_AUTH_ENABLED=${OMNIGENT_AUTH_ENABLED:-1}
+      # Single-user default: with auth off the server's entrypoint serves every
+      # request as its local user, so MoonMind needs no Omnigent credential.
+      # Anyone who can reach this server, including the published port below,
+      # has full control. Set 1 for Omnigent's accounts login; MoonMind then
+      # needs OMNIGENT_API_TOKEN.
+      - OMNIGENT_AUTH_ENABLED=${OMNIGENT_AUTH_ENABLED:-0}
       - OMNIGENT_AUTH_PROVIDER=${OMNIGENT_AUTH_PROVIDER:-}
       - OMNIGENT_ACCOUNTS_COOKIE_SECRET=${OMNIGENT_ACCOUNTS_COOKIE_SECRET:-}
       - OMNIGENT_ACCOUNTS_BASE_URL=${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}

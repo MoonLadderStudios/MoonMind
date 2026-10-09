@@ -1205,7 +1205,9 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     assert omnigent_env["ARTIFACT_DIR"] == "${OMNIGENT_ARTIFACT_DIR:-/data/artifacts}"
     assert omnigent_env["HOST"] == "0.0.0.0"
     assert omnigent_env["PORT"] == "8000"
-    assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-1}"
+    # The bundled server defaults to the single-user no-auth posture so a
+    # default install needs no Omnigent credential.
+    assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-0}"
     assert omnigent_env["OMNIGENT_AUTH_PROVIDER"] == "${OMNIGENT_AUTH_PROVIDER:-}"
     assert omnigent_env["OMNIGENT_ACCOUNTS_BASE_URL"] == (
         "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}"
