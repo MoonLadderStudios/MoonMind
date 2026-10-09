@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -291,5 +292,136 @@ async def test_saved_candidate_survives_owned_cleanup_and_finishes_without_rerun
         phases = (await store.get(binding.bindingId)).phaseResults
         assert phases["saved"] == saved
         assert phases["restoration"]["restorationEvidenceRef"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_host_lost_execution_saved_workspace_restores_into_retry_execution(
+    tmp_path, monkeypatch
+):
+    """Lost host -> saved bytes -> Run retry decision -> fresh workspace (#4627).
+
+    The realizer finalizes the host-lost turn through its real save owner, the
+    Run workflow selects that archive for the next Step Execution, and a
+    replacement worker restores the exact bytes into the successor's own
+    workspace after the lost execution's workspace volume is gone.
+    """
+
+    from moonmind.omnigent.host_services.workspace import (
+        OmnigentWorkspaceMaterializer,
+    )
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    root = tmp_path / "worker"
+    _candidate_workspace(root)
+    blob_root = tmp_path / "durable-artifacts"
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(blob_root)),
+    )
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        gateway = TemporalOmnigentArtifactGateway(session_factory=sessions)
+        request = await _request(gateway)
+        store = InMemoryStableRuntimeBindingStore()
+        binding = await store.create_initial(
+            execution_plan_ref=request.step_execution.omnigent_execution_plan.plan_ref,
+            idempotency_key=request.idempotency_key,
+            provider_leases={},
+        )
+        sink = RuntimeBindingSessionAuthoritySink(store, binding)
+        await sink.record_phase(
+            "workspace",
+            request.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+                include={
+                    "agent_kind",
+                    "agent_id",
+                    "correlation_id",
+                    "idempotency_key",
+                    "step_execution",
+                },
+            )
+            | {"workspaceSpec": dict(request.workspace_spec)},
+        )
+        publisher = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
+        realizer, _released = _owned_cleanup_realizer(store, publisher)
+
+        async def no_publication(*_args, **_kwargs):
+            raise AssertionError("a lost turn must not publish")
+
+        realizer._publish_repository = no_publication
+        host_lost = AgentRunResult(
+            summary="Omnigent session host was lost before the turn finished",
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+            retryRecommendation="retry_step_execution",
+        )
+
+        lost = await realizer._finish_execution(request, sink, host_lost)
+
+        assert lost.retry_recommendation == "retry_step_execution"
+        assert lost.metadata["workPreserved"] is True
+        saved = lost.metadata["savedWorkspaceCheckpoint"]
+        archive = await gateway.read_bytes(saved["archiveRef"])
+        assert "sha256:" + hashlib.sha256(archive).hexdigest() == saved["archiveDigest"]
+
+        # The Run workflow chooses the successor's source from the same result
+        # the AgentRun child returns.
+        run = MoonMindRunWorkflow()
+        run._record_runtime_loss_recovery(
+            "implement",
+            execution_result=run._map_agent_run_result(lost),
+            lost_execution_ordinal=1,
+            retry_execution_ordinal=2,
+        )
+        restore_ref = run._runtime_loss_checkpoint_restore_ref(
+            "implement", retry_execution_ordinal=2
+        )
+        assert restore_ref == saved["archiveRef"]
+
+        # The lost execution's workspace volume is gone; a replacement worker
+        # materializes the successor's own workspace from durable bytes only.
+        shutil.rmtree(root)
+        successor_step_id = f"{WORKFLOW_ID}:run-1:implement:execution:2"
+        successor_workspace_id = hashlib.sha256(
+            f"{WORKFLOW_ID}:{successor_step_id}".encode()
+        ).hexdigest()[:24]
+        assert successor_workspace_id != WORKSPACE_ID
+        successor = AgentExecutionRequest.model_validate(
+            {
+                "agentKind": "external",
+                "agentId": "omnigent",
+                "correlationId": WORKFLOW_ID,
+                "idempotencyKey": successor_step_id,
+                "workspaceSpec": {
+                    "workspaceLocator": {
+                        "kind": "sandbox",
+                        "workspaceId": successor_workspace_id,
+                        "relativePath": "repo",
+                    },
+                    "workspaceCheckpointRestoreRef": restore_ref,
+                },
+            }
+        )
+        mounted = await OmnigentWorkspaceMaterializer(
+            command_runner=None,
+            workspace_root=root,
+            artifact_service=TemporalOmnigentArtifactGateway(session_factory=sessions),
+        ).materialize(successor, runtime_uid=os.getuid(), runtime_gid=os.getgid())
+
+        restored = Path(mounted["sourceRef"])
+        assert successor_workspace_id in restored.parts
+        assert (restored / "generated.py").read_text() == (
+            "print('generated by the run')\n"
+        )
+        assert (restored / "app.py").read_text() == "print('uncommitted edit')\n"
     finally:
         await engine.dispose()
