@@ -280,15 +280,37 @@ metadata flag.
 4. After every remediation, verify the exact local `HEAD` is visible on the PR
    branch, then return to step 2. Never reuse a pre-remediation snapshot.
    Completion accepts only the configured provider adapter's qualified
-   signals for the current head: a submitted provider review or the adapter's
-   qualified clean-review signal observed after the request on its unchanged
-   head, as defined by the portable bundle's provider adapter/helper (which
+   signals for the current head: a submitted provider review, the adapter's
+   qualified request-bound clean-review signal, or its qualified automatic
+   completion summary with an associated no-findings reaction, as defined by
+   the portable bundle's provider adapter/helper (which
    owns message-text and reaction interpretation). Read all pages and refresh
    the comment inventory after observing completion and revalidate the remote
    head before accepting the snapshot. Merge with the verified head as an
    expected-head guard. A clean review signal satisfies review freshness; it does
    not erase independent actionable findings, CI failures, or conflicts. When
    those gates are clear, finish on the same head without another request.
+   Codex's automatic PR-opened summary is completion only when its trusted bot
+   identity, exact repository/PR URL, completed Code Review table, and chronology
+   are qualified. Its commit must be the current head; an abbreviation must
+   uniquely match the complete PR commit inventory and resolve to that exact
+   SHA through GitHub. For more than 250 commits, use the paginated comparison
+   of the exact PR base/head SHAs rather than the capped PR commits endpoint;
+   incomplete counts remain blocked. Automatic chronology uses GitHub's
+   comment/completion/reaction times and exact-SHA binding, never author-controlled
+   Git commit dates. Undated or malformed explicit requests make automatic
+   chronology unavailable, and a later dated request still owns the review wait.
+   The bot's PR thumbs-up must postdate completion and the
+   summary update. If a reaction labels its actor as User, accept it only when
+   GitHub's account lookup confirms the exact login, numeric ID, node ID and
+   Bot type; failed lookups stay observable. Summary tables, old thumbs-up,
+   eyes/start events, human
+   copies, ambiguous commits, and newer unclassified provider feedback cannot
+   open the gate. A newer explicit request still owns its unchanged head, and a
+   later provider refusal stays failed until qualified newer completion exists.
+   The snapshot records the summary, resolved commit and confirming reaction
+   identities in automaticSummary; it refreshes the full inventory and checks
+   the remote head again before accepting that evidence.
    The comment collector reads submitted reviews and issue replies before the
    inline/thread inventory, and the snapshot reuses those raw reviews. A clean
    issue reply or reaction observed afterward still requires another inventory

@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-10-01\
+**Updated:** 2026-10-09\
 **Audience:** Workflow/runtime authors, dashboard and API contributors, and operators  
 **Authority:** MoonMind authoring, target binding, runtime handoff, and result integration for PR Resolver. Resolver decisions and procedures belong to the immutable portable Skill bundle, not this integration document.  
 **Owning Surface:** PR Resolver admission and ordinary Skill execution/result boundaries  
@@ -126,6 +126,28 @@ The portable Skill, not MoonMind's UI or scheduling gate, owns automatedReview f
 Both the portable snapshot and GitHub readiness gate use the shared provider request selector. A newer explicit request on the unchanged head supersedes earlier refusals and completion evidence. Issue comments with equal creation timestamps are ordered by their numeric comment IDs; review and reaction IDs do not share that ordering. Only registered provider refusal openings count as a failed request, not findings or quoted examples that mention limits. An incomplete request inventory cannot establish completion. The readiness Activity carries the selected request ID and timestamp into the durable gate. The gate retains superseded requests in its existing cycle ledger before assigning completion to the selected request; per-observation replay markers preserve recorded decisions across worker upgrades. GitHub quota responses remain retryable with provider failure metadata, while permanent comment-read permission denials remain terminal.
 
 An older-commit review is not fresh for a new head. ProgressSignature includes head plus sorted actionable/deferred comment IDs so the parent can enforce the declared no-progress handoff without implementing the Skill's comment classification.
+
+The portable collector also recognizes Codex's automatic PR-opened completion
+summary without manufacturing an explicit request. The registered bot must
+publish the supported completed Code Review table on the exact repository/PR.
+An abbreviated reviewed commit is accepted only after the complete PR commit
+inventory proves one match and GitHub resolves it to the exact current head.
+For PRs above 250 commits, a paginated exact base/head comparison supplies the
+inventory instead of the capped PR endpoint; count or uniqueness failures stay
+blocked. Automatic chronology uses GitHub's comment/completion/reaction times
+and exact-SHA binding, independently of author-controlled Git commit dates.
+An undated or malformed explicit request makes chronology unavailable; later
+dated requests retain precedence even when Git commit dates are skewed.
+A provider PR thumbs-up must follow both completion and the summary update.
+Reaction actors labeled User require an authoritative account lookup matching
+their exact login, numeric ID and node ID with a Bot account.
+Stale reactions, a newer review start, malformed or ambiguous evidence, and
+newer unclassified provider feedback remain blocked. Newer explicit requests
+retain their existing precedence, and later qualified refusals remain failed.
+The automaticSummary projection retains bounded comment, resolved commit,
+completion/update time and confirming reaction identities. The complete
+inventory is refreshed after this signal, and the final PR head is revalidated.
+Completion never disposes of independent findings or changes required CI rules.
 
 ---
 

@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -32,9 +32,13 @@ from pr_resolver_core.code_hosts import (  # noqa: E402
 )
 from pr_resolver_core.review_providers import (  # noqa: E402
     AUTOMATED_REVIEW_PROVIDERS,
+    automatic_review_reaction,
+    automatic_review_reply,
+    automatic_review_request,
     has_explicit_finding_severity,
     is_automated_review_provider_login,
     is_review_request_comment,
+    latest_automatic_review_summary,
     latest_review_reply,
     latest_review_request,
     resolve_automated_review_provider,
@@ -139,6 +143,7 @@ def run_command(
     initial_delay_seconds=1.0,
     max_delay_seconds=8.0,
     paginated=False,
+    records_key=None,
 ):
     resolved_cmd = _resolve_command(cmd)
     env = _build_subprocess_env()
@@ -173,7 +178,7 @@ def run_command(
             if output.strip() == "" and not paginated:
                 return {}
             if paginated:
-                return _decode_paginated_records(output)
+                return _decode_paginated_records(output, records_key=records_key)
             return json.loads(output)
         except FileNotFoundError:
             print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
@@ -795,6 +800,125 @@ def _fetch_pr_reactions(*, pr_repo: str | None, pr_number: object) -> list[dict]
     )
 
 
+def _verify_automatic_reaction_actors(*, provider: str, reactions: list) -> list:
+    """Verify bot IDs when GitHub reaction payloads label a bot as User.
+
+    Reaction REST responses can disagree with the account's type. Do not relax
+    the provider adapter's bot guard: only normalize that field after GitHub's
+    account endpoint proves the exact login, numeric ID, node ID and Bot type.
+    Retrieval failures stay visible and unverified actors stay unqualified.
+    """
+    verified = []
+    identities = {}
+    for reaction in reactions:
+        user = reaction.get("user") if isinstance(reaction, dict) else None
+        login = str(user.get("login") or "").lower() if isinstance(user, dict) else ""
+        if (
+            not isinstance(user, dict)
+            or user.get("type") != "User"
+            or not login.endswith("[bot]")
+            or not is_automated_review_provider_login(provider, login)
+            or not isinstance(user.get("id"), int)
+            or isinstance(user.get("id"), bool)
+            or user["id"] <= 0
+            or not isinstance(user.get("node_id"), str)
+            or not user["node_id"]
+        ):
+            verified.append(reaction)
+            continue
+        if login not in identities:
+            identities[login] = run_command(
+                ["gh", "api", f"users/{quote(login, safe='')}"],
+                "Unable to verify the automatic review reaction's bot identity.",
+            )
+        identity = identities[login]
+        if (
+            isinstance(identity, dict)
+            and identity.get("type") == "Bot"
+            and str(identity.get("login") or "").lower() == login
+            and identity.get("id") == user["id"]
+            and identity.get("node_id") == user["node_id"]
+        ):
+            verified.append({**reaction, "user": {**user, "type": "Bot"}})
+        else:
+            verified.append(reaction)
+    return verified
+def _resolve_automatic_review_commit(
+    *, pr_repo: str, pr_number: int, commit_ref: str, head_sha: str
+) -> str | None:
+    """Resolve abbreviated summary commits in the exact repository and PR.
+
+    Prefix matching alone cannot prove identity. Read the complete PR commit
+    inventory, require one matching commit, and confirm GitHub resolves that
+    reference to the exact head. Unknown/incomplete reads remain observable.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha) or not re.fullmatch(
+        r"[0-9a-f]{7,40}", commit_ref
+    ):
+        return None
+    if not head_sha.startswith(commit_ref):
+        return None
+    if commit_ref == head_sha:
+        return head_sha
+    pull = run_command(
+        ["gh", "api", f"repos/{pr_repo}/pulls/{pr_number}"],
+        "Unable to verify the PR for automatic review commit resolution.",
+    )
+    if not isinstance(pull, dict):
+        raise RuntimeError(
+            "Malformed PR evidence for automatic review commit resolution"
+        )
+    head = pull.get("head") or {}
+    base_repo = (pull.get("base") or {}).get("repo") or {}
+    count = pull.get("commits")
+    if (
+        pull.get("number") != pr_number
+        or head.get("sha") != head_sha
+        or str(base_repo.get("full_name") or "").lower() != pr_repo.lower()
+    ):
+        return None
+    if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+        raise RuntimeError("Malformed PR commit inventory for automatic review")
+    if count > 250:
+        # The PR commits endpoint is capped even with pagination. An exact-SHA
+        # comparison supports all pages; the PR's count still proves coverage.
+        base_sha = str((pull.get("base") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            raise RuntimeError("Missing exact PR base for automatic review inventory")
+        commits = run_command(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{pr_repo}/compare/{base_sha}...{head_sha}?per_page=100",
+            ],
+            "Unable to collect the complete automatic review commit inventory.",
+            paginated=True,
+            records_key="commits",
+        )
+    else:
+        commits = _fetch_review_collection(
+            f"repos/{pr_repo}/pulls/{pr_number}/commits?per_page=100"
+        )
+    if any(
+        not re.fullmatch(r"[0-9a-f]{40}", str(commit.get("sha") or ""))
+        for commit in commits
+    ):
+        raise RuntimeError("Malformed PR commit inventory for automatic review")
+    shas = {commit["sha"] for commit in commits}
+    if len(shas) != count:
+        raise RuntimeError("Incomplete PR commit inventory for automatic review")
+    if {sha for sha in shas if sha.startswith(commit_ref)} != {head_sha}:
+        return None
+    resolved = run_command(
+        ["gh", "api", f"repos/{pr_repo}/commits/{commit_ref}"],
+        "Unable to unambiguously resolve the automatic review commit.",
+    )
+    if not isinstance(resolved, dict) or resolved.get("sha") != head_sha:
+        return None
+    return head_sha
+
+
 def build_automated_review_evidence(
     *,
     provider: object,
@@ -812,8 +936,8 @@ def build_automated_review_evidence(
 
     The Skill owns this decision in every host: a review only counts for the
     current head when the provider identity submitted it against that exact
-    commit, or answered the request for the unchanged head with a qualified
-    clean comment or reaction. PR-level results must postdate the request.
+    commit, answered the request for the unchanged head, or published a qualified
+    automatic completion summary plus a later no-findings reaction on this PR.
     When the provider's latest answer to the request is a refusal (for example
     a usage limit), the request is reported failed rather than pending.
     """
@@ -959,6 +1083,82 @@ def build_automated_review_evidence(
                     completed_at = reaction.get("created_at")
                     break
 
+    automatic_summary = None
+    automatic_failure = None
+    if not completion_kind and request_comment is None:
+        summary = latest_automatic_review_summary(
+            record, comments, repository=str(pr_repo or ""), pr_number=pr_number
+        )
+        if summary is not None:
+            later_request = automatic_review_request(
+                record, comments, summary=summary, head_sha=normalized_head
+            )
+            if later_request is not None:
+                request_comment = later_request.comment
+                request_at = later_request.created_at
+                reply = latest_review_reply(
+                    record,
+                    comments,
+                    requested_at=request_at,
+                    head_sha=normalized_head,
+                    request_comment_id=request_comment.get("id"),
+                )
+                summary = None
+        if summary is not None:
+            resolved_commit = _resolve_automatic_review_commit(
+                pr_repo=summary.repository,
+                pr_number=summary.pr_number,
+                commit_ref=summary.commit_ref,
+                head_sha=normalized_head,
+            )
+            if resolved_commit == normalized_head:
+                if reactions_for_pr is None:
+                    reactions_for_pr = _fetch_pr_reactions(
+                        pr_repo=pr_repo, pr_number=pr_number
+                    )
+                auto_reply, unknown_feedback = automatic_review_reply(
+                    record,
+                    comments,
+                    summary=summary,
+                    head_sha=normalized_head,
+                )
+                reaction = automatic_review_reaction(
+                    record,
+                    _verify_automatic_reaction_actors(
+                        provider=record.provider, reactions=reactions_for_pr
+                    ),
+                    summary=summary,
+                    not_before=(
+                        auto_reply.created_at if auto_reply else summary.completed_at
+                    ),
+                )
+                automatic_summary = {
+                    "commentId": summary.comment.get("id"),
+                    "reviewedCommitRef": summary.commit_ref,
+                    "reviewedCommitSha": resolved_commit,
+                    "completedAt": summary.completed_at.isoformat(),
+                    "updatedAt": summary.updated_at.isoformat(),
+                    "reactionId": reaction.get("id") if reaction is not None else None,
+                    "reactedAt": (
+                        reaction.get("created_at") if reaction is not None else None
+                    ),
+                }
+                if unknown_feedback is not None:
+                    automatic_summary["supersededByCommentId"] = unknown_feedback.get(
+                        "id"
+                    )
+                    automatic_summary["feedbackUnclassified"] = True
+                if (
+                    auto_reply
+                    and auto_reply.failure_class
+                    and auto_reply.created_at > summary.completed_at
+                ):
+                    reply = automatic_failure = auto_reply
+                elif reaction is not None and unknown_feedback is None:
+                    completion_kind = "automatic_summary"
+                    completion_id = summary.comment.get("id")
+                    completed_at = summary.completed_at.isoformat()
+
     fresh = bool(completion_kind)
     # Without completion, a provider refusal as the latest answer ends the
     # request instead of leaving it pending forever.
@@ -978,7 +1178,11 @@ def build_automated_review_evidence(
             {
                 "kind": "issue_comment",
                 "id": failure.comment.get("id"),
-                "failedAt": failure.comment.get("created_at"),
+                "failedAt": (
+                    failure.created_at.isoformat()
+                    if automatic_failure is not None
+                    else failure.comment.get("created_at")
+                ),
                 "providerErrorClass": failure.failure_class,
             }
             if failure is not None
@@ -993,6 +1197,8 @@ def build_automated_review_evidence(
         "completionId": completion_id,
         "completedAt": completed_at,
     }
+    if automatic_summary is not None:
+        evidence["automaticSummary"] = automatic_summary
     if latest_provider_review is not None:
         evidence["latestProviderReview"] = {
             "id": latest_provider_review.get("id"),
@@ -1918,6 +2124,7 @@ def main():
             "completedAt",
             "requestFailed",
             "requestFailure",
+            "automaticSummary",
         )
         for _refresh_attempt in range(3):
             previous_result = tuple(
