@@ -566,6 +566,7 @@ async def test_post_merge_github_completion_applies_done_status(
     async def fake_update_github_issue_status(inputs, _context=None, *, merged_pull_request):
         captured.update(inputs)
         captured["merged_pull_request"] = merged_pull_request
+        captured["context"] = _context
         return SimpleNamespace(
             status="COMPLETED",
             outputs={
@@ -584,6 +585,7 @@ async def test_post_merge_github_completion_applies_done_status(
     result = await TemporalIntegrationActivities.merge_automation_complete_post_merge_github(
         object(),
         {
+            "parentWorkflowId": "mm:parent-run",
             "pullRequest": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
             "postMergeGithub": {
                 "enabled": True,
@@ -599,6 +601,8 @@ async def test_post_merge_github_completion_applies_done_status(
         "issueNumber": 3143,
         "mode": "done",
         "merged_pull_request": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
+        # The child gate reads with its parent run's admitted repository authority.
+        "context": {"admittedWorkflowId": "mm:parent-run"},
     }
     assert result["status"] == "succeeded"
     assert result["confirmedLabels"] == ["status: done"]

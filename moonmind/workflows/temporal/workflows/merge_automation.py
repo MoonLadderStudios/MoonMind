@@ -16,12 +16,13 @@ from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellat
 with workflow.unsafe.imports_passed_through():
     from pr_resolver_core.review_providers import review_comment_is_after
     from moonmind.config.settings import settings
+    from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
     from moonmind.schemas.temporal_models import (
         AutomatedReviewFailureModel,
+        AutomatedReviewRequestReceiptModel,
         MergeAutomationStartInput,
         ReadinessBlockerModel,
     )
-    from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
     from moonmind.utils.logging import redact_sensitive_text
     from moonmind.workflows.merge_automation_review import (
         REVIEW_REQUEST_POSTED_STATUSES,
@@ -120,6 +121,9 @@ MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH = (
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
 MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_PATCH_PREFIX = (
     "merge-automation-selected-review-request-v1:"
+)
+MERGE_AUTOMATION_MULTIPLE_REVIEW_REQUESTS_PATCH_PREFIX = (
+    "merge-automation-multiple-review-requests-v1:"
 )
 MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
     "merge-automation-actionable-ci-failure-v1:"
@@ -1874,10 +1878,87 @@ class MoonMindMergeAutomationWorkflow:
             return
         if not self._review_cycles:
             self._review_cycles.append({"cycle": 1, **active, "status": "requested"})
+        receipts = evaluation.get("automatedReviewRequests")
+        if receipts is not None and self._multiple_review_requests_enabled(
+            observation_key
+        ):
+            try:
+                if not isinstance(receipts, list) or not receipts:
+                    raise ValueError("Missing selected request inventory")
+                observed = [
+                    AutomatedReviewRequestReceiptModel.model_validate(receipt)
+                    for receipt in receipts
+                ]
+                keys = [
+                    (
+                        _parse_review_timestamp(receipt.requested_at),
+                        receipt.request_comment_id,
+                    )
+                    for receipt in observed
+                ]
+                if keys != sorted(keys) or keys[-1] != (
+                    _parse_review_timestamp(selected_at),
+                    selected_id,
+                ):
+                    raise ValueError("Selected request disagrees with inventory")
+                known = {
+                    cycle.get("requestCommentId"): _parse_review_timestamp(
+                        cycle.get("requestedAt")
+                    )
+                    for cycle in self._review_cycles
+                    if cycle.get("headSha") == active["headSha"]
+                }
+                anchor = (
+                    _parse_review_timestamp(active.get("requestedAt")),
+                    active.get("requestCommentId"),
+                )
+                if (
+                    anchor[0] is None
+                    or not isinstance(anchor[1], int)
+                    or isinstance(anchor[1], bool)
+                    or anchor[1] <= 0
+                ):
+                    raise ValueError("Active request has no causal identity")
+                unseen = []
+                for receipt, key in zip(observed, keys):
+                    if receipt.request_comment_id in known:
+                        if known[receipt.request_comment_id] != key[0]:
+                            raise ValueError("Retained request time is contradictory")
+                        continue
+                    if key <= anchor:
+                        raise ValueError("Request predates retained active request")
+                    unseen.append(receipt)
+                    known[receipt.request_comment_id] = key[0]
+                for receipt in unseen:
+                    budget_blocker = self._review_cycle_budget_blocker()
+                    if budget_blocker is not None:
+                        return budget_blocker
+                    self._retain_selected_review_request(
+                        receipt.request_comment_id, receipt.requested_at
+                    )
+                return None
+            except (TypeError, ValueError):
+                return ReadinessBlockerModel(
+                    kind="external_state_unavailable",
+                    summary="Observed review requests disagree with retained request evidence.",
+                    retryable=False,
+                    source="merge_automation",
+                )
         if self._selected_review_request_cycle_budget_enabled(observation_key):
             budget_blocker = self._review_cycle_budget_blocker()
             if budget_blocker is not None:
                 return budget_blocker
+        self._retain_selected_review_request(selected_id, selected_at)
+
+    def _multiple_review_requests_enabled(self, observation_key: str) -> bool:
+        return workflow.patched(
+            MERGE_AUTOMATION_MULTIPLE_REVIEW_REQUESTS_PATCH_PREFIX + observation_key
+        )
+
+    def _retain_selected_review_request(
+        self, selected_id: int, selected_at: str
+    ) -> None:
+        active = self._active_review_request
         previous = self._review_cycles[-1]
         if previous.get("status") == "requested":
             previous["status"] = "superseded"
@@ -2167,6 +2248,18 @@ class MoonMindMergeAutomationWorkflow:
                 budget_blocker = self._settle_active_review_request(
                     evaluation if isinstance(evaluation, Mapping) else {}
                 )
+        if (
+            budget_blocker is not None
+            and budget_blocker.kind == "external_state_unavailable"
+        ):
+            # The receipt inventory already failed the observation-gated
+            # reconciliation. Publish its terminal blocker before attempting
+            # to normalize the same malformed Activity payload again.
+            terminal = await self._blocked_review_summary(
+                summary=budget_blocker.summary,
+                blocker_kind=budget_blocker.kind,
+            )
+            return evaluation, None, terminal
         if budget_blocker is not None and isinstance(evaluation, Mapping):
             # Rejected or malformed receipts are not admitted cycle evidence.
             # Keep their bounded blocker, without passing corrupt data into

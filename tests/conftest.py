@@ -1,7 +1,11 @@
 import asyncio
+import atexit
 import inspect
 import os
 import signal
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -124,6 +128,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.unit_fast)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_handlecrashitem(crashitem, report):
+    """Expose the lost test before xdist recovery can delay its failure summary."""
+    try:
+        print(
+            f"xdist-crash {report.node.gateway.id} {crashitem}",
+            file=sys.__stderr__,
+            flush=True,
+        )
+    except (OSError, ValueError):
+        # ValueError also covers closed streams and UnicodeEncodeError.
+        pass  # Diagnostic output must not replace the original crash failure.
+
+
 @pytest.fixture
 def disabled_env_keys(monkeypatch):
     from moonmind.config.settings import settings
@@ -190,24 +208,28 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
 # ── atexit cleanup for orphaned Temporal test-server processes ──────────────
 #
-# ``WorkflowEnvironment.start_time_skipping()`` spawns a ``temporal-test-server``
-# child process.  Under pytest-xdist the worker process may exit before the
-# async context manager's ``__aexit__`` runs, leaving the server alive.
-# The parent pytest process then hangs waiting for the worker pipe to drain.
-#
-# An ``atexit`` handler fires on interpreter shutdown *inside each worker*,
-# early enough to kill the orphaned child before the pipe blocks.
-import atexit
-import subprocess
+# The SDK spawns ``temporal-test-server`` for time skipping and a Temporal CLI
+# ``server start-dev`` child for local testing. Normal shutdown uses atexit as
+# a fallback; pytest-timeout's fatal thread callback must clean up before
+# os._exit bypasses context managers.
 
 
 def _kill_owned_temporal_servers() -> None:
-    """Terminate ``temporal-test-server`` subprocesses owned by this process."""
+    """Terminate SDK Temporal server subprocesses owned by this process."""
     my_pid = os.getpid()
     try:
         out = subprocess.check_output(
-            ["pgrep", "-P", str(my_pid), "-f", "temporal-test-server"],
+            [
+                "pgrep",
+                "-P",
+                str(my_pid),
+                "-f",
+                # The SDK supports a caller-supplied CLI executable path.
+                # Match its server invocation while retaining the parent fence.
+                r"temporal-test-server|^.+ server start-dev( |$)",
+            ],
             text=True,
+            timeout=2,
         )
         for line in out.strip().splitlines():
             pid = int(line.strip())
@@ -216,10 +238,107 @@ def _kill_owned_temporal_servers() -> None:
             except OSError:
                 # Best-effort: the child may already be gone or we may lack permission.
                 pass
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        ValueError,
+    ):
         # Best-effort cleanup: if `pgrep` is unavailable, fails, or output is unexpected,
         # we silently ignore it to avoid disrupting test shutdown.
         pass
 
 
 atexit.register(_kill_owned_temporal_servers)
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_timeout_set_timer(item, settings):
+    """Keep pytest-timeout's fatal policy while cleaning this worker's servers."""
+    if settings.method != "thread" and (
+        settings.method != "signal"
+        or threading.current_thread() is threading.main_thread()
+    ):
+        return None
+
+    import pytest_timeout
+
+    def timeout_owned_worker():
+        if not settings.disable_debugger_detection and pytest_timeout.is_debugging():
+            return
+        try:
+            _kill_owned_temporal_servers()
+        finally:
+            pytest_timeout.timeout_timer(item, settings)
+
+    # Preserve pytest-timeout 2.4.0's thread timer and cancellation lifecycle.
+    timer = threading.Timer(settings.timeout, timeout_owned_worker)
+    timer.name = "%s %s" % (pytest_timeout.__name__, item.nodeid)
+
+    def cancel():
+        timer.cancel()
+        timer.join()
+
+    item.cancel_timeout = cancel
+    timer.start()
+    return True
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_xdist_make_scheduler(config, log):
+    """Finalize a crashed item once while retaining native file grouping."""
+    if config.option.dist != "loadfile":
+        return None
+
+    from xdist.scheduler.loadfile import LoadFileScheduling
+
+    class _CrashFinalizingLoadFileScheduling(LoadFileScheduling):
+        """Compatibility repair for the pinned xdist 3.8.0 private state.
+
+        Remove when a released dependency passes the crash-recovery subprocess
+        cases with its native scheduler; see BackendTestSelection.md.
+        """
+
+        def schedule(self):
+            restarting = self.collection is not None
+            super().schedule()
+            if restarting:
+                # Match upstream #1328: a replacement needs a next item (or
+                # shutdown) before it can execute its first queued test.
+                for node in self.nodes:
+                    self._reschedule(node)
+
+        def remove_node(self, node):
+            # pytest-xdist 3.8.0 LoadScopeScheduling.remove_node, with the
+            # selected crash item completed before native requeue/reschedule.
+            # DSession still receives that item and reports its original failure.
+            workload = self.assigned_work.pop(node)
+            if not self._pending_of(workload):
+                return None
+
+            for work_unit in workload.values():
+                for nodeid, completed in work_unit.items():
+                    if not completed:
+                        crashitem = nodeid
+                        work_unit[nodeid] = True
+                        break
+                else:
+                    continue
+                break
+            else:
+                raise RuntimeError(
+                    "Unable to identify crashitem on a workload with pending items"
+                )
+
+            # Completed files would send an empty test list, leaving a
+            # replacement waiting before any test timeout can start.
+            self.workqueue.update(
+                (scope, work_unit)
+                for scope, work_unit in workload.items()
+                if self._pending_of({scope: work_unit})
+            )
+            for remaining_node in self.assigned_work:
+                self._reschedule(remaining_node)
+            return crashitem
+
+    return _CrashFinalizingLoadFileScheduling(config, log)

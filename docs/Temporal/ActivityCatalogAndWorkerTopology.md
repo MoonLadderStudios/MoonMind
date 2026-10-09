@@ -384,8 +384,14 @@ construction for the fixture's seeded checkpoint), and an activity
 interceptor observes deliveries and injects faults without replacing a
 handler. The journeys assert the serving queue, timeouts, retry budget and
 durable row state for success, provider failure, cancellation, transient
-terminal retry and terminal rejection. One journey bounds the artifacts
-worker's slots and holds one slot with an unfinished `mark_running`: the
+terminal retry and terminal rejection. Cancellation covers both the observed
+running-state handoff and the original activity-entry boundary, with the same
+terminal-state and history-replay assertions. The activity-entry case uses the
+SDK-selected, image-cached CLI dev server because the time-skipping server
+can reject cancellation racing activity completion with `ACTIVITY_UNKNOWN`
+([upstream issue](https://github.com/temporalio/sdk-java/issues/2391)); the
+post-handoff case and other journeys retain time skipping. One journey bounds
+the artifacts worker's slots and holds one slot with an unfinished `mark_running`: the
 workflow worker still processes the cancellation, the canceled terminal
 persists through the free slot, and the late running handoff cannot reopen
 the canceled turn (`mark_turn_running` leaves terminal turns unchanged).

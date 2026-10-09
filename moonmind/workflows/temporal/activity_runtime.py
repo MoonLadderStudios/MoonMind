@@ -4296,23 +4296,59 @@ async def _saved_work_destination_authority(
     ``github:repository-default`` is the deployment's default repository
     connection: a recorded connection's credential is read and no ambient
     token substitutes for it. The authority reference records only the
-    redaction-safe credential source, so a changed connection invalidates the
-    persisted decision while a token value never enters workflow history.
+    redaction-safe credential source, recorded connection revisions, and the
+    selected managed SecretRef's atomically read revisions. A
+    changed connection invalidates the persisted decision while a token value
+    never enters workflow history.
     """
 
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+        RepositoryRouteError,
+    )
     from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-        resolve_default_github_connection_credential,
+        select_github_access_for_launch,
     )
 
-    credential = await resolve_default_github_connection_credential(
-        repo=contract.destination.repository
-    )
+    operations = ("read", "write", "branch_write")
+    if contract.destination.objective != "branch":
+        operations += ("review_request",)
+    try:
+        access = await select_github_access_for_launch(
+            DEFAULT_GIT_CONNECTION_REF,
+            repository=contract.destination.repository,
+            required_operations=operations,
+        )
+    except RepositoryContractError as exc:
+        raise _publication_authority_unavailable(
+            ResolvedGitHubCredential(
+                source=GitHubCredentialSource.UNRESOLVABLE,
+                diagnostic=str(exc),
+                retryable=(
+                    exc.code == "REPOSITORY_CONNECTION_UNAVAILABLE"
+                    and not isinstance(exc.__cause__, RepositoryRouteError)
+                ),
+            )
+        ) from exc
+    credential = access.credential
     if not credential.token:
         raise _publication_authority_unavailable(credential)
     authority_ref = (
         f"{contract.github_authority_ref}#{credential.source.value}:"
         f"{credential.source_name or 'default'}"
     )
+    if access.connection is not None:
+        authority_ref += (
+            f"#{access.connection.id}:policy:{access.connection.policy_revision}:"
+            f"credential:{access.connection.credential_revision}"
+        )
+    if credential.reference_revision is not None:
+        authority_ref += f"#secret:{credential.reference_revision}"
     if admitted_authority_ref is not None and authority_ref != admitted_authority_ref:
         raise temporal_exceptions.ApplicationError(
             "destination authority changed since the decision was admitted",
@@ -4322,13 +4358,11 @@ async def _saved_work_destination_authority(
     return credential.token, authority_ref
 
 
-def _saved_decision(
-    contract: Any, prepared: Mapping[str, Any], *, authority_ref: str | None = None
-) -> Any:
+def _saved_decision(contract: Any, prepared: Mapping[str, Any]) -> Any:
     """Return a persisted admission only if it is exactly this contract's decision.
 
-    ``authority_ref`` compares against the currently resolved authority
-    instead of the one the record carries.
+    Current authority is checked against this validated admission before
+    rebuilding or using its candidate.
     """
 
     from moonmind.publish.saved_candidate import SavedPublicationAdmission
@@ -4339,7 +4373,7 @@ def _saved_decision(
         )
         expected = contract.admission(
             expected_base_sha=admission.expected_base_sha,
-            authority_ref=authority_ref or admission.authority_ref,
+            authority_ref=admission.authority_ref,
         )
     except ValueError:
         return None
@@ -4441,19 +4475,31 @@ async def _merge_automation_repository_credential(
     )
 
 
+def _admitted_activity_workflow_id() -> str:
+    """The run executing this Activity, whose admitted repository authority it uses.
+
+    A child workflow acts with its recorded owning run (resolved by the
+    repository reader); outside an Activity no run is recorded, which selects
+    the default connection rather than an ambient token.
+    """
+    return temporal_activity.info().workflow_id if temporal_activity.in_activity() else ""
+
+
 @contextlib.asynccontextmanager
-async def _merge_automation_github_token(payload, *, repository, operation):
+async def _merge_automation_github_access(payload, *, repository, operation):
+    """Yield the ``GitHubService`` authority arguments for one gate operation."""
     acquired = await _merge_automation_repository_credential(
         payload, repository=repository, operation=operation,
     )
     if acquired is None:
-        yield payload.get("githubToken")
+        # Merge/fix gates use their owning run's admitted connection.
+        yield {"admitted_workflow_id": _admitted_activity_workflow_id()}
         return
     try:
         token = acquired.credential.use_now(lambda value: value.decode("utf-8").strip())
         if not token:
             raise TemporalActivityRuntimeError("selected collaboration credential is empty")
-        yield token
+        yield {"github_token": token}
     finally:
         acquired.credential.clear()
 
@@ -5035,15 +5081,15 @@ class TemporalIntegrationActivities:
             active_review_request = None
 
         repository = str(pull_request.get("repo") or "")
-        async with _merge_automation_github_token(
+        async with _merge_automation_github_access(
             payload, repository=repository, operation="read",
-        ) as github_token:
+        ) as github_access:
             readiness = await GitHubService().evaluate_pull_request_readiness(
                 repo=repository,
                 pr_number=int(pull_request.get("number") or 0),
                 head_sha=str(pull_request.get("headSha") or ""),
                 policy=dict(policy),
-                github_token=github_token,
+                **github_access,
                 review_loop_enabled=bool(review_loop.get("enabled")),
                 review_request=dict(active_review_request)
                 if active_review_request
@@ -5123,9 +5169,9 @@ class TemporalIntegrationActivities:
                 "that does not match its request identity"
             )
 
-        async with _merge_automation_github_token(
+        async with _merge_automation_github_access(
             payload, repository=repository, operation="review_request",
-        ) as github_token:
+        ) as github_access:
             async with get_async_session_context() as session:
                 entry = await MergeAutomationReviewRequestStore(session).claim(
                     request_key=expected_request_key,
@@ -5168,7 +5214,7 @@ class TemporalIntegrationActivities:
                 provider=provider_record.provider,
                 attempt_started_at=reconcile_from.isoformat(),
                 recorded_comment_id=entry.request_comment_id,
-                github_token=github_token,
+                **github_access,
                 **({"expires_at": payload["expiresAt"]} if "expiresAt" in payload else {}),
             )
             outcome = result.model_dump(by_alias=True, mode="json")
@@ -5254,12 +5300,16 @@ class TemporalIntegrationActivities:
             gate = candidate_context["acceptanceGate"]
             gate = gate if isinstance(gate, Mapping) else {}
             binding = acceptance_evidence(gate)
+            # The gate reads with the parent run's admitted repository authority.
+            admitted = str(payload.get("parentWorkflowId") or "").strip()
             reason = await validate_completion_target(
                 gate,
                 repository=binding.subject.repository if binding else "",
                 source_ref=str(payload.get("jiraIssueKey") or ""),
                 expected_ref=str(candidate_context.get("completionTargetRef") or ""),
-                read_target=GitHubService().read_repository_target,
+                read_target=lambda repo, ref: GitHubService().read_repository_target(
+                    repo, ref, admitted_workflow_id=admitted
+                ),
             )
             if reason:
                 return {"status": "blocked", "required": True, "reason": reason,
@@ -5323,6 +5373,8 @@ class TemporalIntegrationActivities:
                 "mode": "done",
                 **({"completionTargetRef": config["completionTargetRef"]} if config.get("completionTargetRef") else {}),
             },
+            # The gate reads with the parent run's admitted repository authority.
+            {"admittedWorkflowId": str(payload.get("parentWorkflowId") or "").strip()},
             merged_pull_request=payload.get("pullRequest") or {},
         )
         outputs = dict(result.outputs)
@@ -5637,6 +5689,7 @@ class TemporalIntegrationActivities:
         result = await GitHubService().resolve_pull_request_selector(
             repo=repository,
             selector=selector,
+            admitted_workflow_id=_admitted_activity_workflow_id(),
         )
         return result.model_dump(by_alias=True, mode="json")
 
@@ -5662,6 +5715,7 @@ class TemporalIntegrationActivities:
             pr_number=pr_number,
             head_sha=str(payload.get("headSha") or ""),
             policy=dict(payload.get("policy") or {}),
+            admitted_workflow_id=_admitted_activity_workflow_id(),
         )
         result = readiness.model_dump(by_alias=True, mode="json")
         result["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
@@ -5681,11 +5735,14 @@ class TemporalIntegrationActivities:
         repository = str(payload.get("repository") or "").strip()
         pr_number = int(payload.get("prNumber") or 0)
         expected_head = str(payload.get("headSha") or "").strip()
+        # The readiness read and the merge use the same admitted connection.
+        admitted = _admitted_activity_workflow_id()
         readiness = await service.evaluate_pull_request_readiness(
             repo=repository,
             pr_number=pr_number,
             head_sha=expected_head,
             policy=dict(payload.get("policy") or {}),
+            admitted_workflow_id=admitted,
         )
         if readiness.pull_request_merged is True:
             return {
@@ -5712,6 +5769,7 @@ class TemporalIntegrationActivities:
             pr_url=str(payload.get("prUrl") or ""),
             merge_method=str(payload.get("mergeMethod") or "squash"),
             expected_head_sha=expected_head or None,
+            admitted_workflow_id=admitted,
         )
         output = result.model_dump(by_alias=True, mode="json")
         output["idempotencyKey"] = str(payload.get("idempotencyKey") or "")
@@ -6038,8 +6096,8 @@ class TemporalAgentRuntimeActivities:
         Only saved-work artifacts are read, each under a publication use claim
         and the admitted owner scope; the original source is never looked up.
         ``priors`` are persisted decisions of the same operation, newest
-        first: the newest one that is exactly this decision under the current
-        authority is rebuilt instead of observing the base again.
+        first: the newest one that is exactly this request retains its
+        admission. Current authority must still match before any rebuild.
         """
         from moonmind.publish.saved_candidate import SavedPublicationError
         from moonmind.publish.saved_work_source import (
@@ -6087,21 +6145,21 @@ class TemporalAgentRuntimeActivities:
             await claim(saved_work_artifact_id(contract.saved_work_ref))
         except SavedPublicationError as exc:
             raise _saved_publication_failure(exc) from exc
+        # A plain retry completes the same decision; it never admits a moved
+        # base as a second candidate for the same operation, and a newer,
+        # different request of that operation never hides it.
+        for prior in priors if admission is None else ():
+            reused = _saved_decision(contract, prior)
+            if reused is not None:
+                admission = reused
+                persisted_head_sha = str(prior["candidate"]["headSha"])
+                break
         token, authority_ref = await _saved_work_destination_authority(
             contract,
             admitted_authority_ref=(
                 admission.authority_ref if admission is not None else None
             ),
         )
-        # A plain retry completes the same decision; it never admits a moved
-        # base as a second candidate for the same operation, and a newer,
-        # different request of that operation never hides it.
-        for prior in priors if admission is None else ():
-            reused = _saved_decision(contract, prior, authority_ref=authority_ref)
-            if reused is not None:
-                admission = reused
-                persisted_head_sha = str(prior["candidate"]["headSha"])
-                break
 
         async def read(ref: str, content_types: frozenset[str]) -> bytes:
             artifact_id = saved_work_artifact_id(ref)

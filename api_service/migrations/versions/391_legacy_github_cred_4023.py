@@ -286,6 +286,7 @@ def migrate_legacy_github_connection(
                     "write",
                     "branch_write",
                     "review_request",
+                    "merge_request",
                 ],
                 "client_policy": _deployment_client_policy(),
                 "credential_config": credential,

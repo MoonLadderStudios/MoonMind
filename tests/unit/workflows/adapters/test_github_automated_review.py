@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -65,6 +67,80 @@ def _review_clock(monkeypatch, initial):
 # ---------------------------------------------------------------------------
 # request_automated_review
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", ["pending", "clean", "refusal"])
+async def test_readiness_preserves_every_causal_review_request(response):
+    from moonmind.schemas.temporal_models import ReadinessEvidenceModel
+
+    timestamp = _ACTIVE_REQUEST["requestedAt"]
+    request = {"body": "@codex review", "created_at": timestamp}
+    first_page = [{**request, "id": 98764}, {**request, "id": 98766}]
+    second_page = [
+        {**request, "id": 98765},
+        {**request, "id": 98766},
+        {**request, "id": 98767},
+        {**request, "id": 98768, "body": "    @codex review"},
+        {**request, "id": 98770, "commit_id": _OLD_HEAD},
+    ]
+    if response != "pending":
+        second_page.append(
+            {
+                "id": 98771,
+                "body": (
+                    "Codex Review: Didn't find any major issues."
+                    if response == "clean"
+                    else "You have reached your Codex usage limits for code reviews."
+                ),
+                "created_at": "2026-08-24T22:21:00Z",
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+            }
+        )
+
+    def respond(request):
+        path = request.url.path.removeprefix(f"/repos/{_REPO}/")
+        if path == "pulls/350":
+            body = {"state": "open", "merged": False, "head": {"sha": _HEAD}}
+        elif path == "issues/350/comments":
+            if request.url.params.get("page") != "2":
+                return httpx.Response(
+                    200,
+                    json=first_page,
+                    headers={
+                        "Link": f'<https://api.github.com/repos/{_REPO}/issues/350/comments?page=2>; rel="next"'
+                    },
+                )
+            body = second_page
+        elif path == "pulls/350/reviews" or path.endswith("/reactions"):
+            body = []
+        else:
+            raise AssertionError(path)
+        return httpx.Response(200, json=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+    with _patch_client(client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=_HEAD,
+            github_token="synthetic-token",
+            policy={"checks": "ignored", "automatedReview": "required"},
+            review_loop_enabled=True,
+            review_request=_ACTIVE_REQUEST,
+        )
+    projected = ReadinessEvidenceModel.model_validate(
+        result.model_dump(by_alias=True)
+    ).model_dump(by_alias=True)
+    assert projected["automatedReviewRequests"] == [
+        {"requestCommentId": identifier, "requestedAt": timestamp}
+        for identifier in (98765, 98766, 98767)
+    ]
+    assert projected["automatedReviewRequestCommentId"] == 98767
+    assert (
+        projected["automatedReviewComplete"]
+        is {"pending": False, "clean": True, "refusal": None}[response]
+    )
 
 
 @pytest.mark.asyncio
@@ -1093,6 +1169,65 @@ async def test_requested_review_uses_latest_comment_across_pages(
     assert [b["kind"] for b in result.blockers] == (
         [] if latest_clean else ["automated_review_request_failed"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reviewed_head", [True, False])
+async def test_requested_review_real_codex_clean_reply_completes_only_its_head(
+    monkeypatch, reviewed_head
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    reply = json.loads(
+        (
+            Path(__file__).resolve().parents[4]
+            / "tests/fixtures/pr_resolver/codex_clean_replies.json"
+        ).read_text(encoding="utf-8")
+    )[-1]
+    head = reply["headSha"] if reviewed_head else _HEAD
+    prefix = _readiness_prefix()
+    prefix[0] = _get(
+        200,
+        {
+            "state": "open",
+            "merged": False,
+            "head": {"sha": head},
+            "base": {"sha": "base"},
+            "mergeable": True,
+            "mergeable_state": "clean",
+        },
+    )
+    reply_comment = {
+        "id": reply["commentId"],
+        "body": reply["body"],
+        "created_at": reply["createdAt"],
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+    mock_client = _client(
+        get_responses=[
+            *prefix,
+            _get(200, []),
+            _get(200, [reply_comment]),
+            _get(200, []),
+            _get(200, []),
+            # Revalidate the complete request inventory before accepting this result.
+            _get(200, [reply_comment]),
+            _get(200, {"state": "open", "merged": False, "head": {"sha": head}}),
+        ]
+    )
+    with _patch_client(mock_client):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo=_REPO,
+            pr_number=350,
+            head_sha=head,
+            review_loop_enabled=True,
+            review_request={**_ACTIVE_REQUEST, "headSha": head},
+        )
+
+    assert (result.automated_review_complete is True) is reviewed_head
+    assert result.automated_review_completion_kind == (
+        "issue_comment" if reviewed_head else None
+    )
+    assert result.ready is reviewed_head
 
 
 @pytest.mark.asyncio

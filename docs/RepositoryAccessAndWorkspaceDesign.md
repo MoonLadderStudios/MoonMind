@@ -314,6 +314,56 @@ destination authority fails before publication; typed repository plans do not
 fall back to ambient credentials. Historical plans without repository snapshots
 retain their existing credential path.
 
+Server-side repository readers (`GitHubService.read_pull_request`,
+`read_repository_target`, and `commit_is_ancestor`) read with the connection
+admitted for the work. A caller supplies that connection or names the admitted
+run. Tools and Activities name the run that owns them. A merge gate acting for
+its parent run names the parent. The reader takes the run's recorded
+`connectionRef` from its canonical parameters. A routed run's parameters name
+no connection, so the reader takes the connection its frozen execution plan's
+repository binding admitted: the collaboration binding, else the source
+binding. A plan that bound no repository authority admitted only the default
+connection, and an unreadable plan fails. A child workflow started by a
+run, such as an agent step, merge gate, or resolver or remediation child, has
+no canonical record of its own. It acts with the nearest recorded run on its
+Temporal parent chain, read from the worker's Temporal client. A chain that
+reaches no recorded run fails. As at launch, an omitted reference means
+`repository-connection:git-default`, and an unrecorded default derives from the
+deployment declaration. Selection uses the launch selector, so a deleted,
+disabled, or unassigned connection fails there.
+
+The selected connection's endpoint must be trusted before any credential is
+read. A pull-request URL is read only through the connection that serves its
+host, so a PR on one host is never validated with another host's repository
+facts. An App connection issues through the bound acquirer for exactly the
+requested operation. A PAT connection reads only its own SecretRef. A missing
+or unreadable credential fails without substituting an ambient token. A run
+that authored anonymous access reads with no credential and cannot mutate.
+Retries and reconciliation reads in the same Activity reuse the same admitted
+run.
+
+Pull-request operations in the same work use that admitted connection too. The
+Jules merge Activity's base retarget and merge, the pr-resolver Activities'
+selector, readiness, and merge, and merge/fix merge-automation readiness and
+review requests pass their executing run to `GitHubService`. An App connection
+acquires `merge_request` for a merge or base retarget, `review_request` for a
+review request, and `read` for readiness and selector lookups. A failed
+selection or credential reports the operation unavailable and sends no request.
+For a run with frozen repository access, server-side operations use the existing
+Omnigent credential acquisition owner to verify the snapshot digest, repository,
+role, operation and current assignment/revision before resolving either a PAT or
+App credential. An admitted run takes precedence over a service-supplied
+connection. Native review bindings retain their read/review-only restriction.
+Historical runs without repository snapshots must match their recorded
+repository and the selected connection's active operation grant. A default
+connection does not bypass a recorded assignment, and an absent operation grant
+reports the operation unavailable; this path adds no grant or credential fallback.
+The `github.resolve_pull_request_target` tool resolves its selector and reads
+the pull request with the executing run's admitted connection the same way.
+Review-only merge automation and saved publication supply their own admitted
+credentials. Issue-lifecycle helpers still take an explicit token and fall back
+to deployment resolution when it is omitted.
+
 ### INV-004 Ambient identity cannot override admitted identity
 
 Git and hosting CLI execution isolate home/configuration state and scrub token variables, inherited authorization headers, credential helpers, `.netrc`, and login caches unless explicitly supplied by the admitted adapter. Helpers validate protocol, host, and repository path and use path-sensitive matching where required. Environment credentials cannot override selected `gh` configuration.
@@ -438,6 +488,8 @@ Publication-only execution accepts an immutable `savedWorkRef`, an authorized de
 
 The saved result's authorization, digest, and completeness are verified. Destination repository/branch, connection, operations, client/policy snapshot, and remote expectation are newly admitted. A clean contained workspace receives content without old credentials or approvals. Candidate construction is deterministic, provenance-preserving, and scanned under current destination policy.
 
+The recorded default destination follows the existing connection service's repository assignments and operations, including its classified migrated-default exception. Branch publication requires read, write, and branch-write authority; a PR also requires review-request authority. One selection supplies both the policy and credential. The persisted authority records the connection's policy and credential revisions alongside its redaction-safe credential source. A selected managed `db://` SecretRef also contributes its own credential and policy revisions, read atomically with its value through the Secrets System; independent managed-secret rotation cannot retain the old authority identity. Prepare retries, push, and PR creation reject a revision mismatch with `PUBLICATION_AUTHORITY_CHANGED`; a missing or revoked grant instead makes authority unavailable. They preserve the saved result, original decision, and prior confirmed effects for a newly admitted decision. Tokens and token hashes never enter this reference or workflow history.
+
 Mutation uses the existing protected-branch and compare-and-set/lease controls. The exact remote revision is verified, and a PR is created or adopted only when requested and supported. Canonical provider-aware publication evidence links the saved-work digest and destination authority. A self-contained result requires no original source PAT.
 
 The one-control authoring contract does not replay an old workflow's Auto to choose new side effects. Publish Saved Work admits its own explicit Branch/PR objective and supported automation, if any, under the same compiler. None is deliberate non-publication. An old Skill-owned Auto result cannot be converted into a publication-only Skill execution or a claim that unrelated resolver/tracker effects completed.
@@ -458,6 +510,8 @@ Repository creation is a separate authorization capability. Separate source/dest
 ### QUALITY-006 Publication recovery reconciles exact remote evidence
 
 Publication idempotency includes saved-work digest, admitted destination, application strategy, and intended branch. Candidate identity and observed remote expectation are persisted before mutation. A lost push or PR-create response leads to exact remote reconciliation, not blind repetition.
+
+An explicit fresh admission generation separates re-admission from retry while preserving the same saved work, commit, destination, and output. Ordinary Saved Results authoring persists the generation before submission, reuses it through ambiguous acknowledgments and reloads, and rotates only on a new explicit submission after the matching operation is known terminal. Omitted generations retain historical keys; old admissions, decisions, and receipts remain immutable.
 
 A stale baseline or conflict blocks publication while preserving original saved work. Replanning onto a newer base produces a new candidate/attempt and required approval. Changing connection or destination requires re-admission. The original saved artifact and compute outcome are immutable.
 

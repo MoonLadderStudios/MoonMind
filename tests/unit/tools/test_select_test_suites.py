@@ -24,6 +24,21 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
 @pytest.mark.parametrize(
     "changed_path",
     [
+        ".agents/skills/pr-resolver/bin/pr_resolve_snapshot.py",
+        ".agents/skills/fix-comments/tools/get_pr_comments.py",
+        "tests/unit/test_pr_resolver_wait_polling.py",
+        "pr_resolver_core/github_checks.py",
+    ],
+)
+def test_resolver_cli_changes_keep_the_existing_slow_suite_selected(changed_path):
+    outputs = _outputs([changed_path])
+    assert outputs["unit_slow"] == "true"
+    assert outputs["unit_fast"] == "true"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
         "AGENTS.md",
         "README.md",
         "docs/Development/BackendTestSelection.md",
@@ -37,21 +52,9 @@ def test_audited_prose_only_change_skips_test_suites(
 ) -> None:
     outputs = _outputs([changed_path])
 
-    assert outputs == {
-        "unit_fast": "false",
-        "unit_slow": "false",
-        "api_component": "false",
-        "temporal_boundary": "false",
-        "integration_ci": "false",
-        "reliability_journey": "false",
-        "exact_artifact": "false",
-        "omnigent_conformance": "false",
-        "full_backend": "false",
-        "frontend_static": "false",
-        "frontend_browser_chromium": "false",
-        "frontend_browser_firefox": "false",
-        "full_frontend": "false",
-    }
+    assert all(outputs[key] == "false" for key in select_test_suites.OUTPUT_KEYS)
+    assert outputs["integration_matrix"] == '{"suite":[]}'
+    assert outputs["backend_matrix"] == '{"include":[]}'
 
 
 def test_measured_readme_inventory_and_screenshot_diff_skips_test_suites() -> None:
@@ -65,7 +68,10 @@ def test_measured_readme_inventory_and_screenshot_diff_skips_test_suites() -> No
         ]
     )
 
-    assert all(value == "false" for value in outputs.values())
+    assert all(
+        value == "false"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_audited_prose_does_not_suppress_api_coverage() -> None:
@@ -95,7 +101,10 @@ def test_audited_prose_does_not_suppress_api_coverage() -> None:
             "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
             {"unit_fast"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
         ("docs/UnlistedContract.md", {"unit_fast"}),
     ],
 )
@@ -115,7 +124,10 @@ def test_prose_exemption_preserves_executable_and_unlisted_markdown_coverage(
             "docs/Temporal/WorkflowTypeCatalogGenerated.md",
             {"unit_fast", "temporal_boundary"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
     ],
 )
 def test_rename_to_audited_prose_retains_source_path_coverage(
@@ -136,13 +148,19 @@ def test_prose_exemption_keeps_templates_and_submodules_on_full_verification(
 ) -> None:
     outputs = _outputs(["README.md", changed_path])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_schedule_with_audited_prose_selects_full_verification() -> None:
     outputs = select_suites(["README.md"], event_name="schedule").as_outputs()
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_backend_only_change_skips_frontend() -> None:
@@ -353,31 +371,46 @@ def test_api_service_migration_change_selects_integration_ci() -> None:
 def test_pyproject_change_selects_full_backend() -> None:
     outputs = _outputs(["pyproject.toml"])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_workflow_change_selects_full_backend() -> None:
     outputs = _outputs([".github/workflows/pytest-unit-tests.yml"])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_unit_runner_change_selects_full_backend() -> None:
     outputs = _outputs(["tools/test_unit.sh"])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_empty_changed_file_input_selects_full_backend() -> None:
     outputs = _outputs([])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_unknown_path_fails_open_to_full_backend() -> None:
     outputs = _outputs(["Makefile"])
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_main_push_selects_full_backend() -> None:
@@ -387,7 +420,10 @@ def test_main_push_selects_full_backend() -> None:
         ref_name="main",
     ).as_outputs()
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_manual_dispatch_selects_full_backend() -> None:
@@ -397,7 +433,10 @@ def test_manual_dispatch_selects_full_backend() -> None:
         ref_name="feature",
     ).as_outputs()
 
-    assert all(value == "true" for value in outputs.values())
+    assert all(
+        value == "true"
+        for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def test_main_rejects_interactive_stdin(monkeypatch, capsys) -> None:
@@ -737,10 +776,16 @@ def test_unknown_and_empty_diffs_conservatively_select_full_verification():
     for paths in ([], ["Makefile"], ["some/new/tool.sh"]):
         outputs = _outputs(paths)
         assert outputs["full_backend"] == "true", paths
-        assert all(value == "true" for value in outputs.values()), paths
+        assert all(
+            value == "true"
+            for value in (outputs[key] for key in select_test_suites.OUTPUT_KEYS)
+        ), paths
     # A mixed known + unknown diff still fails open to the full corpus.
     mixed = _outputs(["README.md", "totally-unknown-path-xyz"])
-    assert all(value == "true" for value in mixed.values())
+    assert all(
+        value == "true"
+        for value in (mixed[key] for key in select_test_suites.OUTPUT_KEYS)
+    )
 
 
 def _aggregator_probe_script(cases: list[tuple[str, str, str]]) -> str:
@@ -809,10 +854,10 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
 
     workflow = (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
     # Selected gates fail on any non-success result.
-    assert "if [[ \"$result\" != \"success\" ]]; then" in workflow
+    assert 'if [[ "$result" != "success" ]]; then' in workflow
     assert "was selected but ended with result=" in workflow
     # Unselected gates must report skipped; anything else fails.
-    assert "elif [[ \"$result\" != \"skipped\" ]]; then" in workflow
+    assert 'elif [[ "$result" != "skipped" ]]; then' in workflow
     assert "was not selected but ended with result=" in workflow
     # Always-required gates (selector itself, preflight invariants including
     # shard ownership, frontend and generated-contract aggregators) fail on
@@ -833,9 +878,7 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         "omnigent-deterministic-conformance",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
-    for removed in (
-        "reliability-journey-checkpoint-resume",
-    ):
+    for removed in ("reliability-journey-checkpoint-resume",):
         assert f'require_selected "{removed}"' not in workflow, removed
     # The consolidated fast/boundary suites are enforced through the matrix
     # aggregate, not as individual selected gates.
@@ -846,11 +889,11 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     ):
         assert f'require_selected "{consolidated}"' not in workflow, consolidated
     # The matrix aggregate derives selection from all four selector outputs.
-    assert 'needs.select-test-suites.outputs.unit_fast' in workflow
-    assert 'needs.select-test-suites.outputs.api_component' in workflow
-    assert 'needs.select-test-suites.outputs.temporal_boundary' in workflow
-    assert 'needs.select-test-suites.outputs.reliability_journey' in workflow
-    assert 'needs.backend-matrix.result' in workflow
+    assert "needs.select-test-suites.outputs.unit_fast" in workflow
+    assert "needs.select-test-suites.outputs.api_component" in workflow
+    assert "needs.select-test-suites.outputs.temporal_boundary" in workflow
+    assert "needs.select-test-suites.outputs.reliability_journey" in workflow
+    assert "needs.backend-matrix.result" in workflow
     # Wiring: each require_selected call must be reachable, not commented
     # out. A commented call still contains the string but never executes.
     reachable = [
@@ -1077,3 +1120,182 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
     outputs = _outputs(["tests/integration/single_user/test_example.py"])
     assert outputs["integration_ci"] == "true"
     assert outputs["reliability_journey"] == "false"
+
+
+@pytest.mark.parametrize(
+    ("path", "lanes"),
+    [
+        ("tests/integration/api/test_routes.py", {"hermetic"}),
+        (
+            "tests/integration/host_update/test_host_updater_transport.py",
+            {"host-update-transport"},
+        ),
+        (
+            "tests/integration/host_update/test_journal_transition.py",
+            {"controller-journey"},
+        ),
+        (
+            "tests/integration/host_update/conftest.py",
+            {"hermetic", "host-update-transport", "controller-journey"},
+        ),
+        (
+            "tools/first_run_journey_3938.sh",
+            {"fresh-journey", "upgrade-journey", "controller-journey"},
+        ),
+        (
+            "tools/single_user_journey_browser.mjs",
+            {"fresh-journey", "upgrade-journey", "controller-journey"},
+        ),
+        ("tests/integration/reliability/test_checkpoint_cold_resume.py", set()),
+    ],
+)
+def test_integration_matrix_selects_only_owned_lanes(path, lanes):
+    import json
+
+    outputs = _outputs([path])
+    assert set(json.loads(outputs["integration_matrix"])["suite"]) == lanes
+    assert (outputs["integration_ci"] == "true") == bool(lanes)
+    for lane in select_test_suites.INTEGRATION_LANES:
+        assert (outputs["integration_" + lane.replace("-", "_")] == "true") == (
+            lane in lanes
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api_service/main.py",
+        "api_service/auth.py",
+        "moonmind/config/settings.py",
+        "moonmind/workflows/temporal/worker_runtime.py",
+        "docker-compose.yaml",
+        "frontend/Dockerfile",
+        "package-lock.json",
+        "api_service/db/models.py",
+        "frontend/src/generated/openapi.ts",
+        "frontend/src/lib/api/client.ts",
+        "frontend/src/features/workflow-native-chat/client.ts",
+        "migrations/new.py",
+    ],
+)
+def test_shared_contracts_select_every_integration_lane(path):
+    import json
+
+    assert json.loads(_outputs([path])["integration_matrix"])["suite"] == list(
+        select_test_suites.INTEGRATION_LANES
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/unit/tools/test_example.py",
+        "tests/integration/api/conftest.py",
+        "tests/.reliability-test-durations.json",
+        "tools/verify_test_shard_ownership.py",
+        "tools/ci/refresh_reliability_durations.py",
+        "tools/ci/write_backend_matrix_summary.py",
+        "pyproject.toml",
+        ".github/workflows/pytest-unit-tests.yml",
+        "unknown-path",
+    ],
+)
+def test_collection_inputs_require_full_ownership_proof(path):
+    assert _outputs([path])["ownership_full"] == "true"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["moonmind/utils/text.py", "README.md", "api_service/api/routers/example.py"],
+)
+def test_ordinary_changes_skip_full_collection(path):
+    assert _outputs([path])["ownership_full"] == "false"
+
+
+def test_backend_matrix_retains_only_selected_rows_and_reliability_shards():
+    import json
+
+    assert json.loads(_outputs(["README.md"])["backend_matrix"]) == {"include": []}
+    assert json.loads(_outputs(["moonmind/utils/text.py"])["backend_matrix"]) == {
+        "include": [{"suite": "unit-fast", "job_minutes": 15}]
+    }
+    rows = json.loads(
+        _outputs(["tests/integration/reliability/test_checkpoint_cold_resume.py"])[
+            "backend_matrix"
+        ]
+    )["include"]
+    assert rows == [{"suite": "unit-fast", "job_minutes": 15}] + [
+        {"suite": f"reliability-shard-{n}", "shard": str(n), "job_minutes": 20}
+        for n in range(1, 5)
+    ]
+
+
+def test_matrix_output_order_is_deterministic_and_union_preserving():
+    paths = ["tests/integration/api/test_routes.py", "tools/first_run_journey_3938.sh"]
+    assert _outputs(paths) == _outputs(list(reversed(paths)) + paths)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "moonmind/config/new_settings.py",
+        "api_service/core/runtime.py",
+        "api_service/auth/session.py",
+        "moonmind/workflows/temporal/runtime/bootstrap.py",
+        "tests/integration/conftest.py",
+    ],
+)
+def test_shared_boot_configuration_and_fixtures_select_all_lanes(path):
+    import json
+
+    assert json.loads(_outputs([path])["integration_matrix"])["suite"] == list(
+        select_test_suites.INTEGRATION_LANES
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid", ["../outside.py", "/tmp/outside.py", "moonmind/../unknown.py"]
+)
+def test_malformed_mixed_diff_fails_open(invalid):
+    outputs = _outputs(["README.md", invalid])
+    assert all(outputs[key] == "true" for key in select_test_suites.OUTPUT_KEYS)
+
+
+def test_cli_emits_valid_matrices_and_booleans(monkeypatch, tmp_path, capsys):
+    import json
+
+    output_file = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    selection = select_suites(["tests/integration/api/test_routes.py"])
+    select_test_suites.emit_outputs(selection)
+    assert output_file.read_text() == capsys.readouterr().out
+    emitted = dict(line.split("=", 1) for line in output_file.read_text().splitlines())
+    assert emitted == selection.as_outputs()
+    assert json.loads(emitted["integration_matrix"]) == {"suite": ["hermetic"]}
+    assert json.loads(emitted["backend_matrix"]) == {
+        "include": [{"suite": "unit-fast", "job_minutes": 15}]
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/integration/host_update/test_new.py",
+        "tests/integration/host_update/new_fixture.py",
+    ],
+)
+def test_unknown_host_update_inputs_preserve_hermetic_collection(path):
+    import json
+
+    lanes = json.loads(_outputs([path])["integration_matrix"])["suite"]
+    assert set(lanes) == {"hermetic", "host-update-transport", "controller-journey"}
+
+
+def test_journal_transition_actor_selects_its_exact_invocation_owner():
+    import json
+
+    assert json.loads(
+        _outputs(["tests/integration/host_update/journal_transition_actor.py"])[
+            "integration_matrix"
+        ]
+    ) == {"suite": ["controller-journey"]}

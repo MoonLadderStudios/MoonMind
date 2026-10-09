@@ -2980,6 +2980,7 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
             "write",
             "branch_write",
             "review_request",
+            "merge_request",
         ]
         assert "destination" not in access
     finally:
