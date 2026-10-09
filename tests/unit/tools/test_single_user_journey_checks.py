@@ -132,7 +132,9 @@ def test_populate_submits_the_workflow_create_task_envelope(api_server, tmp_path
     assert first["type"] == "task"
     assert "workflowType" not in first and "initialParameters" not in first
     payload = first["payload"]
-    assert payload["repository"] == "o/r"
+    # A clean install has no repository connection to route a repository
+    # through, so the candidate journey saves scratch results.
+    assert "repository" not in payload
     assert payload["publishMode"] == "none"
     assert payload["task"]["title"] == "single-user journey fresh"
     assert payload["task"]["instructions"]
