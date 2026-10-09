@@ -85,7 +85,7 @@ For a normal combined-stack startup, run:
 docker compose up -d
 ```
 
-This is the default path for local and self-hosted operators. It starts MoonMind, Omnigent, and required local dependencies using the repository `docker-compose.yaml` and built-in accounts mode unless an operator has deliberately supplied OIDC configuration.
+This is the default path for local and self-hosted operators. It starts MoonMind, Omnigent, and required local dependencies using the repository `docker-compose.yaml`. The bundled Omnigent server runs in its single-user posture (`OMNIGENT_AUTH_ENABLED=0`): it serves every request as its local user, so MoonMind needs no Omnigent credential. Anyone who can reach the server, including its published `OMNIGENT_PORT`, has full control of it.
 
 Optional services are selected through `COMPOSE_PROFILES` or an explicit `--profile` flag. Do not set `COMPOSE_FILE` to retired OAuth-host overlays; the canonical single Compose file owns supported static host definitions.
 
@@ -314,11 +314,11 @@ A file mounted where a directory is expected, or a directory mounted where a fil
 
 For a dedicated or on-demand OAuth host, also verify that the selected Provider Profile resolves the canonical credential mount and generation. Do not manually replace the volume name in workflow JSON or Docker arguments.
 
-### Built-In Accounts and OIDC
+### Omnigent Login: Single-User, Accounts, and OIDC
 
-Built-in accounts mode is the documented default for the combined local stack. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider.
+The combined local stack defaults to Omnigent's single-user posture with no Omnigent login. To require a login, set `OMNIGENT_AUTH_ENABLED=1`: Omnigent then uses built-in accounts (create the first admin in the Omnigent web UI) or, when `OMNIGENT_OIDC_ISSUER` is set, an external OIDC provider. With login enabled, MoonMind reaches the server only with a configured `OMNIGENT_API_TOKEN`; without one, MoonMind cannot create the default Omnigent Agent Profile.
 
-OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is using built-in accounts or explicit OIDC configuration before resetting credentials or deleting volumes.
+OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is single-user, built-in accounts, or explicit OIDC before resetting credentials or deleting volumes.
 
 ### Profile Lease Waits
 
