@@ -1094,6 +1094,15 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# A lost Omnigent host (for example a recreated agent container during an
+# update) ends its Step Execution after the realizer saved the caller-owned
+# workspace. The fresh Step Execution restores that verified archive instead of
+# starting an empty workspace, and records honestly when no save exists
+# (MoonLadderStudios/MoonMind#4627). Older histories keep launching the retry
+# from the admitted step inputs only.
+RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH = (
+    "run-omnigent-host-loss-retry-checkpoint-restore-v1"
+)
 # GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
 # and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
 # candidate into doc reconciliation, then publish that reconciled archive (or
@@ -1748,6 +1757,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
+        # Latest runtime-loss retry decision per logical Step: the saved
+        # workspace of the lost execution, or the honest restart limitation.
+        self._step_runtime_loss_recovery: dict[str, dict[str, Any]] = {}
         self._step_checkpoint_workspace_evidence_by_boundary: dict[
             str, dict[str, dict[str, str]]
         ] = {}
@@ -3048,6 +3060,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 dict(source_execution_ordinal) if source_execution_ordinal else None
             )
             self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
+            runtime_loss_recovery = self._step_runtime_loss_recovery.get(
+                logical_step_id
+            )
+            if (
+                isinstance(runtime_loss_recovery, Mapping)
+                and runtime_loss_recovery.get("retryExecutionOrdinal") == attempt
+            ):
+                workspace["runtimeLossRecovery"] = dict(runtime_loss_recovery)
             return workspace
         workspace = workspace_policy_metadata(
             policy="fresh_branch_from_source",
@@ -3060,6 +3080,109 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
+
+    def _record_runtime_loss_recovery(
+        self,
+        logical_step_id: str,
+        *,
+        execution_result: Any,
+        lost_execution_ordinal: int,
+        retry_execution_ordinal: int,
+    ) -> None:
+        """Decide how the fresh Step Execution continues after runtime loss.
+
+        Only an explicit ``retry_step_execution`` remediation means the agent
+        runtime itself stopped. Its realizer saves the caller-owned workspace
+        before releasing the lost host; a verified worktree archive becomes the
+        successor's restore source. Without one, the successor restarts from
+        the admitted step inputs and the limitation is recorded, never implied
+        to have preserved the interrupted work.
+        """
+
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return
+        recommendation = str(
+            outputs.get("retryRecommendation")
+            or outputs.get("retry_recommendation")
+            or ""
+        ).strip()
+        if recommendation != "retry_step_execution":
+            self._step_runtime_loss_recovery.pop(logical_step_id, None)
+            return
+        recovery: dict[str, Any] = {
+            "lostExecutionOrdinal": lost_execution_ordinal,
+            "retryExecutionOrdinal": retry_execution_ordinal,
+            "providerErrorCode": str(
+                outputs.get("providerErrorCode")
+                or outputs.get("provider_error_code")
+                or ""
+            ).strip()
+            or None,
+        }
+        saved = outputs.get("savedWorkspaceCheckpoint")
+        archive_ref = None
+        archive_digest = ""
+        if isinstance(saved, Mapping) and saved.get("kind") == "worktree_archive":
+            archive_ref = self._bounded_story_loop_artifact_ref(
+                saved.get("archiveRef")
+            )
+            archive_digest = str(saved.get("archiveDigest") or "").strip()
+        if (
+            archive_ref is not None
+            and archive_digest.startswith("sha256:")
+            and len(archive_digest) == len("sha256:") + 64
+        ):
+            recovery.update(
+                {
+                    "mode": "restore_saved_checkpoint",
+                    "checkpointRef": archive_ref,
+                    "checkpointDigest": archive_digest,
+                }
+            )
+            step_checkpoint_ref = self._bounded_story_loop_artifact_ref(
+                saved.get("checkpointRef")
+            )
+            if step_checkpoint_ref is not None:
+                recovery["stepCheckpointRef"] = step_checkpoint_ref
+            message = (
+                "Retrying %s as Step Execution %s from the saved workspace of "
+                "lost Step Execution %s"
+            )
+        else:
+            recovery.update(
+                {
+                    "mode": "restart_from_admitted_inputs",
+                    "limitation": (
+                        "The lost Step Execution's workspace was not saved; "
+                        "the retry restarts from the admitted step inputs and "
+                        "repeats any work after the last durable boundary."
+                    ),
+                }
+            )
+            message = (
+                "Retrying %s as Step Execution %s from admitted step inputs; "
+                "lost Step Execution %s left no saved workspace"
+            )
+        self._step_runtime_loss_recovery[logical_step_id] = recovery
+        self._get_logger().info(
+            message % (logical_step_id, retry_execution_ordinal, lost_execution_ordinal)
+        )
+
+    def _runtime_loss_checkpoint_restore_ref(
+        self,
+        logical_step_id: str,
+        *,
+        retry_execution_ordinal: int,
+    ) -> str | None:
+        recovery = self._step_runtime_loss_recovery.get(logical_step_id)
+        if (
+            not isinstance(recovery, Mapping)
+            or recovery.get("retryExecutionOrdinal") != retry_execution_ordinal
+        ):
+            return None
+        ref = recovery.get("checkpointRef")
+        return str(ref) if ref else None
 
     @staticmethod
     def _apply_step_checkpoint_manifest_refs(
@@ -13293,6 +13416,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
+                            runtime_loss_restore_ref = (
+                                self._runtime_loss_checkpoint_restore_ref(
+                                    node_id,
+                                    retry_execution_ordinal=current_step_execution,
+                                )
+                            )
+                            if runtime_loss_restore_ref is not None:
+                                # The lost execution's saved workspace is the
+                                # latest verified boundary of this same Step;
+                                # it already contains any earlier restored
+                                # candidate plus the interrupted work.
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    runtime_loss_restore_ref
+                                )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
@@ -14015,10 +14152,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 updated_at=workflow.now(),
                                 summary=self._summary,
                             )
+                            lost_step_execution = current_step_execution
                             current_step_execution = self._step_execution_for(
                                 node_id
                             ) or (current_step_execution + 1)
                             attempt_reason = "runtime_recovered"
+                            if (
+                                tool_type == "agent_runtime"
+                                and _normalize_agent_runtime_id(
+                                    self._agent_id_from_runtime_inputs(
+                                        node_inputs=node_inputs,
+                                        fallback_name=tool_name,
+                                    )
+                                )
+                                == "omnigent"
+                                and workflow.patched(
+                                    RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH
+                                )
+                            ):
+                                self._record_runtime_loss_recovery(
+                                    node_id,
+                                    execution_result=execution_result,
+                                    lost_execution_ordinal=lost_step_execution,
+                                    retry_execution_ordinal=current_step_execution,
+                                )
                             continue
 
                         diagnostics_ref = None

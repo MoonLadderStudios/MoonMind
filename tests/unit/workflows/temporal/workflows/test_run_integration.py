@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
+    RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
@@ -1722,6 +1723,222 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         assert ("terminal", 1, "retryable") in manifests
     else:
         assert all(disposition != "retryable" for _, _, disposition in manifests)
+
+
+_HOST_LOST_SAVED_CHECKPOINT = {
+    "kind": "worktree_archive",
+    "baseCommit": "a" * 40,
+    "archiveRef": "artifact://art_host_lost_archive",
+    "archiveDigest": "sha256:" + "b" * 64,
+    "manifestRef": "artifact://art_host_lost_manifest",
+    "manifestDigest": "sha256:" + "c" * 64,
+    "workspaceDigest": "sha256:" + "d" * 64,
+    "checkpointRef": "artifact://art_host_lost_step_checkpoint",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_checkpoint", "restore_patch_enabled", "expected_restore_ref", "expected_mode"),
+    [
+        (
+            _HOST_LOST_SAVED_CHECKPOINT,
+            True,
+            "artifact://art_host_lost_archive",
+            "restore_saved_checkpoint",
+        ),
+        (None, True, None, "restart_from_admitted_inputs"),
+        (
+            {**_HOST_LOST_SAVED_CHECKPOINT, "archiveDigest": "md5:not-verifiable"},
+            True,
+            None,
+            "restart_from_admitted_inputs",
+        ),
+        (_HOST_LOST_SAVED_CHECKPOINT, False, None, None),
+    ],
+    ids=[
+        "saved-checkpoint-restored",
+        "no-checkpoint-restarts-honestly",
+        "unverifiable-checkpoint-not-restored",
+        "previous-history",
+    ],
+)
+async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_checkpoint: dict[str, Any] | None,
+    restore_patch_enabled: bool,
+    expected_restore_ref: str | None,
+    expected_mode: str | None,
+) -> None:
+    """A host-loss retry continues from the lost execution's saved workspace.
+
+    MoonLadderStudios/MoonMind#4627: the realizer saves the caller-owned
+    workspace of a lost host before releasing it. The fresh Step Execution must
+    restore those verified bytes instead of starting an empty workspace, and
+    must say so honestly when no saved checkpoint exists.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_requests.append(request)
+        if len(child_requests) == 1:
+            metadata: dict[str, Any] = {}
+            if saved_checkpoint is not None:
+                metadata = {
+                    "savedWorkspaceCheckpoint": dict(saved_checkpoint),
+                    "workPreserved": True,
+                }
+            return AgentRunResult(
+                summary="Omnigent session host was lost before the turn finished.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+                metadata=metadata,
+            )
+        return AgentRunResult(summary="Recovered on a fresh Step Execution.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    async def fake_record_step_execution_manifest(
+        _logical_step_id: str,
+        **_kwargs: Any,
+    ) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+    }
+    if restore_patch_enabled:
+        enabled_patches.add(RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-omnigent-host-loss",
+            "run_id": "run-omnigent-host-loss",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    assert len(child_requests) == 2
+    first, retry = child_requests
+    assert "workspaceCheckpointRestoreRef" not in (first.workspace_spec or {})
+    assert retry.step_execution is not None
+    assert retry.step_execution.execution_ordinal == 2
+    assert retry.step_execution.reason == "runtime_recovered"
+    assert (retry.workspace_spec or {}).get(
+        "workspaceCheckpointRestoreRef"
+    ) == expected_restore_ref
+
+    workspace = workflow._step_execution_workspace(
+        "omnigent-turn",
+        attempt=2,
+        source_execution_ordinal=None,
+    )
+    recovery = workspace.get("runtimeLossRecovery")
+    if expected_mode is None:
+        assert recovery is None
+    else:
+        assert recovery["mode"] == expected_mode
+        assert recovery["lostExecutionOrdinal"] == 1
+        assert recovery["providerErrorCode"] == "OMNIGENT_SESSION_HOST_LOST"
+        if expected_restore_ref is not None:
+            assert recovery["checkpointRef"] == expected_restore_ref
+            assert recovery["checkpointDigest"] == saved_checkpoint["archiveDigest"]
+        else:
+            assert "checkpointRef" not in recovery
+            # Work after the last durable boundary is repeated, never implied
+            # to have survived.
+            assert "not saved" in recovery["limitation"]
 
 
 @pytest.mark.asyncio
