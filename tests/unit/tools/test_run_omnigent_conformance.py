@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "tools/run_omnigent_conformance.py"
@@ -264,3 +264,92 @@ def test_main_fails_fast_when_fake_provider_auth_mode_mismatches(
     assert runner.main() == 1
     assert ran == []
     assert not (tmp_path / "runner-evidence.json").exists()
+
+
+def test_deterministic_python_layers_select_each_module_once() -> None:
+    runner = _load_runner()
+    selected: Counter[Path] = Counter()
+    for command in runner.COMMANDS:
+        if command[1:3] != ("-m", "pytest"):
+            continue
+        ignored = {
+            REPO_ROOT / argument.removeprefix("--ignore=")
+            for argument in command
+            if argument.startswith("--ignore=")
+        }
+        for argument in command:
+            if not argument.startswith("tests/"):
+                continue
+            target = REPO_ROOT / argument
+            modules = target.rglob("test_*.py") if target.is_dir() else (target,)
+            selected.update(module for module in modules if module not in ignored)
+
+    recovery = REPO_ROOT / "tests/integration/omnigent/test_embedded_recovery.py"
+    assert selected[recovery] == 1
+    assert all(count == 1 for count in selected.values()), selected
+    # Keep the ordinary integration modules and the existing DB exclusion.
+    assert (
+        selected[REPO_ROOT / "tests/integration/omnigent/test_bridge_conformance.py"]
+        == 1
+    )
+    assert (
+        selected[REPO_ROOT / "tests/integration/omnigent/test_host_auth_lifecycle.py"]
+        == 0
+    )
+
+
+@pytest.mark.parametrize("recovery_exit_code", [0, 1])
+def test_recovery_evidence_retains_its_executed_command_and_failure(
+    monkeypatch, tmp_path: Path, recovery_exit_code: int
+) -> None:
+    runner = _load_runner()
+    recovery = "tests/integration/omnigent/test_embedded_recovery.py"
+    commands_run = []
+
+    def run(command, **kwargs):
+        commands_run.append(tuple(command))
+        return SimpleNamespace(
+            returncode=recovery_exit_code if recovery in command else 0
+        )
+
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(runner, "assert_secret_free", lambda _value: None)
+    monkeypatch.delenv(runner.FAKE_PROVIDER_ENV, raising=False)
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            "run_omnigent_conformance.py",
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+        ],
+    )
+
+    assert runner.main() == recovery_exit_code
+    assert commands_run[: len(runner.COMMANDS)] == list(runner.COMMANDS)
+    evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    matrix = evidence["deterministicCoverage"]["evidenceGroupResults"][
+        "failureAndRestartMatrix"
+    ]
+    recovery_result = next(
+        result for result in matrix["paths"] if result["path"] == recovery
+    )
+    expected_status = "failed" if recovery_exit_code else "passed"
+    assert recovery_result == {
+        "path": recovery,
+        "status": expected_status,
+        "commandIndexes": [2],
+    }
+    assert matrix["status"] == expected_status
+    assert evidence["commandResults"][1]["exitCode"] == recovery_exit_code
+    assert all(
+        case["status"] == expected_status
+        for case in evidence["cases"]
+        if case["caseId"] in runner.DETERMINISTIC_CASES
+    )
