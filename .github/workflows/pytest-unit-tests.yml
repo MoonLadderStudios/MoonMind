@@ -298,8 +298,8 @@ jobs:
     # The PR ceiling stays above the heaviest duration-balanced partition
     # load (~500s) plus collection/shutdown overhead.
     # Fast lanes (MoonLadderStudios/MoonMind#4369): unit-fast uses a 60s
-    # per-test timeout, API/component and Temporal use 120s, each under an
-    # explicit 7-minute native test-step bound. Per-test exceptions for a
+    # per-test timeout under a 9-minute native test-step bound; API/component
+    # and Temporal use 120s, each under an explicit 7-minute step bound. Per-test exceptions for a
     # justified slow case use the installed pytest-timeout per-test marker,
     # never a raised global default. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
@@ -311,8 +311,8 @@ jobs:
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
     # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get a
-    # 15-minute job budget covering setup (~2-3 minutes), the 7-minute test
-    # step, and bounded reporting (2-minute caps that typically finish in
+    # 15-minute job budget covering setup (~2-3 minutes), the test step
+    # (at most 9 minutes), and bounded reporting (2-minute caps that typically finish in
     # seconds); reliability rows keep a 20-minute budget covering
     # setup, the 12-minute test step, and bounded diagnostics/cleanup. The
     # blanket 30-minute ceiling is replaced, not raised.
@@ -402,11 +402,12 @@ jobs:
       - name: Run selected unit suite
         id: run-unit
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
-        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
+        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 9-minute
         # native test-step ceiling over the 60s per-test pytest timeout. The
-        # per-invocation faulthandler dump (45s) writes every thread's stack
-        # into the teed log before that terminating deadline.
-        timeout-minutes: 7
+        # suite measured up to 433s (76s collection), overrunning a 7-minute
+        # bound on main. The per-invocation faulthandler dump (45s) writes
+        # every thread's stack into the teed log before that deadline.
+        timeout-minutes: 9
         env:
           MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
           PYTHONUNBUFFERED: "1"
