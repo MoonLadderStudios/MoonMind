@@ -52,8 +52,24 @@ try {
   page.setDefaultTimeout(timeout);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
 
+  // Chromium aborts a navigation with ERR_NETWORK_CHANGED when the runner's
+  // interfaces change, as they do while the stack starts Omnigent host
+  // containers. That abort says nothing about the page, so retry it briefly.
+  const goto = async (url) => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await page.goto(url, { waitUntil: "domcontentloaded" });
+      } catch (error) {
+        if (attempt >= 3 || !String(error?.message || error).includes("ERR_NETWORK_CHANGED")) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  };
+
   const visit = async (path, check) => {
-    const response = await page.goto(base + path, { waitUntil: "domcontentloaded" });
+    const response = await goto(base + path);
     if (!response || !response.ok()) {
       throw new Error(`GET ${path} returned ${response ? response.status() : "no response"}`);
     }
