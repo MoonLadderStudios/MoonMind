@@ -117,6 +117,10 @@ COMMANDS = (
         # compose-backed integration-ci job; the deterministic runner does not
         # provision a database service.
         "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
+        # The second layer runs this module explicitly and owns its recovery
+        # evidence. Exclude it here to avoid executing the same nodes twice
+        # with the same interpreter, environment, and pytest options.
+        "--ignore=tests/integration/omnigent/test_embedded_recovery.py",
         "-q",
         "--tb=short",
         *_PYTEST_PARALLEL_ARGS,

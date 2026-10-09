@@ -23,9 +23,10 @@ qualified run is executed from this selector.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from typing import Iterable
 
@@ -35,6 +36,12 @@ OUTPUT_KEYS = (
     "api_component",
     "temporal_boundary",
     "integration_ci",
+    "integration_hermetic",
+    "integration_host_update_transport",
+    "integration_fresh_journey",
+    "integration_upgrade_journey",
+    "integration_controller_journey",
+    "ownership_full",
     "reliability_journey",
     "exact_artifact",
     "omnigent_conformance",
@@ -44,6 +51,34 @@ OUTPUT_KEYS = (
     "frontend_browser_firefox",
     "full_frontend",
 )
+
+# Stable row order is part of the emitted Actions matrix contract.
+INTEGRATION_LANES = (
+    "hermetic",
+    "host-update-transport",
+    "fresh-journey",
+    "upgrade-journey",
+    "controller-journey",
+)
+JOURNEY_LANES = INTEGRATION_LANES[2:]
+INTEGRATION_LANE_EXACT = {
+    "tests/integration/host_update/test_host_updater_transport.py": (
+        "host-update-transport",
+    ),
+    "tests/integration/host_update/test_journal_transition.py": ("controller-journey",),
+    "tests/integration/host_update/journal_transition_actor.py": (
+        "controller-journey",
+    ),
+    "tools/first_run_journey_3938.sh": JOURNEY_LANES,
+    "tools/single_user_journey_checks.py": JOURNEY_LANES,
+    "tools/single_user_journey_browser.mjs": JOURNEY_LANES,
+}
+OWNERSHIP_FULL_EXACT = {
+    "tools/verify_test_shard_ownership.py",
+    "tools/ci/refresh_reliability_durations.py",
+    "tools/ci/write_backend_matrix_summary.py",
+}
+
 
 FRONTEND_STATIC_EXACT = {
     "package.json",
@@ -214,6 +249,11 @@ INTEGRATION_CI_EXACT = {
 }
 
 INTEGRATION_CI_PREFIXES = (
+    # Shared boot/runtime/configuration inputs can affect every installed lane.
+    "api_service/core/",
+    "api_service/auth/",
+    "moonmind/config/",
+    "moonmind/workflows/temporal/runtime/",
     "tests/integration/",
     "api_service/db/",
     "api_service/migrations/",
@@ -527,6 +567,12 @@ class SuiteSelection:
     api_component: bool = False
     temporal_boundary: bool = False
     integration_ci: bool = False
+    integration_hermetic: bool = False
+    integration_host_update_transport: bool = False
+    integration_fresh_journey: bool = False
+    integration_upgrade_journey: bool = False
+    integration_controller_journey: bool = False
+    ownership_full: bool = False
     reliability_journey: bool = False
     exact_artifact: bool = False
     omnigent_conformance: bool = False
@@ -537,7 +583,31 @@ class SuiteSelection:
     full_frontend: bool = False
 
     def as_outputs(self) -> dict[str, str]:
-        return {key: "true" if getattr(self, key) else "false" for key in OUTPUT_KEYS}
+        outputs = {
+            key: "true" if getattr(self, key) else "false" for key in OUTPUT_KEYS
+        }
+        outputs["integration_matrix"] = json.dumps(
+            {
+                "suite": [
+                    lane
+                    for lane in INTEGRATION_LANES
+                    if getattr(self, "integration_" + lane.replace("-", "_"))
+                ]
+            },
+            separators=(",", ":"),
+        )
+        rows = [
+            {"suite": suite, "job_minutes": 15}
+            for suite in ("unit-fast", "api-component", "temporal-boundary")
+            if getattr(self, suite.replace("-", "_"))
+        ]
+        if self.reliability_journey:
+            rows.extend(
+                {"suite": f"reliability-shard-{n}", "shard": str(n), "job_minutes": 20}
+                for n in range(1, 5)
+            )
+        outputs["backend_matrix"] = json.dumps({"include": rows}, separators=(",", ":"))
+        return outputs
 
 
 def _normalize_path(raw_path: str) -> str | None:
@@ -548,7 +618,11 @@ def _normalize_path(raw_path: str) -> str | None:
     while path.startswith("./"):
         path = path[2:]
     normalized = PurePosixPath(path).as_posix()
-    if normalized == "." or normalized.startswith("../") or normalized == "..":
+    if (
+        normalized == "."
+        or PurePosixPath(normalized).is_absolute()
+        or ".." in PurePosixPath(normalized).parts
+    ):
         return None
     return normalized
 
@@ -650,6 +724,8 @@ def _full_backend_selection() -> SuiteSelection:
         api_component=True,
         temporal_boundary=True,
         integration_ci=True,
+        **{"integration_" + lane.replace("-", "_"): True for lane in INTEGRATION_LANES},
+        ownership_full=True,
         reliability_journey=True,
         exact_artifact=True,
         omnigent_conformance=True,
@@ -669,17 +745,67 @@ def _full_selection() -> SuiteSelection:
     )
 
 
+def _integration_lanes(paths: list[str], selection: SuiteSelection) -> set[str]:
+    """Narrow only audited lane-local inputs; shared boundaries keep every lane.
+
+    A new integration test belongs to the hermetic corpus by default. The
+    separately invoked host transport and controller tests override that owner.
+    Omnigent contracts retain the complete cross-layer gate.
+    """
+    lanes: set[str] = set()
+    for path in paths:
+        if path in INTEGRATION_LANE_EXACT:
+            lanes.update(INTEGRATION_LANE_EXACT[path])
+        elif path.startswith("tests/integration/host_update/"):
+            # Standalone lanes invoke only their exact modules. New marked
+            # tests and shared fixtures must also reach the hermetic collector.
+            lanes.update(("hermetic", "host-update-transport", "controller-journey"))
+        elif (
+            path in {"tests/integration/conftest.py", "tests/conftest.py"}
+            or is_omnigent_contract_owned(path)
+            or is_exact_artifact_owned(path)
+        ):
+            lanes.update(INTEGRATION_LANES)
+        elif path.startswith(INTEGRATION_CI_EXCLUDED_PREFIXES):
+            continue
+        elif path.startswith("tests/integration/"):
+            lanes.add("hermetic")
+        elif _matches(
+            path, exact=INTEGRATION_CI_EXACT, prefixes=INTEGRATION_CI_PREFIXES
+        ):
+            lanes.update(INTEGRATION_LANES)
+    # Never silently lose an aggregate selection when its owner is extended.
+    if selection.integration_ci and not lanes:
+        lanes.update(INTEGRATION_LANES)
+    return lanes
+
+
+def _needs_full_ownership(path: str) -> bool:
+    return (
+        path.startswith("tests/")
+        or path in OWNERSHIP_FULL_EXACT
+        or PurePosixPath(path).name == "conftest.py"
+        or _matches(path, globs=("*pytest*", "*test*plugin*", "requirements*.txt"))
+        or path in {"package.json", "package-lock.json"}
+    )
+
+
 def select_suites(
     changed_files: Iterable[str],
     *,
     event_name: str | None = None,
     ref_name: str | None = None,
 ) -> SuiteSelection:
+    raw_paths = list(changed_files)
     paths = [
         path
-        for raw_path in changed_files
+        for raw_path in raw_paths
         if (path := _normalize_path(raw_path)) is not None
     ]
+    # A malformed nonblank entry means the diff is incomplete, even alongside
+    # otherwise known paths. Blank stdin lines remain harmless.
+    if any(raw.strip() and _normalize_path(raw) is None for raw in raw_paths):
+        return _full_selection()
 
     if _is_force_full_event(event_name, ref_name):
         return _full_selection()
@@ -782,7 +908,16 @@ def select_suites(
     if omnigent_paths:
         selection = _elevate_omnigent_contract_gate(selection, omnigent_paths)
 
-    return selection
+    lanes = _integration_lanes(paths, selection)
+    return replace(
+        selection,
+        integration_ci=bool(lanes),
+        ownership_full=any(_needs_full_ownership(path) for path in paths),
+        **{
+            "integration_" + lane.replace("-", "_"): lane in lanes
+            for lane in INTEGRATION_LANES
+        },
+    )
 
 
 def emit_outputs(selection: SuiteSelection) -> None:
