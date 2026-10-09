@@ -278,10 +278,13 @@ removed. An expired lease or offline projection is not proof. The realizer
 resumes a failed removal within a short bound. If removal still cannot be
 confirmed, the step fails with `OMNIGENT_CLEANUP_DEFERRED` instead of running a
 second attempt beside a possibly live one, and the janitor finishes the
-cleanup. Repeated interruptions share the step's existing retry budget. The
-successor launches the installed qualified host image (an explicit operator
-pin stays authoritative) and publishes to the same candidate branch as the
-step's first Step Execution, so a push whose acknowledgement was lost is
+cleanup. Repeated interruptions share the step's existing retry budget. On a
+generic on-demand host the successor launches the installed qualified host
+image (an explicit operator pin stays authoritative). A Codex profile-bound
+successor relaunches the run's admitted launch authority, whose exact policy
+image its coordinator verifies, so a compatible newer installed image does not
+invalidate the retry. The successor publishes to the same candidate branch as
+the step's first Step Execution, so a push whose acknowledgement was lost is
 reconciled rather than duplicated.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 

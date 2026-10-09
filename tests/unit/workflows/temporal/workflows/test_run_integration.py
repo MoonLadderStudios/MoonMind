@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
@@ -1756,17 +1756,33 @@ def _host_lost_result(
     )
 
 
+_OMNIGENT_TURN_NODE = {
+    "id": "omnigent-turn",
+    "tool": {"type": "agent_runtime", "name": "omnigent"},
+    "inputs": {
+        "instructions": "Implement the change.",
+        "runtime": {"mode": "omnigent"},
+    },
+}
+
+
 async def _drive_omnigent_step_attempts(
     monkeypatch: pytest.MonkeyPatch,
-    child_results: list[AgentRunResult],
+    child_results: (
+        list[AgentRunResult]
+        | Callable[[AgentExecutionRequest], Awaitable[AgentRunResult]]
+    ),
     *,
     enabled_patches: set[str],
     on_child: Callable[[MoonMindRunWorkflow, int], None] | None = None,
     child_requests: list[AgentExecutionRequest] | None = None,
+    nodes: list[dict[str, Any]] | None = None,
+    edges: list[dict[str, Any]] | None = None,
 ) -> tuple[MoonMindRunWorkflow, list[AgentExecutionRequest], list[dict[str, Any]]]:
-    """Run one Omnigent step through the real Run retry loop.
+    """Run Omnigent steps through the real Run retry loop.
 
-    Each AgentRun child returns the next scripted result. Step Execution
+    Each AgentRun child returns the next scripted result, or the result of
+    ``child_results`` when it is the AgentRun boundary itself. Step Execution
     manifests go through the production builder; only the artifact write is
     captured.
     """
@@ -1785,18 +1801,7 @@ async def _drive_omnigent_step_attempts(
         **_kwargs: Any,
     ) -> Any:
         assert activity_type == "artifact.read"
-        return _mock_plan_payload(
-            [
-                {
-                    "id": "omnigent-turn",
-                    "tool": {"type": "agent_runtime", "name": "omnigent"},
-                    "inputs": {
-                        "instructions": "Implement the change.",
-                        "runtime": {"mode": "omnigent"},
-                    },
-                }
-            ]
-        )
+        return _mock_plan_payload(nodes or [_OMNIGENT_TURN_NODE], edges)
 
     async def fake_execute_child_workflow(
         workflow_name: str,
@@ -1807,6 +1812,8 @@ async def _drive_omnigent_step_attempts(
         child_requests.append(request)
         if on_child is not None:
             on_child(workflow, len(child_requests))
+        if callable(child_results):
+            return await child_results(request)
         return child_results[len(child_requests) - 1]
 
     async def fake_bind_workflow_scoped_session(
