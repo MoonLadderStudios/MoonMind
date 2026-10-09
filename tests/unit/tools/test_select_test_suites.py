@@ -24,6 +24,21 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
 @pytest.mark.parametrize(
     "changed_path",
     [
+        ".agents/skills/pr-resolver/bin/pr_resolve_snapshot.py",
+        ".agents/skills/fix-comments/tools/get_pr_comments.py",
+        "tests/unit/test_pr_resolver_wait_polling.py",
+        "pr_resolver_core/github_checks.py",
+    ],
+)
+def test_resolver_cli_changes_keep_the_existing_slow_suite_selected(changed_path):
+    outputs = _outputs([changed_path])
+    assert outputs["unit_slow"] == "true"
+    assert outputs["unit_fast"] == "true"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
         "AGENTS.md",
         "README.md",
         "docs/Development/BackendTestSelection.md",
@@ -86,7 +101,10 @@ def test_audited_prose_does_not_suppress_api_coverage() -> None:
             "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
             {"unit_fast"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
         ("docs/UnlistedContract.md", {"unit_fast"}),
     ],
 )
@@ -106,7 +124,10 @@ def test_prose_exemption_preserves_executable_and_unlisted_markdown_coverage(
             "docs/Temporal/WorkflowTypeCatalogGenerated.md",
             {"unit_fast", "temporal_boundary"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
     ],
 )
 def test_rename_to_audited_prose_retains_source_path_coverage(
