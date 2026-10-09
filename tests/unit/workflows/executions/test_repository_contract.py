@@ -197,6 +197,7 @@ async def test_derived_default_connection_reads_the_deployment_declaration() -> 
         return_value=ResolvedGitHubCredential(token="declared", source="direct_env")
     )
     connection = reconcile_default_git_connection(client_policy=_policy())
+    assert "merge_request" in connection.allowed_operations
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential", resolver
     ):

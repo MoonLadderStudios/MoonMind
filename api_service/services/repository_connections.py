@@ -191,6 +191,9 @@ _GITHUB_REPOSITORY_PREFIXES = (
 
 # Audit identity migration 391 records when it maps the legacy credential.
 _LEGACY_DEFAULT_MIGRATION_REQUEST_ID = "migration:391:legacy-github-credential"
+_LEGACY_DEFAULT_ALLOWED_OPERATIONS = frozenset(
+    {"read", "write", "branch_write", "review_request"}
+)
 
 
 def _github_repository_key(value: Any) -> str:
@@ -1397,7 +1400,11 @@ class RepositoryConnectionService:
                 canonicalRemote=f"{endpoint.rstrip('/')}/{name}.git",
                 displayName=name,
             ),
-            operations=connection.allowed_operations,
+            operations=tuple(
+                operation
+                for operation in connection.allowed_operations
+                if operation in _LEGACY_DEFAULT_ALLOWED_OPERATIONS
+            ),
         )
 
     async def _is_unscoped_migrated_default(
