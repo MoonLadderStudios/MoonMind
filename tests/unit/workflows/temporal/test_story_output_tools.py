@@ -5756,3 +5756,225 @@ async def test_default_story_fetcher_resolves_credentials_for_requested_reposito
     )
     resolve.assert_awaited_once_with(repo="owner/repo")
     assert client.get.await_count == 1
+
+
+class _AdmittedReader:
+    """Repository reader double that records the admitted run per read."""
+
+    def __init__(self, pull_request: dict[str, Any], *, fail: bool = False) -> None:
+        self.pull_request = pull_request
+        self.fail = fail
+        self.reads: list[tuple[str, str]] = []
+
+    async def read_pull_request(self, repository, url, *, admitted_workflow_id=""):
+        self.reads.append(("pull_request", admitted_workflow_id))
+        if self.fail:
+            raise RuntimeError("provider page truncated")
+        return self.pull_request
+
+    async def read_repository_target(self, repository, ref="", *, admitted_workflow_id=""):
+        self.reads.append(("target", admitted_workflow_id))
+        return {"ref": "refs/heads/main", "revision": "d" * 40,
+                "contentDigest": "git-tree:" + "e" * 40}
+
+    async def commit_is_ancestor(self, repository, ancestor, descendant, *, admitted_workflow_id=""):
+        self.reads.append(("ancestor", admitted_workflow_id))
+        return True
+
+
+def _merged_pr(head_repository: str = "acme/repo") -> dict[str, Any]:
+    return {
+        "number": 7,
+        "state": "closed",
+        "merged": True,
+        "merge_commit_sha": "c" * 40,
+        "title": "Fix acme/repo#4",
+        "body": "",
+        "base": {"ref": "main", "repo": {"full_name": "acme/repo"}},
+        "head": {"ref": "feature", "sha": "a" * 40,
+                 "repo": {"full_name": head_repository}},
+    }
+
+
+_MERGED_HANDOFF = {
+    "repo": "acme/repo", "number": 7, "url": "https://github.com/acme/repo/pull/7",
+    "headSha": "a" * 40, "headBranch": "feature", "baseBranch": "main",
+}
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_reads_every_fact_with_admitted_run() -> None:
+    reader = _AdmittedReader(_merged_pr())
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason is None
+    assert reader.reads == [
+        ("pull_request", "mm:parent-run"),
+        ("target", "mm:parent-run"),
+        ("ancestor", "mm:parent-run"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_rejects_same_branch_from_fork() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == "The pull request does not match the current published candidate"
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_partial_pull_request_lookup_is_unavailable_not_absent() -> None:
+    reader = _AdmittedReader(_merged_pr(), fail=True)
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == (
+        "Read the matching GitHub pull request through the authorized "
+        "repository reader (RuntimeError)"
+    )
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        ({"admittedWorkflowId": "mm:parent-run", "workflow_id": "merge-gate"}, "mm:parent-run"),
+        ({"workflow_id": "mm:run"}, "mm:run"),
+        (None, ""),
+    ],
+)
+def test_admitted_repository_workflow_prefers_named_parent(context, expected) -> None:
+    assert story_tools._admitted_repository_workflow(context) == expected
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_post_merge_reads_with_parent_run() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    result = await update_github_issue_status(
+        {"repository": "acme/repo", "issueNumber": 4, "mode": "done"},
+        {"admittedWorkflowId": "mm:parent-run", "execution_owner": "default/merge-gate"},
+        github_service_factory=lambda: reader,
+        merged_pull_request=_MERGED_HANDOFF,
+    )
+
+    assert result.status == "FAILED"
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_child_started_workflow_reads_handoff_with_owning_run_connection(
+    monkeypatch, tmp_path
+) -> None:
+    """#4010: a resolver/remediation child acts with its recorded owner's selected PAT B.
+
+    The child has no canonical record; the reader follows its Temporal parent
+    chain (remediation -> resolver -> owning run) to the recorded authority.
+    """
+
+    import dataclasses
+
+    import httpx
+    from temporalio import activity
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from tests.helpers.repository_connections import (
+        TemporalParentClient,
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    owner = "mm:owner-run"
+    resolver = "merge-automation:mm:owner-run:acme/repo:7:resolver:1"
+    remediation = f"{resolver}:remediation"
+    parents = {remediation: resolver, resolver: owner}
+
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/repos/acme/repo/pulls/7":
+            return httpx.Response(200, json={**_merged_pr(), "body": "Fixes acme/repo#4"})
+        if path.endswith("/commits/refs%2Fheads%2Fmain") or path.endswith(
+            "/commits/refs/heads/main"
+        ):
+            return httpx.Response(
+                200, json={"sha": "d" * 40, "commit": {"tree": {"sha": "e" * 40}}}
+            )
+        if path.startswith("/repos/acme/repo/compare/"):
+            return httpx.Response(200, json={"status": "ahead"})
+        raise AssertionError(f"Unexpected provider request: {request.method} {path}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    client = TemporalParentClient(parents)
+    monkeypatch.setattr(activity, "client", lambda: client)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:team-b", "acme/repo")
+        ],
+        admitted_runs={
+            owner: {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:team-b",
+                    "repository": {"name": "acme/repo"},
+                }
+            }
+        },
+    )
+
+    async def validate() -> str | None:
+        return await story_tools._validate_post_merge_issue_handoff(
+            GitHubService(), repository="acme/repo", issue_ref="acme/repo#4",
+            pull_request=_MERGED_HANDOFF,
+            admitted_workflow_id=story_tools._admitted_repository_workflow(
+                {"workflow_id": "authored-input-is-ignored"}
+            ),
+        )
+
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=remediation)
+    try:
+        reason = await env.run(validate)
+    finally:
+        await engine.dispose()
+
+    assert reason is None
+    # Each provider read resolves only through the recorded parent chain. The
+    # credential acquirer may perform a second bounded authority read before
+    # falling back to a historical connection, so do not freeze that internal
+    # lookup count here.
+    assert len(client.described) >= 6
+    assert len(client.described) % 2 == 0
+    assert all(
+        pair == (remediation, resolver)
+        for pair in zip(client.described[::2], client.described[1::2])
+    )
+    assert [r.url.path.split("/")[4] for r in requests] == ["pulls", "commits", "compare"]
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}

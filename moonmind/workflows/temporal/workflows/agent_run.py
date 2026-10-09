@@ -97,6 +97,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.activity_catalog import (
         TemporalActivityRoute,
+        WORKFLOW_FLEET,
         WORKFLOW_TASK_QUEUE,
         build_default_activity_catalog,
         get_workflow_child_task_queue,
@@ -1388,8 +1389,17 @@ class MoonMindAgentRun:
 
     @staticmethod
     def _execute_kwargs_for_route(route: TemporalActivityRoute) -> dict[str, Any]:
+        task_queue = route.task_queue
+        if route.fleet == WORKFLOW_FLEET:
+            # Workflow-fleet Activities run on this workflow's own lane. The
+            # former per-lane processes each built the catalog from their own
+            # start queue, so merge-lane histories recorded the merge queue;
+            # deriving it from the running queue keeps that exact command.
+            task_queue = get_workflow_child_task_queue(
+                workflow.info().task_queue, settings.temporal
+            )
         kwargs: dict[str, Any] = {
-            "task_queue": route.task_queue,
+            "task_queue": task_queue,
             "start_to_close_timeout": timedelta(
                 seconds=route.timeouts.start_to_close_seconds
             ),

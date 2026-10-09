@@ -86,11 +86,12 @@ async def load_repository_connection_for_launch(
     A database failure propagates so callers can tell an unreadable record
     from an absent one, and a deleted or disabled connection raises
     ``RepositoryRouteError``: only true absence may select the deployment
-    declaration. A recorded connection other than the default admits only a
+    declaration. A recorded connection admits only a named
     ``repository`` it has a verified assignment for, and only that
-    assignment's operations. The default is the classified legacy exception:
-    it maps the deployment's pre-#4023 credential, whose scope predates
-    assignments.
+    assignment's operations. The connection service classifies the migrated
+    default's historical unscoped exception; its identity alone grants none.
+    A default read without a repository serves deployment operations such as
+    registry authentication, not repository admission.
     """
 
     from api_service.db.base import async_session_maker
@@ -112,7 +113,7 @@ async def load_repository_connection_for_launch(
             principal_scope=("system", None),
         )
         if connection is not None:
-            if connection_ref == DEFAULT_GIT_CONNECTION_REF:
+            if connection_ref == DEFAULT_GIT_CONNECTION_REF and repository is None:
                 return connection
             assignment = await service.launch_assignment(connection, repository)
             return connection.model_copy(
@@ -265,18 +266,15 @@ async def select_github_access_for_launch(
     repository: str | None = None,
     connections_dir: Path | None = None,
     client_policy: Any | None = None,
+    required_operations: Iterable[str] = (),
 ) -> SelectedGitHubAccess:
     """Select a launch's Git connection and read only its credential, once.
 
     Selection raises as :func:`select_git_connection_for_launch` does. A
     selected source that fails yields an unresolved credential carrying its
-    correction, never another credential.
+    correction, never another credential. Required operations are checked
+    against the recorded connection and assignment before reading a secret.
     """
-
-    from moonmind.auth.github_credentials import (
-        resolve_connection_github_credential,
-        resolve_deployment_github_credential,
-    )
 
     connection = await select_git_connection_for_launch(
         connection_ref,
@@ -284,6 +282,37 @@ async def select_github_access_for_launch(
         connections_dir=connections_dir,
         client_policy=client_policy,
     )
+    return await _resolve_github_access_for_connection(
+        connection, repository=repository, required_operations=required_operations
+    )
+
+
+async def _resolve_github_access_for_connection(
+    connection: Any | None,
+    *,
+    repository: str | None,
+    required_operations: Iterable[str] = (),
+) -> SelectedGitHubAccess:
+    """Resolve a selected connection only after its active operation policy."""
+    from moonmind.auth.github_credentials import (
+        resolve_connection_github_credential,
+        resolve_deployment_github_credential,
+    )
+
+    if connection is not None:
+        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_CONNECTION_MISMATCH,
+            RepositoryContractError,
+        )
+
+        for operation in required_operations:
+            if operation not in connection.allowed_operations:
+                raise RepositoryContractError(
+                    REPOSITORY_CONNECTION_MISMATCH,
+                    f"connection does not allow operation {operation!r}",
+                )
+        github_api_base_for(connection.endpoint_ref)
     if connection is None:
         credential = await resolve_deployment_github_credential(repo=repository)
     else:
@@ -291,6 +320,265 @@ async def select_github_access_for_launch(
             connection, repo=repository
         )
     return SelectedGitHubAccess(connection=connection, credential=credential)
+
+
+#: Bound on the Temporal parent chain walked to a workflow's recorded run.
+_ADMITTED_OWNER_MAX_DEPTH = 8
+
+
+async def _recorded_parent_workflow_id(workflow_id: str) -> str:
+    """Return the Temporal parent of ``workflow_id`` from the server's record.
+
+    Only an Activity has the worker's client; elsewhere there is no parent to
+    read, and a failed read is unavailable authority rather than none.
+    """
+
+    from temporalio import activity
+
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    if not activity.in_activity():
+        return ""
+    try:
+        described = await activity.client().get_workflow_handle(workflow_id).describe()
+    except Exception as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"owner of run {workflow_id!r} could not be read "
+            f"({type(exc).__name__}); no other connection is substituted",
+        ) from exc
+    return str(getattr(described, "parent_id", "") or "").strip()
+
+
+async def _planned_repository_connection(
+    session: Any, workflow_id: str, parameters: Mapping[str, Any]
+) -> str:
+    """Return the connection a routed run's frozen execution plan admitted.
+
+    Routed admission selects a concrete connection without rewriting the
+    authored parameters; the plan's repository binding records it. The
+    collaboration binding serves pull-request work, else the source binding.
+    A run without a plan, or a plan binding no repository authority, admitted
+    only the default connection. An unreadable plan raises; no other
+    connection is substituted.
+    """
+
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        repository_bindings_of,
+    )
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    raw_binding = parameters.get("omnigentExecutionPlan")
+    if not isinstance(raw_binding, Mapping):
+        return ""
+    try:
+        binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+        plan = await SessionExecutionPlanStore(session).load(binding.plan_ref)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"execution plan of run {workflow_id!r} could not be read "
+            f"({type(exc).__name__}); no other connection is substituted",
+        ) from exc
+    if plan is None:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            f"execution plan of run {workflow_id!r} is not recorded; no other "
+            "connection is substituted",
+        )
+    by_role = {}
+    for repository_binding in repository_bindings_of(
+        dict(plan.payload.credentialBindings)
+    ).values():
+        if isinstance(repository_binding, Mapping):
+            role = repository_binding.get("repositoryRole")
+            connection_ref = repository_binding.get("connectionRef")
+        else:
+            role = repository_binding.repositoryRole
+            connection_ref = repository_binding.connectionRef
+        by_role.setdefault(str(role or ""), str(connection_ref or "").strip())
+    return by_role.get("collaboration") or by_role.get("source_read") or ""
+
+
+async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
+    """Return the ``(connectionRef, anonymous)`` a recorded run admitted.
+
+    Retries, Activities, and child gates acting for a run read its canonical
+    parameters (and, for routed admission, its frozen execution plan) instead
+    of carrying credentials or rediscovering authority.
+    A child workflow started by a run (an agent step, a merge gate, a resolver
+    or remediation child) has no canonical record of its own; it acts with
+    the nearest recorded run on its Temporal parent chain. An unrecorded or
+    unreadable chain raises; no other authority is assumed.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.workflows.executions.repository_contract import (
+        authored_repository_access,
+    )
+
+    owner, _run_id, parameters = await _admitted_repository_record(workflow_id)
+    connection_ref, anonymous = authored_repository_access(parameters)
+    if not connection_ref and not anonymous:
+        async with async_session_maker() as session:
+            connection_ref = await _planned_repository_connection(
+                session, owner, parameters
+            )
+    return connection_ref, anonymous
+
+
+async def _admitted_repository_record(
+    workflow_id: str,
+) -> tuple[str, str, Mapping[str, Any]]:
+    """Read the nearest canonical owner once for all admitted repository uses."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    requested = owner = str(workflow_id or "").strip()
+    for _ in range(_ADMITTED_OWNER_MAX_DEPTH):
+        if not owner:
+            break
+        async with async_session_maker() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, owner)
+            if record is not None:
+                if not isinstance(record.parameters, Mapping):
+                    break
+                return (
+                    owner,
+                    str(getattr(record, "run_id", "") or ""),
+                    record.parameters,
+                )
+        owner = await _recorded_parent_workflow_id(owner)
+    raise RepositoryContractError(
+        "REPOSITORY_CONNECTION_UNAVAILABLE",
+        f"run {requested!r} has no recorded repository authority; no other "
+        "connection is substituted",
+    )
+
+
+async def acquire_admitted_repository_use(
+    workflow_id: str, *, repository: str, operation: str,
+    expected_api_base: str | None = None,
+) -> tuple[str | None, Any | None]:
+    """Acquire frozen server authority, or validate a historical recorded target.
+
+    The existing Omnigent acquisition owner verifies the snapshot digest,
+    repository, role, operation and current grants/revisions before secrets.
+    Historical runs without repository snapshots retain their selected
+    connection path, bounded by their recorded repository and active operations.
+    """
+    from api_service.db.base import async_session_maker
+    from moonmind.auth.github_app_wiring import github_api_base_for
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from moonmind.omnigent.host_services.github_credentials import (
+        OmnigentGithubCredentialService,
+    )
+    from moonmind.omnigent.workspace_sources import compile_workspace_source
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+        github_repository_name_from_value,
+    )
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _load_verified_execution_plan,
+    )
+
+    owner, run_id, parameters = await _admitted_repository_record(workflow_id)
+    raw_binding = parameters.get("omnigentExecutionPlan")
+    if isinstance(raw_binding, Mapping):
+        binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+        plan = await _load_verified_execution_plan(
+            binding, workflow_id=owner, run_id=run_id
+        )
+        access = plan.payload.resolvedTools.get("repositoryAccess", {})
+        if access:
+            role = "collaboration" if "collaboration" in access else "source_read"
+            credentials = OmnigentGithubCredentialService(
+                None,
+                session_factory=async_session_maker,
+                artifact_gateway=TemporalOmnigentArtifactGateway(
+                    async_session_maker, principal=f"workflow:{owner}"
+                ),
+            )
+            identity = await credentials.admitted_repository_identity(
+                plan=plan,
+                request=None,
+                role=role,
+                operation=operation,
+                repository=repository,
+                consumer="server",
+            )
+            api_base = github_api_base_for(identity.endpoint)
+            if expected_api_base is not None and api_base.rstrip(
+                "/"
+            ) != expected_api_base.rstrip("/"):
+                raise ValueError(
+                    f"The admitted repository connection does not serve {expected_api_base}"
+                )
+            acquired = await credentials.acquire_repository_use(
+                plan=plan,
+                request=None,
+                role=role,
+                operation=operation,
+                repository=repository,
+                execution_owner=owner,
+                consumer="server",
+            )
+            return api_base, acquired
+        from moonmind.omnigent.harness_platform.credential_bindings import (
+            repository_bindings_of,
+        )
+
+        if repository_bindings_of(dict(plan.payload.credentialBindings)):
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "repository operation lacks its admitted snapshot",
+            )
+
+    workflow = parameters.get("workflow") or parameters.get("task") or {}
+    workflow = workflow if isinstance(workflow, Mapping) else {}
+    workspace = (
+        parameters.get("workspaceSpec")
+        or parameters.get("workspace")
+        or workflow.get("workspace")
+        or {}
+    )
+    workspace = dict(workspace) if isinstance(workspace, Mapping) else {}
+    target = (
+        parameters.get("repository")
+        or workspace.get("repositoryTarget")
+        or workspace.get("repository")
+    )
+    if isinstance(target, Mapping) and target.get("provider"):
+        workspace["repositoryTarget"] = dict(target)
+        workspace.pop("repository", None)
+    elif target:
+        workspace["repository"] = target
+    source = compile_workspace_source(
+        workspace, workflow_id=owner, step_execution_id=owner, runtime="omnigent"
+    )
+    admitted_repository = github_repository_name_from_value(source.repository_ref)
+    if (
+        not admitted_repository
+        or admitted_repository.casefold() != repository.casefold()
+    ):
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE",
+            "repository target conflicts with the recorded run",
+        )
+    return None, None
 
 
 async def resolve_selected_github_credential_for_launch(
@@ -332,7 +620,7 @@ async def resolve_default_github_connection_credential(
 
     try:
         connection = await load_repository_connection_for_launch(
-            DEFAULT_GIT_CONNECTION_REF
+            DEFAULT_GIT_CONNECTION_REF, repository=repo
         )
     except asyncio.CancelledError:
         raise
@@ -999,6 +1287,7 @@ __all__ = [
     "build_github_credential_descriptor_for_launch",
     "inspect_managed_secret_refs_for_launch",
     "load_active_managed_github_secret_slug",
+    "load_admitted_repository_access",
     "load_repository_connection_for_launch",
     "resolve_default_github_connection_credential",
     "resolve_ghcr_pull_credentials_for_launch",

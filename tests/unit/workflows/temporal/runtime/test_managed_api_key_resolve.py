@@ -373,23 +373,31 @@ async def test_ghcr_pull_credentials_bound_to_ghcr_registry() -> None:
 
     assert GHCR_REGISTRY == "ghcr.io"
 
+
 async def test_resolve_github_token_for_launch_propagates_cancellation_from_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
-    async def _fake_resolve(_secret_name: str) -> str:
+    attempted: list[str] = []
+
+    async def _fake_resolve(_cls, _session, secret_name: str):
+        attempted.append(secret_name)
         raise asyncio.CancelledError()
 
-    monkeypatch.setattr(app_settings.github, "github_token_secret_ref", "db://github-pat")
+    monkeypatch.setattr(
+        app_settings.github, "github_token_secret_ref", "db://github-pat"
+    )
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
-        _fake_resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_fake_resolve)
     )
 
     with pytest.raises(asyncio.CancelledError):
         await resolve_github_token_for_launch({})
+    assert attempted == ["github-pat"]
+
 
 class _FakeStatusResult:
     def __init__(self, rows: list[tuple[str, str]]) -> None:
@@ -574,7 +582,7 @@ def _default_connection(credential: dict[str, object]):
 def _record_default_connection(monkeypatch: pytest.MonkeyPatch, connection) -> list[str]:
     loaded: list[str] = []
 
-    async def _load(connection_ref: str):
+    async def _load(connection_ref: str, **_kwargs: object):
         loaded.append(connection_ref)
         return connection
 
@@ -646,7 +654,7 @@ async def test_unreadable_default_connection_is_not_treated_as_absent(
     _clear_deployment_github_env(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
 
-    async def _unreadable(_connection_ref: str):
+    async def _unreadable(_connection_ref: str, **_kwargs: object):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(
@@ -661,6 +669,7 @@ async def test_unreadable_default_connection_is_not_treated_as_absent(
 async def test_failed_configured_reference_does_not_search_other_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from api_service.services.secrets import SecretsService
     from moonmind.config.settings import settings as app_settings
 
     _clear_deployment_github_env(monkeypatch)
@@ -671,14 +680,12 @@ async def test_failed_configured_reference_does_not_search_other_sources(
     )
     attempted: list[str] = []
 
-    async def _resolve(ref: str, **_kwargs: object) -> str:
-        attempted.append(ref)
+    async def _resolve(_cls, _session, slug: str):
+        attempted.append(f"db://{slug}")
         raise ValueError("secret store unavailable")
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "resolve_managed_api_key_reference",
-        _resolve,
+        SecretsService, "get_secret_with_revision", classmethod(_resolve)
     )
 
     assert await resolve_github_token_for_launch({}) is None
@@ -756,7 +763,7 @@ async def test_default_connection_loader_cancellation_propagates(
 ) -> None:
     _clear_deployment_github_env(monkeypatch)
 
-    async def _cancelled(_connection_ref: str):
+    async def _cancelled(_connection_ref: str, **_kwargs: object):
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(
@@ -872,7 +879,7 @@ async def test_deleted_default_connection_does_not_fall_back_to_declaration(
     _clear_deployment_github_env(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "declared-token")
 
-    async def _deleted(connection_ref: str):
+    async def _deleted(connection_ref: str, **_kwargs: object):
         raise RepositoryRouteError(REPOSITORY_DENIED, f"{connection_ref} was deleted")
 
     monkeypatch.setattr(
@@ -1086,6 +1093,9 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
 ) -> None:
     """The migrated default had no assignments before #4023 and needs none."""
 
+    from sqlalchemy import update
+
+    from api_service.db.models import RepositoryConnectionAuditEvent
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
     )
@@ -1100,9 +1110,17 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
         tmp_path,
         github_pat_connection(DEFAULT_GIT_CONNECTION_REF, "DEFAULT_ACCOUNT_PAT"),
     )
+    async with engine.begin() as database:
+        await database.execute(
+            update(RepositoryConnectionAuditEvent)
+            .where(RepositoryConnectionAuditEvent.request_id == "test-connection-0")
+            .values(request_id="migration:391:legacy-github-credential")
+        )
     try:
-        selected = await managed_api_key_resolve_module.select_git_connection_for_launch(
-            DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
+        selected = (
+            await managed_api_key_resolve_module.select_git_connection_for_launch(
+                DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
+            )
         )
     finally:
         await engine.dispose()
@@ -1114,3 +1132,157 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
         "branch_write",
         "review_request",
     )
+
+
+# ---------------------------------------------------------------------------
+# Admitted repository access of a recorded run (MoonLadderStudios/MoonMind#4010)
+# ---------------------------------------------------------------------------
+
+_PLAN_DIGEST = "a" * 64
+_PLAN_BINDING = {
+    "planRef": f"omnigent-execution-plan:sha256:{_PLAN_DIGEST}",
+    "planDigest": f"sha256:{_PLAN_DIGEST}",
+    "planArtifactRef": "artifact:plan",
+    "taskInputSnapshotRef": "artifact:task-input",
+    "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+}
+
+
+def _repository_binding(connection_ref: str, role: str) -> dict[str, str]:
+    return {
+        "authorityKind": "repository_connection",
+        "connectionRef": connection_ref,
+        "repositoryAccessSnapshotRef": "repository-access-snapshot:sha256:" + "c" * 64,
+        "materializerRef": "repository-broker@1",
+        "repositoryRole": role,
+    }
+
+
+def _recorded_run(monkeypatch, parameters, *, plan_bindings=None, plan_error=None):
+    """Answer the canonical-record and frozen-plan reads at their seams."""
+
+    from api_service.db import base as db_base
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
+    loaded: list[str] = []
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def get(self, _model, workflow_id):
+            if workflow_id != "mm:run":
+                return None
+            return SimpleNamespace(parameters=parameters)
+
+    async def load(self, plan_ref):
+        loaded.append(plan_ref)
+        if plan_error is not None:
+            raise plan_error
+        if plan_bindings is None:
+            return None
+        return SimpleNamespace(
+            payload=SimpleNamespace(credentialBindings=dict(plan_bindings))
+        )
+
+    monkeypatch.setattr(db_base, "async_session_maker", lambda: _Session())
+    monkeypatch.setattr(SessionExecutionPlanStore, "load", load)
+    return loaded
+
+
+async def test_routed_run_acts_with_the_connection_its_plan_admitted(monkeypatch):
+    """Routed admission omits connectionRef; the frozen plan binding names it."""
+
+    loaded = _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={
+            "model": {"authorityKind": "model", "providerProfileRef": "p"},
+            "source": _repository_binding("repository-connection:routed-b", "source_read"),
+            "collaboration": _repository_binding(
+                "repository-connection:routed-b", "collaboration"
+            ),
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:routed-b", False)
+    assert loaded == [_PLAN_BINDING["planRef"]]
+
+
+async def test_routed_run_prefers_its_collaboration_connection(monkeypatch):
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={
+            "source": _repository_binding("repository-connection:reader", "source_read"),
+            "collaboration": _repository_binding(
+                "repository-connection:collaborator", "collaboration"
+            ),
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:collaborator", False)
+
+
+async def test_routed_plan_without_repository_bindings_uses_default(monkeypatch):
+    """A plan that bound no repository authority admitted only the default."""
+
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_bindings={},
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("", False)
+
+
+@pytest.mark.parametrize("plan_error", [None, RuntimeError("db unavailable")])
+async def test_unreadable_routed_plan_is_unavailable_authority(monkeypatch, plan_error):
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+
+    _recorded_run(
+        monkeypatch,
+        {"repository": "acme/repo", "omnigentExecutionPlan": _PLAN_BINDING},
+        plan_error=plan_error,
+    )
+
+    with pytest.raises(RepositoryContractError, match="no other connection"):
+        await managed_api_key_resolve_module.load_admitted_repository_access("mm:run")
+
+
+async def test_authored_connection_is_used_without_reading_the_plan(monkeypatch):
+    loaded = _recorded_run(
+        monkeypatch,
+        {
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:explicit",
+                "repository": {"name": "acme/repo"},
+            },
+            "omnigentExecutionPlan": _PLAN_BINDING,
+        },
+    )
+
+    access = await managed_api_key_resolve_module.load_admitted_repository_access(
+        "mm:run"
+    )
+
+    assert access == ("repository-connection:explicit", False)
+    assert loaded == []
