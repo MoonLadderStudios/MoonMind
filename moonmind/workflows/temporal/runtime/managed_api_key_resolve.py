@@ -620,7 +620,7 @@ async def resolve_default_github_connection_credential(
 
     try:
         connection = await load_repository_connection_for_launch(
-            DEFAULT_GIT_CONNECTION_REF
+            DEFAULT_GIT_CONNECTION_REF, repository=repo
         )
     except asyncio.CancelledError:
         raise

@@ -16,6 +16,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from moonmind.schemas.temporal_models import AutomatedReviewRequestReceiptModel
 from moonmind.workflows.provider_failures import (
     PROVIDER_ERROR_CLASS_RATE_LIMIT,
     ProviderFailureEvent,
@@ -27,6 +28,7 @@ from pr_resolver_core.review_providers import (
     latest_review_reply,
     latest_review_request,
     normalize_reviewer_login,
+    review_requests_after,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +81,9 @@ class PullRequestReadinessResult(BaseModel):
     )
     automated_review_requested_at: str | None = Field(
         None, alias="automatedReviewRequestedAt"
+    )
+    automated_review_requests: list[AutomatedReviewRequestReceiptModel] | None = Field(
+        None, alias="automatedReviewRequests"
     )
     automated_review_completion_kind: str | None = Field(
         None, alias="automatedReviewCompletionKind"
@@ -2376,6 +2381,7 @@ class GitHubService:
         automated_review_complete: bool | None = None
         automated_review_request_comment_id: int | None = None
         automated_review_requested_at: str | None = None
+        automated_review_requests: list[dict[str, Any]] | None = None
         automated_review_completion_kind: str | None = None
         automated_review_completion_id: int | None = None
         automated_review_completed_at: str | None = None
@@ -2529,6 +2535,7 @@ class GitHubService:
                         automated_review_requested_at = review_evidence.get(
                             "requestedAt"
                         )
+                        automated_review_requests = review_evidence.get("requests")
                         automated_review_completion_kind = review_evidence.get(
                             "completionKind"
                         )
@@ -2568,6 +2575,7 @@ class GitHubService:
             automatedReviewComplete=automated_review_complete,
             automatedReviewRequestCommentId=automated_review_request_comment_id,
             automatedReviewRequestedAt=automated_review_requested_at,
+            automatedReviewRequests=automated_review_requests,
             automatedReviewCompletionKind=automated_review_completion_kind,
             automatedReviewCompletionId=automated_review_completion_id,
             automatedReviewCompletedAt=automated_review_completed_at,
@@ -3164,6 +3172,15 @@ class GitHubService:
                 requested_at=review_request.get("requestedAt"),
                 head_sha=requested_head_sha,
             )
+            # Every identifiable request from the active receipt onward
+            # consumes a cycle, including requests superseded between polls.
+            requests = review_requests_after(
+                record,
+                [anchor.comment, *comments],
+                head_sha=requested_head_sha,
+                request_comment_id=anchor.comment.get("id"),
+                requested_at=anchor.created_at,
+            )
         except ValueError as exc:
             return {
                 **pending,
@@ -3181,6 +3198,13 @@ class GitHubService:
         requested_at = request.created_at
         request_comment_id = request.comment.get("id")
         request_evidence = {
+            "requests": [
+                {
+                    "requestCommentId": int(item.comment["id"]),
+                    "requestedAt": item.comment["created_at"],
+                }
+                for item in requests
+            ],
             "requestCommentId": request_comment_id,
             "requestedAt": (
                 request.comment.get("created_at")
