@@ -1739,7 +1739,12 @@ _HOST_LOST_SAVED_CHECKPOINT = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("saved_checkpoint", "restore_patch_enabled", "expected_restore_ref", "expected_mode"),
+    (
+        "saved_checkpoint",
+        "restore_patch_enabled",
+        "expected_restore_ref",
+        "expected_mode",
+    ),
     [
         (
             _HOST_LOST_SAVED_CHECKPOINT,
