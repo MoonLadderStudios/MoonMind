@@ -215,32 +215,6 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert alternate_lane.registry_fingerprint == first.registry_fingerprint
 
 
-def test_deployment_readiness_advertises_the_registered_controller_bootstrap():
-    from temporalio import activity
-
-    @activity.defn(name="mm.tool.execute")
-    async def execute():
-        return None
-
-    spec = build_worker_spec(
-        topology=build_worker_topology(fleet=DEPLOYMENT_FLEET),
-        activities=(execute,),
-        workflows=(),
-        environ={"MOONMIND_DEPLOYMENT_MODE": "development"},
-    )
-    assert spec.readiness_payload()["controllerBootstrapCapabilities"] == [
-        "active-journal-transition"
-    ]
-    assert (
-        "controllerBootstrapCapabilities"
-        not in replace(spec, fleet=WORKFLOW_FLEET).readiness_payload()
-    )
-    assert (
-        "controllerBootstrapCapabilities"
-        not in replace(spec, activity_types=()).readiness_payload()
-    )
-
-
 def test_production_worker_spec_requires_immutable_release_identity() -> None:
     topology = build_worker_topology(fleet=WORKFLOW_FLEET)
     with pytest.raises(ValueError, match="MOONMIND_BUILD_SHA"):

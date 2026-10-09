@@ -46,12 +46,25 @@ CONTROLLER_ALIAS = "moonmind-controller"
 JOURNAL_TRANSITION_CAPABILITY = "active-journal-transition"
 
 
+# The standalone controller image repository. Any other image is the MoonMind
+# application image, which ships this controller under /app/deploy/controller
+# (the standalone image is not published yet, MoonLadderStudios/MoonMind#4500).
+STANDALONE_CONTROLLER_REPOSITORY = "ghcr.io/moonladderstudios/moonmind-controller"
+APPLICATION_CONTROLLER_ENTRYPOINT = '["python", "/app/deploy/controller/server.py"]'
+# The standalone image runs as root; an application-image controller keeps
+# the same Docker-socket authority instead of the application's own user.
+APPLICATION_CONTROLLER_USER = "0:0"
+
+
 def controller_capabilities(url: str, secret: str) -> set[str]:
     request = urllib.request.Request(
         url.rstrip("/") + "/v1/healthz",
         headers={"Authorization": f"Bearer {secret}"},
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
+    # The deployment-owned bearer goes only to the controller endpoint, never
+    # through an ambient HTTP(S) proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
         body = json.load(response)
     return set(body.get("capabilities") or ())
 
@@ -616,6 +629,12 @@ def render_compose_file(
     state_src = mounts_mod.resolve_bind_source(str(state_dir))
     repo_src = mounts_mod.resolve_bind_source(str(repo))
     project_name = project or project_for_repo(repo)
+    process = ""
+    if is_application_image(image):
+        process = (
+            f"    entrypoint: {APPLICATION_CONTROLLER_ENTRYPOINT}\n"
+            f"    user: {json.dumps(APPLICATION_CONTROLLER_USER)}\n"
+        )
     path = state_dir / "controller-compose.yaml"
     # No-target submissions update the project bootstrap recorded, so a
     # `-p` deployment is never addressed as a parallel default project.
@@ -647,7 +666,7 @@ name: {project_name}
 services:
   {CONTROLLER_SERVICE}:
     image: {image}
-    restart: unless-stopped
+{process}    restart: unless-stopped
     environment:
       MOONMIND_CONTROLLER_MANAGED: "1"
       MOONMIND_CONTROLLER_STATE_DIR: /var/lib/moonmind-controller
@@ -665,6 +684,20 @@ services:
 {service_networks}{project_networks}"""
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def is_application_image(image: str) -> bool:
+    """Whether ``image`` is the MoonMind application image, not the standalone one.
+
+    The configured default controller image (``MOONMIND_CONTROLLER_IMAGE``)
+    is treated as standalone too.
+    """
+    repository, _, _ = split_image_reference(image)
+    standalone = {
+        STANDALONE_CONTROLLER_REPOSITORY,
+        split_image_reference(DEFAULT_IMAGE)[0],
+    }
+    return repository not in standalone
 
 
 def _compose(state_dir: Path, project: str, *args: str) -> int:
@@ -866,7 +899,14 @@ def build_parser() -> argparse.ArgumentParser:
         child = sub.add_parser(name, parents=[common])
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
         child.add_argument("--stack", default="moonmind", help="Target stack.")
-        child.add_argument("--image", default=DEFAULT_IMAGE, help="Controller image.")
+        child.add_argument(
+            "--image",
+            default=None,
+            help=(
+                "Controller image (default: the image this installation "
+                f"recorded, else {DEFAULT_IMAGE})."
+            ),
+        )
         child.add_argument("--port", type=int, default=DEFAULT_PORT)
         child.add_argument("--controller-url", default=None)
         child.add_argument(
@@ -896,6 +936,12 @@ def main(argv=None, env=None) -> int:
         args.state_dir = str(default_state_dir(repo))
     if not args.repo:
         args.repo = str(repo)
+    if not args.image:
+        # A repair keeps the controller this installation runs (for example
+        # the application image the host entrypoint installed) instead of
+        # swapping in a different default image.
+        recorded = load_controller_image(Path(args.state_dir).resolve()) or {}
+        args.image = str(recorded.get("requested") or DEFAULT_IMAGE)
     environment = dict(os.environ) if env is None else dict(env)
     if not args.target_project:
         args.target_project = target_project_for_repo(repo, environment)

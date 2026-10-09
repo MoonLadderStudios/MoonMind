@@ -114,15 +114,14 @@ def test_required_integration_job_uploads_failure_diagnostics() -> None:
 
 
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
-    # The hermetic suite, the host-updater transport qualification, and the
-    # three disposable Compose journeys each own an isolated Compose project.
+    # The hermetic suite and the three disposable Compose journeys each own
+    # an isolated Compose project.
     # Running them as parallel rows keeps every boundary while the slowest
     # row, not their serial sum, bounds integration-ci.
     job = _load_workflow()["jobs"]["integration-ci"]
 
     assert json.loads(select_suites([]).as_outputs()["integration_matrix"])["suite"] == [
         "hermetic",
-        "host-update-transport",
         "fresh-journey",
         "upgrade-journey",
         "controller-journey",
@@ -135,10 +134,6 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
         "Run hermetic integration CI suite": (
             "hermetic",
             "./tools/test_integration.sh",
-        ),
-        "Qualify host updater Docker transport recovery": (
-            "host-update-transport",
-            "tests/integration/host_update/test_host_updater_transport.py -q",
         ),
         "Run disposable default first-run journey": (
             "fresh-journey",
@@ -1199,7 +1194,6 @@ def test_backend_and_integration_matrices_consume_selected_rows():
     [
         [],
         ["api_service/api/routers/automation.py"],
-        ["tests/integration/host_update/test_host_updater_transport.py"],
         ["tests/integration/host_update/test_journal_transition.py"],
     ],
 )

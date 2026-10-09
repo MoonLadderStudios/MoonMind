@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
+import { newRequestId } from '../../lib/requestId';
 import { formatStatusLabel } from '../../utils/formatters';
 
 const WorkerSnapshotSchema = z.object({
@@ -205,9 +206,8 @@ const DeploymentStackStateSchema = z
 
 const DeploymentUpdateResultSchema = z
   .object({
-    deploymentUpdateRunId: z.string(),
-    operationId: z.string().optional().nullable(),
-    owner: z.enum(['controller', 'workflow']).optional().nullable(),
+    operationId: z.string(),
+    owner: z.literal('controller'),
     status: z.string(),
   })
   .passthrough();
@@ -374,10 +374,7 @@ function Metric({
 }
 
 function deploymentResultNotice(result: DeploymentUpdateResult, verb: string): string {
-  if (result.owner === 'controller' && result.operationId) {
-    return `Deployment ${verb} accepted by the controller: operation ${result.operationId} (${formatStatusLabel(result.status, 'UNKNOWN')})`;
-  }
-  return `Deployment ${verb} queued: ${result.deploymentUpdateRunId}`;
+  return `Deployment ${verb} accepted by the controller: operation ${result.operationId} (${formatStatusLabel(result.status, 'UNKNOWN')})`;
 }
 
 async function deploymentErrorMessage(response: Response): Promise<string> {
@@ -451,10 +448,13 @@ export function OperationsSettingsSection({
     level: 'ok' | 'error';
     text: string;
   } | null>(null);
-  const [rollbackNotice, setRollbackNotice] = useState<{
+  const [retryNotice, setRetryNotice] = useState<{
     level: 'ok' | 'error';
     text: string;
   } | null>(null);
+  // One operator intent per target. An unanswered or unconfirmed submission
+  // is resubmitted under the same identity so the controller reattaches.
+  const pendingUpdateIntent = useRef<{ targetImage: string; requestId: string } | null>(null);
   const [pauseMode, setPauseMode] = useState('drain');
   const [pauseReason, setPauseReason] = useState('');
   const [resumeReason, setResumeReason] = useState('');
@@ -698,6 +698,11 @@ export function OperationsSettingsSection({
         return null;
       }
 
+      const intent =
+        pendingUpdateIntent.current?.targetImage === targetImage
+          ? pendingUpdateIntent.current
+          : { targetImage, requestId: newRequestId() };
+      pendingUpdateIntent.current = intent;
       const response = await fetch('/api/v1/operations/deployment/update', {
         method: 'POST',
         headers: {
@@ -712,11 +717,17 @@ export function OperationsSettingsSection({
           },
           ...DEFAULT_UPDATE_OPTIONS,
           mode: updateMode,
+          requestId: intent.requestId,
         }),
       });
       if (!response.ok) {
+        if (response.status < 500) {
+          // A definitive refusal; the next submission is a new intent.
+          pendingUpdateIntent.current = null;
+        }
         throw new Error(await deploymentErrorMessage(response));
       }
+      pendingUpdateIntent.current = null;
       return DeploymentUpdateResultSchema.parse(await response.json());
     },
     onSuccess: (result) => {
@@ -731,76 +742,6 @@ export function OperationsSettingsSection({
     },
     onError: (mutationError: Error) => {
       setUpdateNotice({
-        level: 'error',
-        text: mutationError.message,
-      });
-    },
-  });
-
-  const rollbackMutation = useMutation({
-    mutationFn: async (action: DeploymentAction) => {
-      const eligibility = action.rollbackEligibility;
-      const target = eligibility?.targetImage;
-      if (!eligibility?.eligible || !target) {
-        throw new Error(eligibility?.reason || 'Rollback target is not available.');
-      }
-      const targetImage = `${target.repository}:${target.reference}`;
-      const sourceActionId = String(
-        eligibility.sourceActionId || action.id || action.runId || '',
-      ).trim();
-      if (!sourceActionId) {
-        throw new Error('Rollback source action is required.');
-      }
-      const confirmation = [
-        'Rollback deployment?',
-        `Target image: ${targetImage}`,
-        `Source action: ${sourceActionId}`,
-        `Stack: ${deploymentState?.stack || DEPLOYMENT_STACK}`,
-        'Services may restart during this operation.',
-      ].join('\n');
-      if (!window.confirm(confirmation)) {
-        return null;
-      }
-      const requestedAt = new Date().toISOString();
-      const confirmationText = `Rollback to ${targetImage} confirmed from ${sourceActionId}`;
-      const response = await fetch('/api/v1/operations/deployment/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({
-          stack: deploymentState?.stack || DEPLOYMENT_STACK,
-          image: target,
-          mode: 'changed_services',
-          removeOrphans: true,
-          wait: true,
-          runSmokeCheck: false,
-          pauseWork: false,
-          pruneOldImages: false,
-          reason: `Rollback after failed update ${sourceActionId} at ${requestedAt}`,
-          operationKind: 'rollback',
-          rollbackSourceActionId: sourceActionId,
-          confirmation: confirmationText,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(await deploymentErrorMessage(response));
-      }
-      return DeploymentUpdateResultSchema.parse(await response.json());
-    },
-    onSuccess: (result) => {
-      if (!result) {
-        return;
-      }
-      setRollbackNotice({
-        level: 'ok',
-        text: deploymentResultNotice(result, 'rollback'),
-      });
-      queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
-    },
-    onError: (mutationError: Error) => {
-      setRollbackNotice({
         level: 'error',
         text: mutationError.message,
       });
@@ -831,11 +772,11 @@ export function OperationsSettingsSection({
       if (!result) {
         return;
       }
-      setRollbackNotice({ level: 'ok', text: deploymentResultNotice(result, 'retry') });
+      setRetryNotice({ level: 'ok', text: deploymentResultNotice(result, 'retry') });
       queryClient.invalidateQueries({ queryKey: ['deployment-stack', DEPLOYMENT_STACK] });
     },
     onError: (mutationError: Error) => {
-      setRollbackNotice({ level: 'error', text: mutationError.message });
+      setRetryNotice({ level: 'error', text: mutationError.message });
     },
   });
 
@@ -918,6 +859,7 @@ export function OperationsSettingsSection({
   const controllerUnavailable = Boolean(
     deploymentState?.controller.installed && !deploymentState.controller.reachable,
   );
+  const controllerNotInstalled = Boolean(deploymentState && !deploymentState.controller.installed);
   const latestAction = deploymentState?.latestAction;
   const latestActionSummary = latestAction
     ? [
@@ -1053,17 +995,22 @@ export function OperationsSettingsSection({
                 The dashboard cannot submit updates until it answers; the host command{' '}
                 <code>./tools/update-moonmind.sh</code> remains usable.
               </div>
-            ) : deploymentState?.controller.installed ? (
+            ) : controllerNotInstalled ? (
+              <div
+                role="alert"
+                className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300"
+              >
+                {deploymentState?.controller.message ||
+                  'The standalone deployment controller is not installed.'}{' '}
+                The dashboard cannot submit updates until it is installed; the host command{' '}
+                <code>./tools/update-moonmind.sh</code> installs it.
+              </div>
+            ) : deploymentState ? (
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Updates run in the standalone deployment controller, which keeps a local
                 recovery record.
               </p>
-            ) : (
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {deploymentState?.controller.message ||
-                  'The standalone deployment controller is not installed.'}
-              </p>
-            )}
+            ) : null}
 
             <form
               className="space-y-4 rounded-2xl border border-slate-200 p-5 dark:border-slate-800"
@@ -1099,7 +1046,10 @@ export function OperationsSettingsSection({
               <button
                 type="submit"
                 disabled={
-                  deploymentMutation.isPending || !canInvokeOperations || controllerUnavailable
+                  deploymentMutation.isPending ||
+                  !canInvokeOperations ||
+                  controllerUnavailable ||
+                  controllerNotInstalled
                 }
                 className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
               >
@@ -1114,7 +1064,7 @@ export function OperationsSettingsSection({
                 Update history
               </h5>
               <div className="mt-3 space-y-3">
-                {renderDeploymentNotice(rollbackNotice)}
+                {renderDeploymentNotice(retryNotice)}
                 {deploymentState?.recentActions.length ? (
                   deploymentState.recentActions.map((action) => {
                     const target =
@@ -1197,23 +1147,9 @@ export function OperationsSettingsSection({
                               Retry operation
                             </button>
                           ) : null}
-                          {action.rollbackEligibility?.eligible &&
-                          action.rollbackEligibility.targetImage ? (
-                            <button
-                              type="button"
-                              className="text-sm font-medium text-sky-700 hover:text-sky-600 dark:text-sky-400"
-                              disabled={
-                                !canInvokeOperations ||
-                                rollbackMutation.isPending ||
-                                controllerUnavailable
-                              }
-                              onClick={() => rollbackMutation.mutate(action)}
-                            >
-                              Roll back to {action.rollbackEligibility.targetImage.reference}
-                            </button>
-                          ) : action.rollbackEligibility &&
-                            !action.rollbackEligibility.eligible &&
-                            action.rollbackEligibility.reason ? (
+                          {action.rollbackEligibility &&
+                          !action.rollbackEligibility.eligible &&
+                          action.rollbackEligibility.reason ? (
                             <span className="text-sm text-slate-500 dark:text-slate-400">
                               {action.rollbackEligibility.reason}
                             </span>
