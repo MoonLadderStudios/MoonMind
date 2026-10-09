@@ -1394,3 +1394,199 @@ def test_submit_jobs_omits_task_headers_without_env(monkeypatch: Any) -> None:
     assert "X-MoonMind-Task-Workflow-Id" not in headers
     assert "X-MoonMind-Agent-Run-Id" not in headers
     assert "X-MoonMind-Agent-Run-Identifier" not in headers
+
+
+_BATCH_EXECUTION_REF = "batch:run:node-1:execution:1"
+
+
+def _batch_terminal_evidence(workspace: Path) -> Any:
+    from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+
+    return evaluate_terminal_evidence(
+        {
+            "contractId": "batch_pr_resolver_fanout.v1",
+            "relativePath": "artifacts/batch_pr_resolver_result.json",
+            "expectedSchemaVersion": "moonmind.batch-pr-resolver-result.v1",
+            "executionRef": _BATCH_EXECUTION_REF,
+        },
+        workspace_path=str(workspace),
+    )
+
+
+def _run_main_with_discovery(
+    module: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: Any,
+    argv: list[str],
+    open_numbers: list[int],
+    task_context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[int]]:
+    spool = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", _BATCH_EXECUTION_REF)
+    context = tmp_path / "task_context.json"
+    context.write_text(json.dumps(task_context or {}))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "batch_pr_resolver.py",
+            "--repo",
+            "owner/repo",
+            "--task-context-path",
+            str(context),
+            *argv,
+        ],
+    )
+    submitted: list[int] = []
+
+    def discover(**_kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "number": number,
+                "headRefName": f"branch-{number}",
+                "isCrossRepository": False,
+                "headRepositoryOwner": {"login": "owner"},
+                "headRepository": {"name": "repo"},
+            }
+            for number in open_numbers
+        ]
+
+    async def submit(submissions: list[Any]) -> tuple[list[dict[str, Any]], list]:
+        submitted.extend(int(item.pr_number) for item in submissions)
+        return [
+            {"pr": item.pr_number, "workflowId": f"mm:child-{item.pr_number}"}
+            for item in submissions
+        ], []
+
+    module["main"].__globals__["_run_pr_list"] = discover
+    module["main"].__globals__["_submit_jobs"] = submit
+    assert asyncio.run(module["main"]()) == 0
+    return json.loads((spool / "batch_pr_resolver_result.json").read_text()), submitted
+
+
+def test_pull_request_range_limits_queued_children(tmp_path, monkeypatch):
+    """An operator range never queues open PRs outside it (mm:bc0550c5 incident)."""
+    module = _load_module()
+    open_numbers = [4724, 4725, 4733, 4746, 4754, 4759, 4761, 4763, 4764, 4765]
+
+    summary, submitted = _run_main_with_discovery(
+        module,
+        tmp_path,
+        monkeypatch,
+        ["--pull-requests", "#4724-#4746"],
+        open_numbers,
+    )
+
+    assert submitted == [4724, 4725, 4733, 4746]
+    assert summary["requested"] == 4
+    assert summary["created"] == 4
+    assert summary["selection"] == "#4724-#4746"
+    assert summary["skipped"] == []
+
+
+def test_pull_request_list_reports_selected_prs_that_are_not_open(
+    tmp_path, monkeypatch
+):
+    module = _load_module()
+
+    summary, submitted = _run_main_with_discovery(
+        module,
+        tmp_path,
+        monkeypatch,
+        ["--pull-requests", "4765, 4800"],
+        [4724, 4765],
+    )
+
+    assert submitted == [4765]
+    assert summary["skipped"] == [{"pr": 4800, "reason": "not-open"}]
+    # Every selected target is accounted for, so the managed terminal-evidence
+    # boundary accepts the result instead of rejecting it after queueing.
+    assert summary["requested"] == 2
+    assert _batch_terminal_evidence(tmp_path).satisfied
+
+
+def test_pull_request_selection_is_inherited_from_task_context(
+    tmp_path, monkeypatch
+):
+    module = _load_module()
+
+    summary, submitted = _run_main_with_discovery(
+        module,
+        tmp_path,
+        monkeypatch,
+        [],
+        [4724, 4725, 4765],
+        task_context={"skill": {"args": {"pullRequests": "4725"}}},
+    )
+
+    assert submitted == [4725]
+    assert summary["selection"] == "4725"
+
+
+def test_pull_request_selection_is_inherited_from_canonical_skill_inputs(
+    tmp_path, monkeypatch
+):
+    """Canonical tasks carry Skill inputs under ``skill.inputs``, not ``args``."""
+    module = _load_module()
+
+    summary, submitted = _run_main_with_discovery(
+        module,
+        tmp_path,
+        monkeypatch,
+        [],
+        [4724, 4725, 4765],
+        task_context={
+            "skill": {
+                "id": "batch-pr-resolver",
+                "ids": ["batch-pr-resolver"],
+                "inputs": {"pullRequests": "4724-4725"},
+            }
+        },
+    )
+
+    assert submitted == [4724, 4725]
+    assert summary["selection"] == "4724-4725"
+
+
+def test_omitted_pull_request_selection_queues_every_open_pr(tmp_path, monkeypatch):
+    module = _load_module()
+
+    summary, submitted = _run_main_with_discovery(
+        module, tmp_path, monkeypatch, [], [4724, 4765]
+    )
+
+    assert submitted == [4724, 4765]
+    assert summary["selection"] is None
+
+
+@pytest.mark.parametrize("spec", ["", "abc", "4746-4724", "0", "12-"])
+def test_invalid_pull_request_selection_fails_before_discovery(
+    tmp_path, monkeypatch, spec
+):
+    module = _load_module()
+    spool = tmp_path / "artifacts"
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(spool))
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", _BATCH_EXECUTION_REF)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["batch_pr_resolver.py", "--repo", "owner/repo", "--pull-requests", spec],
+    )
+
+    def discover(**_kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError("discovery must not run for an invalid selection")
+
+    module["main"].__globals__["_run_pr_list"] = discover
+    assert asyncio.run(module["main"]()) == 2
+
+    summary = json.loads((spool / "batch_pr_resolver_result.json").read_text())
+    assert summary["status"] == "failed"
+    assert summary["failureCode"] == "BATCH_FANOUT_INPUT_INVALID"
+    assert "pull request selection" in summary["failureMessage"]
+    assert summary["created"] == 0 and summary["queued"] == []
+    # The managed boundary reports the readable validation error, not an
+    # incomplete contract left behind by the pre-discovery "running" marker.
+    evidence = _batch_terminal_evidence(tmp_path)
+    assert evidence.failure_code == "BATCH_FANOUT_INPUT_INVALID"
+    assert "pull request selection" in evidence.metadata["terminalFailureMessage"]
