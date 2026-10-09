@@ -5978,3 +5978,255 @@ async def test_child_started_workflow_reads_handoff_with_owning_run_connection(
     )
     assert [r.url.path.split("/")[4] for r in requests] == ["pulls", "commits", "compare"]
     assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_assessment_block_reports_durable_reason_before_writes(
+    monkeypatch, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Mandatory source unavailable. Restore the source and rerun assessment.",
+            }
+        }
+    )
+    service = _FakeGitHubService()
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactRef": "art_blocked",
+            "previousOutputs": {"assessmentVerdict": "NOT_IMPLEMENTED"},
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
+    assert result.outputs["assessmentArtifactRef"] == "art_blocked"
+    assert "Mandatory source unavailable" in result.outputs["summary"]
+    assert "art_blocked" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+    assert service.create_issue_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [None, {}, {"verdict": "UNKNOWN"}, ["BLOCKED"]])
+async def test_github_blocker_check_rejects_unusable_assessment(monkeypatch, payload):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService({"art_invalid": payload})
+    service = _FakeGitHubService()
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_invalid",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "art_invalid" in result.outputs["summary"]
+    assert "Re-run the assessment" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict", ["FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED"]
+)
+async def test_github_blocker_check_prefers_nonblocked_durable_assessment(
+    monkeypatch, verdict
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_current": {"verdict": verdict}}
+    )
+    service = _FakeGitHubService()
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_current",
+            "previousOutputs": {"assessmentVerdict": "BLOCKED"},
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == verdict
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"verdict": "UNKNOWN"},
+        {"verdict": "BLOCKED", "summary": "Source unavailable"},
+    ],
+)
+async def test_github_assessment_local_handoff_fails_closed(
+    monkeypatch, tmp_path, tool, payload
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    assessment = tmp_path / "assessment.json"
+    if payload is not None:
+        assessment.write_text(json.dumps(payload), encoding="utf-8")
+    service = _FakeGitHubService()
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": str(assessment),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentArtifactName"] == assessment.name
+    if payload and payload["verdict"] == "BLOCKED":
+        assert "Source unavailable" in result.outputs["summary"]
+    else:
+        assert "Re-run the assessment" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+async def test_github_blocked_summary_is_bounded_and_redacted(monkeypatch):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "token=ghp_" + "a" * 36 + " " + "x" * 3000,
+                "manualOnly": {"reason": "Incomplete declaration"},
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert result.completion_disposition is None
+    assert "ghp_" + "a" * 36 not in result.outputs["summary"]
+    assert len(result.outputs["summary"]) < 2300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_reuses_successful_artifact_read(
+    monkeypatch, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+
+    class OneReadArtifactService(_FakeAssessmentArtifactService):
+        async def read(self, **kwargs):
+            if self.read_calls:
+                raise RuntimeError("Transient artifact service outage")
+            return await super().read(**kwargs)
+
+    artifacts = OneReadArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+            "mode": "start",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert artifacts.read_calls == ["art_blocked"]
+
+
+@pytest.mark.asyncio
+async def test_github_blocked_diagnostic_preserves_issue_read_failure(monkeypatch):
+    async def unavailable_issue(**_kwargs):
+        return None, "GitHub issue read unavailable."
+
+    monkeypatch.setattr(story_tools, "_fetch_github_issue", unavailable_issue)
+    artifacts = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert "GitHub issue read unavailable" in result.outputs["summary"]
+    assert result.outputs["assessmentArtifactRef"] == "art_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_omits_private_host_path(
+    monkeypatch, tmp_path, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    private_directory = tmp_path / ".auth" / ("ghp_" + "a" * 36)
+    private_directory.mkdir(parents=True)
+    path = private_directory / "assessment.json"
+    path.write_text(json.dumps({"verdict": "BLOCKED", "summary": "Source unavailable"}))
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactPath": str(path),
+            "mode": "start",
+        },
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert str(private_directory) not in json.dumps(result.outputs)
+    assert "ghp_" + "a" * 36 not in json.dumps(result.outputs)
+    assert result.outputs["assessmentArtifactName"] == "assessment.json"

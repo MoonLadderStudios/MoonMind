@@ -262,6 +262,16 @@ The label is applied only after the comment is confirmed on GitHub, including af
 
 `manual-only` is a start-blocking label. Search skips the issue. An explicit issue workflow stops at its blocker step and reports the label as its blocker. MoonMind never removes the label: a person removes it after doing the manual work, or when automation should try again.
 
+A `BLOCKED` assessment without a valid manual-only declaration fails at the
+blocker step, before the later In Progress step or implementation. The failure
+carries the assessment's bounded, redacted summary and artifact reference (or
+redacted local filename); a missing summary is reported as unavailable rather than inferred
+from issue history. A required but unreadable or malformed assessment likewise
+fails with repair guidance. The defensive In Progress gate uses the same failure
+report. Durable assessment verdicts take precedence over stale compact outputs.
+These failures use the ordinary terminal failed-attempt cleanup below; the
+blocker tool does not release the claim or mutate issue status itself.
+
 ## 6. Failure handling and recovery
 
 ### 6.1 Confirmed terminal failure
