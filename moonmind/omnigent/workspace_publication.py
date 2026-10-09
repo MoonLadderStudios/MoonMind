@@ -179,6 +179,30 @@ def _owned_candidate_authored_base(
     return authored_base
 
 
+def logical_step_publication_identity(request: AgentExecutionRequest) -> str:
+    """Name one repository effect per logical Step across its Step Executions.
+
+    A successor Step Execution of the same Step (for example after an update
+    replaced a lost host) must reconcile the candidate branch an earlier
+    attempt may have pushed before its acknowledgement was lost, not publish a
+    second candidate. The first execution keeps its historical identity, its
+    own idempotency key, so an in-flight retry still resolves the same branch.
+    Keys that are not Step Execution operation keys are used unchanged.
+    """
+
+    key = request.idempotency_key
+    step = request.step_execution
+    if step is None or step.execution_ordinal <= 1:
+        return key
+    prefix = (
+        f"{step.workflow_id}:{step.run_id}:{step.logical_step_id}:execution:"
+    )
+    current = f"{prefix}{step.execution_ordinal}"
+    if step.step_execution_id != current or not key.startswith(f"{current}:"):
+        return key
+    return f"{prefix}1{key[len(current):]}"
+
+
 class OmnigentWorkspacePublicationService:
     """Publish and remotely verify one typed Omnigent sandbox workspace."""
 
@@ -1073,7 +1097,7 @@ class OmnigentWorkspacePublicationService:
                     workspace_locator=workspace_locator,
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
-                    publication_identity=request.idempotency_key,
+                    publication_identity=logical_step_publication_identity(request),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -1088,7 +1112,7 @@ class OmnigentWorkspacePublicationService:
                 workspace_locator=workspace_locator,
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
-                publication_identity=request.idempotency_key,
+                publication_identity=logical_step_publication_identity(request),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,

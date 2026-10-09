@@ -1737,57 +1737,47 @@ _HOST_LOST_SAVED_CHECKPOINT = {
 }
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    (
-        "saved_checkpoint",
-        "restore_patch_enabled",
-        "expected_restore_ref",
-        "expected_mode",
-    ),
-    [
-        (
-            _HOST_LOST_SAVED_CHECKPOINT,
-            True,
-            "artifact://art_host_lost_archive",
-            "restore_saved_checkpoint",
-        ),
-        (None, True, None, "restart_from_admitted_inputs"),
-        (
-            {**_HOST_LOST_SAVED_CHECKPOINT, "archiveDigest": "md5:not-verifiable"},
-            True,
-            None,
-            "restart_from_admitted_inputs",
-        ),
-        (_HOST_LOST_SAVED_CHECKPOINT, False, None, None),
-    ],
-    ids=[
-        "saved-checkpoint-restored",
-        "no-checkpoint-restarts-honestly",
-        "unverifiable-checkpoint-not-restored",
-        "previous-history",
-    ],
-)
-async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-    saved_checkpoint: dict[str, Any] | None,
-    restore_patch_enabled: bool,
-    expected_restore_ref: str | None,
-    expected_mode: str | None,
-) -> None:
-    """A host-loss retry continues from the lost execution's saved workspace.
+def _host_lost_result(
+    saved_checkpoint: dict[str, Any] | None = None,
+    **metadata: Any,
+) -> AgentRunResult:
+    if saved_checkpoint is not None:
+        metadata = {
+            "savedWorkspaceCheckpoint": dict(saved_checkpoint),
+            "workPreserved": True,
+            **metadata,
+        }
+    return AgentRunResult(
+        summary="Omnigent session host was lost before the turn finished.",
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+        retryRecommendation="retry_step_execution",
+        metadata=metadata,
+    )
 
-    MoonLadderStudios/MoonMind#4627: the realizer saves the caller-owned
-    workspace of a lost host before releasing it. The fresh Step Execution must
-    restore those verified bytes instead of starting an empty workspace, and
-    must say so honestly when no saved checkpoint exists.
+
+async def _drive_omnigent_step_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+    child_results: list[AgentRunResult],
+    *,
+    enabled_patches: set[str],
+    on_child: Callable[[MoonMindRunWorkflow, int], None] | None = None,
+    child_requests: list[AgentExecutionRequest] | None = None,
+) -> tuple[MoonMindRunWorkflow, list[AgentExecutionRequest], list[dict[str, Any]]]:
+    """Run one Omnigent step through the real Run retry loop.
+
+    Each AgentRun child returns the next scripted result. Step Execution
+    manifests go through the production builder; only the artifact write is
+    captured.
     """
 
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "org/repo"
     workflow._integration = None
-    child_requests: list[AgentExecutionRequest] = []
+    if child_requests is None:
+        child_requests = []
+    manifests: list[dict[str, Any]] = []
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1815,40 +1805,19 @@ async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
     ) -> AgentRunResult:
         assert workflow_name == "MoonMind.AgentRun"
         child_requests.append(request)
-        if len(child_requests) == 1:
-            metadata: dict[str, Any] = {}
-            if saved_checkpoint is not None:
-                metadata = {
-                    "savedWorkspaceCheckpoint": dict(saved_checkpoint),
-                    "workPreserved": True,
-                }
-            return AgentRunResult(
-                summary="Omnigent session host was lost before the turn finished.",
-                failureClass="integration_error",
-                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
-                retryRecommendation="retry_step_execution",
-                metadata=metadata,
-            )
-        return AgentRunResult(summary="Recovered on a fresh Step Execution.")
+        if on_child is not None:
+            on_child(workflow, len(child_requests))
+        return child_results[len(child_requests) - 1]
 
     async def fake_bind_workflow_scoped_session(
         request: AgentExecutionRequest,
     ) -> AgentExecutionRequest:
         return request
 
-    async def fake_record_step_execution_manifest(
-        _logical_step_id: str,
-        **_kwargs: Any,
-    ) -> None:
-        return None
-
-    enabled_patches = {
-        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
-        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
-        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
-    }
-    if restore_patch_enabled:
-        enabled_patches.add(RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH)
+    async def capture_json_artifact(*, name: str, payload: Any, **_kwargs: Any) -> str:
+        if name.startswith("reports/step_executions/"):
+            manifests.append(dict(payload))
+        return f"artifact://{name}"
 
     workflow_info = type(
         "WorkflowInfo",
@@ -1903,15 +1872,93 @@ async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
         "_maybe_bind_workflow_scoped_session",
         fake_bind_workflow_scoped_session,
     )
-    monkeypatch.setattr(
-        workflow,
-        "_record_step_execution_manifest",
-        fake_record_step_execution_manifest,
-    )
+    monkeypatch.setattr(workflow, "_write_json_artifact", capture_json_artifact)
 
     await workflow._run_execution_stage(
         parameters={"publishMode": "none"},
         plan_ref="plan-ref",
+    )
+    return workflow, child_requests, manifests
+
+
+_HOST_LOSS_RETRY_PATCHES = frozenset(
+    {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH,
+    }
+)
+
+
+def _terminal_manifests(
+    manifests: list[dict[str, Any]], ordinal: int
+) -> list[dict[str, Any]]:
+    return [
+        manifest
+        for manifest in manifests
+        if manifest["executionOrdinal"] == ordinal
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "saved_checkpoint",
+        "restore_patch_enabled",
+        "expected_restore_ref",
+        "expected_mode",
+    ),
+    [
+        (
+            _HOST_LOST_SAVED_CHECKPOINT,
+            True,
+            "artifact://art_host_lost_archive",
+            "restore_saved_checkpoint",
+        ),
+        (None, True, None, "restart_from_admitted_inputs"),
+        (
+            {**_HOST_LOST_SAVED_CHECKPOINT, "archiveDigest": "md5:not-verifiable"},
+            True,
+            None,
+            "restart_from_admitted_inputs",
+        ),
+        (_HOST_LOST_SAVED_CHECKPOINT, False, None, None),
+    ],
+    ids=[
+        "saved-checkpoint-restored",
+        "no-checkpoint-restarts-honestly",
+        "unverifiable-checkpoint-not-restored",
+        "previous-history",
+    ],
+)
+async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_checkpoint: dict[str, Any] | None,
+    restore_patch_enabled: bool,
+    expected_restore_ref: str | None,
+    expected_mode: str | None,
+) -> None:
+    """A host-loss retry continues from the lost execution's saved workspace.
+
+    MoonLadderStudios/MoonMind#4627: the realizer saves the caller-owned
+    workspace of a lost host before releasing it. The fresh Step Execution must
+    restore those verified bytes instead of starting an empty workspace, and
+    must say so honestly when no saved checkpoint exists. The decision is
+    recorded in the successor's durable Step Execution manifest.
+    """
+
+    enabled_patches = set(_HOST_LOSS_RETRY_PATCHES)
+    if not restore_patch_enabled:
+        enabled_patches.discard(RUN_OMNIGENT_HOST_LOSS_RETRY_CHECKPOINT_RESTORE_PATCH)
+
+    workflow, child_requests, manifests = await _drive_omnigent_step_attempts(
+        monkeypatch,
+        [
+            _host_lost_result(saved_checkpoint),
+            AgentRunResult(summary="Recovered on a fresh Step Execution."),
+        ],
+        enabled_patches=enabled_patches,
     )
 
     assert len(child_requests) == 2
@@ -1924,15 +1971,13 @@ async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
         "workspaceCheckpointRestoreRef"
     ) == expected_restore_ref
 
-    workspace = workflow._step_execution_workspace(
-        "omnigent-turn",
-        attempt=2,
-        source_execution_ordinal=None,
-    )
-    recovery = workspace.get("runtimeLossRecovery")
-    if expected_mode is None:
-        assert recovery is None
-    else:
+    successor_manifests = _terminal_manifests(manifests, 2)
+    assert successor_manifests
+    for manifest in successor_manifests:
+        recovery = manifest["workspace"].get("runtimeLossRecovery")
+        if expected_mode is None:
+            assert recovery is None
+            continue
         assert recovery["mode"] == expected_mode
         assert recovery["lostExecutionOrdinal"] == 1
         assert recovery["providerErrorCode"] == "OMNIGENT_SESSION_HOST_LOST"
@@ -1944,6 +1989,122 @@ async def test_run_host_loss_retry_restores_previous_execution_saved_workspace(
             # Work after the last durable boundary is repeated, never implied
             # to have survived.
             assert "not saved" in recovery["limitation"]
+    assert all(
+        "runtimeLossRecovery" not in manifest["workspace"]
+        for manifest in _terminal_manifests(manifests, 1)
+    )
+    assert workflow._step_execution_for("omnigent-turn") == 2
+
+
+@pytest.mark.asyncio
+async def test_run_repeated_host_loss_shares_one_bounded_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every update interruption spends the same Step retry budget (#4627).
+
+    A replaced runtime is retried as a new Step Execution of the same logical
+    Step, each restoring the latest saved workspace. Repeated interruption
+    never resets the budget, and exhaustion ends the step truthfully.
+    """
+
+    child_requests: list[AgentExecutionRequest] = []
+    lost = [
+        _host_lost_result(
+            {
+                **_HOST_LOST_SAVED_CHECKPOINT,
+                "archiveRef": f"artifact://art_host_lost_archive_{ordinal}",
+            }
+        )
+        for ordinal in range(1, 6)
+    ]
+
+    with pytest.raises(ValueError, match="host was lost"):
+        await _drive_omnigent_step_attempts(
+            monkeypatch,
+            lost,
+            enabled_patches=set(_HOST_LOSS_RETRY_PATCHES),
+            child_requests=child_requests,
+        )
+
+    # One original attempt plus the three bounded system retries; no fifth.
+    assert [
+        request.step_execution.execution_ordinal for request in child_requests
+    ] == [1, 2, 3, 4]
+    assert all(
+        request.step_execution.reason == "runtime_recovered"
+        for request in child_requests[1:]
+    )
+    # Each successor continues from its immediate predecessor's saved bytes.
+    assert [
+        (request.workspace_spec or {}).get("workspaceCheckpointRestoreRef")
+        for request in child_requests
+    ] == [
+        None,
+        "artifact://art_host_lost_archive_1",
+        "artifact://art_host_lost_archive_2",
+        "artifact://art_host_lost_archive_3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_cancellation_during_host_loss_starts_no_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    child_requests: list[AgentExecutionRequest] = []
+
+    def cancel_during_lost_attempt(workflow: MoonMindRunWorkflow, count: int) -> None:
+        if count == 1:
+            workflow._cancel_requested = True
+
+    await _drive_omnigent_step_attempts(
+        monkeypatch,
+        [_host_lost_result(_HOST_LOST_SAVED_CHECKPOINT)],
+        enabled_patches=set(_HOST_LOSS_RETRY_PATCHES),
+        on_child=cancel_during_lost_attempt,
+        child_requests=child_requests,
+    )
+
+    assert len(child_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_withheld_successor_authority_starts_no_parallel_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unconfirmed stop of the lost attempt never yields a successor.
+
+    The realizer replaces ``retry_step_execution`` with the janitor's
+    remediation when the lost container could not be confirmed removed; the
+    Run workflow then fails the step instead of starting a second attempt.
+    """
+
+    child_requests: list[AgentExecutionRequest] = []
+    withheld = AgentRunResult(
+        summary=(
+            "The agent attempt ended, but its host could not be confirmed "
+            "stopped; no successor attempt was started."
+        ),
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_CLEANUP_DEFERRED",
+        retryRecommendation="delegate_to_janitor",
+        metadata={
+            "successorAuthority": "withheld",
+            "interruptedProviderErrorCode": "OMNIGENT_SESSION_HOST_LOST",
+            "unfinishedPhase": "cleanup",
+            "savedWorkspaceCheckpoint": dict(_HOST_LOST_SAVED_CHECKPOINT),
+            "workPreserved": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="could not be confirmed stopped"):
+        await _drive_omnigent_step_attempts(
+            monkeypatch,
+            [withheld] * 4,
+            enabled_patches=set(_HOST_LOSS_RETRY_PATCHES),
+            child_requests=child_requests,
+        )
+
+    assert len(child_requests) == 1
 
 
 @pytest.mark.asyncio

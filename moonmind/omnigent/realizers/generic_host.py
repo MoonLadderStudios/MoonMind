@@ -30,6 +30,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+    remediation_for,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
@@ -65,6 +66,19 @@ _CLEANUP_NOT_OWNED = object()
 #: saved work is reported unpublished; other failures keep the short schedule.
 _PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
 _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
+
+#: Waits before each resumed stop of a lost attempt whose first cleanup failed.
+#: A successor Step Execution is authorized only once the container is
+#: confirmed removed; afterwards the janitor owns the binding.
+_STOP_RECONCILIATION_RETRY_DELAYS_SECONDS = (5, 30)
+
+
+class _FinishedAttemptCleanup(Exception):
+    """A retried delivery whose attempt already ended; only its stop remains."""
+
+    def __init__(self, result: AgentRunResult) -> None:
+        super().__init__("finished attempt resumes its unfinished cleanup")
+        self.result = result
 
 
 @dataclass(frozen=True)
@@ -451,6 +465,17 @@ class GenericOmnigentHostRealizer:
                         credential_handles=credential_handles,
                         acquired=acquired,
                     )
+                if binding.terminalResult is not None and binding.state in {
+                    RuntimeBindingState.draining,
+                    RuntimeBindingState.cleanup_pending,
+                }:
+                    # The attempt ended (for example its host was lost) and a
+                    # replacement worker took over before its cleanup finished.
+                    # Finish that same cleanup and return the recorded result;
+                    # never start another turn or discard the saved workspace.
+                    raise _FinishedAttemptCleanup(
+                        AgentRunResult.model_validate(binding.terminalResult)
+                    )
                 if (
                     binding.state is RuntimeBindingState.host_allocating
                     and not binding.omnigentSessionId
@@ -711,6 +736,11 @@ class GenericOmnigentHostRealizer:
         except BaseException as exc:
             primary_error = exc
 
+        finished_attempt = isinstance(primary_error, _FinishedAttemptCleanup)
+        if finished_attempt:
+            result = primary_error.result
+            primary_error = None
+
         if isinstance(primary_error, asyncio.CancelledError) and binding is not None:
             from moonmind.omnigent.activity_ownership import delivery_was_revoked
 
@@ -719,7 +749,11 @@ class GenericOmnigentHostRealizer:
                 # recorded host/session under the same admission generation.
                 raise primary_error
 
-        if not launch_readiness_recorded and not resume_owns_terminal_outcome:
+        if (
+            not launch_readiness_recorded
+            and not resume_owns_terminal_outcome
+            and not finished_attempt
+        ):
             # Only a launch that never reached an attested ready host is a
             # launch-readiness failure; a session that failed afterwards is not.
             control_plane_metrics.record_safely(
@@ -777,10 +811,111 @@ class GenericOmnigentHostRealizer:
                 "generic Omnigent execution ended without a terminal result",
                 code=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED,
             )
+        if cleanup_error is not None and binding is not None:
+            return await self._successor_authority(
+                result,
+                request=request,
+                binding_id=binding.bindingId,
+                host_context=host_context,
+                prepared=prepared,
+                credential_handles=credential_handles,
+                acquired=acquired,
+            )
         # Cleanup remains durably cleanup_pending for janitor recovery and does
         # not overwrite an objectively completed provider turn.
-        _ = cleanup_error
         return result
+
+    async def _host_stop_confirmed(self, binding_id: str) -> bool:
+        """Whether the attempt's container is durably confirmed removed.
+
+        The host lease reaches ``cleaned`` only after the runtime removed the
+        labelled container; an expired lease, a lost heartbeat, or an offline
+        projection never counts. A binding that never recorded a host lease
+        never launched a container.
+        """
+
+        try:
+            binding = await self._runtime_bindings.get(binding_id)
+            if binding is None:
+                return False
+            if not binding.hostLeaseRef:
+                return True
+            lease = await self._host_leases.get(binding.hostLeaseRef)
+        except Exception:
+            logger.warning(
+                "Could not read the lost attempt's stop evidence", exc_info=True
+            )
+            return False
+        return lease is not None and lease.status == "cleaned"
+
+    async def _successor_authority(
+        self,
+        result: AgentRunResult,
+        *,
+        request: AgentExecutionRequest,
+        binding_id: str,
+        host_context: dict[str, Any] | None,
+        prepared: Any | None,
+        credential_handles: tuple[CredentialRuntimeHandle, ...],
+        acquired: tuple[Any, ...],
+    ) -> AgentRunResult:
+        """Grant ``retry_step_execution`` only after the old process stopped.
+
+        Cleanup trouble after the container is removed (credential, evidence,
+        or capacity release) is auxiliary and stays with the janitor. When the
+        removal itself is unconfirmed -- a Docker outage, a partition, or a
+        lost acknowledgement -- this owner resumes that same cleanup within
+        bounds. If removal still cannot be confirmed, the successor is
+        withheld: a second attempt could otherwise write beside a live one.
+        """
+
+        if result.retry_recommendation != "retry_step_execution":
+            return result
+        for delay in (None, *_STOP_RECONCILIATION_RETRY_DELAYS_SECONDS):
+            if delay is not None:
+                await asyncio.sleep(delay)
+                try:
+                    current = await self._runtime_bindings.get(binding_id)
+                    _handles, lease, _context = await self._bound_cleanup_resources(
+                        current
+                    )
+                    await self._cleanup(
+                        request=request,
+                        binding=current,
+                        host_lease=lease,
+                        host_context=host_context,
+                        prepared=prepared,
+                        credential_handles=credential_handles,
+                        acquired=acquired,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Resumed cleanup of a lost Omnigent attempt failed",
+                        exc_info=True,
+                    )
+            if await self._host_stop_confirmed(binding_id):
+                return result
+        return result.model_copy(
+            update={
+                "provider_error_code": (
+                    HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED.value
+                ),
+                "retry_recommendation": remediation_for(
+                    HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED
+                ),
+                "summary": (
+                    "The agent attempt ended, but its host could not be "
+                    "confirmed stopped; no successor attempt was started. "
+                    f"{result.summary}"
+                ),
+                "metadata": {
+                    **(result.metadata or {}),
+                    "successorAuthority": "withheld",
+                    "interruptedProviderErrorCode": result.provider_error_code,
+                    "unfinishedPhase": "cleanup",
+                },
+            }
+        )
 
     def _record_cleanup_outcome(
         self,
@@ -1032,6 +1167,16 @@ class GenericOmnigentHostRealizer:
             raise HarnessPlatformError(
                 "generic Omnigent retry ended without a terminal result",
                 code=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED,
+            )
+        if cleanup_error is not None:
+            return await self._successor_authority(
+                result,
+                request=request,
+                binding_id=current.bindingId,
+                host_context=host_context,
+                prepared=None,
+                credential_handles=credential_handles,
+                acquired=acquired,
             )
         return result
 
