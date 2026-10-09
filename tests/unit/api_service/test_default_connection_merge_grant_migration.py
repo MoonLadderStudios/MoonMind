@@ -213,7 +213,14 @@ def test_narrowed_assignment_keeps_the_operator_scope(engine, migration):
     assert _json(assignment["operations"]) == ["read"]
 
 
-def test_operator_edited_connection_is_unchanged(engine, migration):
+@pytest.mark.parametrize(
+    "operations",
+    [["read", "write"], PRE_MERGE_OPERATIONS],
+    ids=["narrowed", "kept-without-merge"],
+)
+def test_operator_edited_connection_is_unchanged(engine, migration, operations):
+    # An operator update (revision 2) that keeps the original four operations
+    # is an explicit choice to leave merge disabled, not the stale mapping.
     _map_pre_merge_default(engine)
     with engine.begin() as connection:
         connection.execute(
@@ -221,16 +228,16 @@ def test_operator_edited_connection_is_unchanged(engine, migration):
                 "UPDATE repository_connection_records "
                 "SET allowed_operations = :ops, policy_revision = 2"
             ),
-            {"ops": json.dumps(["read", "write"])},
+            {"ops": json.dumps(operations)},
         )
-    _assign(engine, ["read", "write"])
+    _assign(engine, operations)
 
     _upgrade(engine, migration)
 
     [record] = _rows(engine, "repository_connection_records")
     [assignment] = _rows(engine, "repository_connection_assignments")
-    assert _json(record["allowed_operations"]) == ["read", "write"]
-    assert _json(assignment["operations"]) == ["read", "write"]
+    assert _json(record["allowed_operations"]) == operations
+    assert _json(assignment["operations"]) == operations
 
 
 def test_operator_recorded_default_is_unchanged(engine, migration):
