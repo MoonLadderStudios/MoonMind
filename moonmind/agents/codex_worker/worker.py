@@ -4021,8 +4021,10 @@ class CodexWorker:
                         else ("multiple" if deduped_selected_skills else "auto")
                     ),
                     "ids": list(deduped_selected_skills),
-                    "args": (
-                        (task.get("skill") or {}).get("args")
+                    # Materialize the effective inputs (canonical ``inputs``,
+                    # else legacy ``args``) so Skill helpers can inherit them.
+                    "args": self._skill_inputs_from_node(
+                        task.get("skill")
                         if isinstance(task.get("skill"), Mapping)
                         else {}
                     ),
