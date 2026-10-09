@@ -27,6 +27,9 @@ class ResolvedGitHubCredential(BaseModel):
     token: str = ""
     source: GitHubCredentialSource = GitHubCredentialSource.MISSING
     source_name: str | None = Field(None, alias="sourceName")
+    # The selected managed SecretRef's own identity, from the same atomic
+    # read as the value. Connection revisions alone do not fence its rotation.
+    reference_revision: str | None = Field(None, alias="referenceRevision")
     repo: str | None = None
     diagnostic: str | None = None
     # A configured reference that could not be read (for example during a
@@ -72,6 +75,34 @@ async def _resolve_secret_ref(ref: str) -> str:
     )
 
     return await resolve_managed_api_key_reference(ref)
+
+
+async def _resolve_secret_ref_with_revision(ref: str) -> tuple[str, str | None]:
+    """Keep managed-secret value and revision bound by one authoritative read.
+
+    Other backends retain their existing resolver. They have no managed-secret
+    revision; the owning repository connection retains their authority policy.
+    Never derive an identity from credential bytes.
+    """
+
+    if not ref.strip().lower().startswith("db://"):
+        return await _resolve_secret_ref(ref), None
+    from api_service.db.base import async_session_maker
+    from api_service.services.secrets import SecretsService
+    from moonmind.auth.secret_refs import SecretMissingError, parse_secret_ref
+
+    parsed = parse_secret_ref(ref)
+    async with async_session_maker() as session:
+        snapshot = await SecretsService.get_secret_with_revision(
+            session, parsed.locator
+        )
+    if snapshot is None:
+        raise SecretMissingError("Selected managed GitHub credential is not active")
+    revision = (
+        f"{parsed.normalized_ref}:credential:{snapshot['credential_revision']}:"
+        f"policy:{snapshot['policy_revision']}"
+    )
+    return str(snapshot["value"] or ""), revision
 
 
 def _secret_is_absent(exc: BaseException) -> bool:
@@ -136,7 +167,9 @@ async def resolve_github_credential(
         if not secret_ref:
             continue
         try:
-            token = await _resolve_secret_ref(secret_ref)
+            token, reference_revision = await _resolve_secret_ref_with_revision(
+                secret_ref
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -156,6 +189,7 @@ async def resolve_github_credential(
                 token=token,
                 source=GitHubCredentialSource.SECRET_REF_ENV,
                 sourceName=env_name,
+                referenceRevision=reference_revision,
                 repo=repo,
             )
         # A configured reference resolving empty is fail-closed (#4007):
@@ -172,10 +206,14 @@ async def resolve_github_credential(
 
     from moonmind.config.settings import settings
 
-    settings_ref = str(getattr(settings.github, "github_token_secret_ref", "") or "").strip()
+    settings_ref = str(
+        getattr(settings.github, "github_token_secret_ref", "") or ""
+    ).strip()
     if settings_ref:
         try:
-            token = await _resolve_secret_ref(settings_ref)
+            token, reference_revision = await _resolve_secret_ref_with_revision(
+                settings_ref
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -195,6 +233,7 @@ async def resolve_github_credential(
                 token=token,
                 source=GitHubCredentialSource.SECRET_REF_ENV,
                 sourceName="settings.github.github_token_secret_ref",
+                referenceRevision=reference_revision,
                 repo=repo,
             )
         return ResolvedGitHubCredential(
@@ -212,7 +251,9 @@ async def resolve_github_credential(
         if not secret_ref:
             continue
         try:
-            token = await _resolve_secret_ref(secret_ref)
+            token, reference_revision = await _resolve_secret_ref_with_revision(
+                secret_ref
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -232,6 +273,7 @@ async def resolve_github_credential(
                 token=token,
                 source=GitHubCredentialSource.SETTINGS_TOKEN_REF,
                 sourceName=env_name,
+                referenceRevision=reference_revision,
                 repo=repo,
             )
         return ResolvedGitHubCredential(
@@ -318,7 +360,8 @@ async def _resolve_reference_credential(
         f"{reference}, or select a different repository connection."
     )
     try:
-        token = str(await _resolve_secret_ref(reference) or "").strip()
+        token, reference_revision = await _resolve_secret_ref_with_revision(reference)
+        token = str(token or "").strip()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -345,6 +388,7 @@ async def _resolve_reference_credential(
         token=token,
         source=GitHubCredentialSource.SECRET_REF_ENV,
         sourceName=source_name,
+        referenceRevision=reference_revision,
         repo=repo,
     )
 

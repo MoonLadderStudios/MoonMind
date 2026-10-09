@@ -13320,6 +13320,8 @@ export interface components {
             pullRequestBody?: string | null;
             /** Commitmessage */
             commitMessage?: string | null;
+            /** Admissiongeneration */
+            admissionGeneration?: string | null;
         };
         /**
          * ScheduleCreatedResponse
