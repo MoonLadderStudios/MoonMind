@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -798,6 +798,49 @@ def _fetch_pr_reactions(*, pr_repo: str | None, pr_number: object) -> list[dict]
     )
 
 
+def _verify_automatic_reaction_actors(*, provider: str, reactions: list) -> list:
+    """Verify bot IDs when GitHub reaction payloads label a bot as User.
+
+    Reaction REST responses can disagree with the account's type. Do not relax
+    the provider adapter's bot guard: only normalize that field after GitHub's
+    account endpoint proves the exact login, numeric ID, node ID and Bot type.
+    Retrieval failures stay visible and unverified actors stay unqualified.
+    """
+    verified = []
+    identities = {}
+    for reaction in reactions:
+        user = reaction.get("user") if isinstance(reaction, dict) else None
+        login = str(user.get("login") or "").lower() if isinstance(user, dict) else ""
+        if (
+            not isinstance(user, dict)
+            or user.get("type") != "User"
+            or not login.endswith("[bot]")
+            or not is_automated_review_provider_login(provider, login)
+            or not isinstance(user.get("id"), int)
+            or isinstance(user.get("id"), bool)
+            or user["id"] <= 0
+            or not isinstance(user.get("node_id"), str)
+            or not user["node_id"]
+        ):
+            verified.append(reaction)
+            continue
+        if login not in identities:
+            identities[login] = run_command(
+                ["gh", "api", f"users/{quote(login, safe='')}"],
+                "Unable to verify the automatic review reaction's bot identity.",
+            )
+        identity = identities[login]
+        if (
+            isinstance(identity, dict)
+            and identity.get("type") == "Bot"
+            and str(identity.get("login") or "").lower() == login
+            and identity.get("id") == user["id"]
+            and identity.get("node_id") == user["node_id"]
+        ):
+            verified.append({**reaction, "user": {**user, "type": "Bot"}})
+        else:
+            verified.append(reaction)
+    return verified
 def _resolve_automatic_review_commit(
     *, pr_repo: str, pr_number: int, commit_ref: str, head_sha: str
 ) -> str | None:
@@ -1050,7 +1093,9 @@ def build_automated_review_evidence(
                 )
                 reaction = automatic_review_reaction(
                     record,
-                    reactions_for_pr,
+                    _verify_automatic_reaction_actors(
+                        provider=record.provider, reactions=reactions_for_pr
+                    ),
                     summary=summary,
                     not_before=max(
                         head_committed_at,
