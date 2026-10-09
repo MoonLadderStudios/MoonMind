@@ -1136,11 +1136,14 @@ async def test_recorded_default_keeps_its_classified_legacy_scope(
 
     assert selected is not None
     assert resolved.token == "selected-default-token"
+    # The legacy scope serves the connection's own operations, including the
+    # merge action merging pr-resolvers re-admit.
     assert selected.allowed_operations == (
         "read",
         "write",
         "branch_write",
         "review_request",
+        "merge_request",
     )
 
 
