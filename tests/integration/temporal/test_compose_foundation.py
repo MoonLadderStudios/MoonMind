@@ -317,7 +317,7 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
     assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
-        "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}"
+        "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}"
     )
     assert api_env["MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF"] == (
         "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
@@ -1352,3 +1352,59 @@ def test_generic_host_render_keeps_supported_credentials_only(tmp_path, identity
             assert env.get(key) is None
     for key in ("POSTGRES_PASSWORD", "JWT_SECRET_KEY", "ENCRYPTION_MASTER_KEY", "OMNIGENT_ACCOUNTS_COOKIE_SECRET"):
         assert key not in env
+
+
+def test_deployment_project_name_follows_the_running_compose_project():
+    """Services that find their own deployment's containers derive its name.
+
+    Compose interpolates COMPOSE_PROJECT_NAME with the project it is running,
+    so a stack started under any project name finds its own Omnigent server.
+    """
+
+    services = _load_compose()["services"]
+    derived = "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}"
+    consumers = {
+        name: _env_map(service.get("environment"))["MOONMIND_DEPLOYMENT_PROJECT_NAME"]
+        for name, service in services.items()
+        if "MOONMIND_DEPLOYMENT_PROJECT_NAME" in _env_map(service.get("environment"))
+    }
+    # The runtime bootstrap resolves the running server image by project.
+    assert "omnigent-runtime-bootstrap" in consumers
+    assert consumers == {name: derived for name in consumers}
+
+
+def test_rendered_project_name_reaches_live_server_resolvers():
+    """A stack started under another project name resolves its own server."""
+
+    _require_docker_compose()
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
+    for name in ("DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_HOST"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            "/dev/null",
+            "-p",
+            "moonmind-test-project-identity",
+            "-f",
+            "docker-compose.yaml",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    for name in ("api", "omnigent-runtime-bootstrap"):
+        environment = services[name]["environment"]
+        assert environment["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
+            "moonmind-test-project-identity"
+        ), name
