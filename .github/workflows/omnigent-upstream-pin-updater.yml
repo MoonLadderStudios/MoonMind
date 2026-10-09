@@ -316,7 +316,7 @@ jobs:
             tests/unit/omnigent/test_host_registration_inventory.py \
             tests/unit/omnigent/test_oauth_home_materializers.py \
             tests/unit/omnigent/test_omnigent_session_timeline_api.py \
-            tests/unit/omnigent/test_session_supervisor_admission.py \
+            tests/integration/omnigent/test_session_supervisor_failure_handoff.py \
             tests/unit/omnigent/test_control_plane_readiness.py \
             tests/unit/omnigent/test_native_ui.py \
             tests/unit/omnigent/test_native_ui_compat.py \

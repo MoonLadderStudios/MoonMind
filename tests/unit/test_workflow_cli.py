@@ -70,33 +70,39 @@ def test_payload_keeps_server_owned_resolution() -> None:
     payload = build_execution_payload(
         instructions="do work",
         skill="pr-resolver",
+        title="CLI work",
+        repository="MoonLadderStudios/MoonMind",
         agent_profile="agent-a",
         provider_profile="prov-b",
         publish_mode="pr",
         idempotency_key="req-1",
     )
-    assert payload["workflowType"] == "MoonMind.UserWorkflow"
-    assert payload["idempotencyKey"] == "req-1"
-    task = payload["initialParameters"]["task"]
+    # MoonLadderStudios/MoonMind#3935: the CLI submits the Workflow Create
+    # task envelope, so the server's one plan/admission owner resolves the
+    # runtime, Agent Profile and immutable execution plan.
+    assert set(payload) == {"type", "payload"}
+    assert payload["type"] == "task"
+    body = payload["payload"]
+    assert body["idempotencyKey"] == "req-1"
+    assert body["repository"] == "MoonLadderStudios/MoonMind"
+    assert body["agentProfile"] == {"profileId": "agent-a"}
+    assert "targetRuntime" not in body
+    task = body["task"]
+    assert task["instructions"] == "do work"
+    assert "goal" not in task
+    assert task["title"] == "CLI work"
     assert task["steps"] == [{"skill": {"name": "pr-resolver"}}]
-    assert task["agentProfile"] == {"profileId": "agent-a"}
     assert task["providerProfileRef"] == "prov-b"
-    assert task["profileId"] == "prov-b"
-    assert task["providerProfile"] == "prov-b"
-    assert task["publishMode"] == "pr"
     assert task["publish"] == {"mode": "pr"}
-    params = payload["initialParameters"]
-    assert params["agentProfile"] == {"profileId": "agent-a"}
-    assert params["providerProfileRef"] == "prov-b"
-    assert params["publish"] == {"mode": "pr"}
+    assert "runtime" not in task
 
 
 def test_preset_without_instructions_keeps_plan_source() -> None:
     payload = build_execution_payload(preset="demo-preset", idempotency_key="req-p")
-    task = payload["initialParameters"]["task"]
+    task = payload["payload"]["task"]
     assert task["taskTemplate"] == {"slug": "demo-preset", "scope": "global"}
     assert task["instructions"].strip() != ""
-    assert task["goal"].strip() != ""
+    assert "goal" not in task
 
 
 def test_detail_url_strips_userinfo() -> None:
@@ -187,8 +193,8 @@ def test_hermetic_submit_status_logs_journey() -> None:
         if request.method == "POST" and request.url.path == "/api/executions":
             body = json.loads(request.content.decode())
             posts.append(body)
-            assert body["idempotencyKey"] == "req-stable"
-            assert body["workflowType"] == "MoonMind.UserWorkflow"
+            assert body["type"] == "task"
+            assert body["payload"]["idempotencyKey"] == "req-stable"
             return httpx.Response(
                 201,
                 json={
@@ -261,14 +267,17 @@ def test_same_request_id_reconciles_one_workflow() -> None:
     finally:
         client.close()
     assert first["workflowId"] == second["workflowId"] == "wf-same"
-    assert [p["idempotencyKey"] for p in posts] == ["same-key", "same-key"]
+    assert [p["payload"]["idempotencyKey"] for p in posts] == [
+        "same-key",
+        "same-key",
+    ]
 
 
 def test_lost_acknowledgment_stays_retryable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection lost")
 
-    with pytest.raises(WorkflowCliError, match="same --request-id"):
+    with pytest.raises(WorkflowCliError, match="same --request-id.*k1"):
         _client(handler).submit_execution(
             build_execution_payload(instructions="x", idempotency_key="k1")
         )
@@ -458,7 +467,7 @@ def test_hermetic_submit_to_download_journey_saves_bytes(tmp_path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/api/executions":
             body = json.loads(request.content.decode())
-            assert body["idempotencyKey"] == "req-journey-3926"
+            assert body["payload"]["idempotencyKey"] == "req-journey-3926"
             return httpx.Response(
                 201,
                 json={"workflowId": "wf-1", "status": "queued", "state": "scheduled"},

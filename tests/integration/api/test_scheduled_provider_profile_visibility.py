@@ -17,6 +17,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.models import Base, ManagedAgentProviderProfile
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from moonmind.config.settings import settings
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_MEMO_KEY,
     PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
@@ -76,6 +77,11 @@ async def _trigger(client, schedule_id: str):
 async def test_schedule_admission_records_profile_and_preserves_history_4640(
     tmp_path, monkeypatch, selection: str
 ) -> None:
+    # This exercises Provider Profile projection, not Omnigent admission. Under
+    # an Omnigent default a runtime-less target is admitted through plan
+    # compilation (MoonLadderStudios/MoonMind#3935), so keep the default on a
+    # plan-free managed runtime, as the service unit suite does.
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'schedules.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

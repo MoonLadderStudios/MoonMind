@@ -11,8 +11,9 @@ Phases (state is carried in ``--state-file`` so a later phase, possibly on a
 recreated stack, can verify what an earlier phase saved):
 
 ``populate``
-    Read the instance settings and preset catalogs, submit one task with the
-    dashboard's default repository as a deferred start, redeliver the same
+    Read the instance settings and preset catalogs, submit one scratch task
+    (the old release in an upgrade gets its dashboard's default repository)
+    as a deferred start, redeliver the same
     submission (lost acknowledgment), observe it durably recorded and still
     open, attach an artifact to it, dispatch a recurring definition through
     run-now, and save a preset. Without a provider credential no model-backed
@@ -242,39 +243,56 @@ def wait_for_canceled(api: Api, workflow_id: str, *, timeout: float) -> dict[str
     )
 
 
-def populate(
-    api: Api,
-    state: dict[str, Any],
+def journey_submission(
     *,
-    label: str,
-    timeout: float,
-    defer_seconds: float,
-) -> None:
-    catalog = api.json("GET", "/api/v1/settings/catalog")
-    if not catalog:
-        raise JourneyFailure("settings catalog is empty")
-    presets = api.json("GET", "/api/presets")
-    log(f"settings catalog and preset catalog readable ({type(presets).__name__})")
-    # Submit with the repository the dashboard applies when the operator
-    # leaves it blank, read from the deployment instead of declared here.
-    ui_info = api.json("GET", "/api/ui/info")
-    repository = str(
-        ((ui_info.get("dashboardConfig") or {}).get("system") or {}).get(
-            "defaultRepository"
-        )
-        or ""
-    ).strip()
-    if not repository:
-        raise JourneyFailure("dashboard config exposes no default repository")
+    title: str,
+    scheduled_for: datetime,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """The deferred task ``populate`` submits.
 
-    # One task with the dashboard's default selections and no-publication
-    # intent, deferred so it stays in flight without a provider credential:
-    # Temporal holds the start and the cancellation below is observed on the
-    # workflow's first task.
-    scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
-    submission = {
+    MoonLadderStudios/MoonMind#3935: it uses the Workflow Create task envelope
+    and leaves the runtime and profiles to the deployment defaults, so the
+    server resolves them and persists the Omnigent execution plan before
+    scheduling, as it does for the dashboard. A clean install has no
+    repository connection, and routed repository access never downgrades to
+    anonymous, so the task saves scratch results in MoonMind. The unit suite
+    posts this exact payload through the production create route.
+    """
+
+    return {
+        "type": "task",
+        "payload": {
+            "publishMode": "none",
+            "task": {
+                "title": title,
+                "instructions": (
+                    "Single-user journey check: acknowledge this run in one "
+                    "short sentence."
+                ),
+            },
+            "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
+            "idempotencyKey": idempotency_key,
+        },
+    }
+
+
+def pre_upgrade_submission(
+    *,
+    title: str,
+    repository: str,
+    scheduled_for: datetime,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """The deferred task ``populate`` saves on the release being upgraded.
+
+    The upgrade journey proves that work saved by the old release survives the
+    update, so it uses the UserWorkflow request that release accepts.
+    """
+
+    return {
         "workflowType": "MoonMind.UserWorkflow",
-        "title": f"single-user journey {label}",
+        "title": title,
         "initialParameters": {
             "instructions": (
                 "Single-user journey check: acknowledge this run in one short "
@@ -284,8 +302,58 @@ def populate(
             "publishMode": "none",
         },
         "schedule": {"mode": "once", "scheduledFor": scheduled_for.isoformat()},
-        "idempotencyKey": f"single-user-journey-{label}-{uuid.uuid4().hex}",
+        "idempotencyKey": idempotency_key,
     }
+
+
+def populate(
+    api: Api,
+    state: dict[str, Any],
+    *,
+    label: str,
+    timeout: float,
+    defer_seconds: float,
+    pre_upgrade_release: bool = False,
+) -> None:
+    catalog = api.json("GET", "/api/v1/settings/catalog")
+    if not catalog:
+        raise JourneyFailure("settings catalog is empty")
+    presets = api.json("GET", "/api/presets")
+    log(f"settings catalog and preset catalog readable ({type(presets).__name__})")
+    repository: str | None = None
+    if pre_upgrade_release:
+        # The old release accepted the repository its dashboard applies when
+        # the operator leaves it blank, read from the deployment.
+        ui_info = api.json("GET", "/api/ui/info")
+        repository = str(
+            ((ui_info.get("dashboardConfig") or {}).get("system") or {}).get(
+                "defaultRepository"
+            )
+            or ""
+        ).strip()
+        if not repository:
+            raise JourneyFailure("dashboard config exposes no default repository")
+
+    # One task with the dashboard's default selections and no-publication
+    # intent, deferred so it stays in flight without a provider credential:
+    # Temporal holds the start and the cancellation below is observed on the
+    # workflow's first task.
+    scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
+    title = f"single-user journey {label}"
+    idempotency_key = f"single-user-journey-{label}-{uuid.uuid4().hex}"
+    if repository:
+        submission = pre_upgrade_submission(
+            title=title,
+            repository=repository,
+            scheduled_for=scheduled_for,
+            idempotency_key=idempotency_key,
+        )
+    else:
+        submission = journey_submission(
+            title=title,
+            scheduled_for=scheduled_for,
+            idempotency_key=idempotency_key,
+        )
     created = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
     workflow_id = created.get("workflowId") or ""
     if not workflow_id:
@@ -358,7 +426,7 @@ def populate(
                 "title": name,
                 "initialParameters": {
                     "task": {"instructions": "Single-user journey recurring check."},
-                    "repository": repository,
+                    **({"repository": repository} if repository else {}),
                     "publishMode": "none",
                 },
             },
@@ -414,7 +482,7 @@ def populate(
     state["executions"] = [
         {
             "workflowId": workflow_id,
-            "title": submission["title"],
+            "title": title,
             "cancel": True,
             "scheduledFor": scheduled_for.isoformat(),
         },
@@ -1024,6 +1092,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--defer-seconds", type=float, default=150.0)
     parser.add_argument("--api-log", type=Path)
+    parser.add_argument(
+        "--pre-upgrade-release",
+        action="store_true",
+        help="populate the release an upgrade starts from with its own request",
+    )
     args = parser.parse_args(argv)
 
     api = Api(args.api_base)
@@ -1039,6 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
                 label=args.label,
                 timeout=args.timeout,
                 defer_seconds=args.defer_seconds,
+                pre_upgrade_release=args.pre_upgrade_release,
             )
         elif args.phase == "canceled":
             canceled(api, state, timeout=args.timeout)

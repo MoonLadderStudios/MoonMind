@@ -200,7 +200,7 @@ services:
       # trusted-worker-only backend selector and is not read by the API service.
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
-      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
@@ -914,7 +914,7 @@ services:
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE:-/workspace/deployment_state/.env.deploy}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
       - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
-      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - path: .env
@@ -1013,7 +1013,7 @@ services:
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE:-/workspace/deployment_state/.env.deploy}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
       - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
-      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-}
       # With an installed standalone controller, deployment.update_compose_stack
       # only submits and observes the controller's operation (#4502).
@@ -1183,6 +1183,9 @@ services:
       - OMNIGENT_SHARED_HOST_IMAGE=${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}
       - OMNIGENT_SHARED_HOST_IMAGE_TAG=${OMNIGENT_SHARED_HOST_IMAGE_TAG:-latest}
       - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      # Compose supplies the project it is running, so the bootstrap finds
+      # this deployment's own Omnigent server under any project name.
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-${COMPOSE_PROJECT_NAME:-moonmind}}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
       - ./var:/app/var:rw
@@ -1627,7 +1630,12 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - OMNIGENT_CONFIG=${OMNIGENT_CONFIG:-}
-      - OMNIGENT_AUTH_ENABLED=${OMNIGENT_AUTH_ENABLED:-1}
+      # Single-user default: with auth off the server's entrypoint serves every
+      # request as its local user, so MoonMind needs no Omnigent credential.
+      # Anyone who can reach this server, including the published port below,
+      # has full control. Set 1 for Omnigent's accounts login; MoonMind then
+      # needs OMNIGENT_API_TOKEN.
+      - OMNIGENT_AUTH_ENABLED=${OMNIGENT_AUTH_ENABLED:-0}
       - OMNIGENT_AUTH_PROVIDER=${OMNIGENT_AUTH_PROVIDER:-}
       - OMNIGENT_ACCOUNTS_COOKIE_SECRET=${OMNIGENT_ACCOUNTS_COOKIE_SECRET:-}
       - OMNIGENT_ACCOUNTS_BASE_URL=${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}

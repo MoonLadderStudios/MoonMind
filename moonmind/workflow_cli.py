@@ -328,11 +328,15 @@ def build_execution_payload(
     extra_params: Mapping[str, str] | None = None,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    """Build the canonical ``POST /api/executions`` payload.
+    """Build the canonical ``POST /api/executions`` task envelope.
 
-    Preset expansion, defaults, model/profile resolution, and publication
-    normalization remain server-owned; the CLI only names the preset/Skill and
-    passes through small task fields.
+    The CLI submits the same ``{"type": "task", "payload": ...}`` envelope as
+    Workflow Create, so runtime selection, Agent Profile resolution and the
+    immutable Omnigent execution plan have one server-side owner
+    (MoonLadderStudios/MoonMind#3935). Preset expansion, defaults,
+    model/profile resolution, and publication normalization remain
+    server-owned; the CLI only names the preset/Skill and passes through small
+    task fields.
     """
     preset_slug = (preset or "").strip()
     skill_name = (skill or "").strip()
@@ -349,33 +353,24 @@ def build_execution_payload(
         )
     # A preset-only submission carries no instructions/skill plan source, which
     # the server rejects with 422 before preset expansion. Preserve the preset
-    # provenance while giving the server an explicit goal so the request is
-    # admitted and expanded server-side instead of rejected.
+    # provenance while giving the server explicit instructions so the request
+    # is admitted and expanded server-side instead of rejected. Instructions
+    # are never copied into ``goal``: like Workflow Create, the CLI does not
+    # ask the server to choose a preset from free text.
     if preset_slug and not text and not skill_name:
         text = f"Run preset {preset_slug}"
     repo = validate_repository(repository)
     task: dict[str, Any] = {}
     if text:
         task["instructions"] = text
-        task["goal"] = text
+    if title and title.strip():
+        task["title"] = title.strip()
     if preset_slug:
         task["taskTemplate"] = {"slug": preset_slug, "scope": "global"}
     if skill_name:
         task["steps"] = [{"skill": {"name": skill_name}}]
-    if repo:
-        task["repository"] = repo
-    if agent_profile and agent_profile.strip():
-        # Canonical agent-profile selector is {"profileId": ...} at the
-        # top-level payload and runtime locations; keep the task copy for
-        # backward compatibility with readers of the task envelope.
-        task["agentProfile"] = {"profileId": agent_profile.strip()}
     if provider_profile and provider_profile.strip():
-        # Canonical provider-profile aliases recognized by the executions
-        # router and runtime selection; populate every alias so the explicit
-        # selection reaches the worker instead of falling back to default.
         task["providerProfileRef"] = provider_profile.strip()
-        task["profileId"] = provider_profile.strip()
-        task["providerProfile"] = provider_profile.strip()
     if publish_mode is not None:
         normalized_publish = publish_mode.strip().lower()
         if normalized_publish not in {"auto", "none", "branch", "pr"}:
@@ -383,35 +378,28 @@ def build_execution_payload(
                 f"invalid --publish-mode {redact_sensitive_text(publish_mode)!r}; "
                 "use auto, none, branch, or pr."
             )
-        # Canonical publication contract is task.publish.mode (plus the
-        # top-level aliases); keep the legacy task.publishMode copy.
-        task["publishMode"] = normalized_publish
         task["publish"] = {"mode": normalized_publish}
-    for key, value in dict(extra_params or {}).items():
-        task.setdefault(key, value)
-    initial_parameters: dict[str, Any] = {"task": task}
-    # Mirror explicit selectors at the initialParameters level as well: the
-    # executions router and runtime selection read provider/agent profiles and
-    # publication intent from task, runtime, and top-level locations, and the
-    # thin CreateExecutionRequest path never normalizes task-only fields.
-    if task.get("agentProfile") is not None:
-        initial_parameters["agentProfile"] = dict(task["agentProfile"])
-    for alias in ("providerProfileRef", "profileId", "providerProfile"):
-        if task.get(alias) is not None:
-            initial_parameters[alias] = task[alias]
-    if task.get("publish") is not None:
-        initial_parameters["publish"] = dict(task["publish"])
-    if task.get("publishMode") is not None:
-        initial_parameters["publishMode"] = task["publishMode"]
-    payload: dict[str, Any] = {
-        "workflowType": "MoonMind.UserWorkflow",
-        "initialParameters": initial_parameters,
-    }
-    if title and title.strip():
-        payload["title"] = title.strip()
+    if extra_params:
+        # The task envelope keeps only canonical task fields; extras travel in
+        # the preserved ``task.inputs`` map instead of being silently dropped.
+        task["inputs"] = dict(extra_params)
+    request_payload: dict[str, Any] = {"task": task}
+    if repo:
+        request_payload["repository"] = repo
+    if agent_profile and agent_profile.strip():
+        request_payload["agentProfile"] = {"profileId": agent_profile.strip()}
     key = (idempotency_key or "").strip() or new_request_id()
-    payload["idempotencyKey"] = key
-    return payload
+    request_payload["idempotencyKey"] = key
+    return {"type": "task", "payload": request_payload}
+
+
+def execution_request_id(payload: Mapping[str, Any]) -> str:
+    """Return the idempotency key carried by a submission envelope."""
+
+    request_payload = payload.get("payload")
+    if not isinstance(request_payload, Mapping):
+        return ""
+    return str(request_payload.get("idempotencyKey") or "").strip()
 
 
 @dataclass(slots=True)
@@ -588,7 +576,7 @@ class WorkflowApiClient:
         intent — so at-most-one workflow is admitted per intent.
         """
         assert self._client is not None
-        request_key = str(dict(payload).get("idempotencyKey") or "").strip()
+        request_key = execution_request_id(payload)
         try:
             response = self._client.post("/api/executions", json=dict(payload))
         except httpx.RequestError as exc:

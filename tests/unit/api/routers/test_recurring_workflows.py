@@ -752,3 +752,91 @@ async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
             assert (
                 await session.execute(select(RecurringWorkflowDefinition))
             ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_mm3935_schedule_edit_route_admits_a_default_omnigent_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: the Schedules page target-JSON edit
+    (PATCH) reaches the same plan owner as creation under an Omnigent default,
+    so the stored schedule never launches plan-less supervisor work."""
+
+    from uuid import UUID
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from moonmind.config.settings import settings
+    from tests.unit.services.test_recurring_workflows_service import (
+        _mm3935_plan_admission,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    admission = _mm3935_plan_admission(monkeypatch)
+    app = FastAPI()
+    app.include_router(recurring_router.router)
+    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    for route in recurring_router.router.routes:
+        for dependency in route.dependant.dependencies:
+            if dependency.call.__name__ in {
+                "_strict_current_user",
+                "_optional_current_user",
+            }:
+                app.dependency_overrides[dependency.call] = lambda: user
+
+    async with _mm3788_session(tmp_path) as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex-openai-oauth",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        await session.flush()
+        service = _mm3788_service(session)
+        service._artifact_service = SimpleNamespace()
+        app.dependency_overrides[recurring_router._get_service] = lambda: service
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/recurring-workflows",
+                json=_mm3788_create_payload(
+                    _mm3788_route_target(
+                        target_runtime="claude_code",
+                        profile_id="claude_minimax_team",
+                    )
+                ).model_dump(mode="json", by_alias=True),
+            )
+            assert created.status_code == 201, created.text
+            before = created.json()
+            admission.compile_plan.assert_not_awaited()
+            service._adapter.reset_mock()
+            response = await client.patch(
+                f"/api/recurring-workflows/{before['id']}",
+                json={
+                    "version": before["version"],
+                    "target": {
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {
+                            "workflow": {"instructions": "Run the edited resolver."}
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        admission.compile_plan.assert_awaited_once()
+        service._adapter.update_schedule.assert_awaited_once()
+        scheduled = service._adapter.update_schedule.await_args.kwargs[
+            "workflow_input"
+        ]["initial_parameters"]
+        assert scheduled["targetRuntime"] == "omnigent"
+        assert scheduled["omnigentExecutionPlan"] == admission.plan_binding
+        stored = await session.get(RecurringWorkflowDefinition, UUID(before["id"]))
+        await session.refresh(stored)
+        assert stored.target["initialParameters"]["omnigentExecutionPlan"] == (
+            admission.plan_binding
+        )
+        assert stored.version == before["version"] + 1

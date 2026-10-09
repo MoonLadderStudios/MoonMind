@@ -625,7 +625,9 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     assert omnigent_env["HOST"] == "0.0.0.0"
     assert omnigent_env["PORT"] == "8000"
     assert omnigent_env["OMNIGENT_CONFIG"] == "${OMNIGENT_CONFIG:-}"
-    assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-1}"
+    # The bundled server defaults to the single-user no-auth posture so a
+    # default install needs no Omnigent credential.
+    assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-0}"
     assert omnigent_env["OMNIGENT_AUTH_PROVIDER"] == "${OMNIGENT_AUTH_PROVIDER:-}"
     assert omnigent_env["OMNIGENT_ACCOUNTS_BASE_URL"] == (
         "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:${OMNIGENT_PORT:-8000}}"
@@ -684,6 +686,8 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_HOST_IMAGE_TAG",
     ):
         assert f"{expected_name}=" in env_template
+    # The documented template value matches the Compose default.
+    assert "OMNIGENT_AUTH_ENABLED=0" in env_template.splitlines()
     for removed_name in (
         "OMNIGENT_BUILTIN_ADMIN_EMAIL",
         "OMNIGENT_BUILTIN_ADMIN_PASSWORD",

@@ -1180,7 +1180,7 @@ def test_temporary_flags_all_have_retirement_trigger() -> None:
 def test_temporary_flag_without_trigger_is_rejected() -> None:
     with pytest.raises(RetirementGuardError):
         assert_temporary_flags_have_retirement(
-            {"omnigent_session_supervisor_enabled": ""}
+            {"omnigent_session_supervisor_rollback_mode": ""}
         )
 
 

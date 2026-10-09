@@ -116,6 +116,7 @@ from api_service.services.provider_profile_runtime import (
     ProviderProfileRuntimeMismatchError,
     load_provider_profile_for_runtime,
     require_provider_profile_runtime,
+    resolve_launch_target_profile_selection,
 )
 from api_service.services.remediation_capabilities import (
     project_remediation_action_inputs,
@@ -11978,6 +11979,26 @@ async def _create_execution_from_workflow_request(
             run_id_header=(principal_context or {}).get("run_id_header"),
             agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
         )
+    # The canonical identity is deterministic in the request ID. An idempotent
+    # retry returns the already-admitted execution before inheritance, preset
+    # expansion, Provider Profile loading, or the current runtime default can
+    # reject it or produce a new plan or Agent Profile usage
+    # (MoonLadderStudios/MoonMind#3935).
+    create_idempotency_key = str(
+        task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    reserved_workflow_id = (
+        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
+        if create_idempotency_key
+        else f"mm:{uuid4()}"
+    )
+    if create_idempotency_key and session is not None:
+        existing_execution = await session.get(
+            TemporalExecutionCanonicalRecord,
+            reserved_workflow_id,
+        )
+        if existing_execution is not None:
+            return _serialize_execution(existing_execution)
     try:
         inherited = await resolve_child_runtime_inheritance(
             request_payload=payload,
@@ -12594,31 +12615,9 @@ async def _create_execution_from_workflow_request(
     if isinstance(payload.get("batchTargets"), list):
         initial_parameters.setdefault("batchTargets", list(payload["batchTargets"]))
 
-    # Reserve the canonical identity before launch so profile readiness and the
-    # immutable effective snapshot are persisted in the same transaction as the
-    # execution record.  A failed resolution never starts Temporal work.
-    create_idempotency_key = str(
-        task_payload.get("idempotencyKey") or payload.get("idempotencyKey") or ""
-    ).strip()
-    reserved_workflow_id = (
-        f"mm:{uuid5(NAMESPACE_URL, f'{user.id}:user-workflow:{create_idempotency_key}')}"
-        if create_idempotency_key
-        else f"mm:{uuid4()}"
-    )
-    if (
-        canonical_target_runtime == "omnigent"
-        and create_idempotency_key
-        and session is not None
-    ):
-        existing_execution = await session.get(
-            TemporalExecutionCanonicalRecord,
-            reserved_workflow_id,
-        )
-        if existing_execution is not None:
-            # Idempotent retries return the already-admitted authority before
-            # any current profile/default/catalog resolution can produce a new
-            # plan or duplicate an Agent Profile usage row.
-            return _serialize_execution(existing_execution)
+    # Profile readiness and the immutable effective snapshot are persisted
+    # under the reserved identity in the same transaction as the execution
+    # record.  A failed resolution never starts Temporal work.
     agent_profile_selection = payload.get("agentProfile")
     selected_provider_profile = None
     if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
@@ -15127,6 +15126,35 @@ def _validate_execution_fanout_batch_target(
             )
 
 
+def _raw_request_selects_omnigent(
+    *, workflow_type: str, parameters: Mapping[str, Any]
+) -> bool:
+    """Return whether a raw request explicitly or by default selects Omnigent.
+
+    MoonLadderStudios/MoonMind#3935: the raw branch never compiles the
+    immutable Omnigent execution plan, so any canonical runtime field naming
+    Omnigent (top-level, task, or runtime block) and an omitted runtime that
+    defaults to Omnigent must meet the same product boundary instead of
+    reaching the legacy no-plan session supervisor.
+    """
+
+    runtime_ids = resolve_launch_target_profile_selection(
+        {"initialParameters": parameters}
+    ).runtime_ids
+    if runtime_ids:
+        return "omnigent" in runtime_ids
+    if workflow_type != "MoonMind.UserWorkflow":
+        return False
+    return (
+        resolve_runtime_target_selection(
+            surface=AuthoringSurface.workflow_create,
+            workflow_settings=settings.workflow,
+            record_metrics=False,
+        ).runtime_id
+        == "omnigent"
+    )
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
@@ -15220,10 +15248,10 @@ async def create_execution(
                 },
             )
 
-        raw_direct_runtime = str(
-            skill_validation.parameters.get("targetRuntime") or ""
-        ).strip()
-        if raw_direct_runtime and normalize_runtime_id(raw_direct_runtime) == "omnigent":
+        if _raw_request_selects_omnigent(
+            workflow_type=request.workflow_type,
+            parameters=skill_validation.parameters,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
