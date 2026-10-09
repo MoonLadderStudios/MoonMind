@@ -19,12 +19,11 @@
  *           would. The controller answers with its own operation (no
  *           workflow); the card shows the requested target, the observed
  *           installed state, the original error, the controller logs, and
- *           Retry, while the workflow-backed history row stays listed.
+ *           Retry.
  *   controller-reconnect
  *           after the journey replaced the API: a fresh page load reconnects
- *           to the same operation without submitting again, Retry asks the
- *           controller for a fresh attempt, and the workflow-backed history
- *           row still opens its readable workflow page.
+ *           to the same operation without submitting again, and Retry asks
+ *           the controller for a fresh attempt.
  *
  * The state file is written by tools/single_user_journey_checks.py. Every
  * page loads through the deployment's ordinary access path (loopback on the
@@ -125,9 +124,8 @@ process.exit(failed ? 1 : 0);
 
 async function controllerJourney(page, visit, submit) {
   const record = state.controller;
-  const history = state.deploymentHistory;
-  if (!record?.reference || !history?.runDetailUrl) {
-    throw new Error("no controller journey state recorded (run deployment_history first)");
+  if (!record?.reference) {
+    throw new Error("no controller journey state recorded (run controller_absent first)");
   }
   const dialogs = [];
   page.on("dialog", async (dialog) => {
@@ -143,7 +141,6 @@ async function controllerJourney(page, visit, submit) {
   });
   const card = page.getByRole("region", { name: "MoonMind update" });
   const target = `${record.repository}:${record.reference}`;
-  const historyLink = card.locator(`a[href="${history.runDetailUrl}"]`);
 
   const showsFailedOperation = async (operationId) => {
     const label = `Operation ${operationId}`;
@@ -172,7 +169,6 @@ async function controllerJourney(page, visit, submit) {
     await card
       .getByText("Updates run in the standalone deployment controller", { exact: false })
       .waitFor({ state: "visible" });
-    await historyLink.waitFor({ state: "visible" });
     if (submit) {
       await card.getByLabel("Update to").fill(record.reference);
       const answered = page.waitForResponse(
@@ -224,20 +220,4 @@ async function controllerJourney(page, visit, submit) {
     }
   });
   record.dashboardSubmissions = (submit ? 0 : record.dashboardSubmissions || 0) + submissions;
-
-  if (!submit) {
-    // Workflow-backed history opens its workflow page as a readable record.
-    await historyLink.click();
-    await page.waitForURL(
-      (url) => decodeURIComponent(url.pathname) === decodeURIComponent(history.runDetailUrl),
-    );
-    const toolbar = page.locator(".toolbar");
-    await toolbar.getByText(`Workflow ${history.workflowId}`, { exact: true }).waitFor({ state: "visible" });
-    // A canceled tool step may be recorded as failed; either is a closed record.
-    await toolbar
-      .getByText(/^(Canceled|Cancelled|Failed|Terminated)$/i)
-      .first()
-      .waitFor({ state: "visible" });
-    console.log(`single-user-journey-browser: ${history.runDetailUrl} readable as history`);
-  }
 }

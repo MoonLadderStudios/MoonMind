@@ -119,11 +119,8 @@ function controllerBackedApi(input: RequestInfo | URL, init?: RequestInit): Prom
     return Promise.resolve(
       jsonResponse(
         {
-          deploymentUpdateRunId: 'ctl-ui-journey-1',
           operationId: 'ui-journey-1',
           owner: 'controller',
-          taskId: null,
-          workflowId: null,
           status: 'RUNNING',
         },
         202,
@@ -136,11 +133,8 @@ function controllerBackedApi(input: RequestInfo | URL, init?: RequestInit): Prom
     return Promise.resolve(
       jsonResponse(
         {
-          deploymentUpdateRunId: 'ctl-ui-journey-1',
           operationId: 'ui-journey-1',
           owner: 'controller',
-          taskId: null,
-          workflowId: null,
           status: 'RUNNING',
         },
         202,
@@ -189,6 +183,8 @@ describe('Settings Operations controller journey', () => {
       await within(card).findByText(/accepted by the controller: operation ui-journey-1/i),
     ).toBeTruthy();
     expect(submissions).toHaveLength(1);
+    // The submission carries its own intent identity for reattachment.
+    expect(JSON.parse(submissions[0]!).requestId).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/);
 
     // Browser reload: a fresh page reconnects to the running operation
     // through ordinary reads and never submits the update again.

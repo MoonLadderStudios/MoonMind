@@ -40,19 +40,17 @@
 #
 # Controller: the candidate is deployed from a disposable worktree (so its
 # controller state never lands in the operator's checkout) with its own
-# controller link network. Before a controller exists, with the deployment
-# worker stopped, one Settings Operations update is accepted by the
-# transitional workflow updater and canceled before it can run, leaving a
-# workflow-backed history row. The real deploy/controller bootstrap then
-# installs the controller state and the real controller server starts beside
-# the stack. The compiled dashboard submits an update to it and sees the
-# controller's operation with its requested target, observed installed state,
-# original error, logs, and Retry. The API is replaced; a fresh page
-# reconnects to the same operation without submitting again, retries it, and
-# opens the history row's workflow page. The API must then show one
-# controller-owned operation whose retry kept its first failure, the history
-# unchanged, and no new workflow-backed update. The controller has no Docker
-# daemon, so every attempt fails at image staging and no stack is mutated.
+# controller link network. Before a controller exists, a Settings Operations
+# update is refused with the host repair route and creates no workflow. The
+# real deploy/controller bootstrap then installs the controller state and the
+# real controller server starts beside the stack. The compiled dashboard
+# submits an update to it and sees the controller's operation with its
+# requested target, observed installed state, original error, logs, and
+# Retry. The API is replaced; a fresh page reconnects to the same operation
+# without submitting again and retries it. The API must then show one
+# controller-owned operation whose retry kept its first failure and no
+# workflow-backed update. The controller has no Docker daemon, so every
+# attempt fails at image staging and no stack is mutated.
 #
 # Any failed, missing, or unobserved step exits non-zero. There is no smoke
 # mode. A model-backed step needs a provider credential, which this
@@ -435,15 +433,10 @@ prepare_controller_source() {
   export MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK="${PROJECT_NAME}_deployment-controller-network"
 }
 
-# Before a controller exists Settings Operations uses the transitional
-# workflow updater. With the deployment worker stopped it accepts one update
-# that no updater can run; the checks cancel it and wait for the closed
-# workflow-backed history row.
-record_deployment_history() {
-  echo "Stopping the deployment worker so the history update can never run..."
-  compose stop temporal-worker-deployment-control 2>&1 | redact | tail -n 5
-  checks deployment_history "$1"
-  compose up -d --wait --wait-timeout 300 temporal-worker-deployment-control 2>&1 | redact | tail -n 5
+# Before a controller exists Settings Operations refuses an update with the
+# host repair route; it never starts another updater.
+require_controller_absent() {
+  checks controller_absent "$1"
 }
 
 # The real deploy/controller bootstrap writes the deployment-owned state and
@@ -496,7 +489,7 @@ replace_api() {
 
 controller_journey() {
   local label="$1"
-  record_deployment_history "$label"
+  require_controller_absent "$label"
   install_controller "$label"
   browser "$label" controller-submit
   replace_api

@@ -37,7 +37,6 @@ api_component=true|false
 temporal_boundary=true|false
 integration_ci=true|false
 integration_hermetic=true|false
-integration_host_update_transport=true|false
 integration_fresh_journey=true|false
 integration_upgrade_journey=true|false
 integration_controller_journey=true|false
@@ -197,11 +196,11 @@ If the change removes an authorized obsolete capability, identify the retired wo
 
 ### Hermetic Integration CI Selection
 
-The integration matrix selects five independent lanes: hermetic, host-update-transport, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Existing row commands, isolated services, fail-fast, report/redaction and cleanup remain unchanged.
+The integration matrix selects four independent lanes: hermetic, fresh-journey, upgrade-journey, and controller-journey (including host journal transitions). Existing row commands, isolated services, fail-fast, report/redaction and cleanup remain unchanged.
 
-The executable dependency map narrows only audited lane-local inputs: ordinary integration tests/fixtures select hermetic; the host transport test selects host-update-transport; the journal transition test selects controller-journey; unclassified host tests/fixtures retain hermetic plus both host lanes; shared journey scripts select all three journeys. Mixed changes union their lanes. The shared changed-file helper includes rename sources and destinations and deleted paths, so removal does not erase an owner.
+The executable dependency map narrows only audited lane-local inputs: ordinary integration tests/fixtures select hermetic; the journal transition test selects controller-journey; unclassified host tests/fixtures retain hermetic plus controller-journey; shared journey scripts select all three journeys. Mixed changes union their lanes. The shared changed-file helper includes rename sources and destinations and deleted paths, so removal does not erase an owner.
 
-Unknown/full changes, dependencies, Docker/Compose, shared boot/runtime/auth/config and migration boundaries conservatively retain all five. Generated OpenAPI, its generators, shared client transport and native-chat/Omnigent contracts retain cross-layer coverage. Frontend paths are not blanket exclusions. Reliability journeys keep their separate owner.
+Unknown/full changes, dependencies, Docker/Compose, shared boot/runtime/auth/config and migration boundaries conservatively retain all four. Generated OpenAPI, its generators, shared client transport and native-chat/Omnigent contracts retain cross-layer coverage. Frontend paths are not blanket exclusions. Reliability journeys keep their separate owner.
 
 - Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion services (`api_service/services/profile_secret_migration.py`, `api_service/services/single_user_conversion.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`).
 - The `integration-ci` job also runs the default Compose product journeys in `tools/first_run_journey_3938.sh`, each on its own matrix row beside the hermetic suite and the host-updater transport row: a fresh instance, and an in-place upgrade to the candidate from an account-era release that predates the guarded single-user conversion. The upgrade deploys that release from its own `docker-compose.yaml`, and the API startup log must show the conversion classifying its data as one eligible operator. A third journey (`--controller`) drives Settings Operations against the real `deploy/controller` server, which runs beside the candidate stack without a Docker daemon so it can never mutate a stack. The dashboard submits, observes the original error and logs, reconnects after the API is replaced without submitting again, and retries. Workflow-backed history stays readable. They drive the real API and compiled dashboard with no seeded person or provider credential and fail on any failed or unobserved step. Their runner (`tools/first_run_journey_3938.sh`, `tools/single_user_journey_checks.py`, `tools/single_user_journey_browser.mjs`) and the routes they drive (executions, artifacts, recurring workflows, and the dashboard pages) select `integration_ci=true`.
