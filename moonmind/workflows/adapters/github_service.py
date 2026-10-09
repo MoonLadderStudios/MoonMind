@@ -213,40 +213,63 @@ class GitHubService:
     """Thin wrapper around the GitHub REST API for pull-request operations.
 
     This service is stateless and safe to share across activity invocations.
-    Authentication is resolved from an explicit token, ``GITHUB_TOKEN`` env var,
-    or the configured secret reference.
+    Pull-request and issue helpers resolve authentication from an explicit
+    token, ``GITHUB_TOKEN`` env var, or the configured secret reference.
 
-    ``connection`` optionally carries the admitted ``github_app``
-    ``RepositoryConnection`` for this reader: reads for that connection
-    then issue installation tokens through the bound acquirer instead of
-    the PAT flow. Workflow bootstrap passes the connection it already
-    admitted; per-call ``connection`` arguments override it.
+    Repository readers (:meth:`read_pull_request`,
+    :meth:`read_repository_target`, :meth:`commit_is_ancestor`) use only the
+    connection admitted for the work (MoonLadderStudios/MoonMind#4010): a
+    recorded authority of ``admitted_workflow_id``, else a supplied
+    ``connection`` (per call, or ``connection`` here), else the default
+    connection. A selection or credential that fails raises; no ambient token
+    is substituted. Pull-request operations given ``admitted_workflow_id``
+    (merge, base update, readiness, review request, selector) use the same
+    connection for their operation and report it unavailable on failure.
     """
 
     def __init__(self, *, timeout: float = 30.0, connection: Any | None = None) -> None:
         self._timeout = timeout
         self._connection = connection
 
-    async def read_pull_request(self, repository: str, url: str) -> dict[str, Any]:
-        """Read authoritative PR identity through repository-scoped credentials."""
+    async def read_pull_request(
+        self,
+        repository: str,
+        url: str,
+        *,
+        connection: Any | None = None,
+        admitted_workflow_id: str = "",
+    ) -> dict[str, Any]:
+        """Read authoritative PR identity through the admitted repository reader.
+
+        The URL's host must be the selected connection's endpoint, so a PR on
+        one host is never validated with another host's repository facts.
+        """
+        from moonmind.auth.github_app_wiring import github_api_base_for
+
         match = re.fullmatch(
-            r"https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
+            r"https://([^/@\s]+)/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
         )
-        if not match or f"{match[1]}/{match[2]}".lower() != repository.lower():
+        if not match or f"{match[2]}/{match[3]}".lower() != repository.lower():
             raise ValueError("Pull request URL does not identify the requested repository")
-        token, error = await self.resolve_github_token(repo=repository)
-        if not token:
-            raise ValueError(error or "Pull request read requires authorized GitHub access")
+        api_base, headers = await self._repository_reader(
+            repository, connection, admitted_workflow_id
+        )
+        if github_api_base_for(f"https://{match[1]}").rstrip("/") != api_base.rstrip("/"):
+            raise ValueError(
+                "Pull request URL host is not served by the selected repository "
+                "connection"
+            )
+        pr_number = match[4]
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(
-                f"https://api.github.com/repos/{repository}/pulls/{match[3]}",
-                headers=self._github_headers(token),
+                f"{api_base}/repos/{repository}/pulls/{pr_number}",
+                headers=headers,
             )
             response.raise_for_status()
             data = response.json()
         if (
             not isinstance(data, dict)
-            or data.get("number") != int(match[3])
+            or data.get("number") != int(pr_number)
             or str(((data.get("base") or {}).get("repo") or {}).get("full_name") or "").lower()
             != repository.lower()
         ):
@@ -259,25 +282,21 @@ class GitHubService:
         ref: str = "",
         *,
         connection: Any | None = None,
+        admitted_workflow_id: str = "",
     ) -> dict[str, str]:
         """Read a completion branch through the repository's authorized reader.
 
         Omission resolves the remote default, never the current feature upstream.
         This supplies identity only; the portable verifier owns acceptance.
-
-        When a ``github_app`` ``RepositoryConnection`` is supplied (per call
-        or as this reader's admitted connection), the read consumes the App
-        installation credential through the existing bound acquirer (exact
-        restrictions, scope/expiry validation, opaque token) instead of the
-        PAT token flow; every other connection (or none) keeps the
-        existing resolution behavior unchanged.
         """
         from urllib.parse import quote
 
-        headers = await self._repository_reader_headers(repository, connection)
+        api_base, headers = await self._repository_reader(
+            repository, connection, admitted_workflow_id
+        )
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             if not ref:
-                response = await client.get(f"https://api.github.com/repos/{repository}", headers=headers)
+                response = await client.get(f"{api_base}/repos/{repository}", headers=headers)
                 response.raise_for_status()
                 branch = response.json().get("default_branch")
                 if not isinstance(branch, str) or not branch:
@@ -286,7 +305,7 @@ class GitHubService:
             if not ref.startswith("refs/heads/") or not ref.removeprefix("refs/heads/"):
                 raise ValueError("Completion target must be a refs/heads/ branch ref")
             response = await client.get(
-                f"https://api.github.com/repos/{repository}/commits/{quote(ref, safe='')}",
+                f"{api_base}/repos/{repository}/commits/{quote(ref, safe='')}",
                 headers=headers,
             )
             response.raise_for_status()
@@ -304,13 +323,16 @@ class GitHubService:
         descendant: str,
         *,
         connection: Any | None = None,
+        admitted_workflow_id: str = "",
     ) -> bool:
         """Report whether ``descendant`` contains ``ancestor`` in its history."""
 
-        headers = await self._repository_reader_headers(repository, connection)
+        api_base, headers = await self._repository_reader(
+            repository, connection, admitted_workflow_id
+        )
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.get(
-                f"https://api.github.com/repos/{repository}/compare/{ancestor}...{descendant}",
+                f"{api_base}/repos/{repository}/compare/{ancestor}...{descendant}",
                 headers=headers,
             )
             response.raise_for_status()
@@ -319,22 +341,168 @@ class GitHubService:
             raise ValueError("Repository reader returned an unknown comparison status")
         return status in {"ahead", "identical"}
 
-    async def _repository_reader_headers(
-        self, repository: str, connection: Any | None
-    ) -> dict[str, str]:
+    async def _repository_reader(
+        self,
+        repository: str,
+        connection: Any | None,
+        admitted_workflow_id: str,
+        *,
+        operation: str = "read",
+        expected_api_base: str | None = None,
+    ) -> tuple[str, dict[str, str]]:
+        """Return the API base and headers of the connection admitted for work.
+
+        Frozen plans use the existing Omnigent acquisition owner for their
+        exact repository and operation. Historical selection reuses the
+        launch selector, so a deleted, disabled, or
+        unassigned connection fails there. A ``github_app`` connection issues
+        through the bound acquirer for exactly ``operation``; any other
+        connection reads only its own credential. An explicitly anonymous run
+        reads with no credential and cannot mutate.
+        """
+        from moonmind.auth.github_app_wiring import github_api_base_for
+        from moonmind.auth.github_credentials import (
+            resolve_deployment_github_credential,
+        )
+        from moonmind.workflows.executions.repository_contract import (
+            DEFAULT_GIT_CONNECTION_REF,
+        )
+        from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
         active = connection if connection is not None else self._connection
-        if (
-            active is not None
-            and str(getattr(getattr(active, "credential", None), "source", "") or "")
-            == "github_app"
-        ):
-            return await self.bound_app_headers_for_connection(
-                active, repository=repository
+        if str(admitted_workflow_id or "").strip():
+            active = None
+        if active is None:
+            connection_ref, anonymous = "", False
+            if str(admitted_workflow_id or "").strip():
+                frozen_base, acquired = (
+                    await managed_api_key_resolve.acquire_admitted_repository_use(
+                        admitted_workflow_id,
+                        repository=repository,
+                        operation=operation,
+                        expected_api_base=expected_api_base,
+                    )
+                )
+                if frozen_base is not None and acquired is None:
+                    return frozen_base, {
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    }
+                if frozen_base is not None:
+                    try:
+                        return frozen_base, self.headers_from_bound_credential(acquired)
+                    finally:
+                        acquired.credential.clear()
+                connection_ref, anonymous = (
+                    await managed_api_key_resolve.load_admitted_repository_access(
+                        admitted_workflow_id
+                    )
+                )
+            if anonymous:
+                if operation != "read":
+                    raise ValueError(
+                        f"An anonymous run cannot {operation} {repository}"
+                    )
+                api_base = github_api_base_for()
+                if expected_api_base is not None and api_base.rstrip(
+                    "/"
+                ) != expected_api_base.rstrip("/"):
+                    raise ValueError(
+                        f"The admitted repository connection does not serve {expected_api_base}"
+                    )
+                return api_base, {
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                }
+            active = await managed_api_key_resolve.select_git_connection_for_launch(
+                connection_ref or DEFAULT_GIT_CONNECTION_REF, repository=repository
             )
-        token, error = await self.resolve_github_token(repo=repository)
-        if not token:
-            raise ValueError(error or "Repository target read requires authorized GitHub access")
-        return self._github_headers(token)
+        if active is None:
+            if operation != "read":
+                raise ValueError(
+                    f"No recorded repository connection grants {operation} {repository}"
+                )
+            # The unrecorded default derives from the deployment declaration.
+            api_base = github_api_base_for()
+            if expected_api_base is not None and api_base.rstrip(
+                "/"
+            ) != expected_api_base.rstrip("/"):
+                raise ValueError(
+                    f"The admitted repository connection does not serve {expected_api_base}"
+                )
+            resolved = await resolve_deployment_github_credential(repo=repository)
+        else:
+            # Trust the destination before reading either kind of credential.
+            api_base = github_api_base_for(
+                str(getattr(active, "endpoint_ref", "") or "")
+            )
+            if expected_api_base is not None and api_base.rstrip(
+                "/"
+            ) != expected_api_base.rstrip("/"):
+                raise ValueError(
+                    f"The admitted repository connection does not serve {expected_api_base}"
+                )
+            if getattr(active.credential, "source", "") == "github_app":
+                return api_base, await self.bound_app_headers_for_connection(
+                    active, repository=repository, operations=(operation,)
+                )
+            selected = (
+                await managed_api_key_resolve._resolve_github_access_for_connection(
+                    active, repository=repository, required_operations=(operation,)
+                )
+            )
+            resolved = selected.credential
+            api_base = github_api_base_for(selected.connection.endpoint_ref)
+        if not resolved.token:
+            raise ValueError(resolved.safe_summary)
+        return api_base, self._github_headers(resolved.token)
+
+    async def _operation_headers(
+        self,
+        github_token: str | None,
+        *,
+        repo: str,
+        admitted_workflow_id: str | None,
+        operation: str,
+        action: str,
+        api_base: str = "https://api.github.com",
+    ) -> tuple[dict[str, str] | None, str | None]:
+        """Return headers for one pull-request operation, or why it is unavailable.
+
+        ``admitted_workflow_id`` (``""`` names no recorded run: the default
+        connection) routes the operation through :meth:`_repository_reader`,
+        so it uses the same admitted connection as the work's reads and never
+        an ambient token. ``None`` keeps the explicit-token resolution.
+        """
+        if admitted_workflow_id is None:
+            token, resolution_error = await self.resolve_github_token(
+                github_token, repo=repo
+            )
+            if not token:
+                return None, resolution_error or self._missing_auth_summary(action)
+            return self._github_headers(token), None
+        try:
+            admitted_base, headers = await self._repository_reader(
+                repo,
+                None,
+                admitted_workflow_id,
+                operation=operation,
+                expected_api_base=api_base,
+            )
+        except Exception as exc:
+            from moonmind.utils.logging import redact_sensitive_text
+
+            return None, (
+                f"The admitted repository connection cannot {action} "
+                f"({type(exc).__name__}: {redact_sensitive_text(str(exc))}); "
+                "no other GitHub credential is used."
+            )
+        if admitted_base.rstrip("/") != api_base.rstrip("/"):
+            return None, (
+                f"The admitted repository connection does not serve {api_base}; "
+                "no other GitHub credential is used."
+            )
+        return headers, None
 
     # -- helpers ----------------------------------------------------------
 
@@ -511,7 +679,7 @@ class GitHubService:
             operations=tuple(operations),
             principal_ref=principal_ref,
             principal_scope=(scope_type, scope_ref),
-            execution_owner=f"github-service:read:{repository}",
+            execution_owner=f"github-service:{'+'.join(operations)}:{repository}",
             repository_display=repository,
             repository=repository,
             revision_reader=revision_reader,
@@ -1557,6 +1725,7 @@ class GitHubService:
         expected_base_branch: str | None = None,
         expected_draft: bool | None = None,
         endpoint: str = "https://github.com",
+        admitted_workflow_id: str | None = None,
     ) -> PullRequestSelectorResult:
         """Resolve a selector, validating publication expectations when supplied."""
 
@@ -1613,18 +1782,21 @@ class GitHubService:
                 summary=f"Resolved PR #{pr_number} from its GitHub URL.",
             )
 
-        token, resolution_error = await self.resolve_github_token(
+        headers, resolution_error = await self._operation_headers(
             github_token,
             repo=repository,
+            admitted_workflow_id=admitted_workflow_id,
+            operation="read",
+            action="resolve a PR branch",
+            api_base=api_base,
         )
-        if not token:
+        if headers is None:
             return PullRequestSelectorResult(
                 selectorType="branch",
                 reasonCode="auth_unavailable",
-                summary=resolution_error or self._missing_auth_summary("resolve a PR branch"),
+                summary=resolution_error,
             )
 
-        headers = self._github_headers(token)
         owner = repository.split("/", 1)[0]
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -1729,6 +1901,7 @@ class GitHubService:
         merge_method: str = "merge",
         expected_head_sha: str | None = None,
         github_token: str | None = None,
+        admitted_workflow_id: str | None = None,
     ) -> MergePRResult:
         """Merge a GitHub pull request by URL."""
 
@@ -1741,22 +1914,24 @@ class GitHubService:
             )
 
         owner, repo, pr_number = parsed
-        token, resolution_error = await self.resolve_github_token(
+        headers, resolution_error = await self._operation_headers(
             github_token,
             repo=f"{owner}/{repo}",
+            admitted_workflow_id=admitted_workflow_id,
+            operation="merge_request",
+            action="merge a PR",
         )
-        if not token:
+        if headers is None:
             return MergePRResult(
                 pr_url=pr_url,
                 merged=False,
-                summary=resolution_error or self._missing_auth_summary("merge a PR"),
+                summary=resolution_error,
             )
 
         api_url = (
             f"https://api.github.com/repos/{owner}/{repo}"
             f"/pulls/{pr_number}/merge"
         )
-        headers = self._github_headers(token)
         payload = {"merge_method": merge_method}
         if expected_head_sha:
             payload["sha"] = expected_head_sha
@@ -1816,6 +1991,7 @@ class GitHubService:
         pr_url: str,
         new_base: str,
         github_token: str | None = None,
+        admitted_workflow_id: str | None = None,
     ) -> tuple[bool, str]:
         """Update a GitHub PR's base (target) branch.
 
@@ -1827,22 +2003,21 @@ class GitHubService:
             return False, f"Could not parse PR URL: {pr_url}"
 
         owner, repo, pr_number = parsed
-        token, resolution_error = await self.resolve_github_token(
+        # Retargeting the base prepares the merge, under the same operation.
+        headers, resolution_error = await self._operation_headers(
             github_token,
             repo=f"{owner}/{repo}",
+            admitted_workflow_id=admitted_workflow_id,
+            operation="merge_request",
+            action="update a PR base branch",
         )
-        if not token:
-            return (
-                False,
-                resolution_error
-                or self._missing_auth_summary("update a PR base branch"),
-            )
+        if headers is None:
+            return False, str(resolution_error)
 
         api_url = (
             f"https://api.github.com/repos/{owner}/{repo}"
             f"/pulls/{pr_number}"
         )
-        headers = self._github_headers(token)
         payload: dict[str, Any] = {"base": new_base}
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -1892,6 +2067,7 @@ class GitHubService:
         recorded_comment_id: int | None = None,
         github_token: str | None = None,
         expires_at: str | None = None,
+        admitted_workflow_id: str | None = None,
     ) -> AutomatedReviewRequestResult:
         """Post exactly one automated review request for one exact head SHA.
 
@@ -1918,18 +2094,19 @@ class GitHubService:
             payload.update(kwargs)
             return AutomatedReviewRequestResult.model_validate(payload)
 
-        token, resolution_error = await self.resolve_github_token(
+        headers, resolution_error = await self._operation_headers(
             github_token,
             repo=repo,
+            admitted_workflow_id=admitted_workflow_id,
+            operation="review_request",
+            action="request an automated review",
         )
-        if not token:
+        if headers is None:
             return _result(
                 status="unavailable",
                 retryable=True,
-                summary=resolution_error
-                or self._missing_auth_summary("request an automated review"),
+                summary=resolution_error,
             )
-        headers = self._github_headers(token)
         started_at = _parse_github_timestamp(attempt_started_at)
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -2160,14 +2337,18 @@ class GitHubService:
         github_token: str | None = None,
         review_loop_enabled: bool = False,
         review_request: Mapping[str, Any] | None = None,
+        admitted_workflow_id: str | None = None,
     ) -> PullRequestReadinessResult:
         """Evaluate GitHub readiness for a tracked pull request revision."""
 
-        token, resolution_error = await self.resolve_github_token(
+        headers, resolution_error = await self._operation_headers(
             github_token,
             repo=repo,
+            admitted_workflow_id=admitted_workflow_id,
+            operation="read",
+            action="evaluate PR readiness",
         )
-        if not token:
+        if headers is None:
             return PullRequestReadinessResult(
                 headSha=head_sha,
                 ready=False,
@@ -2179,8 +2360,7 @@ class GitHubService:
                 blockers=[
                     {
                         "kind": "external_state_unavailable",
-                        "summary": resolution_error
-                        or self._missing_auth_summary("evaluate PR readiness"),
+                        "summary": resolution_error,
                         "retryable": True,
                         "source": "github",
                     }
@@ -2190,7 +2370,6 @@ class GitHubService:
         policy = dict(policy or {})
         checks_required = policy.get("checks", "required") == "required"
         review_required = policy.get("automatedReview", "required") == "required"
-        headers = self._github_headers(token)
         blockers: list[dict[str, Any]] = []
         observed_head_sha = head_sha
         observed_base_sha: str | None = None

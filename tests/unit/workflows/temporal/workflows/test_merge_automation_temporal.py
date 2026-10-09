@@ -89,7 +89,10 @@ def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id=MERGE_AUTOMATION_WORKFLOW_ID),
+        lambda: SimpleNamespace(
+            workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
+            task_queue="mm.workflow.user.v2",
+        ),
     )
 
 
@@ -188,9 +191,25 @@ def test_merge_automation_workflow_child_task_queue_is_replay_patched(
         lambda patch_id: patch_id
         == MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2"),
+    )
     assert (
         MoonMindMergeAutomationWorkflow._workflow_child_task_queue()
         == "mm.workflow.custom.v2"
+    )
+    # MoonMind#3937: merge-lane descendants stay on the merge lane now that
+    # the lane shares the workflow process instead of overriding settings.
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(task_queue="mm.workflow.merge_automation"),
+    )
+    assert (
+        MoonMindMergeAutomationWorkflow._workflow_child_task_queue()
+        == "mm.workflow.merge_automation"
     )
 
     monkeypatch.setattr(
@@ -347,7 +366,11 @@ def test_legacy_gated_continuation_uses_fallback_poll_deadline(
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+        lambda: SimpleNamespace(
+            workflow_id="merge-owner",
+            run_id="owner-run",
+            task_queue="mm.workflow.user.v2",
+        ),
     )
     deadline = workflow._continuation_deadline(
         {
@@ -391,7 +414,11 @@ def test_gated_continuation_rejects_execution_identity_mismatch(
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+        lambda: SimpleNamespace(
+            workflow_id="merge-owner",
+            run_id="owner-run",
+            task_queue="mm.workflow.user.v2",
+        ),
     )
     continuation = {
         "schemaVersion": "gated-continuation/v1",
@@ -438,7 +465,11 @@ def test_pre_identity_patch_history_keeps_legacy_continuation_shape(
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+        lambda: SimpleNamespace(
+            workflow_id="merge-owner",
+            run_id="owner-run",
+            task_queue="mm.workflow.user.v2",
+        ),
     )
     monkeypatch.setattr(
         merge_automation_module.workflow,
@@ -642,7 +673,11 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="merge-owner", run_id="owner-run"),
+        lambda: SimpleNamespace(
+            workflow_id="merge-owner",
+            run_id="owner-run",
+            task_queue="mm.workflow.user.v2",
+        ),
     )
 
     result = await workflow.run(_payload())

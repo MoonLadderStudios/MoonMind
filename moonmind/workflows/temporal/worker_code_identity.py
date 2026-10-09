@@ -505,15 +505,15 @@ def _children_freshness(
 ) -> list[WorkerCodeFreshness] | None:
     """Expand a workflow-group readiness envelope into per-lane freshness.
 
-    The default Compose topology points ``TEMPORAL_WORKFLOW_READINESS_URL``
-    at the workflow worker-group supervisor (port 8080), whose response
-    stores per-process readiness under ``children`` and carries no
-    top-level ``codeRevision``/``codeDigest``. Reading only the top-level
-    fields would classify the whole fleet as ``unknown`` on every
-    successful response, so each child identity is compared with the
-    checkout and reported as ``<group>/<lane>``. Returns ``None`` when
-    the payload carries no child identities (caller falls back to the
-    top-level fields).
+    The workflow worker-group supervisor retired by MoonMind#3937 stored
+    per-process readiness under ``children`` with no top-level
+    ``codeRevision``/``codeDigest``; one may still answer
+    ``TEMPORAL_WORKFLOW_READINESS_URL`` until an update recreates its
+    container. Each child identity is compared with the checkout and
+    reported as ``<group>/<lane>``. Returns ``None`` when the payload
+    carries no child identities, which is the current single-process
+    workflow worker shape (caller falls back to the top-level fields).
+    Remove once no deployment can still run the pre-#3937 supervisor.
     """
 
     children = payload.get("children")

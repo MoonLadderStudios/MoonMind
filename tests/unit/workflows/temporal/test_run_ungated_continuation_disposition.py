@@ -81,7 +81,7 @@ def test_gated_parameters_are_recognized_as_merge_automation_owned(
         (),
         {"workflow_id": "mm:parent-merge-automation"},
     )
-    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    workflow_info = type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "parent": parent_info})
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     workflow = MoonMindRunWorkflow()
@@ -689,7 +689,7 @@ def test_mismatched_temporal_parent_is_not_gated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parent_info = type("ParentInfo", (), {"workflow_id": "mm:other-parent"})
-    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    workflow_info = type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "parent": parent_info})
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     workflow = MoonMindRunWorkflow()
@@ -718,7 +718,7 @@ def test_gated_reenter_gate_disposition_is_allowed(
         (),
         {"workflow_id": "mm:parent-merge-automation"},
     )
-    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    workflow_info = type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "parent": parent_info})
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     workflow = MoonMindRunWorkflow()
@@ -932,7 +932,7 @@ def test_typed_merge_automation_continuation_is_allowed_for_owning_gate(
         (),
         {"workflow_id": "mm:parent-merge-automation"},
     )
-    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    workflow_info = type("WorkflowInfo", (), {"task_queue": "mm.workflow.user.v2", "parent": parent_info})
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     workflow = MoonMindRunWorkflow()

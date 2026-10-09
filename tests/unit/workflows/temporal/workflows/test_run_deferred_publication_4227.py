@@ -45,6 +45,7 @@ def deferred_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-4227",
             "run_id": "run-4227",

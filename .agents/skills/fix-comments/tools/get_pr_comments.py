@@ -6,6 +6,10 @@ By default this collects:
 - Issue comments on the PR conversation
 - Inline review comments
 - Review body comments (optional, enabled by default; empty bodies skipped)
+
+The separate reviews list retains complete raw reviews, including empty bodies,
+unless --exclude-reviews is set. Reviews and issue replies are observed before
+collecting inline comments and thread state.
 """
 
 from __future__ import annotations
@@ -497,6 +501,11 @@ def main() -> None:
     pr_number = args.pr_number
 
     pr_metadata = api_get_json(f"{base}/pulls/{pr_number}", token)
+    reviews_raw = (
+        fetch_paginated(f"{base}/pulls/{pr_number}/reviews", token)
+        if not args.exclude_reviews
+        else []
+    )
     issue_comments_raw = fetch_paginated(f"{base}/issues/{pr_number}/comments", token)
     review_comments_raw = fetch_paginated(f"{base}/pulls/{pr_number}/comments", token)
 
@@ -511,7 +520,6 @@ def main() -> None:
     )
 
     if not args.exclude_reviews:
-        reviews_raw = fetch_paginated(f"{base}/pulls/{pr_number}/reviews", token)
         for review in reviews_raw:
             body = (review.get("body") or "").strip()
             if body or args.include_empty_reviews:
@@ -530,6 +538,10 @@ def main() -> None:
         # keep the affected items blocking and never invent a clean result.
         "thread_inventory_complete": threads_complete,
         "comments": comments,
+        "reviews": reviews_raw,
+        # Submitted review completion precedes the full comment inventory.
+        # Later issue-reply/reaction signals still require another full refresh.
+        "review_evidence_precedes_inventory": not args.exclude_reviews,
     }
 
     json_output = json.dumps(
