@@ -255,6 +255,7 @@ class DockerOmnigentHostLauncher:
         host_class: HostClass | None = None,
         *,
         required_executables: tuple[str, ...] = (),
+        prefer_installed: bool = False,
     ) -> str:
         """Return the image to launch: exact when usable, else qualified local.
 
@@ -271,19 +272,24 @@ class DockerOmnigentHostLauncher:
         only fail exact-host attestation, so when the deployment records a
         different qualified image that owns those tools, launch that instead.
         The planned image stays authoritative whenever it satisfies the plan,
-        and nothing is probed unless such an alternative exists.
+        and nothing is probed unless such an alternative exists. A successor
+        Step Execution after runtime loss (``prefer_installed``) is a fresh
+        launch instead: it uses that qualified installed image whenever it is
+        present and satisfies the plan, unless an operator pinned the planned
+        image.
         """
 
         requested = str(requested_ref or "").strip()
         if not requested:
             return requested
         requested_present = await self._image_present(requested)
-        if requested_present and not required_executables:
+        if requested_present and not required_executables and not prefer_installed:
             return requested
         if "@sha256:" not in requested:
             return requested
         try:
             from moonmind.omnigent.host_image_drift import (
+                _operator_pins,
                 compatible_deployed_fallback,
             )
 
@@ -293,9 +299,33 @@ class DockerOmnigentHostLauncher:
                 if host_class is not None
                 else "",
             )
+            operator_pinned = requested in _operator_pins()
         except Exception:
             fallback = None
+            operator_pinned = False
         if fallback is None:
+            return requested
+        if (
+            prefer_installed
+            and not operator_pinned
+            and await self._image_present(fallback)
+            and (
+                not required_executables
+                or await self._image_owns_tools(
+                    fallback, required_executables, host_class
+                )
+            )
+        ):
+            import logging
+
+            logging.getLogger(__name__).info(
+                "recovered Step Execution launches the installed host image "
+                "(planned=%s installed=%s)",
+                requested[:80],
+                fallback[:80],
+            )
+            return fallback
+        if requested_present and not required_executables:
             return requested
         if requested_present and await self._image_owns_tools(
             requested, required_executables, host_class
@@ -392,6 +422,7 @@ class DockerOmnigentHostLauncher:
             host_class.imageRef,
             host_class,
             required_executables=_image_owned_executables(spec.toolAttachments),
+            prefer_installed=spec.preferInstalledImage,
         )
         await self._backend.run(
             [

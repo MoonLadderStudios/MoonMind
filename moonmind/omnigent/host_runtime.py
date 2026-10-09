@@ -42,6 +42,22 @@ from moonmind.omnigent.host_ports import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
+def fresh_recovery_attempt(request: AgentExecutionRequest) -> bool:
+    """Whether this launch is a new Step Execution after its runtime stopped.
+
+    A host-loss or other runtime-recovered retry is a fresh launch of the same
+    logical Step and follows the installed runtime (#4503). The lost attempt
+    keeps the image it actually ran on in its own attestation.
+    """
+
+    step = request.step_execution
+    return (
+        step is not None
+        and step.execution_ordinal > 1
+        and step.reason == "runtime_recovered"
+    )
+
+
 @dataclass(frozen=True)
 class PreparedHostInputs:
     workspace_attachment: dict[str, Any]
@@ -329,6 +345,7 @@ class GenericOmnigentHostRuntime:
                     "accessMode": "read-write",
                 },
                 "labels": labels,
+                "preferInstalledImage": fresh_recovery_attempt(request),
             }
         )
         anticipated_authority = {

@@ -130,7 +130,7 @@ Preserve the operator's `.env`, Compose overrides, project identity, credentials
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release. A requested branch tip whose image is still publishing is an availability condition: use the existing bounded resolution policy, preserve explicit target intent, and report the actual selected source. Do not silently substitute a different target for an explicit request.
 
-The installed Omnigent server/host selection belongs to this same deployment owner. Future managed launches resolve it from installed deployment intent. Historical attempt records retain the actual image and session that executed them.
+The installed Omnigent server/host selection belongs to this same deployment owner. Future managed launches resolve it from installed deployment intent. Historical attempt records retain the actual image and session that executed them. That is a record, not a process: an update may stop an attempt, and a distinct successor Step Execution continues the step.
 
 ## 10. Execution lifecycle
 
@@ -267,11 +267,22 @@ Recreating an active host needs no operator draining or checkpointing. The
 updater does not supervise agent recovery: Omnigent reports the interrupted
 turn's host lost (`OMNIGENT_SESSION_HOST_LOST`, `retry_step_execution`), the
 realizer saves the caller-owned workspace before releasing the host, and the
-Run workflow retries only that step as a new, bounded Step Execution that
-restores the saved workspace archive. Completed steps are not repeated. Work
-after the last saved boundary may be repeated. A step whose workspace could not
-be saved restarts from its admitted step inputs, and its retry records that
-limitation. Explicit cancellation starts no retry.
+Run workflow retries only that step as a new Step Execution that restores the
+saved workspace archive. Completed steps are not repeated. Work after the last
+saved boundary may be repeated. A step whose workspace could not be saved
+restarts from its admitted step inputs, and its Step Execution manifest records
+that limitation. Explicit cancellation starts no retry.
+
+The retry authority requires the lost attempt's host container to be confirmed
+removed. An expired lease or offline projection is not proof. The realizer
+resumes a failed removal within a short bound. If removal still cannot be
+confirmed, the step fails with `OMNIGENT_CLEANUP_DEFERRED` instead of running a
+second attempt beside a possibly live one, and the janitor finishes the
+cleanup. Repeated interruptions share the step's existing retry budget. The
+successor launches the installed qualified host image (an explicit operator
+pin stays authoritative) and publishes to the same candidate branch as the
+step's first Step Execution, so a push whose acknowledgement was lost is
+reconciled rather than duplicated.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
 The standalone controller delegates selection and migration to the existing
