@@ -127,8 +127,11 @@ workflow and run. Reads carry that trusted workflow scope through the existing
 artifact authorization policy. Caller-supplied capture identities cannot select a
 different workflow or run. Checkpoint discovery includes the owning run's step
 ledger, preserves declared boundaries and attempt ordinals, and rejects a ledger
-from another execution. Recovery compares artifact reference aliases while still
-requiring source membership and completed artifact metadata.
+from another execution. The live ledger read is bounded and best-effort: a missing
+Temporal history or unavailable connection retains checkpoints already persisted
+in the execution's memo, parameters, or finish summary. An available but mismatched
+or malformed ledger remains an error. Recovery compares artifact reference aliases
+while still requiring source membership and completed artifact metadata.
 
 Recovery and claim release still require their original input, plan, integrity,
 capability, side-effect, and cleanup evidence. These representation adapters do not
