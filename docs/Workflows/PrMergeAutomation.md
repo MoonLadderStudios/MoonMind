@@ -293,11 +293,15 @@ the request. Resolver modes re-enter the gate for the new revision; review-only
 blocks without retargeting.
 
 Completion includes the provider's submitted review, its request-bound clean
-comment (for Codex, `Codex Review: Didn't find any major issues. 🚀`), or its
-qualified clean-review reaction. Ordinary clean comments and PR-level reactions
-must be newer than the request on its unchanged head. Pending, unknown, blank,
-or dismissed review states, eyes reactions, quoted clean messages, and stale
-responses are not completion. The Skill reads every page of review/reaction
+comment, or its qualified clean-review reaction. A clean comment opens with the
+provider's clean-result sentence (for Codex, `Codex Review: Didn't find any
+major issues.`); the rest of that line is flair the provider varies, and any
+further text must be P2/medium-or-below findings. When the comment names the
+commit it reviewed (Codex's abbreviated `Reviewed commit` line), that commit
+must be the current head. Ordinary clean comments and PR-level reactions must
+be newer than the request on its unchanged head. Pending, unknown, blank, or
+dismissed review states, eyes reactions, quoted or embedded clean messages,
+responses carrying P0/P1 findings, and stale responses are not completion. The Skill reads every page of review/reaction
 evidence and refreshes the full comment inventory after observing completion,
 then revalidates the remote head. Merge operations require that verified head
 to still match. When a request has multiple provider response comments, the
@@ -329,6 +333,15 @@ to their finishMode. Completion does not request another review for the same hea
 ### 11.3.5 No-progress and termination rules
 
 The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable or provider-refused review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
+
+Readiness carries the ordered, deduplicated explicit request receipts from the
+retained active request through the selected latest request. Each unseen receipt
+consumes a cycle, including requests superseded between polls. The gate checks
+the budget before each adoption, retains intermediate requests as superseded,
+and attributes completion only to the latest adopted request. Contradictory
+identities or timestamps remain unavailable evidence. Older observations without
+these receipts and previously recorded decisions retain their interpretation
+through the observation-scoped workflow patch.
 
 A no-op fix pass is successful only when the latest required review covers the current head and no actionable comments remain. Merge finish continues until merged/already-merged plus required tracker effects. Fix-only finishes at verified review-clean without merge. Neither changes its finish mode at runtime to make a gate green.
 

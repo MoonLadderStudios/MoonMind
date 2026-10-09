@@ -19,6 +19,7 @@ cooperative deadline stops, hard kills and unrecorded exits distinctly.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -30,6 +31,7 @@ from pathlib import Path
 import yaml
 
 from tools.ci.write_backend_matrix_summary import build_evidence
+from tools.select_test_suites import select_suites
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
@@ -214,7 +216,7 @@ def test_per_row_job_bounds_replace_blanket_thirty_minutes() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["backend-matrix"]
     assert job.get("timeout-minutes") != 30
-    matrix = job["strategy"]["matrix"]["include"]
+    matrix = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     by_suite = {row["suite"]: row for row in matrix}
     assert by_suite["unit-fast"].get("job_minutes") == 15
     assert by_suite["api-component"].get("job_minutes") == 15
@@ -262,7 +264,7 @@ FAST_RUN_STEPS = (
 
 def test_reliability_dependency_start_has_finite_outer_bound() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    rows = workflow["jobs"]["backend-matrix"]["strategy"]["matrix"]["include"]
+    rows = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     reliability_job_minutes = min(
         row["job_minutes"] for row in rows if row["suite"].startswith("reliability-")
     )

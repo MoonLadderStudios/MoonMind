@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tools.select_test_suites import select_suites
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
@@ -117,7 +120,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     # row, not their serial sum, bounds integration-ci.
     job = _load_workflow()["jobs"]["integration-ci"]
 
-    assert job["strategy"]["matrix"]["suite"] == [
+    assert json.loads(select_suites([]).as_outputs()["integration_matrix"])["suite"] == [
         "hermetic",
         "host-update-transport",
         "fresh-journey",
@@ -442,21 +445,20 @@ def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None
     assert "unit-slow" in workflow["jobs"]["ci-required"]["needs"]
 
 
-def test_shard_ownership_verifier_always_runs() -> None:
+def test_shard_ownership_verifier_runs_for_collection_inputs() -> None:
     workflow = _load_workflow()
     assert "verify-test-shard-ownership" not in workflow["jobs"]
     job = workflow["jobs"]["preflight-policy"]
 
-    # Static repository invariant (MoonLadderStudios/MoonMind#3950): exclusive
-    # shard ownership must gate targeted PRs too, so it runs in the always-run
-    # preflight job with no selection gate of its own.
+    # Policy stays unconditional; changed collection inputs select the real
+    # ownership verifier, including all four installed-plugin partitions.
     assert "if" not in job
     verifier = next(
         step
         for step in job["steps"]
         if "tools/verify_test_shard_ownership.py" in step.get("run", "")
     )
-    assert "if" not in verifier
+    assert verifier["if"] == "steps.ownership.outputs.ownership_full == 'true'"
     install = _run_command("preflight-policy", "Install runtime dependencies via uv")
     assert "uv pip install --system -e .[tests]" in install
 
@@ -796,7 +798,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # scheduled diagnostics.
     assert "schedule" in str(strategy["fail-fast"])
     assert "github.event_name" in str(strategy["fail-fast"])
-    suites = [entry["suite"] for entry in strategy["matrix"]["include"]]
+    suites = [entry["suite"] for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]]
     assert suites == [
         "unit-fast",
         "api-component",
@@ -808,13 +810,13 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     ]
     shards = [
         entry.get("shard")
-        for entry in strategy["matrix"]["include"]
+        for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
         if entry["suite"].startswith("reliability-")
     ]
     # pytest-split groups are 1-based (MoonLadderStudios/MoonMind#4366):
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
-    rows = {entry["suite"]: entry for entry in strategy["matrix"]["include"]}
+    rows = {entry["suite"]: entry for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]}
     assert rows["unit-fast"]["job_minutes"] == 15
     assert rows["api-component"]["job_minutes"] == 15
     assert rows["temporal-boundary"]["job_minutes"] == 15
@@ -1085,3 +1087,179 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
     assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
         "Start isolated reliability dependencies"
     ]["run"]
+
+
+def _run_required_gate(tmp_path, *, outputs=None, results=None):
+    import os
+    import re
+    import subprocess
+
+    selected = select_suites(["README.md"], event_name="pull_request").as_outputs()
+    selected.setdefault("backend_matrix", '{"include":[]}')
+    selected.setdefault("integration_matrix", '{"suite":[]}')
+    selected.update(outputs or {})
+    needs = {
+        name: {
+            "result": (
+                "success"
+                if name
+                in {
+                    "select-test-suites",
+                    "preflight-policy",
+                    "test-frontend",
+                    "check-generated-contracts",
+                }
+                else "skipped"
+            )
+        }
+        for name in _load_workflow()["jobs"]["ci-required"]["needs"]
+    }
+    needs["select-test-suites"]["outputs"] = selected
+    for name, result in (results or {}).items():
+        needs[name]["result"] = result
+    steps = _load_workflow()["jobs"]["ci-required"]["steps"]
+    script = "\n".join(step.get("run", "") for step in steps)
+
+    def resolve(match):
+        path = match.group(1).strip().split(".")
+        value = {"needs": needs}
+        for key in path:
+            value = value.get(key, "")
+        return str(value)
+
+    script = re.sub(r"\$\{\{\s*(needs\.[^}]+)\}\}", resolve, script)
+    return subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+            "NEEDS_JSON": json.dumps(needs),
+        },
+    )
+
+
+@pytest.mark.parametrize("bad_selection", ["", "TRUE", "garbage"])
+def test_required_gate_rejects_invalid_selection(tmp_path, bad_selection):
+    result = _run_required_gate(tmp_path, outputs={"unit_fast": bad_selection})
+    assert result.returncode != 0, result.stdout
+
+
+@pytest.mark.parametrize(
+    "matrix", ["", "null", '{"include":[]}', '{"include":[{"suite":"unit-fast"}]}']
+)
+def test_required_gate_rejects_missing_selected_matrix_row(tmp_path, matrix):
+    result = _run_required_gate(
+        tmp_path,
+        outputs={"unit_fast": "true", "backend_matrix": matrix},
+        results={"backend-matrix": "success"},
+    )
+    assert result.returncode != 0, result.stdout
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "timed_out", "skipped", ""])
+def test_required_gate_rejects_missing_or_failed_selected_result(tmp_path, result):
+    proc = _run_required_gate(
+        tmp_path,
+        outputs={
+            "unit_fast": "true",
+            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":15}]}',
+        },
+        results={"backend-matrix": result},
+    )
+    assert proc.returncode != 0, proc.stdout
+
+
+def test_required_gate_accepts_only_intentional_skips(tmp_path):
+    assert _run_required_gate(tmp_path).returncode == 0
+    assert (
+        _run_required_gate(
+            tmp_path, results={"select-test-suites": "failure"}
+        ).returncode
+        != 0
+    )
+
+
+def test_backend_and_integration_matrices_consume_selected_rows():
+    jobs = _load_workflow()["jobs"]
+    for job, output in [
+        ("backend-matrix", "backend_matrix"),
+        ("integration-ci", "integration_matrix"),
+    ]:
+        assert (
+            jobs[job]["strategy"]["matrix"]
+            == "${{ fromJSON(needs.select-test-suites.outputs." + output + ") }}"
+        )
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        [],
+        ["api_service/api/routers/automation.py"],
+        ["tests/integration/host_update/test_host_updater_transport.py"],
+        ["tests/integration/host_update/test_journal_transition.py"],
+    ],
+)
+def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
+    outputs = select_suites(paths, event_name="pull_request").as_outputs()
+    results = {
+        "backend-matrix": (
+            "success" if json.loads(outputs["backend_matrix"])["include"] else "skipped"
+        ),
+        **{
+            job: "success" if outputs[key] == "true" else "skipped"
+            for job, key in (
+                ("unit-slow", "unit_slow"),
+                ("integration-ci", "integration_ci"),
+                ("omnigent-exact-artifact", "exact_artifact"),
+                ("omnigent-deterministic-conformance", "omnigent_conformance"),
+            )
+        },
+    }
+    proc = _run_required_gate(tmp_path, outputs=outputs, results=results)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "bad_matrix",
+    [
+        '{"suite":[]}',
+        '{"suite":["hermetic","hermetic"]}',
+        '{"suite":["unknown"]}',
+        "garbage",
+    ],
+)
+def test_required_gate_rejects_incomplete_or_duplicate_integration_selection(
+    tmp_path, bad_matrix
+):
+    outputs = select_suites(
+        ["tests/integration/test_example.py"], event_name="pull_request"
+    ).as_outputs()
+    outputs["integration_matrix"] = bad_matrix
+    proc = _run_required_gate(
+        tmp_path,
+        outputs=outputs,
+        results={"backend-matrix": "success", "integration-ci": "success"},
+    )
+    assert proc.returncode != 0, proc.stdout
+
+
+def test_required_gate_rejects_missing_or_duplicate_reliability_partition(tmp_path):
+    outputs = select_suites([], event_name="pull_request").as_outputs()
+    matrix = json.loads(outputs["backend_matrix"])
+    matrix["include"][-1] = matrix["include"][-2]
+    outputs["backend_matrix"] = json.dumps(matrix)
+    results = {
+        job: "success" for job in _load_workflow()["jobs"]["ci-required"]["needs"]
+    }
+    assert (
+        _run_required_gate(tmp_path, outputs=outputs, results=results).returncode != 0
+    )
+
+
+@pytest.mark.parametrize("flag", ["full_backend", "full_frontend"])
+def test_required_gate_rejects_empty_full_selection(tmp_path, flag):
+    assert _run_required_gate(tmp_path, outputs={flag: "true"}).returncode != 0

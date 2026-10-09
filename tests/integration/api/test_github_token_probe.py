@@ -106,8 +106,8 @@ def selected_b(monkeypatch, settings_user_override):
     monkeypatch.setattr(
         RepositoryConnectionService, "list_assignments", list_assignments
     )
-    secret = AsyncMock(return_value="token-b")
-    monkeypatch.setattr(github_credentials, "_resolve_secret_ref", secret)
+    secret = AsyncMock(return_value=("token-b", "fixture-connection-b-revision"))
+    monkeypatch.setattr(github_credentials, "_resolve_secret_ref_with_revision", secret)
     state.secret = secret
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -307,12 +307,12 @@ async def test_settings_token_ref_reaches_canonical_github_resolver(monkeypatch)
     monkeypatch.delenv("WORKFLOW_GITHUB_TOKEN_SECRET_REF", raising=False)
     monkeypatch.setenv("MOONMIND_GITHUB_TOKEN_REF", "db://github-pat-main")
 
-    async def _fake_secret_ref(ref: str) -> str:
+    async def _fake_secret_ref(ref: str) -> tuple[str, str]:
         assert ref == "db://github-pat-main"
-        return "resolved-token"
+        return "resolved-token", "fixture-settings-revision"
 
     monkeypatch.setattr(
-        "moonmind.auth.github_credentials._resolve_secret_ref",
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
         _fake_secret_ref,
     )
 
