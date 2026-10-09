@@ -2,10 +2,10 @@
 
 Settings Operations (the API) and the ``deployment.update_compose_stack``
 tool submit and observe the same controller operation the host entrypoint
-uses (MoonLadderStudios/MoonMind#4502; the controller is #4500). Once a
-deployment has installed the controller it is the only update owner: a
-timeout, refusal, or outage is reported and never converted into another
-updater. The deployment-owned bearer secret is read server side from the
+uses (MoonLadderStudios/MoonMind#4502; the controller is #4500). The
+controller is the only update owner: its absence, a timeout, refusal, or
+outage is reported with the host repair route and never converted into
+another updater. The deployment-owned bearer secret is read server side from the
 controller state bootstrap writes; it never reaches a browser or an agent.
 """
 
@@ -55,11 +55,22 @@ CONTROLLER_SUBMIT_TIMEOUT_SECONDS: float = 20
 CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
 CONTROLLER_SUBMIT_ATTEMPTS = 2
 CONTROLLER_RECENT_LIMIT = 10
+# The independent repair route: it installs, refreshes, or restores the
+# controller from the host without a healthy API, worker, or Temporal.
+HOST_REPAIR_COMMAND = "./tools/update-moonmind.sh"
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
+# ``UNKNOWN`` is an unreadable or unrecognized controller status: it never
+# looks accepted or finished.
 ControllerStatus = Literal[
-    "QUEUED", "RUNNING", "SUCCEEDED", "PARTIALLY_VERIFIED", "FAILED", "SUPERSEDED"
+    "QUEUED",
+    "RUNNING",
+    "SUCCEEDED",
+    "PARTIALLY_VERIFIED",
+    "FAILED",
+    "SUPERSEDED",
+    "UNKNOWN",
 ]
 _CONTROLLER_STATUS_MAP: dict[str, ControllerStatus] = {
     "pending": "QUEUED",
@@ -70,6 +81,11 @@ _CONTROLLER_STATUS_MAP: dict[str, ControllerStatus] = {
     "failed": "FAILED",
     "superseded": "SUPERSEDED",
 }
+
+
+# The bearer travels only to the controller's private endpoint, never through
+# an ambient HTTP(S) proxy.
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 @dataclass(frozen=True)
@@ -175,7 +191,7 @@ def _controller_request(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _DIRECT_OPENER.open(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8") or "{}"
             status = response.status
     except urllib.error.HTTPError as exc:
@@ -255,14 +271,43 @@ def unavailable_controller_error(
     if operation_id:
         message += (
             f" Operation {operation_id} was not confirmed; it is not "
-            "resubmitted automatically. Use the host update command "
-            "(./tools/update-moonmind.sh) if the dashboard cannot reach it."
+            "resubmitted automatically."
         )
+    message += (
+        f" Use the host update command ({HOST_REPAIR_COMMAND}) if the "
+        "dashboard cannot reach it."
+    )
+    details: dict[str, Any] = {"repairCommand": HOST_REPAIR_COMMAND}
+    if operation_id:
+        details["operationId"] = operation_id
     return DeploymentOperationError(
         "deployment_controller_unavailable",
         message,
         status_code=503,
-        details={"operationId": operation_id} if operation_id else {},
+        details=details,
+    )
+
+
+def controller_not_installed_error() -> DeploymentOperationError:
+    return DeploymentOperationError(
+        "deployment_controller_not_installed",
+        "The standalone deployment controller is not installed, so no update "
+        f"was submitted. Run the host update command ({HOST_REPAIR_COMMAND}); "
+        "it installs the controller and updates through it.",
+        status_code=503,
+        details={"repairCommand": HOST_REPAIR_COMMAND},
+    )
+
+
+def controller_refresh_required_error() -> DeploymentOperationError:
+    return DeploymentOperationError(
+        "deployment_controller_refresh_required",
+        "The installed deployment controller predates journal-transition "
+        "support, so no update was submitted. Run the host update command "
+        f"({HOST_REPAIR_COMMAND}); it refreshes the controller outside any "
+        "open operation and updates through it.",
+        status_code=503,
+        details={"repairCommand": HOST_REPAIR_COMMAND},
     )
 
 
@@ -385,56 +430,6 @@ def controller_supports_journal_transition(
     return "active-journal-transition" in (result.get("capabilities") or ())
 
 
-def require_worker_controller_bootstrap(environ: dict[str, str] | None = None) -> None:
-    """Observe the actual privileged submitter before queueing its prerequisite.
-
-    Keep explicit worker images untouched. An old pinned worker cannot be
-    asked to execute a method it does not implement, and its generic update
-    activity must never silently bypass the required controller bootstrap.
-    """
-    from moonmind.workflows.temporal.worker_code_identity import (
-        probe_worker_readiness,
-        readiness_urls_from_env,
-    )
-
-    env = os.environ if environ is None else environ
-    urls = [
-        url
-        for name, url in readiness_urls_from_env(env)
-        if name
-        in {
-            "deployment",
-            "temporal-worker-deployment-control",
-        }
-    ]
-    if not urls:
-        port = str(env.get("WORKER_HEALTHCHECK_PORT") or "8080")
-        if not port.isdigit():
-            port = "8080"
-        urls = [f"http://temporal-worker-deployment-control:{port}/readyz"]
-    queue = (
-        env.get("TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE") or "mm.activity.deployment"
-    )
-    for url in urls:
-        payload = probe_worker_readiness(url) or {}
-        if not (
-            payload.get("ready") is True
-            and payload.get("fleet") == "deployment"
-            and queue in (payload.get("taskQueues") or ())
-            and "mm.tool.execute" in (payload.get("activityTypes") or ())
-            and "active-journal-transition"
-            in (payload.get("controllerBootstrapCapabilities") or ())
-        ):
-            raise DeploymentOperationError(
-                "deployment_controller_prerequisite_unavailable",
-                "The controller needs journal-transition support, but the configured "
-                "deployment worker has not demonstrated its bootstrap method on the "
-                "deployment queue. No update was queued. Use the host update command; "
-                "it refreshes the controller independently and preserves the worker image pin.",
-                status_code=503,
-            )
-
-
 def ensure_controller_journal_transition(
     endpoint: ControllerEndpoint,
     *,
@@ -443,9 +438,10 @@ def ensure_controller_journal_transition(
 ) -> None:
     """Trusted deployment-control submission prerequisite, before ownership.
 
-    The API only queues this existing privileged worker when necessary. The
-    worker invokes the host lifecycle code; it never applies the stack or
-    replaces a controller that owns an open deployment operation.
+    Used by the deployment worker's tool adapter. It invokes the host
+    lifecycle code; it never applies the stack or replaces a controller that
+    owns an open deployment operation. The API never runs it: it returns the
+    host repair route instead.
     """
     if controller_supports_journal_transition(endpoint):
         return
@@ -542,4 +538,4 @@ def list_controller_operations(
 
 def controller_action_status(controller_status: str) -> ControllerStatus:
     """Map a controller operation status onto the Operations action status."""
-    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "QUEUED")
+    return _CONTROLLER_STATUS_MAP.get(str(controller_status or ""), "UNKNOWN")

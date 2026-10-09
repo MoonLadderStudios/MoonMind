@@ -305,21 +305,20 @@ def test_host_and_settings_operations_duplicates_have_one_mutation_owner(
     assert [op["operationId"] for op in controller.store.list_terminal()] == ["ui-1"]
 
 
-def test_legacy_direct_is_refused_once_a_controller_owns_the_deployment(
+def test_host_controller_calls_never_traverse_an_ambient_proxy(
     installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repo, controller = installed()
-    (repo / "deploy/state/controller/operations").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        update, "_submit_legacy_direct", lambda *a, **k: pytest.fail("second updater")
+    """The deployment-owned bearer goes only to the controller endpoint."""
+    _repo, controller = installed()
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    status, health = update._controller_call(
+        controller.url, SECRET, "GET", "/v1/healthz", timeout=5
     )
-    with pytest.raises(RuntimeError, match="Refusing --legacy-direct"):
-        update._submit_release(
-            {"project": "moonmind", "image": IMAGE, "inputs": {}, "context": {}},
-            repo,
-            controller_url=f"http://127.0.0.1:{controller.port}",
-            secret_file=None,
-            legacy_direct=True,
-        )
-    assert controller.applied == []
+
+    assert status == 200
+    assert "active-journal-transition" in health["capabilities"]
