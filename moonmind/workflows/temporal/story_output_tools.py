@@ -5875,9 +5875,9 @@ async def check_github_issue_blockers(
     # Carry the assessment verdict + durable ref forward so the In Progress step
     # (which sits after this blocker step) can resolve the verdict by ref without
     # sharing the assessment agent's filesystem. Use the shared assessment
-    # resolver (compact previousOutputs, local handoff file, free text, then
-    # durable ref) so GitHub and Jira stay on one canonical verdict path.
-    assessment_verdict, _ = await _resolve_jira_assessment_verdict(
+    # resolver (durable ref first, then local/compact/text fallback) so GitHub
+    # and Jira stay on one canonical verdict path.
+    assessment_verdict, assessment_available = await _resolve_jira_assessment_verdict(
         inputs,
         _context,
     )
@@ -5898,7 +5898,10 @@ async def check_github_issue_blockers(
             },
         )
     issue = _github_issue_payload(issue_data, repository)
-    if assessment_verdict != "FULLY_IMPLEMENTED":
+    if (
+        _normalize_assessment_verdict(assessment_verdict)
+        and assessment_verdict != "FULLY_IMPLEMENTED"
+    ):
         manual_only = _manual_only_declaration(await _assessment_payload(inputs, _context))
         if manual_only is not None:
             return await _mark_github_issue_manual_only(
@@ -5910,6 +5913,15 @@ async def check_github_issue_blockers(
                 service=github_service_factory(),
                 assessment_output=assessment_output,
             )
+    assessment_failure = await _github_assessment_failure(
+        inputs,
+        _context,
+        issue_ref=issue_ref,
+        verdict=assessment_verdict,
+        available=assessment_available,
+    )
+    if assessment_failure is not None:
+        return assessment_failure
     # This is the completion gate, not the start gate: it holds acceptance and
     # closure while a declared completion dependency is still open, even though
     # selection admits the issue's independently useful implementation work.
@@ -5968,6 +5980,64 @@ async def _assessment_payload(
     if path:
         return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
     return None
+
+
+async def _github_assessment_failure(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    *,
+    issue_ref: str,
+    verdict: str,
+    available: bool,
+) -> ToolResult | None:
+    """Stop before implementation with the assessment's own bounded diagnostic.
+
+    Both the blocker step and the defensive start gate use the same failed
+    outcome. Durable workflow finalization still owns claim/attempt cleanup.
+    """
+    ref = _assessment_artifact_ref(inputs, context)
+    path = _string(
+        inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
+    )
+    required = bool(ref or path)
+    verdict = _normalize_assessment_verdict(verdict)
+    if verdict != "BLOCKED" and not (required and (not available or not verdict)):
+        return None
+    outputs: dict[str, Any] = {"issueRef": issue_ref, "decision": "blocked"}
+    location = ""
+    if ref:
+        outputs["assessmentArtifactRef"] = ref
+        location += f" assessment ref {ref}"
+    if path:
+        outputs["assessmentArtifactPath"] = path
+        location += f" (path {path})"
+    if verdict == "BLOCKED":
+        outputs["assessmentVerdict"] = verdict
+        payload = await _assessment_payload(inputs, context)
+        # A fallback verdict must not inherit a contradictory artifact's reason.
+        from moonmind.workflows.temporal.assessment_verdict import (
+            normalize_assessment_payload,
+        )
+
+        reason = ""
+        if (
+            payload is not None
+            and normalize_assessment_payload(payload)[0] == "BLOCKED"
+        ):
+            reason = redact_comment_body(_string(payload.get("summary")).strip())[:2000]
+        outputs["summary"] = (
+            f"GitHub issue {issue_ref} is blocked by its assessment. "
+            + (reason or "The assessment did not provide a readable blocker summary.")
+            + (f" See{location}." if location else "")
+        )
+    else:
+        outputs["summary"] = (
+            f"GitHub issue {issue_ref} requires a usable assessment, but it was unavailable"
+            f" or had no valid verdict{location}. Re-run the assessment step so it writes "
+            "a JSON object with verdict as exactly one of FULLY_IMPLEMENTED, "
+            "PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED."
+        )
+    return ToolResult(status="FAILED", outputs=outputs)
 
 
 def _manual_only_declaration(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -8505,8 +8575,8 @@ async def _update_github_issue_status(
     mode = _github_status_mode(inputs)
     requested_mode = mode
     was_finalize_after_pr = requested_mode == "finalize_after_pr_or_done"
-    # Use the shared assessment resolver (compact previousOutputs, local handoff
-    # file, free text, then durable ref) so GitHub start/in-progress gating stays
+    # Use the shared assessment resolver (durable ref first, then local/compact/
+    # text fallback) so GitHub start/in-progress gating stays
     # on one canonical verdict path with the Jira assessment flow. The ref is the
     # bridge-compatible channel when the assessment ran on an Omnigent host whose
     # workspace this tool cannot mount.
@@ -8516,36 +8586,21 @@ async def _update_github_issue_status(
     )
     issue_ref = f"{repository}#{issue_number}"
     require_verification = _github_status_requires_verification(inputs)
-    if mode in {"start", "in_progress"} and (
-        inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
-        or _assessment_artifact_ref(inputs, _context)
-    ):
-        if not assessment_available:
-            assessment_ref = _assessment_artifact_ref(inputs, _context)
-            assessment_path = _string(
-                inputs.get("assessmentArtifactPath")
-                or inputs.get("assessment_artifact_path")
-            )
-            detail = (
-                f" assessment ref {assessment_ref}" if assessment_ref else ""
-            )
-            if assessment_path:
-                detail += f" (path {assessment_path})"
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "summary": (
-                        "GitHub issue status update requires an assessment artifact, "
-                        f"but it was unavailable{detail}. Re-run the assessment step "
-                        "so it writes a JSON object with verdict as exactly one of "
-                        "FULLY_IMPLEMENTED, PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, "
-                        "or BLOCKED."
-                    ),
-                },
-            )
-        if assessment_verdict == "FULLY_IMPLEMENTED":
+    if mode in {"start", "in_progress"}:
+        assessment_failure = await _github_assessment_failure(
+            inputs,
+            _context,
+            issue_ref=issue_ref,
+            verdict=assessment_verdict,
+            available=assessment_available,
+        )
+        if assessment_failure is not None:
+            return assessment_failure
+        if assessment_verdict == "FULLY_IMPLEMENTED" and (
+            inputs.get("assessmentArtifactPath")
+            or inputs.get("assessment_artifact_path")
+            or _assessment_artifact_ref(inputs, _context)
+        ):
             return ToolResult(
                 status="COMPLETED",
                 outputs={
@@ -8553,16 +8608,6 @@ async def _update_github_issue_status(
                     "decision": "skipped",
                     "assessmentVerdict": assessment_verdict,
                     "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is FULLY_IMPLEMENTED.",
-                },
-            )
-        if assessment_verdict == "BLOCKED":
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "assessmentVerdict": assessment_verdict,
-                    "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is BLOCKED.",
                 },
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
