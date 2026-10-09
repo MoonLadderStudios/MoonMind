@@ -20977,7 +20977,6 @@ def test_mm3935_journey_submission_reaches_the_plan_owner(
         service,
         journey_submission(
             title="single-user journey fresh",
-            repository="MoonLadderStudios/MoonMind",
             scheduled_for=scheduled_for,
             idempotency_key="mm3935-journey",
         ),
