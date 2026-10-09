@@ -20708,7 +20708,7 @@ async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
         {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
         {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
     ],
-    ids=["task-runtime-mode", "task-target-runtime", "runtime-mode"],
+    ids=["nested-runtime-mode", "nested-target-runtime", "runtime-mode"],
 )
 async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
     tmp_path,
