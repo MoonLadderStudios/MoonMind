@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
+from moonmind.schemas.temporal_models import StepCheckpointCreateInput
 from moonmind.workflows.temporal import activity_runtime
 from moonmind.workflows.temporal import artifacts as artifact_module
 from moonmind.workflows.temporal.activity_runtime import (
@@ -249,3 +251,29 @@ async def test_capture_rejects_caller_identity_outside_actual_activity(
         await TemporalCheckpointActivities(
             artifact_service=service
         ).step_checkpoint_create(request)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_keeps_structured_plan_identity(capture_artifacts):
+    service, write, info = capture_artifacts
+    request, _, _ = await capture_request(write)
+    request["planRef"] = {
+        "artifact_ref_v": 1,
+        "artifact_id": "art_plan",
+        "sha256": "3" * 64,
+        "encryption": "none",
+    }
+    result = await TemporalCheckpointActivities(
+        artifact_service=service
+    ).step_checkpoint_create(request)
+    _, raw = await service.read(
+        artifact_id=result["checkpointRef"].removeprefix("artifact://"),
+        principal="workflow:" + info.workflow_id,
+    )
+    checkpoint = json.loads(raw)
+    assert checkpoint["planRef"] == "art_plan"
+    assert checkpoint["planDigest"] == "sha256:" + "3" * 64
+    assert checkpoint["taskInputSnapshotRef"] == request["taskInputSnapshotRef"]
+    request["planRef"] = {"sha256": "3" * 64}
+    with pytest.raises(ValidationError, match="planRef.*artifact_id"):
+        StepCheckpointCreateInput.model_validate(request)

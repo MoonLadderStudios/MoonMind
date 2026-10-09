@@ -50,6 +50,7 @@ from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
 )
 from moonmind.config.settings import settings
+from moonmind.core.artifacts import canonical_artifact_ref, temporal_artifact_id
 from moonmind.schemas.temporal_models import (
     AGENT_RUN_ID_MEMO_KEYS,
     AGENT_RUN_ID_PARAM_KEYS,
@@ -2109,8 +2110,8 @@ class TemporalExecutionService:
         *,
         field_name: str,
     ) -> None:
-        ref = str(artifact_ref or "").strip()
-        if not ref or not ref.startswith("art_"):
+        ref = temporal_artifact_id(str(artifact_ref or ""))
+        if ref is None:
             return
 
         artifact = await self._session.get(TemporalArtifact, ref)
@@ -5147,11 +5148,12 @@ class TemporalExecutionService:
                 "RECOVERY_CAPABILITY_DIGEST_MISMATCH"
             )
         source_artifact_refs = {
-            str(ref).strip() for ref in (record.artifact_refs or []) if str(ref).strip()
+            canonical_artifact_ref(str(ref))
+            for ref in (record.artifact_refs or []) if str(ref).strip()
         }
         required_recovery_refs = {
-            target.checkpoint.ref,
-            target.checkpoint.validation_ref,
+            canonical_artifact_ref(target.checkpoint.ref),
+            canonical_artifact_ref(target.checkpoint.validation_ref),
         }
         if not required_recovery_refs.issubset(source_artifact_refs):
             raise TemporalExecutionRecoveryCheckpointError(
