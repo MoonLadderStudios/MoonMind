@@ -609,8 +609,10 @@ require the selected runtime's validated evidence. A
 server policy cutover uses the running Compose container's observed repository
 digest, never a newly pulled tag whose container is not running yet. Bindings
 with active host leases remain on their immutable prior authority and are
-revisited after the lease drains. Binding cutover and lease acquisition lock the
-same durable binding row. Live launch attestation requires the selected policy
+revisited after the lease drains. A cut-over binding does not override a
+Run's admitted Codex plan: its later and host-loss-recovered Step Executions
+keep launching the recorded policy version. Binding
+cutover and lease acquisition lock the same durable binding row. Live launch attestation requires the selected policy
 reference to appear in the running image's observed repository digests. The
 mutable Compose input recorded in `Config.Image` remains diagnostic
 configuration, not runtime image authority.
