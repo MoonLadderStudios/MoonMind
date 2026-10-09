@@ -1186,9 +1186,15 @@ async def test_removing_last_assignment_never_restores_migrated_default_scope(
         )
         assert connection is not None
         # The genuine, never-scoped migration mapping still bootstraps
-        # explicit selection without fabricating a recorded assignment.
+        # explicit selection without fabricating a recorded assignment. Its
+        # merge action needs an explicit assignment, so it is not bootstrapped.
         bootstrap = await service.launch_assignment(connection, repository)
-        assert bootstrap.operations == connection.allowed_operations
+        assert "merge_request" in connection.allowed_operations
+        assert bootstrap.operations == tuple(
+            operation
+            for operation in connection.allowed_operations
+            if operation != "merge_request"
+        )
         await service.launch_assignment(connection, unrelated_repository)
 
         assignment = await service.set_assignment(
