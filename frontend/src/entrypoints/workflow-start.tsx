@@ -132,7 +132,9 @@ const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
 // authoritative user input; autocomplete is optional assistance that must never
 // overwrite it and must never gate typing, pasting, or submission.
 // Interaction contract:
-// - Open/repo change fetches only default-branch metadata (no enumeration).
+// - The default branch comes with the repository options when discovery knows
+//   it; otherwise open/repo change fetches only default-branch metadata (no
+//   enumeration).
 // - Focus shows default + MoonMind-recent branches with zero GitHub requests.
 // - Typing filters those local suggestions synchronously inside the isolated
 //   input; the large Create page does not rerender per keystroke.
@@ -446,6 +448,7 @@ function writeLocalPreference(key: string, value: string): void {
 type RepositoryOption = {
   value: string;
   label: string;
+  defaultBranch: string;
 };
 
 function normalizeRepositoryOptions(
@@ -453,6 +456,7 @@ function normalizeRepositoryOptions(
     | Array<{
         value?: string | null;
         label?: string | null;
+        defaultBranch?: string | null;
       }>
     | undefined,
 ): RepositoryOption[] {
@@ -461,6 +465,7 @@ function normalizeRepositoryOptions(
     .map((item) => ({
       value: String(item?.value || "").trim(),
       label: String(item?.label || item?.value || "").trim(),
+      defaultBranch: String(item?.defaultBranch || "").trim(),
     }))
     .filter((item) => {
       if (!item.value) {
@@ -540,6 +545,7 @@ interface DashboardConfig {
         value?: string | null;
         label?: string | null;
         source?: string | null;
+        defaultBranch?: string | null;
       }>;
       error?: string | null;
     };
@@ -7474,11 +7480,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setBranchInputSyncToken((token) => token + 1);
   }, []);
   const readBranchDraft = (): string => branchDraftRef.current || "";
-  // Default-branch metadata loads once per repository with no branch
-  // enumeration and no dependence on input text. When the metadata route is
-  // unconfigured (legacy configs/tests), fall back to the suggestion route
-  // once per repository: its payload carries defaultBranch and the metadata
-  // reader discards the items.
+  // Repository discovery already reports each visible repository's default
+  // branch. Seeding the metadata query with it makes the branch field ready
+  // on first render instead of waiting behind the page's other requests.
+  const knownDefaultBranch =
+    repositoryOptions.find(
+      (option) =>
+        option.value.toLowerCase() === branchLookupRepository.toLowerCase(),
+    )?.defaultBranch || "";
+  // Otherwise default-branch metadata loads once per repository with no
+  // branch enumeration and no dependence on input text. When the metadata
+  // route is unconfigured (legacy configs/tests), fall back to the suggestion
+  // route once per repository: its payload carries defaultBranch and the
+  // metadata reader discards the items.
   const effectiveBranchMetadataEndpoint =
     branchMetadataEndpoint || branchLookupEndpoint;
   const branchMetadataQuery = useQuery({
@@ -7492,6 +7506,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     enabled: Boolean(
       effectiveBranchMetadataEndpoint && branchLookupRepository,
     ),
+    initialData: knownDefaultBranch
+      ? { defaultBranch: knownDefaultBranch }
+      : undefined,
     retry: false,
     queryFn: async ({ signal }) =>
       readBranchMetadata(
