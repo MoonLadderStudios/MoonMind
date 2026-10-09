@@ -1041,13 +1041,16 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
 
     assert test_stage < production_stage < omnigent_copy
     assert "USER app" in dockerfile[test_stage:production_stage]
-    assert "COPY api_service/docker/cache_temporal_test_server.py" in dockerfile[
-        test_stage:production_stage
-    ]
-    assert "python /tmp/cache_temporal_test_server.py" in dockerfile[
-        test_stage:production_stage
-    ]
-    assert "WorkflowEnvironment.start_time_skipping()" in cache_script
+    test_image = dockerfile[test_stage:production_stage]
+    assert (
+        "COPY --chown=app:app api_service/docker/cache_temporal_test_server.py"
+        in test_image
+    )
+    assert test_image.index("USER app") < test_image.index(
+        "python /tmp/cache_temporal_test_server.py"
+    )
+    assert "WorkflowEnvironment.start_time_skipping," in cache_script
+    assert "WorkflowEnvironment.start_local," in cache_script
     assert "test_server_download_version" not in cache_script
     assert "test_server_download_version" not in test_conftest
     assert "docker-buildx-plugin" in dockerfile[:test_stage]

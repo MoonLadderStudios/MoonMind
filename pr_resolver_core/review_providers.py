@@ -31,7 +31,9 @@ class AutomatedReviewProvider:
     command: str
     reviewer_logins: tuple[str, ...]
     clean_review_reactions: tuple[str, ...] = ("+1",)
-    clean_review_comments: tuple[str, ...] = ()
+    # The sentence that opens the clean result; the remaining opening-line text
+    # is provider flair and is still checked for high-severity findings.
+    clean_review_result: str = ""
     # ``(failure_class, openings)`` pairs recognizing the provider's notice that
     # it refused or could not perform a requested review.
     failure_reply_prefixes: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -43,7 +45,7 @@ AUTOMATED_REVIEW_PROVIDERS = MappingProxyType(
             provider="codex",
             command="@codex review",
             reviewer_logins=("chatgpt-codex-connector",),
-            clean_review_comments=("Codex Review: Didn't find any major issues. 🚀",),
+            clean_review_result="Codex Review: Didn't find any major issues.",
             # "You have reached your Codex usage limits for code reviews." and
             # "Codex usage limits have been reached for code reviews."
             failure_reply_prefixes=(
@@ -97,6 +99,9 @@ def normalize_reviewer_login(login: object) -> str:
 
 # Severity identifies findings in provider-authored summary/reply bodies; it
 # never disposes of them. Every priority uses the same applicability rules.
+# Severity also decides whether a provider's clean result completes its review:
+# P2/medium-or-below text after the clean result still completes it, while those
+# findings stay actionable through the comment inventory.
 _SEVERITY_P_RE = re.compile(
     r"\bP\s*[0-9]\b|\bsev\s*[0-9]\b",
     re.IGNORECASE,
@@ -117,6 +122,47 @@ def has_explicit_finding_severity(body: object) -> bool:
 
     text = str(body or "")
     return bool(_SEVERITY_P_RE.search(text) or _SEVERITY_TEXT_RE.search(text))
+
+
+# High-severity detection is restricted to structured priority/severity labels
+# (for example `[P1]`, `priority: high`, or `severity: critical`) so prose
+# adjectives in explicitly low-priority findings (for example
+# `[P2] Avoid high memory usage`) cannot promote them back to high.
+_HIGH_SEVERITY_P_RE = re.compile(
+    r"\bP\s*[01]\b|\bsev\s*[01]\b",
+    re.IGNORECASE,
+)
+_HIGH_SEVERITY_TEXT_RE = re.compile(
+    r"\bseverity\s*[:=\-]\s*(critical|high|major|severe|urgent|blocker|p[01])\b"
+    r"|\bpriority\s*[:=\-]\s*(critical|high|highest|urgent|blocker|p[01])\b"
+    r"|\[(critical|high|major|severe|urgent|blocker|p[01]|sev[01])\]"
+    r"|^(critical|high)\s*[:\-]"
+    r"|\b(critical|high)\s+(severity|priority)\b"
+    r"|\b(severity|priority)\s+(critical|high)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NIT_RE = re.compile(r"\bnits?\b", re.IGNORECASE)
+
+
+def has_high_severity_finding(body: object) -> bool:
+    """Return True when *body* carries a structured P0/critical or P1/high marker."""
+
+    text = str(body or "")
+    return bool(
+        _HIGH_SEVERITY_P_RE.search(text) or _HIGH_SEVERITY_TEXT_RE.search(text)
+    )
+
+
+def is_low_severity_only_finding(body: object) -> bool:
+    """Return True when *body* is explicitly low severity and nothing higher.
+
+    Text without any severity marker is conservatively treated as requiring
+    review (return False) so unmarked feedback never completes a review.
+    """
+
+    text = str(body or "")
+    marked = has_explicit_finding_severity(text) or bool(_NIT_RE.search(text))
+    return marked and not has_high_severity_finding(text)
 
 
 def is_automated_review_provider_login(provider: object, login: object) -> bool:
@@ -195,23 +241,22 @@ def is_review_request_comment(provider: AutomatedReviewProvider, comment: Any) -
     )
 
 
-def latest_review_request(
+def _review_requests(
     provider: AutomatedReviewProvider,
     comments: Iterable[Any],
     *,
     head_sha: str,
     not_before: datetime | None = None,
-) -> ReviewRequest | None:
-    """Select requests once for both the portable snapshot and GitHub gate.
+) -> Iterable[ReviewRequest]:
+    """Recognize explicit requests once for every resolver host.
 
     Hosts supply a head timestamp or the active request as the lower bound.
     REST issue-comment collections omit ``type``; portable inventories must
     explicitly identify any non-issue records so they cannot become requests.
     """
 
-    latest = None
     if not head_sha:
-        return None
+        return
     for comment in comments:
         if not is_review_request_comment(provider, comment):
             continue
@@ -221,11 +266,68 @@ def latest_review_request(
         commit = str(comment.get("commit_id") or "").strip()
         if commit and commit != head_sha:
             continue
+        yield ReviewRequest(comment=comment, created_at=created_at)
+
+
+def latest_review_request(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    head_sha: str,
+    not_before: datetime | None = None,
+) -> ReviewRequest | None:
+    """Select the causally latest explicit request for the unchanged head."""
+    latest = None
+    for request in _review_requests(
+        provider, comments, head_sha=head_sha, not_before=not_before
+    ):
         if latest is None or review_comment_is_after(
-            created_at, comment.get("id"), latest.created_at, latest.comment.get("id")
+            request.created_at,
+            request.comment.get("id"),
+            latest.created_at,
+            latest.comment.get("id"),
         ):
-            latest = ReviewRequest(comment=comment, created_at=created_at)
+            latest = request
     return latest
+
+
+def review_requests_after(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    head_sha: str,
+    request_comment_id: object,
+    requested_at: datetime,
+) -> list[ReviewRequest]:
+    """Retain every identifiable request from the active receipt onward."""
+    anchor_id = _comment_id(request_comment_id)
+    if anchor_id is None:
+        raise ValueError("The active review request has no valid comment identity.")
+    requests: dict[int, ReviewRequest] = {}
+    for request in _review_requests(provider, comments, head_sha=head_sha):
+        identifier = _comment_id(request.comment.get("id"))
+        if identifier is None:
+            raise ValueError("A review request has no valid comment identity.")
+        if identifier == anchor_id:
+            if request.created_at != requested_at:
+                raise ValueError(
+                    "The active review request timestamp is contradictory."
+                )
+        elif not review_comment_is_after(
+            request.created_at, identifier, requested_at, anchor_id
+        ):
+            continue
+        prior = requests.get(identifier)
+        if prior is not None and prior.created_at != request.created_at:
+            raise ValueError("A review request has contradictory timestamps.")
+        requests[identifier] = request
+    return sorted(
+        requests.values(),
+        key=lambda request: (
+            request.created_at,
+            _comment_id(request.comment.get("id")),
+        ),
+    )
 
 
 def _request_reply_time(
@@ -255,27 +357,58 @@ def _request_reply_time(
     return created_at
 
 
-def _is_clean_review_body(provider: AutomatedReviewProvider, body: str) -> bool:
-    """Recognize the provider's exact clean result.
+# Provider boilerplate is outside the result. Only the boilerplate block is
+# dropped so text around it still counts against a clean result.
+_PROVIDER_FOOTER_RE = re.compile(
+    r"<details>\s*<summary>\s*ℹ️ About Codex in GitHub\s*</summary>"
+    r".*?(?:</details>|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_REVIEWED_COMMIT_RE = re.compile(r"Reviewed commit:\s*`?([^`]*)`?", re.IGNORECASE)
+_MIN_ABBREVIATED_SHA_LENGTH = 7
 
-    A bare phrase inside arbitrary prose or a quoted response is not
-    completion evidence, and a marked finding of any priority keeps the
-    response non-clean.
-    """
-    if has_explicit_finding_severity(body):
+
+def _names_head_commit(commit: str, head_sha: str) -> bool:
+    """Return True when *commit*, possibly abbreviated, names *head_sha*."""
+
+    commit = commit.strip().lower()
+    return len(commit) >= _MIN_ABBREVIATED_SHA_LENGTH and (
+        head_sha.strip().lower().startswith(commit)
+    )
+
+
+def _is_clean_review_body(
+    provider: AutomatedReviewProvider, body: str, *, head_sha: str
+) -> bool:
+    """Read a clean result while preserving quoted Markdown and named commits."""
+    reviewed_commits = []
+    lines = []
+    body = _PROVIDER_FOOTER_RE.sub("", body)
+    for line in body.splitlines():
+        # Markdown code indentation quotes the result or its reviewed commit;
+        # stripping it would turn embedded text into completion evidence.
+        if line.strip() and line.expandtabs(4).startswith("    "):
+            return False
+        line = re.sub(r"^#{1,6}\s+", "", line.strip()).replace("**", "")
+        line = " ".join(line.split())
+        reviewed_commit = _REVIEWED_COMMIT_RE.fullmatch(line)
+        if reviewed_commit:
+            reviewed_commits.append(reviewed_commit.group(1))
+        elif line:
+            lines.append(line)
+    if not all(_names_head_commit(commit, head_sha) for commit in reviewed_commits):
         return False
-    # Provider boilerplate is outside the result. Keep any other text so a
-    # mixed clean/findings response cannot be mistaken for a clean result.
-    body = re.sub(
-        r"<details>\s*<summary>\s*ℹ️ About Codex in GitHub\s*</summary>.*?</details>\s*$",
-        "",
-        body,
-        count=1,
-        flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-    body = re.sub(r"^#{1,6}\s+", "", body).replace("**", "")
-    body = " ".join(body.split())
-    return body in provider.clean_review_comments
+    if not lines or not lines[0].startswith(provider.clean_review_result):
+        return False
+    flair = lines[0][len(provider.clean_review_result) :]
+    findings = "\n".join(lines[1:])
+    # A clean response carrying only P2/medium-or-below findings is still a
+    # clean review: there is nothing major left, so the Fix and Review Loop ends
+    # instead of requesting another review. P0/critical or P1/high findings,
+    # including any hidden in the flair, keep the response non-clean.
+    if has_high_severity_finding(flair):
+        return False
+    return not findings or is_low_severity_only_finding(findings)
 
 
 def _failure_class(provider: AutomatedReviewProvider, body: str) -> str:
@@ -320,8 +453,7 @@ def classify_review_reply(
     opening = next((line for line in raw_body.splitlines() if line.strip()), "")
     if opening.startswith(("    ", "\t")):
         return None
-    body = raw_body.strip()
-    if _is_clean_review_body(provider, body):
+    if _is_clean_review_body(provider, raw_body, head_sha=head_sha):
         return ReviewReply(comment=comment, created_at=created_at)
     failure_class = _failure_class(provider, str(comment.get("body") or ""))
     if failure_class:

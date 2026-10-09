@@ -139,26 +139,44 @@ def test_existing_ledger_dispositions_apply_without_hiding_open_threads(
 
 
 @pytest.mark.parametrize(
-    "suffix",
+    ("suffix", "completes_review"),
     [
-        "\n\n[P2] Preserve the pending retry.",
-        "\n\nseverity: low\nDocument the retry condition.",
-        "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>Help</details>\n[P3] Keep the result.",
-        "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>[P2] Keep the result.</details>",
+        ("\n\n[P2] Preserve the pending retry.", True),
+        ("\n\nseverity: low\nDocument the retry condition.", True),
+        (
+            (
+                "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>Help</details>"
+                "\n[P3] Keep the result."
+            ),
+            True,
+        ),
+        (
+            (
+                "\n\n<details><summary>ℹ️ About Codex in GitHub</summary>"
+                "[P2] Keep the result.</details>"
+            ),
+            True,
+        ),
+        ("\n\n[P1] Preserve the saved candidate.", False),
     ],
 )
-def test_clean_phrase_cannot_hide_trailing_findings(snapshot_module, suffix):
+def test_clean_result_cannot_hide_trailing_findings(
+    snapshot_module, suffix, completes_review
+):
+    """Only lower-priority findings let a clean result complete the review.
+
+    Completion settles review freshness; it never disposes of the findings,
+    which still need a disposition at every priority.
+    """
     comment = _finding("issue_comment", CLEAN_BODY + suffix)
 
-    assert (
-        classify_review_reply(
-            automated_review_provider_or_raise("codex"),
-            comment,
-            requested_at=datetime(2026, 8, 24, 22, 15, tzinfo=UTC),
-            head_sha=HEAD,
-        )
-        is None
+    reply = classify_review_reply(
+        automated_review_provider_or_raise("codex"),
+        comment,
+        requested_at=datetime(2026, 8, 24, 22, 15, tzinfo=UTC),
+        head_sha=HEAD,
     )
+    assert (reply is not None and reply.failure_class == "") is completes_review
     assert snapshot_module["summarize_comments"]([comment])["actionableCommentIds"] == [
         51
     ]
