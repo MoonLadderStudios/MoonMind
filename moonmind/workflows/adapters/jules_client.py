@@ -389,42 +389,6 @@ class JulesClient:
 
         return GitHubService()
 
-    async def merge_pull_request(
-        self,
-        *,
-        pr_url: str,
-        merge_method: str = "merge",
-        github_token: str | None = None,
-    ) -> "MergePRResult":
-        """Merge a GitHub pull request by URL.
-
-        Delegates to :class:`GitHubService`.
-        """
-        svc = self._github_service()
-        return await svc.merge_pull_request(
-            pr_url=pr_url,
-            merge_method=merge_method,
-            github_token=github_token,
-        )
-
-    async def update_pull_request_base(
-        self,
-        *,
-        pr_url: str,
-        new_base: str,
-        github_token: str | None = None,
-    ) -> tuple[bool, str]:
-        """Update a GitHub PR's base (target) branch.
-
-        Delegates to :class:`GitHubService`.
-        """
-        svc = self._github_service()
-        return await svc.update_pull_request_base(
-            pr_url=pr_url,
-            new_base=new_base,
-            github_token=github_token,
-        )
-
     async def create_pull_request(
         self,
         *,

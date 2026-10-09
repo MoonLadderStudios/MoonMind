@@ -537,7 +537,9 @@ class OmnigentOAuthHostJanitor:
         authority = await self._cleanup_authority(lease, binding=binding)
         if authority is None:
             result = await self._runtime.stop_host(
-                binding=binding, host_lease=lease
+                binding=binding,
+                host_lease=lease,
+                cleanup_authority_store=self._run_store,
             )
             cleanup = dict(result or {})
             launch = getattr(lease, "effective_launch_snapshot", None)
@@ -572,6 +574,7 @@ class OmnigentOAuthHostJanitor:
                 request_identity
             ),
             artifact_gateway=self._artifact_gateway,
+            cleanup_authority_store=self._run_store,
         )
 
     async def _record_terminal_cleanup(

@@ -364,6 +364,44 @@ bash -lc 'gh repo view owner/repo --json nameWithOwner'
 
 Mutation-capable workflows must also verify that the selected GitHub credential has the repository permissions required by the Skill or publish policy.
 
+For the profile-bound path, `authored_github_operations` is the canonical reader
+of these requirements. Before any bridge/host/lease mutation, a metadata-only
+check verifies the selected default connection and its repository assignment.
+Agent-facing projection then reserves a monotonically increasing revision under
+the durable bridge and host-lease owner, and installs that reservation in the
+lease-private cache before acquiring a credential. Acquisition rechecks the same
+narrowed operations before secret access. The value keeps its original
+reservation through retries; cached values cannot acquire a newer publication
+stamp. Destination writers serialize reservations and atomically replace the
+credential and its stamp together, so a late older acquisition cannot overwrite
+a newer one. Lost acknowledgments reconcile the installed stamp without reading
+or logging the credential. The durable owner is rechecked after destination
+reservation and immediately before publication. Reservation, acquisition, or
+refresh failures retain the host, workspace, and lease for the existing retry
+owner. Cleanup retires the current reservation before deleting its cache and
+cannot remove a newer projection. A successful metadata preflight never becomes
+a cached grant. The generic host stores its reservation under the existing
+runtime-binding compare-and-swap fence and uses the same destination writer.
+Historical generic cleanup reuses its frozen tool-image authority and can retire
+only an unversioned destination; it cannot adopt a newer stamped projection.
+
+Authenticated read-only `gh` requires only `read`. Branch publication requires
+`write` and `branch_write`; PR publication also requires `review_request`.
+GitHub-relevant Skill-owned Auto and generic actions carry explicit
+`githubOperations`; they do not infer merge permission from publication mode.
+Auto for a local or other-provider source, with no `gh` or explicit GitHub action
+metadata, does not require or acquire GitHub authority. The publisher checks only
+its destination operations, so a saved branch/PR publication does not reacquire
+source-read authority or imply merge permission. Prepared clone-only work still
+resolves a source credential lazily only if materialization is necessary.
+
+The four built-in Auto Skills declare their actual actions. `fix-ci` and
+`fix-merge-conflicts` require branch writes; `fix-comments` also requires review
+operations; `pr-resolver` adds merge only for its merging finish mode.
+`fix-merge-conflicts` declares both `git` and `gh`, matching its authoritative PR
+lookup and the existing lease-private Git/gh credential projection.
+
+
 If `gh` is missing, unauthenticated, or unauthorized for the target repository, MoonMind blocks before creating the Omnigent session and returns an actionable capability diagnostic.
 
 A host may contain `gh` even when a run does not require it. Mere executable presence does not cause MoonMind to inject GitHub credentials or imply permission to perform GitHub mutations.

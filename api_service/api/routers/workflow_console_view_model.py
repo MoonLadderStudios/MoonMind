@@ -8,7 +8,7 @@ import re
 import time
 import logging
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, Mapping
 from urllib.parse import quote, urlparse
@@ -149,13 +149,17 @@ class RepositoryOption:
     value: str
     label: str
     source: str
+    default_branch: str | None = None
 
     def to_payload(self) -> dict[str, str]:
-        return {
+        payload = {
             "value": self.value,
             "label": self.label,
             "source": self.source,
         }
+        if self.default_branch:
+            payload["defaultBranch"] = self.default_branch
+        return payload
 
 @dataclass(frozen=True, slots=True)
 class BranchOption:
@@ -208,6 +212,7 @@ def _append_repository_option(
     value: object,
     *,
     source: str,
+    default_branch: str | None = None,
 ) -> None:
     normalized = _normalize_repository_value(value)
     if not normalized:
@@ -217,7 +222,12 @@ def _append_repository_option(
         return
     seen.add(key)
     options.append(
-        RepositoryOption(value=normalized, label=normalized, source=source)
+        RepositoryOption(
+            value=normalized,
+            label=normalized,
+            source=source,
+            default_branch=default_branch,
+        )
     )
 
 def _fetch_github_repository_options(
@@ -260,6 +270,9 @@ def _fetch_github_repository_options(
                     seen,
                     item.get("full_name"),
                     source="github",
+                    default_branch=(
+                        str(item.get("default_branch") or "").strip() or None
+                    ),
                 )
     return options, None
 
@@ -1000,6 +1013,7 @@ def _build_repository_options(
     for raw_repo in configured_repos.split(","):
         _append_repository_option(options, seen, raw_repo, source="configured")
 
+    discovered: list[RepositoryOption] = []
     discovery_error: str | None = None
     github_config = getattr(settings, "github", None)
     github_enabled = (
@@ -1026,6 +1040,18 @@ def _build_repository_options(
                 source="github",
             )
 
+    # Discovery already reports every visible repository's default branch, so
+    # the Create page can show it immediately instead of waiting on a second
+    # per-repository GitHub lookup behind the page's other requests.
+    default_branches = {
+        option.value.lower(): option.default_branch
+        for option in discovered
+        if option.default_branch
+    }
+    options = [
+        replace(option, default_branch=default_branches.get(option.value.lower()))
+        for option in options
+    ]
     return {
         "items": [option.to_payload() for option in options],
         "error": discovery_error,
@@ -1716,8 +1742,11 @@ async def resolve_dashboard_runtime_config(
       ``is_default`` lookup instead of selecting a stale ID.
     """
 
+    # Create-page config performs blocking GitHub repository discovery; run it
+    # off the event loop so it never stalls concurrent requests such as branch
+    # lookups on the single API worker.
     if session is None:
-        return build_runtime_config(initial_path)
+        return await asyncio.to_thread(build_runtime_config, initial_path)
 
     # Local imports keep the view-model importable without DB models loaded
     # for tests that exercise build_runtime_config directly.
@@ -1764,7 +1793,8 @@ async def resolve_dashboard_runtime_config(
         runtime_override = None
         profile_ref = None
 
-    return build_runtime_config(
+    return await asyncio.to_thread(
+        build_runtime_config,
         initial_path,
         default_runtime_override=runtime_override,
         default_provider_profile_ref=profile_ref,

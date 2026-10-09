@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from temporalio import workflow
 
 from api_service.db.models import Base
-from moonmind.config.settings import settings
+from moonmind.config.settings import TemporalSettings, settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal import (
     AGENT_RUNTIME_FLEET,
@@ -215,32 +215,6 @@ def test_executable_worker_spec_drives_registration_and_stable_identity() -> Non
     assert alternate_lane.registry_fingerprint == first.registry_fingerprint
 
 
-def test_deployment_readiness_advertises_the_registered_controller_bootstrap():
-    from temporalio import activity
-
-    @activity.defn(name="mm.tool.execute")
-    async def execute():
-        return None
-
-    spec = build_worker_spec(
-        topology=build_worker_topology(fleet=DEPLOYMENT_FLEET),
-        activities=(execute,),
-        workflows=(),
-        environ={"MOONMIND_DEPLOYMENT_MODE": "development"},
-    )
-    assert spec.readiness_payload()["controllerBootstrapCapabilities"] == [
-        "active-journal-transition"
-    ]
-    assert (
-        "controllerBootstrapCapabilities"
-        not in replace(spec, fleet=WORKFLOW_FLEET).readiness_payload()
-    )
-    assert (
-        "controllerBootstrapCapabilities"
-        not in replace(spec, activity_types=()).readiness_payload()
-    )
-
-
 def test_production_worker_spec_requires_immutable_release_identity() -> None:
     topology = build_worker_topology(fleet=WORKFLOW_FLEET)
     with pytest.raises(ValueError, match="MOONMIND_BUILD_SHA"):
@@ -367,6 +341,55 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
         "agent_runtime",
         "docker_workload",
     )
+
+def test_workflow_topology_serves_merge_lane_with_its_own_budget():
+    """#3937: one workflow process polls every lane; merge keeps 2 slots."""
+
+    topology = describe_configured_worker(
+        temporal_settings=settings.temporal.model_copy(
+            update={
+                "worker_fleet": WORKFLOW_FLEET,
+                "workflow_worker_concurrency": 8,
+                "merge_automation_workflow_worker_concurrency": 2,
+            }
+        )
+    )
+
+    assert topology.task_queues == (
+        "mm.workflow.user.v2",
+        "mm.workflow",
+        "mm.workflow.merge_automation",
+    )
+    assert topology.concurrency_limit == 8
+    assert topology.queue_concurrency_limits == {
+        "mm.workflow.merge_automation": 2,
+    }
+
+
+def test_merge_queue_shared_with_start_queue_keeps_the_fleet_budget():
+    topology = describe_configured_worker(
+        temporal_settings=settings.temporal.model_copy(
+            update={
+                "worker_fleet": WORKFLOW_FLEET,
+                "workflow_worker_concurrency": 8,
+                "merge_automation_workflow_task_queue": "mm.workflow.user.v2",
+            }
+        )
+    )
+
+    assert topology.task_queues == ("mm.workflow.user.v2", "mm.workflow")
+    assert topology.queue_concurrency_limits == {}
+
+
+def test_merge_lane_budget_defaults_to_two():
+    assert TemporalSettings().merge_automation_workflow_worker_concurrency == 2
+    assert (
+        TemporalSettings(
+            TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY="3"
+        ).merge_automation_workflow_worker_concurrency
+        == 3
+    )
+
 
 def test_agent_runtime_topology_exposes_docker_workload_capability():
     topology = describe_configured_worker(

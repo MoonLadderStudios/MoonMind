@@ -47,6 +47,7 @@ pytestmark = [
 
 _REPO = "MoonLadderStudios/MoonMind"
 _WORKFLOW = "mm:test-deployment-evidence"
+_OPERATIONS = ("read", "write", "branch_write", "review_request", "merge_request")
 
 
 @pytest_asyncio.fixture
@@ -57,8 +58,16 @@ async def authority_context(tmp_path, monkeypatch):
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
-        github_pat_connection("selected-repository", "SELECTED_REPOSITORY_PAT"),
-        assignments=[github_repository_assignment("selected-repository", _REPO)],
+        # The merge resolver child derives merge_request from its finish mode,
+        # so its connection and live assignment must admit that action.
+        github_pat_connection(
+            "selected-repository", "SELECTED_REPOSITORY_PAT", operations=_OPERATIONS
+        ),
+        assignments=[
+            github_repository_assignment(
+                "selected-repository", _REPO, operations=_OPERATIONS
+            )
+        ],
     )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -268,12 +277,20 @@ async def test_repository_plan_routes_to_authorized_realizer_before_capacity(
 async def test_merge_resolver_child_activity_readmits_mixed_parent_without_caller_grants(
     authority_context, monkeypatch, parent_publish_mode
 ):
+    # Auto publication is provider-neutral, so GitHub actions are declared.
+    declared = (
+        {"githubOperations": ["write", "branch_write", "review_request"]}
+        if parent_publish_mode == "auto"
+        else {}
+    )
     parent = await _compile(
         monkeypatch,
         authority_context,
         repository=_target(),
         requiredCapabilities=["gh"],
         publishMode=parent_publish_mode,
+        mergeAutomation={"enabled": True},
+        **declared,
     )
     assert "source" in parent.envelope.payload.credentialBindings
     sessions, artifacts, _gateway = authority_context
@@ -386,6 +403,9 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
             calls.append((list(argv), kwargs.get("input_bytes")))
             if argv[1:3] == ["volume", "inspect"]:
                 return 0, hashlib.sha256(owner.encode()).hexdigest()[:32], ""
+            if argv[1:2] == ["run"] and "-ceu" in argv:
+                # The projection writer acknowledges its reservation stamp.
+                return 0, argv[-1], ""
             return 0, "", ""
 
     async def clone_runner(argv, input_bytes=None):
@@ -448,8 +468,33 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
         idempotency_key=request.idempotency_key,
         provider_leases={},
     )
+    # Mirror the generic realizer: projection is reserved durably before prepare.
+    from moonmind.omnigent.runtime_bindings import (
+        RuntimeBindingState,
+        reserve_github_projection,
+        validate_github_projection,
+    )
+
+    reservation = None
+    if not anonymous:
+        for state in (
+            RuntimeBindingState.credentials_acquired,
+            RuntimeBindingState.credentials_materialized,
+        ):
+            binding = await runtime_store.update(
+                binding.bindingId,
+                expected_revision=binding.revision,
+                expected_fencing_generation=binding.fencingGeneration,
+                state=state,
+            )
+        binding, reservation = await reserve_github_projection(runtime_store, binding)
     owner = f"{binding.bindingId}:{binding.fencingGeneration}"
-    authority = []
+    authority = list(binding.cleanupAuthorityRefs)
+
+    async def verify_projection():
+        await validate_github_projection(
+            runtime_store, binding.bindingId, reservation
+        )
 
     async def record(value):
         nonlocal binding
@@ -472,6 +517,8 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
         launch_policy=SimpleNamespace(),
         authority_sink=record,
         repository_owner_ref=owner,
+        github_projection_reservation=reservation,
+        github_projection_verifier=verify_projection,
     )
     clone_argv, clone_input = next(
         (argv, data) for argv, data in calls if "-ceu" in argv

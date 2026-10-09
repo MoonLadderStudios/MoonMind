@@ -191,6 +191,9 @@ _GITHUB_REPOSITORY_PREFIXES = (
 
 # Audit identity migration 391 records when it maps the legacy credential.
 _LEGACY_DEFAULT_MIGRATION_REQUEST_ID = "migration:391:legacy-github-credential"
+_LEGACY_DEFAULT_ALLOWED_OPERATIONS = frozenset(
+    {"read", "write", "branch_write", "review_request"}
+)
 
 
 def _github_repository_key(value: Any) -> str:
@@ -1397,13 +1400,17 @@ class RepositoryConnectionService:
                 canonicalRemote=f"{endpoint.rstrip('/')}/{name}.git",
                 displayName=name,
             ),
-            operations=connection.allowed_operations,
+            operations=tuple(
+                operation
+                for operation in connection.allowed_operations
+                if operation in _LEGACY_DEFAULT_ALLOWED_OPERATIONS
+            ),
         )
 
     async def _is_unscoped_migrated_default(
         self, connection: RepositoryConnection
     ) -> bool:
-        """Whether this is migration 391's mapping and still has no assignment.
+        """Whether migration 391's mapping has never been explicitly scoped.
 
         The migration writes its ``connection.create`` audit identity only
         when the default row is its own mapping; it keeps an operator's
@@ -1423,6 +1430,20 @@ class RepositoryConnectionService:
             )
         ).first()
         if migrated is None:
+            return False
+        # Explicit assignment management permanently replaces the migration's
+        # unscoped bootstrap. Removing the final grant must not restore it.
+        scoped = (
+            await self._session.execute(
+                select(RepositoryConnectionAuditEvent.id).where(
+                    RepositoryConnectionAuditEvent.connection_id == connection.id,
+                    RepositoryConnectionAuditEvent.action.in_(
+                        ("assignment.set", "assignment.remove")
+                    ),
+                )
+            )
+        ).first()
+        if scoped is not None:
             return False
         assigned = (
             await self._session.execute(

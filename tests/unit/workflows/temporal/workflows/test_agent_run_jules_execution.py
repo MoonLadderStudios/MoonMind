@@ -45,6 +45,7 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-agent-run-1",
             "run_id": "run-1",

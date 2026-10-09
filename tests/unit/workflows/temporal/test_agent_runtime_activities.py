@@ -4406,9 +4406,13 @@ async def test_pr_resolver_resolve_selector_activity_preserves_canonical_identit
 ) -> None:
     from moonmind.workflows.adapters.github_service import PullRequestSelectorResult
 
-    async def resolve_selector(self, *, repo: str, selector: str, github_token=None):
+    async def resolve_selector(
+        self, *, repo: str, selector: str, github_token=None, admitted_workflow_id=None
+    ):
         assert repo == "MoonLadderStudios/MoonMind"
         assert selector == "feature/mm-1200"
+        # The admitted connection resolves it, never an ambient token (#4010).
+        assert github_token is None and admitted_workflow_id == ""
         return PullRequestSelectorResult(
             resolved=True,
             prNumber=3192,
@@ -7977,6 +7981,11 @@ def _session_activities(
     ("selected_ref", "selected_token", "other_token"),
     [
         ("repository-connection:team-b", "token-for-selected-B", "token-for-default-A"),
+        (
+            "repository-connection:git-default",
+            "token-for-default-A",
+            "token-for-selected-B",
+        ),
         # A bare repository selects the default, as an omitted connectionRef does.
         (None, "token-for-default-A", "token-for-selected-B"),
     ],
@@ -8009,7 +8018,7 @@ async def test_launch_session_authenticates_as_the_selected_connection_among_sev
             ),
             github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
-            )
+            ),
         ],
     )
     workspace_root = tmp_path / "agent_jobs"
@@ -8069,7 +8078,7 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
             ),
             github_repository_assignment(
                 "repository-connection:team-b", "MoonLadderStudios/private-repo"
-            )
+            ),
         ],
     )
     workspace_root = tmp_path / "agent_jobs"
@@ -8094,3 +8103,144 @@ async def test_launch_session_stops_with_the_correction_when_the_selected_source
     assert host.git_envs == []
     assert host.docker_run_envs == []
     assert host.broker_tokens == []
+
+
+# ---------------------------------------------------------------------------
+# Merge gates and pr-resolver Activities use their run's admitted connection
+# (MoonLadderStudios/MoonMind#4010)
+# ---------------------------------------------------------------------------
+
+_ADMITTED_OWNER = "mm:owner-run"
+_MERGE_GATE = f"merge-automation:{_ADMITTED_OWNER}:acme/repo:7:{'a' * 40}"
+
+
+def _in_gate_activity(monkeypatch, workflow_id: str, parents: dict[str, str]):
+    import dataclasses
+
+    from temporalio import activity
+    from temporalio.testing import ActivityEnvironment
+
+    from tests.helpers.repository_connections import TemporalParentClient
+
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=workflow_id)
+    client = TemporalParentClient(parents)
+    monkeypatch.setattr(activity, "client", lambda: client)
+    return env
+
+
+@pytest.mark.asyncio
+async def test_merge_gate_readiness_reads_with_owning_run_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A merge/fix gate (no canonical record) reads with its owner's selected PAT B."""
+
+    import httpx
+
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    env = _in_gate_activity(monkeypatch, _MERGE_GATE, {_MERGE_GATE: _ADMITTED_OWNER})
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:team-b", "acme/repo")
+        ],
+        admitted_runs={
+            _ADMITTED_OWNER: {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:team-b",
+                    "repository": {"name": "acme/repo"},
+                }
+            }
+        },
+    )
+    try:
+        await env.run(
+            TemporalIntegrationActivities().merge_automation_evaluate_readiness,
+            {
+                "pullRequest": {"repo": "acme/repo", "number": 7, "headSha": "a" * 40},
+                "mergeAutomationConfig": {"finishMode": "merge"},
+            },
+        )
+    finally:
+        await engine.dispose()
+
+    assert requests
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("activity_name", ["resolve_selector", "read_snapshot", "finalize_merge"])
+async def test_pr_resolver_activities_use_their_runs_admitted_connection(
+    monkeypatch: pytest.MonkeyPatch, activity_name: str
+) -> None:
+    """Each pr-resolver read and its merge name the executing run, never a token."""
+
+    from moonmind.workflows.adapters.github_service import (
+        GitHubService,
+        MergePRResult,
+        PullRequestReadinessResult,
+        PullRequestSelectorResult,
+    )
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def resolve(self, **kwargs):
+        calls.append(("selector", kwargs))
+        return PullRequestSelectorResult(
+            selectorType="branch", reasonCode="not_found", summary="No PR."
+        )
+
+    async def readiness(self, **kwargs):
+        calls.append(("readiness", kwargs))
+        return PullRequestReadinessResult(headSha="a" * 40, ready=True)
+
+    async def merge(self, **kwargs):
+        calls.append(("merge", kwargs))
+        return MergePRResult(
+            pr_url="https://github.com/acme/repo/pull/7", merged=True, summary="Merged."
+        )
+
+    monkeypatch.setattr(GitHubService, "resolve_pull_request_selector", resolve)
+    monkeypatch.setattr(GitHubService, "evaluate_pull_request_readiness", readiness)
+    monkeypatch.setattr(GitHubService, "merge_pull_request", merge)
+    resolver_run = f"{_ADMITTED_OWNER}:resolver:1"
+    env = _in_gate_activity(monkeypatch, resolver_run, {})
+    activities = TemporalIntegrationActivities()
+    payload = {
+        "repository": "acme/repo",
+        "selector": "feature",
+        "prNumber": 7,
+        "prUrl": "https://github.com/acme/repo/pull/7",
+        "headSha": "a" * 40,
+    }
+
+    await env.run(getattr(activities, f"pr_resolver_{activity_name}"), payload)
+
+    assert calls
+    for _name, kwargs in calls:
+        assert kwargs["admitted_workflow_id"] == resolver_run
+        assert "github_token" not in kwargs
+    if activity_name == "finalize_merge":
+        assert [name for name, _ in calls] == ["readiness", "merge"]

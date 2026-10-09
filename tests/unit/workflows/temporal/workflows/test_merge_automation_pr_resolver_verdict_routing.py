@@ -211,6 +211,7 @@ class _Harness:
             merge_automation_module.workflow,
             "info",
             lambda: SimpleNamespace(
+                task_queue="mm.workflow.user.v2",
                 workflow_id=MERGE_AUTOMATION_WORKFLOW_ID, run_id=OWNER_RUN_ID
             ),
         )
@@ -234,6 +235,7 @@ def _default_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
         merge_automation_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=MERGE_AUTOMATION_WORKFLOW_ID, run_id=OWNER_RUN_ID
         ),
     )

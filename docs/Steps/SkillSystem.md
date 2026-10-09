@@ -1270,6 +1270,40 @@ capability before launch; the Skill author and operator do not manage a separate
 permission checkbox. See
 [Required Capabilities](../Workflows/RequiredCapabilities.md#75-executionfanout).
 
+GitHub action requirements are distinct from tool readiness. Skill-owned Auto
+publication involving a GitHub source, `gh`, or explicit GitHub action metadata
+declares `metadata.publish.githubOperations`; other GitHub effects
+may declare `metadata.sideEffect.githubOperations`. These lists use the existing
+repository operation vocabulary (`read`, `write`, `branch_write`, `lock`,
+`review_request`, `merge_request`). Generic agent requests use
+`parameters.githubOperations`. Requirements compose with resolved Skill metadata;
+an empty or narrower caller list cannot remove a Skill's required operation.
+Neither declaration creates or expands a connection grant. Auto remains
+provider-neutral: a local or other-provider publisher with no GitHub intent
+neither needs these declarations nor acquires GitHub authority. Explicit GitHub
+metadata and malformed signals still require validation in every context.
+
+Resolved Skill entries preserve publication and side-effect metadata from the
+selected content, including deployment artifacts. Run forwards it under a replay
+gate. The known `merge_pull_request` side effect additionally requires
+`merge_request` for the Skill's `finishMode: merge` (including its documented
+default), and does not require it for `fix_only`. Invalid or contradictory
+metadata and undeclared mutation intent are rejected before binding a host.
+`enqueue_children` alone does not require a GitHub write. Older GitHub-relevant
+Auto snapshots without enough action metadata require a corrected request; they
+never receive inferred broader permissions. Retained work remains available.
+
+Generic Omnigent plans compose the selected resolved Skill metadata and authored
+action declarations through this same canonical reader before freezing
+collaboration authority. At credential use, the current agent's required actions
+must remain within that frozen snapshot; the current connection and assignment
+must still admit its full operation set. Source reads, trusted native review,
+and publisher destination operations retain their distinct roles. Conflicting
+workspace and runtime repository projections fail before credentials or host
+mutation; equivalent GitHub slug/URL spellings retain one canonical target for
+preflight and publication.
+
+
 ---
 
 ## 18. Security and Trust

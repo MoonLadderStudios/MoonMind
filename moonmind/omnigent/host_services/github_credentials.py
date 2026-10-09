@@ -29,6 +29,148 @@ _TARGET_PATH = "/run/mm-credentials/github"
 _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
+def github_projection_script(
+    config_dir: str = "/config", *, action: str = "publish"
+) -> str:
+    """Build the destination-serialized, restart-safe gh projection protocol.
+
+    Arguments are uid, gid, host, and the metadata-only durable reservation.
+    Only publish reads the token, from stdin. The installed stamp is a YAML
+    comment in hosts.yml: token and acknowledgement therefore share one rename.
+    """
+    import shlex
+
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", config_dir) or ".." in config_dir:
+        raise ValueError("GitHub config directory is unsafe")
+    if action not in {"reserve", "publish", "inspect", "retire", "retire_legacy"}:
+        raise ValueError("GitHub projection action is unsupported")
+    program = _GITHUB_PROJECTION_PROGRAM.replace(
+        "CONFIG_DIRECTORY", repr(config_dir)
+    ).replace("PROJECTION_ACTION", repr(action))
+    return "exec python3 -c " + shlex.quote(program) + ' "$@"'
+
+
+_GITHUB_PROJECTION_PROGRAM = r"""
+import fcntl, json, os, re, sys, tempfile
+from pathlib import Path
+root = Path(CONFIG_DIRECTORY)
+action = PROJECTION_ACTION
+prefix = '# moonmind-projection: '
+def fail():
+    raise ValueError('GitHub projection reservation is unavailable or stale')
+def validate(value):
+    if not isinstance(value, dict) or set(value) != {'ownerRef', 'revision', 'reservationId'}:
+        fail()
+    if (not isinstance(value['ownerRef'], str) or not value['ownerRef']
+        or len(value['ownerRef']) > 256 or not re.fullmatch(r'[A-Za-z0-9:_.-]+', value['ownerRef'])
+        or type(value['revision']) is not int or value['revision'] < 1
+        or not isinstance(value['reservationId'], str)
+        or not re.fullmatch(r'[a-f0-9-]{36}', value['reservationId'])):
+        fail()
+    return value
+try:
+    uid, gid = int(sys.argv[1]), int(sys.argv[2])
+    host = sys.argv[3]
+    stamp = validate(json.loads(sys.argv[4]))
+    if not re.fullmatch(r'[A-Za-z0-9.\-:\[\]]+', host) or uid < 0 or gid < 0:
+        fail()
+    os.umask(0o077)
+    root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink():
+        fail()
+    def read_json(path):
+        if path.is_symlink():
+            fail()
+        return json.loads(path.read_text()) if path.exists() else None
+    def atomic(path, content):
+        descriptor, temporary = tempfile.mkstemp(prefix='.' + path.name + '.', dir=root)
+        try:
+            with os.fdopen(descriptor, 'w') as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+                os.fchown(stream.fileno(), uid, gid)
+                os.fchmod(stream.fileno(), 0o600)
+            os.replace(temporary, path)
+            directory = os.open(root, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    # Read before locking: a slow/abandoned transport never blocks reservation
+    # or prevents the newer issuance from reaching the destination.
+    token = sys.stdin.read() if action == 'publish' else None
+    if token is not None and (not token or '\n' in token or '\r' in token):
+        fail()
+    lock_path = root / '.projection.lock'
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'r+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state_path = root / '.projection-reservation.json'
+        state = read_json(state_path)
+        if state is not None:
+            current = validate(state.get('reservation'))
+            if current['ownerRef'] != stamp['ownerRef']:
+                fail()
+        else:
+            current = None
+        live = root / 'hosts.yml'
+        if live.is_symlink():
+            fail()
+        installed = None
+        if live.exists():
+            with live.open() as stream:
+                line = stream.readline()
+            if line.startswith(prefix):
+                installed = validate(json.loads(line[len(prefix):]))
+                if installed['ownerRef'] != stamp['ownerRef']:
+                    fail()
+        if action == 'inspect':
+            if current != stamp or state.get('retired'):
+                fail()
+            print(json.dumps(installed, sort_keys=True))
+        elif action == 'reserve':
+            if state and state.get('retired'):
+                fail()
+            if current and (stamp['revision'] < current['revision']
+                or (stamp['revision'] == current['revision'] and stamp != current)):
+                fail()
+            if installed and (stamp['revision'] < installed['revision']
+                or (stamp['revision'] == installed['revision'] and stamp != installed)):
+                fail()
+            os.chown(root, uid, gid)
+            os.chmod(root, 0o700)
+            os.fchown(lock.fileno(), uid, gid)
+            atomic(state_path, json.dumps({'reservation': stamp, 'retired': False}, sort_keys=True))
+            print(json.dumps(stamp, sort_keys=True))
+        elif action in {'retire', 'retire_legacy'}:
+            if action == 'retire_legacy' and not (
+                installed is None and (current is None
+                    or (current == stamp and state.get('retired') is True))
+            ):
+                fail()
+            if current is not None and current != stamp:
+                fail()
+            atomic(state_path, json.dumps({'reservation': stamp, 'retired': True}, sort_keys=True))
+            print(json.dumps(stamp, sort_keys=True))
+        else:
+            if current != stamp or state.get('retired'):
+                fail()
+            if installed != stamp:
+                atomic(live, prefix + json.dumps(stamp, sort_keys=True) + '\n'
+                    + host + ':\n    user: x-access-token\n    oauth_token: '
+                    + token + '\n    git_protocol: https\n')
+            print(json.dumps(stamp, sort_keys=True))
+except Exception:
+    # Never include credential bytes, paths, or untrusted JSON in diagnostics.
+    print('GitHub projection reservation is unavailable or stale', file=sys.stderr)
+    sys.exit(73)
+"""
+
+
 def github_host_from_endpoint(endpoint: str) -> str:
     """Return the Git/CLI authority after deployment-owned endpoint validation."""
     from moonmind.auth.github_app_wiring import github_api_base_for
@@ -116,6 +258,22 @@ class OmnigentGithubCredentialService:
         self._sessions = session_factory
         self._artifacts = artifact_gateway
 
+    async def validate_repository_intent(
+        self, *, request: AgentExecutionRequest, plan: OmnigentExecutionPlanEnvelope
+    ) -> None:
+        """Validate canonical intent and live authority without acquiring values."""
+        from moonmind.omnigent.workspace_intent import authored_repository_source
+
+        authored_repository_source(request)
+        if plan.payload.resolvedTools.get("repositoryAccess", {}).get("collaboration"):
+            await self.admitted_repository_identity(
+                plan=plan,
+                request=request,
+                role="collaboration",
+                operation="read",
+                validate_current=True,
+            )
+
     async def _verified_repository_access(
         self,
         *,
@@ -124,7 +282,7 @@ class OmnigentGithubCredentialService:
         role: str,
         operation: str,
         repository: str | None,
-        consumer: Literal["agent", "native"] = "agent",
+        consumer: Literal["agent", "native", "server"] = "agent",
     ) -> tuple[
         str, dict[str, Any], dict[str, Any], SelectionSnapshot, RepositoryIdentity
     ]:
@@ -133,17 +291,44 @@ class OmnigentGithubCredentialService:
             "collaboration": "collaboration",
             "destination_write": "destination",
         }.get(role)
-        if consumer not in {"agent", "native"}:
+        if consumer not in {"agent", "native", "server"}:
             raise ValueError("repository consumer is unsupported")
         if consumer == "native" and (
-            request is not None or role != "collaboration" or operation not in {"read", "review_request"}
+            request is not None
+            or role != "collaboration"
+            or operation not in {"read", "review_request"}
         ):
-            raise ValueError("native repository consumer only admits trusted review operations")
-        if request is None and consumer != "native":
+            raise ValueError(
+                "native repository consumer only admits trusted review operations"
+            )
+        if consumer == "server" and (
+            request is not None
+            or role not in {"collaboration", "source_read"}
+            or operation not in {"read", "review_request", "merge_request"}
+            or (role == "source_read" and operation != "read")
+        ):
+            raise ValueError(
+                "server repository consumer requires a trusted repository operation"
+            )
+        if request is None and consumer not in {"native", "server"}:
             raise ValueError("native repository use requires an explicit consumer")
-        binding = plan.payload.credentialBindings.get(slot) if plan is not None else None
-        if binding is not None and getattr(binding, "consumer", "agent") == "native" and consumer != "native":
-            raise ValueError("native repository authority cannot be consumed by an agent")
+        binding = (
+            plan.payload.credentialBindings.get(slot) if plan is not None else None
+        )
+        if (
+            binding is not None
+            and getattr(binding, "consumer", "agent") == "native"
+            and consumer != "native"
+        ):
+            raise ValueError(
+                "native repository authority cannot be consumed by an agent"
+            )
+        if request is not None:
+            from moonmind.omnigent.workspace_intent import authored_repository_source
+
+            # Every consumer of this credential must name one repository.
+            # Reject alias disagreement before any snapshot read or projection.
+            authored_repository_source(request)
         access = (
             plan.payload.resolvedTools.get("repositoryAccess", {}).get(slot)
             if plan is not None
@@ -225,6 +410,15 @@ class OmnigentGithubCredentialService:
             )
         if snapshot.role != role or operation not in snapshot.operations:
             raise ValueError("repository operation or role is not admitted")
+        if consumer == "agent" and role == "collaboration":
+            from moonmind.omnigent.workspace_intent import authored_github_operations
+
+            if not set(authored_github_operations(request)).issubset(
+                snapshot.operations
+            ):
+                raise ValueError(
+                    "requested GitHub actions conflict with the admitted snapshot"
+                )
         return slot, access, payload, snapshot, identity
 
     async def admitted_repository_identity(
@@ -235,7 +429,8 @@ class OmnigentGithubCredentialService:
         role: str,
         operation: str,
         repository: str | None = None,
-        consumer: Literal["agent", "native"] = "agent",
+        consumer: Literal["agent", "native", "server"] = "agent",
+        validate_current: bool = False,
     ) -> RepositoryIdentity:
         """Resolve the snapshot's target without acquiring or exposing a token."""
         _slot, _access, _payload, _snapshot, identity = (
@@ -248,7 +443,55 @@ class OmnigentGithubCredentialService:
                 consumer=consumer,
             )
         )
+        if validate_current:
+            await self._current_repository_connection(
+                snapshot=_snapshot, payload=_payload, identity=identity, role=role
+            )
         return identity
+
+    async def _current_repository_connection(
+        self, *, snapshot, payload, identity, role
+    ):
+        """Revalidate live metadata through the same owner on launch and resume."""
+        from api_service.services.repository_connections import (
+            RepositoryConnectionService,
+        )
+        from moonmind.auth.bound_acquisition import (
+            AccessMode,
+            select_repository_authority,
+        )
+
+        if self._sessions is None:
+            raise ValueError("repository connection reader is unavailable")
+        async with self._sessions() as session:
+            connections = RepositoryConnectionService(session)
+            connection = await connections.get_connection(
+                snapshot.connection_id,
+                principal_ref=snapshot.principal_ref,
+                principal_scope=(snapshot.scope_type, snapshot.scope_ref),
+            )
+            if connection is None:
+                raise ValueError("selected repository connection is unavailable")
+            assignment = await connections.launch_assignment(
+                connection, snapshot.repository_display
+            )
+            if (
+                assignment.identity.route_id() != snapshot.route_id
+                or assignment.revision != payload["assignmentRevision"]
+            ):
+                raise ValueError("repository assignment changed; re-admit the attempt")
+            select_repository_authority(
+                access_mode=AccessMode.EXPLICIT,
+                principal_ref=snapshot.principal_ref,
+                principal_scope=(snapshot.scope_type, snapshot.scope_ref),
+                identity=identity,
+                role=role,
+                requested_operations=snapshot.operations,
+                policy_revision=connection.policy_revision,
+                explicit_connection=connection,
+                explicit_assignment=assignment,
+            )
+            return connection
 
     async def acquire_repository_use(
         self,
@@ -260,16 +503,12 @@ class OmnigentGithubCredentialService:
         repository: str | None = None,
         execution_owner: str | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
-        consumer: Literal["agent", "native"] = "agent",
+        consumer: Literal["agent", "native", "server"] = "agent",
     ) -> AcquiredCredential | None:
         """Consume the compiler's immutable selection, never current defaults."""
-        from api_service.services.repository_connections import (
-            RepositoryConnectionService,
-        )
         from moonmind.auth.bound_acquisition import (
             AccessMode,
             AcquisitionRequest,
-            select_repository_authority,
         )
         from moonmind.auth.github_app_wiring import (
             build_bound_acquirer_for_connection,
@@ -309,37 +548,9 @@ class OmnigentGithubCredentialService:
             raise ValueError("repository connection reader is unavailable")
 
         async def current_connection():
-            async with self._sessions() as session:
-                connections = RepositoryConnectionService(session)
-                connection = await connections.get_connection(
-                    snapshot.connection_id,
-                    principal_ref=snapshot.principal_ref,
-                    principal_scope=(snapshot.scope_type, snapshot.scope_ref),
-                )
-                if connection is None:
-                    raise ValueError("selected repository connection is unavailable")
-                assignment = await connections.launch_assignment(
-                    connection, snapshot.repository_display
-                )
-                if (
-                    assignment.identity.route_id() != snapshot.route_id
-                    or assignment.revision != payload["assignmentRevision"]
-                ):
-                    raise ValueError(
-                        "repository assignment changed; re-admit the attempt"
-                    )
-                select_repository_authority(
-                    access_mode=AccessMode.EXPLICIT,
-                    principal_ref=snapshot.principal_ref,
-                    principal_scope=(snapshot.scope_type, snapshot.scope_ref),
-                    identity=identity,
-                    role=role,
-                    requested_operations=snapshot.operations,
-                    policy_revision=connection.policy_revision,
-                    explicit_connection=connection,
-                    explicit_assignment=assignment,
-                )
-                return connection
+            return await self._current_repository_connection(
+                snapshot=snapshot, payload=payload, identity=identity, role=role
+            )
 
         connection = await current_connection()
 
@@ -449,10 +660,59 @@ class OmnigentGithubCredentialService:
         expected_omnigent_version: str = "",
         plan: OmnigentExecutionPlanEnvelope | None = None,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        projection_reservation: dict[str, Any] | None = None,
+        projection_verifier: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, Any] | None:
         attachment = self.anticipated_attachment(resolved_tools, owner_ref=owner_ref)
         if attachment is None:
             return None
+        if (
+            not projection_reservation
+            or projection_reservation.get("ownerRef") != owner_ref
+        ):
+            raise HarnessPlatformError(
+                "GitHub projection requires its durable runtime reservation",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        # Frozen action/target validation happens before destination mutation,
+        # and acquisition below independently revalidates live assignment.
+        identity = await self.admitted_repository_identity(
+            plan=plan, request=request, role="collaboration", operation="read"
+        )
+        if projection_verifier is None:
+            raise HarnessPlatformError(
+                "GitHub projection requires its durable owner verifier",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        await projection_verifier()
+        attachment = {
+            **attachment,
+            "githubHost": github_host_from_endpoint(identity.endpoint),
+            "projectionReservation": dict(projection_reservation),
+            "projectionImageRef": writer_image_ref,
+        }
+        if authority_sink is not None:
+            await authority_sink({**attachment, "kind": "github_credentials"})
+        effective_writer = await self._prepare_projection(
+            attachment=attachment,
+            writer_image_ref=writer_image_ref,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+            expected_omnigent_version=expected_omnigent_version,
+        )
+        if effective_writer != attachment["projectionImageRef"]:
+            attachment = {**attachment, "projectionImageRef": effective_writer}
+            if authority_sink is not None:
+                await authority_sink({**attachment, "kind": "github_credentials"})
+        reserved = await self._run_projection(
+            attachment, effective_writer, runtime_uid, runtime_gid, "reserve"
+        )
+        if json.loads(reserved) != projection_reservation:
+            raise HarnessPlatformError(
+                "GitHub projection reservation was not acknowledged",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+        await projection_verifier()
         acquired = await self.acquire_repository_use(
             plan=plan,
             request=request,
@@ -462,39 +722,57 @@ class OmnigentGithubCredentialService:
             authority_sink=authority_sink,
         )
         try:
-            attachment = {
-                **attachment,
-                "githubHost": github_host_from_endpoint(acquired.binding.endpoint),
-            }
-            return await self._materialize_acquired(
-                attachment=attachment,
-                acquired=acquired,
-                writer_image_ref=writer_image_ref,
-                runtime_uid=runtime_uid,
-                runtime_gid=runtime_gid,
-                expected_omnigent_version=expected_omnigent_version,
+            await projection_verifier()
+            token = acquired.credential.use_now(
+                lambda value: bytes(value).decode("utf-8")
             )
+            if not token or "\n" in token or "\r" in token:
+                raise HarnessPlatformError(
+                    "admitted repository issuance returned invalid credential material",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            try:
+                published = await self._run_projection(
+                    attachment,
+                    effective_writer,
+                    runtime_uid,
+                    runtime_gid,
+                    "publish",
+                    token=token,
+                )
+                if json.loads(published) != projection_reservation:
+                    raise ValueError(
+                        "GitHub projection publication was not acknowledged"
+                    )
+            except Exception:
+                # A transport failure may follow the atomic rename. Reconcile
+                # that exact installed reservation without replaying a token.
+                try:
+                    observed = await self._run_projection(
+                        attachment,
+                        effective_writer,
+                        runtime_uid,
+                        runtime_gid,
+                        "inspect",
+                    )
+                    confirmed = json.loads(observed) == projection_reservation
+                except Exception:  # noqa: BLE001 - unavailable readback proves nothing
+                    confirmed = False
+                if not confirmed:
+                    raise
+            return attachment
         finally:
             acquired.credential.clear()
 
-    async def _materialize_acquired(
+    async def _prepare_projection(
         self,
         *,
         attachment,
-        acquired,
         writer_image_ref,
         runtime_uid,
         runtime_gid,
         expected_omnigent_version,
     ):
-        token = acquired.credential.use_now(
-            lambda material: bytes(material).decode("utf-8")
-        )
-        if not token or "\n" in token or "\r" in token:
-            raise HarnessPlatformError(
-                "admitted repository issuance returned invalid credential material",
-                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-            )
         if runtime_uid <= 0 or runtime_gid <= 0:
             raise HarnessPlatformError(
                 "GitHub credential runtime owner is invalid",
@@ -506,44 +784,51 @@ class OmnigentGithubCredentialService:
                 "GitHub credential volume identity is unsafe",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
-        await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "create",
-                "--label",
-                "moonmind.owner=generic-omnigent-github-credential",
-                "--label",
-                f"moonmind.owner_digest={attachment['ownerDigest']}",
-                volume,
-            ],
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        owner_inspect = [
+            "docker",
+            "volume",
+            "inspect",
+            "--format",
+            '{{ index .Labels "moonmind.owner_digest" }}',
+            volume,
+        ]
+        # Unknown inspection failures are not evidence that the volume is
+        # absent. A confirmed absence permits idempotent creation; Docker may
+        # still return a volume created by an overlapping same-owner writer.
+        code, observed_owner, error = await self._backend.run(
+            owner_inspect, check=False
         )
-        _code, observed_owner, _error = await self._backend.run(
-            [
-                "docker",
-                "volume",
-                "inspect",
-                "--format",
-                '{{ index .Labels "moonmind.owner_digest" }}',
-                volume,
-            ],
-            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
-        )
+        if code != 0:
+            if "no such volume" not in error.lower():
+                raise HarnessPlatformError(
+                    "GitHub credential volume inspection failed",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            await self._backend.run(
+                [
+                    "docker",
+                    "volume",
+                    "create",
+                    "--label",
+                    "moonmind.owner=generic-omnigent-github-credential",
+                    "--label",
+                    f"moonmind.owner_digest={attachment['ownerDigest']}",
+                    volume,
+                ],
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
+            _code, observed_owner, _error = await self._backend.run(
+                owner_inspect,
+                failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+            )
         if observed_owner.strip() != str(attachment["ownerDigest"]):
             raise HarnessPlatformError(
                 "GitHub credential projection is owned by another lease",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
-        script = (
-            "set -eu; umask 077; mkdir -p /config; "
-            "printf '%s:\\n    user: x-access-token\\n    oauth_token: ' \"$3\" "
-            "> /config/hosts.yml; "
-            "cat >> /config/hosts.yml; "
-            "printf '\\n    git_protocol: https\\n' >> /config/hosts.yml; "
-            'chown -R "$1:$2" /config; '
-            "chmod 0700 /config; chmod 0600 /config/hosts.yml"
-        )
+        # Write the complete configuration beside the live file and rename it
+        # into place, so an interrupted writer never leaves a mounted reader a
+        # truncated or partial hosts.yml for the current issuance.
         # Same-repo SHA drift recovery as credential writers: reuse a qualified
         # deployment image when the plan-pinned digest is absent, avoiding a
         # 7GB exact pull for patch rebuilds. Qualification (digest pin plus
@@ -594,44 +879,38 @@ class OmnigentGithubCredentialService:
                         rcode = 1
                     if rcode != 0:
                         effective_writer = fallback
-        try:
-            await self._backend.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-i",
-                    # The selected host image runs workloads as the requested
-                    # runtime UID.  This isolated, networkless setup process
-                    # needs root only to initialize and hand off the credential
-                    # volume to that UID.
-                    "--user",
-                    "0:0",
-                    "--network",
-                    "none",
-                    "--mount",
-                    f"type=volume,src={volume},dst=/config",
-                    "--entrypoint",
-                    "/bin/sh",
-                    effective_writer,
-                    "-ceu",
-                    script,
-                    "--",
-                    str(runtime_uid),
-                    str(runtime_gid),
-                    str(attachment["githubHost"]),
-                ],
-                input_bytes=token.encode(),
-                failure_code=(
-                    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
-                ),
-            )
-        except BaseException:
-            await self._backend.run(
-                ["docker", "volume", "rm", volume], check=False
-            )
-            raise
-        return attachment
+        return effective_writer
+
+    async def _run_projection(
+        self, attachment, image, uid, gid, action, *, token: str | None = None
+    ) -> str:
+        _code, output, _error = await self._backend.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--user",
+                "0:0",
+                "--network",
+                "none",
+                "--mount",
+                f"type=volume,src={attachment['sourceRef']},dst=/config",
+                "--entrypoint",
+                "/bin/sh",
+                image,
+                "-ceu",
+                github_projection_script(action=action),
+                "--",
+                str(uid),
+                str(gid),
+                str(attachment["githubHost"]),
+                json.dumps(attachment["projectionReservation"], sort_keys=True),
+            ],
+            **({"input_bytes": token.encode()} if token is not None else {}),
+            failure_code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        )
+        return output
 
     async def cleanup(self, attachment: dict[str, Any]) -> None:
         volume = str(attachment.get("sourceRef") or "")
@@ -664,6 +943,31 @@ class OmnigentGithubCredentialService:
                 "stale owner cannot clean a newer GitHub credential projection",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        reservation = attachment.get("projectionReservation")
+        image = attachment.get("projectionImageRef")
+        if not image:
+            raise HarnessPlatformError(
+                "GitHub credential cleanup image authority is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+            )
+        if reservation:
+            await self._run_projection(attachment, image, 0, 0, "retire")
+        else:
+            # Historical bindings carry the image in their existing tool
+            # authority. They can retire only an unversioned destination;
+            # the locked protocol rejects any newer reservation/installed stamp.
+            from uuid import NAMESPACE_URL, uuid5
+
+            legacy = {
+                **attachment,
+                "githubHost": attachment.get("githubHost", "github.com"),
+                "projectionReservation": {
+                    "ownerRef": "legacy:" + owner_digest,
+                    "revision": 1,
+                    "reservationId": str(uuid5(NAMESPACE_URL, volume)),
+                },
+            }
+            await self._run_projection(legacy, image, 0, 0, "retire_legacy")
         code, _out, _err = await self._backend.run(
             ["docker", "volume", "rm", volume], check=False
         )
@@ -678,6 +982,7 @@ __all__ = [
     "OmnigentGithubCredentialService",
     "github_clone_source_from_identity",
     "github_host_from_endpoint",
+    "github_projection_script",
     "github_repository_from_request",
     "normalize_github_repository_remote",
 ]

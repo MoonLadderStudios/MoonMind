@@ -169,8 +169,8 @@ RUN command -v codex && codex --version \
 # Portable fan-out Skills use ordinary python3 and require the queue client's
 # HTTP dependency. Use the existing image environment in both shell forms;
 # a system Python without its packages must never reach workflow launch.
-RUN --network=none python3 -c 'import httpx' \
-    && bash -lc "python3 -c 'import httpx'"
+RUN --network=none python3 -c 'import fcntl, httpx' \
+    && bash -lc "python3 -c 'import fcntl, httpx'"
 
 # A binary and MoonMind's supported range alone do not prove the installed
 # Omnigent native harness can use it. Check that owner's actual readiness

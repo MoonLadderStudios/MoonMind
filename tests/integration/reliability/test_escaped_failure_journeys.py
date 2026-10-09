@@ -2017,6 +2017,7 @@ async def test_successful_batch_fanout_is_compacted_before_publish_activity_deco
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": (
                 "mm:replay-parent:agent:tpl:batch-github-workflows:01:replay"
@@ -2180,6 +2181,7 @@ async def test_omnigent_terminal_result_replays_after_metadata_overflow(
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": manifest["incidentChildWorkflowId"],
             "run_id": "01a002c0-2468-70a7-a4fe-084afc817977",
@@ -2582,6 +2584,7 @@ async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
         run_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=manifest["incidentChildWorkflowId"],
             run_id="replay-run",
         ),
@@ -5291,7 +5294,14 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
         skill_projection=tmp_path / "skills",
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
-        github_token="fixture-token",
+        github_token="fixture_token",
+        github_projection_reservation={
+            "ownerRef": f"host-lease:{host_lease.lease_id}",
+            "revision": 1,
+            "reservationId": "c1ff73e9-c42d-48b5-acce-1e8c0f07c9c3",
+        },
+        recovery_request=SimpleNamespace(),
+        recovery_store=SimpleNamespace(validate_github_projection=AsyncMock()),
         effective_launch=compile_effective_launch(
             profile_ref="omnigent-codex@1",
             policy_ref="codex-on-demand@1",
@@ -5760,7 +5770,7 @@ async def test_invalid_required_omnigent_checkpoint_blocks_publication(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id="workflow-1", run_id="run-1"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="workflow-1", run_id="run-1"),
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -7163,7 +7173,7 @@ async def test_instructionless_inflight_remediation_loop_remains_replayable(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "info",
-        lambda: SimpleNamespace(run_id="inflight-replay-run"),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", run_id="inflight-replay-run"),
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -7635,6 +7645,7 @@ async def test_omnigent_required_capability_authority_reaches_adapter(
         run_workflow_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             namespace="default",
             workflow_id=manifest["incidentWorkflowId"],
             run_id=manifest["incidentRunId"],

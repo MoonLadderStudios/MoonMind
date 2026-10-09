@@ -197,7 +197,7 @@ def test_github_projection_exposes_only_non_secret_cli_environment():
         "GIT_CONFIG_VALUE_0",
     } <= passthrough
     assert not any("TOKEN" in name or "SECRET" in name for name in environment)
-    assert "cp /run/mm-credentials/github/hosts.yml" in _script
+    assert "ln -sfn /run/mm-credentials/github/hosts.yml" in _script
     assert "/home/app/.config/gh/hosts.yml" in _script
     assert "> /home/app/.omnigent/moonmind/bin/gh" in _script
     assert "export GH_CONFIG_DIR=/home/app/.config/gh" in _script
@@ -298,6 +298,84 @@ def test_projected_cli_restores_context_after_child_environment_is_stripped(tmp_
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.exercise_projection(tmp_path)
+
+
+@pytest.mark.parametrize("control_available", [False, True])
+def test_control_file_authenticates_http_and_host_tunnel_on_each_start(
+    tmp_path, control_available
+):
+    home, skills, binaries, control = (
+        tmp_path / name for name in ("home", "skills", "bin", "control")
+    )
+    for directory in (home, skills, binaries, control):
+        directory.mkdir()
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": str(skills)},
+        step_execution_id="workflow:run:node-1:execution:1",
+        control_attachment={"targetPath": str(control)},
+        control_credential_available=control_available,
+    )
+    # The installed host CLI and WebSocket factory consume different names.
+    # Observe the real generated shell at exec, before upstream consumes the
+    # bootstrap value; no credential belongs in Docker configuration or the
+    # persisted run-context projection.
+    executable = binaries / "omnigent"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "print(json.dumps({name: os.getenv(name) for name in "
+        "('OMNIGENT_API_TOKEN', 'OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN')}))\n"
+    )
+    executable.chmod(0o755)
+    script = script.replace("/home/app", str(home)).replace(
+        "/run/mm-credentials", str(tmp_path / "absent-credentials")
+    )
+    for selected in ("selected-first-start", "selected-restarted-host"):
+        (control / "api-token").write_text(selected)
+        launch_environment = {
+            **environment,
+            "PATH": f"{binaries}:/usr/bin:/bin",
+        }
+        if control_available:
+            launch_environment.update(
+                OMNIGENT_API_TOKEN="ambient-http",
+                OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN="ambient-tunnel",
+            )
+        result = subprocess.run(
+            ["/bin/sh", "-ceu", script, "--", "http://test-omnigent"],
+            env=launch_environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        expected = selected if control_available else None
+        assert json.loads(result.stdout) == {
+            "OMNIGENT_API_TOKEN": expected,
+            "OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN": expected,
+        }
+        assert selected not in script
+        assert selected not in json.dumps(environment)
+        assert selected not in "".join(
+            path.read_text() for path in home.rglob("*") if path.is_file()
+        )
+    if control_available:
+        (control / "api-token").unlink()
+        unavailable = subprocess.run(
+            ["/bin/sh", "-ceu", script, "--", "http://test-omnigent"],
+            env=launch_environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert unavailable.returncode != 0
+        assert (
+            unavailable.stdout == ""
+        ), "missing file must not fall back to ambient auth"
+    passthrough = environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
+    assert "OMNIGENT_API_TOKEN" not in passthrough
+    assert "OMNIGENT_RUNNER_INITIAL_AUTH_TOKEN" not in passthrough
 
 
 @pytest.mark.parametrize("github_host", [None, "github.enterprise.test"])

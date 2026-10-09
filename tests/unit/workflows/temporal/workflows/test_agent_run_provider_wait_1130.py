@@ -209,7 +209,7 @@ def _mock_workflow_identity(monkeypatch, workflow_id: str = "agent-run-1") -> No
     monkeypatch.setattr(
         agent_run_module.workflow,
         "info",
-        lambda: SimpleNamespace(workflow_id=workflow_id),
+        lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id=workflow_id),
     )
 
 

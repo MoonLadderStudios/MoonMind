@@ -24,6 +24,21 @@ def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
 @pytest.mark.parametrize(
     "changed_path",
     [
+        ".agents/skills/pr-resolver/bin/pr_resolve_snapshot.py",
+        ".agents/skills/fix-comments/tools/get_pr_comments.py",
+        "tests/unit/test_pr_resolver_wait_polling.py",
+        "pr_resolver_core/github_checks.py",
+    ],
+)
+def test_resolver_cli_changes_keep_the_existing_slow_suite_selected(changed_path):
+    outputs = _outputs([changed_path])
+    assert outputs["unit_slow"] == "true"
+    assert outputs["unit_fast"] == "true"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
         "AGENTS.md",
         "README.md",
         "docs/Development/BackendTestSelection.md",
@@ -86,7 +101,10 @@ def test_audited_prose_does_not_suppress_api_coverage() -> None:
             "docs/ManagedAgents/AgentSessionDeploymentSafetyCutover.md",
             {"unit_fast"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
         ("docs/UnlistedContract.md", {"unit_fast"}),
     ],
 )
@@ -106,7 +124,10 @@ def test_prose_exemption_preserves_executable_and_unlisted_markdown_coverage(
             "docs/Temporal/WorkflowTypeCatalogGenerated.md",
             {"unit_fast", "temporal_boundary"},
         ),
-        (".agents/skills/pr-resolver/SKILL.md", {"unit_fast", "reliability_journey"}),
+        (
+            ".agents/skills/pr-resolver/SKILL.md",
+            {"unit_fast", "unit_slow", "reliability_journey"},
+        ),
     ],
 )
 def test_rename_to_audited_prose_retains_source_path_coverage(
@@ -1076,11 +1097,9 @@ def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
         "tools/update-moonmind.sh",
         ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
         ".agents/skills/update-moonmind/scripts/update_release.py",
-        "tests/unit/test_update_moonmind_transport.py",
-        "tests/integration/host_update/test_host_updater_transport.py",
     ],
 )
-def test_host_updater_transport_changes_select_real_docker_qualification(
+def test_host_updater_changes_select_integration_qualification(
     changed_path: str,
 ) -> None:
     assert _outputs([changed_path])["integration_ci"] == "true"
@@ -1106,16 +1125,12 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
     [
         ("tests/integration/api/test_routes.py", {"hermetic"}),
         (
-            "tests/integration/host_update/test_host_updater_transport.py",
-            {"host-update-transport"},
-        ),
-        (
             "tests/integration/host_update/test_journal_transition.py",
             {"controller-journey"},
         ),
         (
             "tests/integration/host_update/conftest.py",
-            {"hermetic", "host-update-transport", "controller-journey"},
+            {"hermetic", "controller-journey"},
         ),
         (
             "tools/first_run_journey_3938.sh",
@@ -1267,7 +1282,7 @@ def test_unknown_host_update_inputs_preserve_hermetic_collection(path):
     import json
 
     lanes = json.loads(_outputs([path])["integration_matrix"])["suite"]
-    assert set(lanes) == {"hermetic", "host-update-transport", "controller-journey"}
+    assert set(lanes) == {"hermetic", "controller-journey"}
 
 
 def test_journal_transition_actor_selects_its_exact_invocation_owner():

@@ -112,6 +112,10 @@ def test_populated_deployment_maps_the_effective_reference(engine, migration):
     assert _secret_ref(records[0]) == "env://GITHUB_TOKEN"
     assert records[0]["scope_type"] == "system"
     assert records[0]["hosting_service"] == "github"
+    allowed_operations = records[0]["allowed_operations"]
+    if isinstance(allowed_operations, str):
+        allowed_operations = json.loads(allowed_operations)
+    assert "merge_request" in allowed_operations
     assert len(audits) == 1
     assert audits[0]["action"] == "connection.create"
     # No assignment or route default: an unknown legacy allowlist does not

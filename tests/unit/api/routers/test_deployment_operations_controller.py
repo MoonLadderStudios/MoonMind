@@ -145,79 +145,8 @@ def _stack(client: TestClient) -> dict:
     return response.json()
 
 
-@pytest.mark.parametrize("worker_pin", [None, "ghcr.io/org/moonmind:explicit"])
-def test_old_controller_queues_existing_privileged_submitter_for_prerequisite(
-    controller_factory, monkeypatch, worker_pin
-):
-    controller = controller_factory()
-    request = controller_client._controller_request
-
-    def old_health(endpoint, **kwargs):
-        if kwargs["path"] == "/v1/healthz":
-            return 200, {"status": "ok"}
-        return request(endpoint, **kwargs)
-
-    monkeypatch.setattr(controller_client, "_controller_request", old_health)
-    if worker_pin:
-        monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", worker_pin)
-    monkeypatch.setattr(
-        worker_code_identity,
-        "probe_worker_readiness",
-        lambda url: {
-            "ready": True,
-            "fleet": "deployment",
-            "taskQueues": ["mm.activity.deployment"],
-            "activityTypes": ["mm.tool.execute"],
-            "controllerBootstrapCapabilities": ["active-journal-transition"],
-            "buildSha": "different-from-api-and-target",
-        },
-    )
-    client, temporal = _client()
-    queued = []
-
-    async def create_execution(**kwargs):
-        queued.append(kwargs)
-        return SimpleNamespace(
-            workflow_id="update-prerequisite", run_id="prerequisite-run"
-        )
-
-    temporal.create_execution = create_execution
-    response = client.post("/api/v1/operations/deployment/update", json=_update())
-    assert response.status_code == 202, response.text
-    assert response.json()["workflowId"] == "update-prerequisite"
-    assert controller.applied == []
-    assert len(queued) == 1
-    assert queued[0]["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
-
-
-@pytest.mark.parametrize(
-    "worker_readiness",
-    [
-        None,
-        {
-            "ready": True,
-            "fleet": "deployment",
-            "taskQueues": ["mm.activity.deployment"],
-            "activityTypes": ["mm.tool.execute"],
-        },
-        {
-            "ready": False,
-            "fleet": "deployment",
-            "taskQueues": ["mm.activity.deployment"],
-            "activityTypes": ["mm.tool.execute"],
-            "controllerBootstrapCapabilities": ["active-journal-transition"],
-        },
-        {
-            "ready": True,
-            "fleet": "deployment",
-            "taskQueues": ["different-queue"],
-            "activityTypes": ["mm.tool.execute"],
-            "controllerBootstrapCapabilities": ["active-journal-transition"],
-        },
-    ],
-)
-def test_old_pinned_worker_cannot_receive_an_unsafe_controller_submission(
-    controller_factory, monkeypatch, worker_readiness
+def test_old_controller_is_refreshed_from_the_host_never_through_a_workflow(
+    controller_factory, monkeypatch
 ):
     controller = controller_factory()
     request = controller_client._controller_request
@@ -230,40 +159,134 @@ def test_old_pinned_worker_cannot_receive_an_unsafe_controller_submission(
             else request(endpoint, **kwargs)
         ),
     )
-    pin = "ghcr.io/org/moonmind:explicit-old"
-    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", pin)
-    monkeypatch.setattr(
-        worker_code_identity, "probe_worker_readiness", lambda url: worker_readiness
-    )
-    client, temporal = _client()
-    response = client.post("/api/v1/operations/deployment/update", json=_update())
-    assert response.status_code == 503, response.text
-    detail = response.json()["detail"]
-    assert detail["code"] == "deployment_controller_prerequisite_unavailable"
-    assert "host update command" in detail["message"]
-    assert temporal.calls == []
-    assert controller.applied == []
-    import os
-
-    assert os.environ["MOONMIND_DEPLOYMENT_WORKER_IMAGE"] == pin
-
-
-def test_current_controller_does_not_depend_on_an_old_pinned_worker(
-    controller_factory, monkeypatch
-):
-    controller = controller_factory()
-    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", "ghcr.io/org/moonmind:old")
+    # The deployment worker is no longer a prerequisite of the API path.
     monkeypatch.setattr(
         worker_code_identity,
         "probe_worker_readiness",
-        lambda url: pytest.fail("worker is irrelevant"),
+        lambda url: pytest.fail("the API must not probe the deployment worker"),
     )
     client, temporal = _client()
+
     response = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_refresh_required"
+    assert detail["repairCommand"] == "./tools/update-moonmind.sh"
+    assert temporal.calls == []
+    assert controller.applied == []
+
+
+def test_missing_controller_returns_the_host_repair_route_without_a_workflow(
+    controller_factory, monkeypatch
+):
+    # The fixture points the API at an empty controller state directory.
+    monkeypatch.delenv("MOONMIND_CONTROLLER_URL", raising=False)
+    client, temporal = _client()
+
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_not_installed"
+    assert detail["repairCommand"] == "./tools/update-moonmind.sh"
+    assert "operationId" not in detail
+    assert temporal.calls == []
+    state = _stack(client)
+    assert state["controller"]["installed"] is False
+    assert state["controller"]["reachable"] is False
+    assert "./tools/update-moonmind.sh" in state["controller"]["message"]
+    assert "workflow" not in state["controller"]["message"]
+
+
+def test_update_submission_never_constructs_a_temporal_client(controller_factory):
+    controller = controller_factory()
+    app = FastAPI()
+    app.include_router(router)
+    _override_user(app, is_superuser=True)
+
+    def temporal_unavailable():
+        raise AssertionError("an update submission must not depend on Temporal")
+
+    app.dependency_overrides[_get_temporal_execution_service] = temporal_unavailable
+    client = TestClient(app)
+
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+
     assert response.status_code == 202, response.text
     assert response.json()["owner"] == "controller"
     assert len(controller.applied) == 1
+
+
+def test_request_identity_names_the_controller_operation(controller_factory):
+    controller = controller_factory()
+    client, temporal = _client()
+
+    first = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "requestId": "browser-intent-1"},
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["operationId"] == "ui-browser-intent-1"
+
+    # The same intent resubmitted after a lost response reattaches.
+    again = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "requestId": "browser-intent-1"},
+    )
+    assert again.status_code == 202, again.text
+    assert again.json()["operationId"] == "ui-browser-intent-1"
+    assert controller.applied == ["ui-browser-intent-1"]
+
+    # Reusing an identity for a different target is refused, not applied.
+    changed = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update("sha256:" + "c" * 64), "requestId": "browser-intent-1"},
+    )
+    assert changed.status_code == 409, changed.text
+    assert controller.applied == ["ui-browser-intent-1"]
     assert temporal.calls == []
+
+
+@pytest.mark.parametrize("request_id", ["", "../secrets", "x" * 121, "has space"])
+def test_unsafe_request_identity_is_rejected_before_the_controller(
+    controller_factory, request_id
+):
+    controller = controller_factory()
+    client, _temporal = _client()
+
+    response = client.post(
+        "/api/v1/operations/deployment/update",
+        json={**_update(), "requestId": request_id},
+    )
+
+    assert response.status_code == 422, response.text
+    assert controller.applied == []
+
+
+@pytest.mark.parametrize("reported", ["", "reticulating", None])
+def test_unrecognized_controller_status_is_unknown_not_queued(
+    controller_factory, monkeypatch, reported
+):
+    controller_factory()
+    client, _temporal = _client()
+    submitted = client.post("/api/v1/operations/deployment/update", json=_update())
+    assert submitted.status_code == 202, submitted.text
+    request = controller_client._controller_request
+
+    def unreadable_status(endpoint, **kwargs):
+        status, parsed = request(endpoint, **kwargs)
+        for operation in parsed.get("operations") or ():
+            operation["status"] = reported
+        return status, parsed
+
+    monkeypatch.setattr(controller_client, "_controller_request", unreadable_status)
+
+    latest = _stack(client)["latestAction"]
+
+    assert latest["status"] == "UNKNOWN"
+    assert latest["completedAt"] is None
+    assert latest["retryAllowed"] is False
 
 
 def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
@@ -280,9 +303,8 @@ def test_operations_router_submits_to_the_real_controller_with_temporal_stopped(
     assert accepted["owner"] == "controller"
     assert accepted["status"] == "SUCCEEDED"
     # No workflow identity is manufactured for a local controller operation.
-    assert accepted["workflowId"] is None
-    assert accepted["taskId"] is None
-    assert accepted["deploymentUpdateRunId"] == f"ctl-{operation_id}"
+    assert set(accepted) == {"operationId", "owner", "status"}
+    assert operation_id.startswith("ui-")
     assert controller.applied == [operation_id]
     assert temporal.calls == []
     recorded = controller.store.load(operation_id)
@@ -539,7 +561,8 @@ def test_historical_workflow_actions_remain_readable_beside_controller_operation
                     ],
                 }
             },
-            memo={},
+            # Before-state evidence once made this row a rollback source.
+            memo={"deploymentBeforeSummary": f"{IMAGE_REPOSITORY}:stable"},
             artifact_refs=["art_history"],
             started_at="2026-04-25T18:00:00Z",
             closed_at="2026-04-25T18:04:00Z",
@@ -555,6 +578,9 @@ def test_historical_workflow_actions_remain_readable_beside_controller_operation
     assert history["logsArtifactUrl"] == "/api/artifacts/art_history"
     assert history["operationId"] is None
     assert history["retryAllowed"] is False
+    assert history["rollbackEligibility"]["eligible"] is False
+    assert history["rollbackEligibility"]["targetImage"] is None
+    assert "retired workflow updater" in history["rollbackEligibility"]["reason"]
     assert temporal.calls == []
 
 
@@ -653,3 +679,22 @@ def test_current_image_is_the_newest_installation_the_controller_confirmed(
     assert current["deployedImage"] == _desired(installed)
     assert current["resolvedDigest"] == installed
     assert current["repository"] == IMAGE_REPOSITORY
+
+
+def test_controller_bearer_never_traverses_an_ambient_proxy(
+    controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = controller_factory()
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        # Nothing listens here: a proxied request could never succeed.
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    client, temporal = _client()
+
+    response = client.post("/api/v1/operations/deployment/update", json=_update())
+
+    assert response.status_code == 202, response.text
+    assert controller.applied == [response.json()["operationId"]]
+    assert temporal.calls == []

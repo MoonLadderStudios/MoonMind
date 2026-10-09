@@ -314,6 +314,56 @@ destination authority fails before publication; typed repository plans do not
 fall back to ambient credentials. Historical plans without repository snapshots
 retain their existing credential path.
 
+Server-side repository readers (`GitHubService.read_pull_request`,
+`read_repository_target`, and `commit_is_ancestor`) read with the connection
+admitted for the work. A caller supplies that connection or names the admitted
+run. Tools and Activities name the run that owns them. A merge gate acting for
+its parent run names the parent. The reader takes the run's recorded
+`connectionRef` from its canonical parameters. A routed run's parameters name
+no connection, so the reader takes the connection its frozen execution plan's
+repository binding admitted: the collaboration binding, else the source
+binding. A plan that bound no repository authority admitted only the default
+connection, and an unreadable plan fails. A child workflow started by a
+run, such as an agent step, merge gate, or resolver or remediation child, has
+no canonical record of its own. It acts with the nearest recorded run on its
+Temporal parent chain, read from the worker's Temporal client. A chain that
+reaches no recorded run fails. As at launch, an omitted reference means
+`repository-connection:git-default`, and an unrecorded default derives from the
+deployment declaration. Selection uses the launch selector, so a deleted,
+disabled, or unassigned connection fails there.
+
+The selected connection's endpoint must be trusted before any credential is
+read. A pull-request URL is read only through the connection that serves its
+host, so a PR on one host is never validated with another host's repository
+facts. An App connection issues through the bound acquirer for exactly the
+requested operation. A PAT connection reads only its own SecretRef. A missing
+or unreadable credential fails without substituting an ambient token. A run
+that authored anonymous access reads with no credential and cannot mutate.
+Retries and reconciliation reads in the same Activity reuse the same admitted
+run.
+
+Pull-request operations in the same work use that admitted connection too. The
+Jules merge Activity's base retarget and merge, the pr-resolver Activities'
+selector, readiness, and merge, and merge/fix merge-automation readiness and
+review requests pass their executing run to `GitHubService`. An App connection
+acquires `merge_request` for a merge or base retarget, `review_request` for a
+review request, and `read` for readiness and selector lookups. A failed
+selection or credential reports the operation unavailable and sends no request.
+For a run with frozen repository access, server-side operations use the existing
+Omnigent credential acquisition owner to verify the snapshot digest, repository,
+role, operation and current assignment/revision before resolving either a PAT or
+App credential. An admitted run takes precedence over a service-supplied
+connection. Native review bindings retain their read/review-only restriction.
+Historical runs without repository snapshots must match their recorded
+repository and the selected connection's active operation grant. A default
+connection does not bypass a recorded assignment, and an absent operation grant
+reports the operation unavailable; this path adds no grant or credential fallback.
+The `github.resolve_pull_request_target` tool resolves its selector and reads
+the pull request with the executing run's admitted connection the same way.
+Review-only merge automation and saved publication supply their own admitted
+credentials. Issue-lifecycle helpers still take an explicit token and fall back
+to deployment resolution when it is omitted.
+
 ### INV-004 Ambient identity cannot override admitted identity
 
 Git and hosting CLI execution isolate home/configuration state and scrub token variables, inherited authorization headers, credential helpers, `.netrc`, and login caches unless explicitly supplied by the admitted adapter. Helpers validate protocol, host, and repository path and use path-sensitive matching where required. Environment credentials cannot override selected `gh` configuration.
@@ -324,6 +374,8 @@ Delivery objects belong to an attempt and use generation-fenced cleanup. Stale c
 
 Where a CLI requires authentication for a declared operation, the selected runtime either provides an explicitly supported portable unauthenticated interface or rejects the combination. It does not fabricate credentials or move a Skill's semantic behavior into a parallel native implementation.
 
+Current Omnigent delivery (implemented): both realizers clone with a Git process environment that keeps only transport routing and trust (proxy and CA variables) and replaces home, global/system configuration, helpers, and extra headers, so the admitted credential or no credential is all Git can send. Fixed, trusted Git LFS filters are restored explicitly without importing arbitrary ambient filter commands. Agent-side `gh` reads an attempt-owned `hosts.yml` written atomically through stdin by the shared projection writer: the generic host reads its read-only projection mount in place, and the profile-bound host reads the copy written into its lease cache volume before launch. Neither passes the token as a container variable. The profile-bound host receives that projection only when the step declares `gh`; a clone-only credential stays with the trusted clone. A same-owner rewrite is visible to the running reader, but no in-session refresh is scheduled yet: a projection is rewritten only when its attempt relaunches, so an expiring App issuance bounds how long agent-side `gh` stays authenticated.
+
 ### QUALITY-003 Routing and confinement are separate guarantees
 
 The routing guarantee covers MoonMind-controlled operations: they use the admitted repository, operation, and identity. A raw PAT exposed to agent code retains its provider-granted scope, even if MoonMind's routing allowlist is narrower.
@@ -331,6 +383,8 @@ The routing guarantee covers MoonMind-controlled operations: they use the admitt
 Confinement against arbitrary code requires credentials limited to the admitted scope or mediation that exposes no broader credential and has no credential/network bypass. A token-returning broker or agent-readable `gh` configuration alone does not prove confinement. A None selection or prompt is not a sandbox when the agent can access a broad write token. The target's strict publication policy requires a qualified enforcement boundary or rejection of the unsupported combination, not a stronger UI promise than the runtime can honor.
 
 MoonMind-managed publication keeps destination write credentials outside the agent and acquires them at the publisher boundary. Skill-owned `auto` execution needs a qualified mediated path or an explicitly accepted credential-exposing policy. High-security mode rejects unsupported confinement rather than reducing isolation silently.
+
+The `githubCredentialsIsolated` host-mode capability is a routing guarantee, not confinement. The profile-bound host reports a projected `gh` credential as `githubCredentialExposure: agent_readable_unconfined` (otherwise `not_projected`) in its preflight evidence and persisted `credential_preflight` lifecycle metadata. A prepared source-only workspace does not reacquire repository credentials; fresh cloning and authorized publication acquire them only when the operation is needed.
 
 ### INV-005 Anonymous access does not remove source-safety controls
 

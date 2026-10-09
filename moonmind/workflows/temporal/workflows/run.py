@@ -244,6 +244,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_TASK_QUEUE,
     TemporalActivityRoute,
     build_default_activity_catalog,
+    get_workflow_child_task_queue,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -815,6 +816,9 @@ RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
+# Explicit action requirements and resolved Skill metadata change the AgentRun
+# payload. Retained histories keep their original payload when this is absent.
+RUN_GITHUB_ACTION_PERMISSIONS_PATCH = "run-github-action-permissions-v1"
 # The launching controller attests the closed canonical turn source and the Step
 # Execution a remediation attempt repairs (#3707).  This adds a field to the
 # AgentRun request payload and therefore requires a replay gate: an in-flight
@@ -1513,7 +1517,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     def _workflow_child_task_queue(self) -> str:
         if workflow.patched(RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
-            return settings.temporal.user_workflow_v2_task_queue
+            return get_workflow_child_task_queue(
+                workflow.info().task_queue, settings.temporal
+            )
         return WORKFLOW_TASK_QUEUE
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
@@ -1699,6 +1705,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._resolved_skill_required_capabilities_by_step: dict[
             str, tuple[str, ...]
         ] = {}
+        self._resolved_skill_actions_by_step: dict[str, dict[str, Any]] = {}
         self._resolved_skill_terminal_contract_by_step: dict[str, dict[str, Any]] = {}
 
         # Artifact refs
@@ -21288,6 +21295,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._resolved_skill_required_capabilities_by_step[node_id] = (
             self._resolved_skill_required_capabilities(selected_entry)
         )
+        action_metadata: dict[str, Any] = {}
+        for key, aliases in (
+            ("publish", ("publish",)),
+            ("sideEffect", ("side_effect", "sideEffect")),
+        ):
+            value = self._resolved_skillset_field(selected_entry, *aliases)
+            if value is not None:
+                action_metadata[key] = self._json_value(
+                    value, path=f"resolvedSkill.{key}"
+                )
+        self._resolved_skill_actions_by_step[node_id] = action_metadata
         self._execution_fanout_authorization_by_step[node_id] = (
             self._resolved_skill_execution_fanout_authorization(
                 selected_entry,
@@ -21877,6 +21895,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if self._workflow_patch_enabled(RUN_GITHUB_ACTION_PERMISSIONS_PATCH):
+            # Presence matters: a malformed null declaration must not disappear
+            # into the default read-only path. Old histories keep their payload.
+            for source in (runtime_block, node_inputs, workflow_parameters or {}):
+                if "githubOperations" in source:
+                    parameters["githubOperations"] = source["githubOperations"]
+                    break
         # Histories accepted before the selector cutoff retain their original
         # Activity payload. New histories carry the nullable authored runtime.
         if self._workflow_patch_enabled("run-model-selection-presence-4636-v1"):
@@ -22316,6 +22341,55 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             raw_skill_payload[key],
                             path=f"node[{node_id}].skill.{key}",
                         )
+            if self._workflow_patch_enabled(RUN_GITHUB_ACTION_PERMISSIONS_PATCH):
+                if (
+                    isinstance(raw_skill_payload, Mapping)
+                    and "publish" in raw_skill_payload
+                ):
+                    compact_skill_payload["publish"] = self._json_value(
+                        raw_skill_payload["publish"],
+                        path=f"node[{node_id}].skill.publish",
+                    )
+                # Snapshot metadata cannot be narrowed by an older registry
+                # projection or a caller's empty operation list. Union declared
+                # requirements; conflicting action identities fail before launch.
+                for key, resolved_metadata in self._resolved_skill_actions_by_step.get(
+                    node_id, {}
+                ).items():
+                    authored_metadata = compact_skill_payload.get(key)
+                    if authored_metadata is not None and not isinstance(
+                        authored_metadata, Mapping
+                    ):
+                        raise ValueError(f"skill.{key} must be an object")
+                    merged_metadata = dict(authored_metadata or {})
+                    for field, value in resolved_metadata.items():
+                        if field == "githubOperations" and field in merged_metadata:
+                            authored_operations = merged_metadata[field]
+                            if (
+                                not isinstance(authored_operations, list)
+                                or not isinstance(value, list)
+                                or any(
+                                    not isinstance(operation, str)
+                                    for operation in (*authored_operations, *value)
+                                )
+                            ):
+                                raise ValueError(
+                                    "githubOperations must be a list of strings"
+                                )
+                            merged_metadata[field] = list(
+                                dict.fromkeys((*authored_operations, *value))
+                            )
+                        else:
+                            if (
+                                field in {"kind", "mode"}
+                                and field in merged_metadata
+                                and merged_metadata[field] != value
+                            ):
+                                raise ValueError(
+                                    f"skill.{key}.{field} conflicts with resolved Skill metadata"
+                                )
+                            merged_metadata[field] = value
+                    compact_skill_payload[key] = merged_metadata
             if compact_skill_payload:
                 compact_skill_payload.setdefault("name", selected_skill)
                 parameters["skill"] = dict(compact_skill_payload)

@@ -1038,6 +1038,7 @@ async def test_run_job_dispatch_submits_and_reports_the_gpu_resource(
             "WorkflowInfo",
             (),
             {
+                "task_queue": "mm.workflow.user.v2",
                 "namespace": "default",
                 "workflow_id": "wf-3779",
                 "run_id": "run-1",
@@ -1121,6 +1122,7 @@ async def test_run_job_dispatch_reports_no_gpu_output_for_a_cpu_only_job(
             "WorkflowInfo",
             (),
             {
+                "task_queue": "mm.workflow.user.v2",
                 "namespace": "default",
                 "workflow_id": "wf-3779",
                 "run_id": "run-1",

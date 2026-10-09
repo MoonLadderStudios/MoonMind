@@ -129,6 +129,7 @@ const stackState = {
   },
   latestAction: recentAction,
   recentActions: [recentAction],
+  controller: { installed: true, reachable: true, message: null },
   policy: {
     repository: 'ghcr.io/moonladderstudios/moonmind',
     defaultReference: 'stable',
@@ -139,11 +140,12 @@ const stackState = {
   },
 };
 
-const stackStateWithRollback = {
+const stackStateWithHistory = {
   ...stackState,
   recentActions: [
     {
       status: 'FAILED',
+      owner: 'workflow',
       requestedImage: 'ghcr.io/moonladderstudios/moonmind:20260425.1234',
       operator: 'admin@example.com',
       reason: 'Routine release failed',
@@ -154,27 +156,12 @@ const stackStateWithRollback = {
       beforeSummary: 'ghcr.io/moonladderstudios/moonmind:stable',
       afterSummary: 'verification failed',
       rollbackEligibility: {
-        eligible: true,
-        sourceActionId: 'depupd_recent',
-        targetImage: {
-          repository: 'ghcr.io/moonladderstudios/moonmind',
-          reference: 'stable',
-        },
-        evidenceRef: 'art:sha256:before',
-      },
-    },
-    {
-      status: 'FAILED',
-      requestedImage: 'ghcr.io/moonladderstudios/moonmind:latest',
-      operator: 'admin@example.com',
-      reason: 'Unsafe rollback evidence',
-      startedAt: '2026-04-25T19:00:00Z',
-      completedAt: '2026-04-25T19:04:00Z',
-      rollbackEligibility: {
         eligible: false,
-        sourceActionId: 'depupd_unsafe',
+        sourceActionId: 'depupd_recent',
         targetImage: null,
-        reason: 'Before-state evidence is missing.',
+        reason:
+          'Rollback through the retired workflow updater is unavailable; update to ghcr.io/moonladderstudios/moonmind:stable instead.',
+        evidenceRef: 'art:sha256:before',
       },
     },
   ],
@@ -236,9 +223,8 @@ describe('OperationsSettingsSection deployment update card', () => {
           ok: true,
           status: 202,
           json: async () => ({
-            deploymentUpdateRunId: 'depupd_queued',
-            taskId: 'mm:deployment-update',
-            workflowId: 'mm:deployment-update',
+            operationId: 'ui-queued',
+            owner: 'controller',
             status: 'QUEUED',
           }),
         } as Response);
@@ -449,10 +435,13 @@ describe('OperationsSettingsSection deployment update card', () => {
         runSmokeCheck: false,
         pauseWork: false,
         pruneOldImages: false,
+        requestId: expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
       });
       expect(JSON.parse(String(updateCall?.[1]?.body))).not.toHaveProperty('reason');
     });
-    expect(await within(card).findByText(/deployment update queued/i)).toBeTruthy();
+    expect(
+      await within(card).findByText(/update accepted by the controller: operation ui-queued \(queued\)/i),
+    ).toBeTruthy();
   });
 
   it('renders update history and hides raw command-log links by default', async () => {
@@ -471,7 +460,7 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(within(card).queryByRole('link', { name: /raw command/i })).toBeNull();
   });
 
-  it('renders rollback only for eligible recent deployment actions', async () => {
+  it('keeps workflow-backed history readable with rollback unavailable', async () => {
     fetchSpy.mockImplementation((input) => {
       const url = String(input);
       if (url === '/api/workers') {
@@ -483,7 +472,7 @@ describe('OperationsSettingsSection deployment update card', () => {
       if (url === '/api/v1/operations/deployment/stacks/moonmind') {
         return Promise.resolve({
           ok: true,
-          json: async () => stackStateWithRollback,
+          json: async () => stackStateWithHistory,
         } as Response);
       }
       if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
@@ -495,73 +484,13 @@ describe('OperationsSettingsSection deployment update card', () => {
     renderOperations();
 
     const card = await screen.findByRole('region', { name: /moonmind update/i });
-    expect(await within(card).findByRole('button', { name: /roll back to stable/i })).toBeTruthy();
-    expect(within(card).queryByRole('button', { name: /roll back to latest/i })).toBeNull();
-    expect(within(card).getByText(/before-state evidence is missing/i)).toBeTruthy();
-  });
-
-  it('confirms rollback and submits the typed deployment rollback payload', async () => {
-    fetchSpy.mockImplementation((input, init) => {
-      const url = String(input);
-      if (url === '/api/workers') {
-        return Promise.resolve({ ok: true, json: async () => workerSnapshot } as Response);
-      }
-      if (url === '/api/v1/operations/codex/shards') {
-        return Promise.resolve({ ok: true, json: async () => workerShardHealth } as Response);
-      }
-      if (url === '/api/v1/operations/deployment/stacks/moonmind') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => stackStateWithRollback,
-        } as Response);
-      }
-      if (url === '/api/v1/operations/deployment/image-targets?stack=moonmind') {
-        return Promise.resolve({ ok: true, json: async () => imageTargets } as Response);
-      }
-      if (url === '/api/v1/operations/deployment/update') {
-        return Promise.resolve({
-          ok: true,
-          status: 202,
-          json: async () => ({
-            deploymentUpdateRunId: 'depupd_rollback',
-            taskId: 'mm:deployment-update',
-            workflowId: 'mm:deployment-update',
-            status: 'QUEUED',
-            body: init?.body,
-          }),
-        } as Response);
-      }
-      return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
-    });
-
-    renderOperations();
-
-    const card = await screen.findByRole('region', { name: /moonmind update/i });
-    fireEvent.click(await within(card).findByRole('button', { name: /roll back to stable/i }));
-
-    await waitFor(() => {
-      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Rollback deployment?'));
-      expect(confirmSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Target image: ghcr.io/moonladderstudios/moonmind:stable'),
-      );
-    });
-
-    await waitFor(() => {
-      const updateCall = fetchSpy.mock.calls.find(([url]) => String(url) === '/api/v1/operations/deployment/update');
-      expect(updateCall).toBeDefined();
-      expect(JSON.parse(String(updateCall?.[1]?.body))).toMatchObject({
-        stack: 'moonmind',
-        image: {
-          repository: 'ghcr.io/moonladderstudios/moonmind',
-          reference: 'stable',
-        },
-        operationKind: 'rollback',
-        rollbackSourceActionId: 'depupd_recent',
-        confirmation: expect.stringContaining('Rollback to ghcr.io/moonladderstudios/moonmind:stable confirmed'),
-        reason: expect.stringContaining('Rollback after failed update depupd_recent'),
-      });
-    });
-    expect(await within(card).findByText(/deployment rollback queued/i)).toBeTruthy();
+    expect(
+      await within(card).findByText(/rollback through the retired workflow updater is unavailable/i),
+    ).toBeTruthy();
+    expect(within(card).getByRole('link', { name: /run detail/i }).getAttribute('href')).toBe(
+      '/workflows/depupd_recent',
+    );
+    expect(within(card).queryByRole('button', { name: /roll back/i })).toBeNull();
   });
 
   const failedControllerAction = {
@@ -652,11 +581,8 @@ describe('OperationsSettingsSection deployment update card', () => {
             ok: true,
             status: 202,
             json: async () => ({
-              deploymentUpdateRunId: 'ctl-ui-1',
               operationId: 'ui-1',
               owner: 'controller',
-              taskId: null,
-              workflowId: null,
               status: 'RUNNING',
             }),
           } as Response)
@@ -690,7 +616,7 @@ describe('OperationsSettingsSection deployment update card', () => {
         message: 'The deployment controller is unavailable: controller endpoint is unreachable.',
       },
       () => null,
-      [failedControllerAction, stackStateWithRollback.recentActions[0]],
+      [failedControllerAction, stackStateWithHistory.recentActions[0]],
     );
     renderOperations();
 
@@ -702,9 +628,96 @@ describe('OperationsSettingsSection deployment update card', () => {
     expect(submit.disabled).toBe(true);
     const retry = within(card).getByRole('button', { name: /retry operation/i }) as HTMLButtonElement;
     expect(retry.disabled).toBe(true);
-    // A rollback from workflow-backed history is also a submission.
-    const rollback = within(card).getByRole('button', { name: /roll back to stable/i }) as HTMLButtonElement;
-    expect(rollback.disabled).toBe(true);
+    expect(within(card).queryByRole('button', { name: /roll back/i })).toBeNull();
+  });
+
+  it('names the host repair route and does not submit when no controller is installed', async () => {
+    mockControllerState(
+      {
+        installed: false,
+        reachable: false,
+        message:
+          'The standalone deployment controller is not installed. Run the host update command (./tools/update-moonmind.sh) to install it and update through it.',
+      },
+      () => null,
+      [recentAction],
+    );
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toContain('not installed');
+    expect(alert.textContent).toContain('./tools/update-moonmind.sh');
+    expect(alert.textContent).not.toMatch(/workflow/i);
+    const submit = within(card).getByRole('button', { name: /update moonmind/i }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+  });
+
+  it('reuses one request identity until the update is answered', async () => {
+    const bodies: Array<{ requestId?: string; image?: { reference?: string } }> = [];
+    let answer: 'network' | 'unavailable' | 'accepted' = 'network';
+    mockControllerState({ installed: true, reachable: true }, (url, init) => {
+      if (url !== '/api/v1/operations/deployment/update') {
+        return null;
+      }
+      bodies.push(JSON.parse(String(init?.body)));
+      if (answer === 'network') {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      if (answer === 'unavailable') {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({
+            detail: {
+              code: 'deployment_controller_unavailable',
+              message: 'The deployment controller is unavailable: controller did not answer.',
+            },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 202,
+        json: async () => ({ operationId: `ui-${bodies.at(-1)?.requestId}`, owner: 'controller', status: 'RUNNING' }),
+      } as Response);
+    });
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    const submit = await within(card).findByRole('button', { name: /update moonmind/i });
+    fireEvent.click(submit);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    await within(card).findByText(/failed to fetch/i);
+
+    answer = 'unavailable';
+    fireEvent.click(submit);
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    await within(card).findByText(/controller did not answer/i);
+
+    answer = 'accepted';
+    fireEvent.click(submit);
+    await waitFor(() => expect(bodies).toHaveLength(3));
+    await within(card).findByText(/update accepted by the controller/i);
+    // An unanswered or unconfirmed submission is retried as the same intent.
+    expect(new Set(bodies.map((body) => body.requestId)).size).toBe(1);
+
+    // Once answered, the next submission is a new intent.
+    fireEvent.click(submit);
+    await waitFor(() => expect(bodies).toHaveLength(4));
+    expect(bodies[3]?.requestId).not.toBe(bodies[0]?.requestId);
+  });
+
+  it('shows an unreadable controller status as unknown, never queued', async () => {
+    mockControllerState({ installed: true, reachable: true }, () => null, [
+      { ...failedControllerAction, status: 'UNKNOWN', retryAllowed: false, completedAt: null },
+    ]);
+    renderOperations();
+
+    const card = await screen.findByRole('region', { name: /moonmind update/i });
+    await within(card).findByText('Operation ui-1');
+    expect(within(card).getAllByText('UNKNOWN').length).toBeGreaterThan(0);
+    expect(within(card).queryByText('QUEUED')).toBeNull();
   });
 
   it('names the controller operation that accepted a submitted update', async () => {
@@ -714,11 +727,8 @@ describe('OperationsSettingsSection deployment update card', () => {
             ok: true,
             status: 202,
             json: async () => ({
-              deploymentUpdateRunId: 'ctl-ui-2',
               operationId: 'ui-2',
               owner: 'controller',
-              taskId: null,
-              workflowId: null,
               status: 'RUNNING',
             }),
           } as Response)

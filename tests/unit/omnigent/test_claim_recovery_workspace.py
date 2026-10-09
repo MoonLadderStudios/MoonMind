@@ -51,7 +51,13 @@ def comparison_from_git(workspace):
 
 
 async def capture_saved_workspace(
-    tmp_path, monkeypatch, change="none", *, workflow_id=None, run_id=None
+    tmp_path,
+    monkeypatch,
+    change="none",
+    *,
+    workflow_id=None,
+    run_id=None,
+    parameters_repository="example/repo",
 ):
     for prefix in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
@@ -122,6 +128,7 @@ async def capture_saved_workspace(
         )
     )
     payload = request.model_dump(by_alias=True, mode="json")
+    payload["parameters"]["repository"] = parameters_repository
     payload["workspaceSpec"] = {
         "repository": "example/repo",
         "startingBranch": "main",

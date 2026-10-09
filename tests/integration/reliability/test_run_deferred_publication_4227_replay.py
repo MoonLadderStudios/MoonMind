@@ -50,6 +50,7 @@ def _workflow(patched: bool, monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWork
         "WorkflowInfo",
         (),
         {
+            "task_queue": "mm.workflow.user.v2",
             "namespace": "default",
             "workflow_id": "wf-4227-replay",
             "run_id": "run-4227-replay",

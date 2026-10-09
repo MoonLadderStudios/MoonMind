@@ -566,6 +566,7 @@ async def test_post_merge_github_completion_applies_done_status(
     async def fake_update_github_issue_status(inputs, _context=None, *, merged_pull_request):
         captured.update(inputs)
         captured["merged_pull_request"] = merged_pull_request
+        captured["context"] = _context
         return SimpleNamespace(
             status="COMPLETED",
             outputs={
@@ -584,6 +585,7 @@ async def test_post_merge_github_completion_applies_done_status(
     result = await TemporalIntegrationActivities.merge_automation_complete_post_merge_github(
         object(),
         {
+            "parentWorkflowId": "mm:parent-run",
             "pullRequest": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
             "postMergeGithub": {
                 "enabled": True,
@@ -599,6 +601,8 @@ async def test_post_merge_github_completion_applies_done_status(
         "issueNumber": 3143,
         "mode": "done",
         "merged_pull_request": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
+        # The child gate reads with its parent run's admitted repository authority.
+        "context": {"admittedWorkflowId": "mm:parent-run"},
     }
     assert result["status"] == "succeeded"
     assert result["confirmedLabels"] == ["status: done"]
@@ -3172,7 +3176,7 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
     monkeypatch.setattr(temporal_activity, "info", lambda: SimpleNamespace(
         namespace="default", workflow_id="parent-wf:agent:verify", workflow_run_id="child-run",
     ))
-    monkeypatch.setattr(run_module.workflow, "info", lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"))
+    monkeypatch.setattr(run_module.workflow, "info", lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="parent-wf", run_id="run"))
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
     monkeypatch.setattr(run_module.workflow, "now", lambda: datetime(2026, 9, 13, tzinfo=timezone.utc))
     async with temporal_db(tmp_path) as session_maker:
@@ -3522,7 +3526,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             monkeypatch.setattr(
                 run_module.workflow,
                 "info",
-                lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"),
+                lambda: SimpleNamespace(task_queue="mm.workflow.user.v2", workflow_id="parent-wf", run_id="run"),
             )
             monkeypatch.setattr(
                 run_module.workflow,
