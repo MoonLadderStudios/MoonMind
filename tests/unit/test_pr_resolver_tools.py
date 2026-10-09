@@ -163,7 +163,7 @@ def test_snapshot_reconciles_current_head_legacy_statuses(
         if "/rules/branches/main" in endpoint:
             return None if required is None else []
         if "/branches/main" in endpoint:
-            return {"protected": required != []}
+            return {"protected": required != [], "commit": {"sha": "base-head"}}
         return None
 
     monkeypatch.setitem(globals_, "fetch_pr_data", lambda _: (pr, "2776", []))
@@ -217,7 +217,7 @@ def _run_snapshot_with_head_evidence(
         if "/rules/branches/main" in endpoint:
             return []
         if "/branches/main" in endpoint:
-            return {"protected": required != []}
+            return {"protected": required != [], "commit": {"sha": "base-head"}}
         return None
 
     monkeypatch.setitem(globals_, "fetch_pr_data", lambda _: (pr, "2776", []))

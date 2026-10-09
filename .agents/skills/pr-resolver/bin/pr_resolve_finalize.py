@@ -278,7 +278,7 @@ def _run_snapshot(
     review_provider: str = "",
     require_fresh_review: bool = False,
 ) -> None:
-    cmd = [sys.executable, str(snapshot_script)]
+    cmd = [sys.executable, str(snapshot_script), "--poll-waits"]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
