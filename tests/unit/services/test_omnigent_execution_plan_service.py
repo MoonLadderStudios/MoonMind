@@ -2736,7 +2736,9 @@ class _ReadableRepositoryPlanArtifacts(_ArtifactService):
         return SimpleNamespace(artifact_id=artifact_id), self.payloads[artifact_id]
 
 
-async def _configure_github_repository_plan_test(monkeypatch, tmp_path):
+async def _configure_github_repository_plan_test(
+    monkeypatch, tmp_path, *, operations=None
+):
     from unittest.mock import AsyncMock
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -2752,8 +2754,18 @@ async def _configure_github_repository_plan_test(monkeypatch, tmp_path):
     engine = await record_repository_connections(
         monkeypatch,
         tmp_path,
-        github_pat_connection("review-repository", "REVIEW_REPOSITORY_PAT"),
-        assignments=[github_repository_assignment("review-repository", repository)],
+        github_pat_connection(
+            "review-repository",
+            "REVIEW_REPOSITORY_PAT",
+            **({"operations": operations} if operations else {}),
+        ),
+        assignments=[
+            github_repository_assignment(
+                "review-repository",
+                repository,
+                **({"operations": operations} if operations else {}),
+            )
+        ],
     )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -2935,10 +2947,13 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
     The pr-review-resolve preset compiles its own publication to None while
     merge automation launches a pr-resolver child with Auto publication. The
     child re-admits against this parent, so the parent scope must hold the
-    push authority its resolver needs (fix_only still pushes).
+    push authority its resolver needs (fix_only still pushes) and, when the
+    gate merges, the resolver's merge action.
     """
     repository, engine, sessions = await _configure_github_repository_plan_test(
-        monkeypatch, tmp_path
+        monkeypatch,
+        tmp_path,
+        operations=("read", "write", "branch_write", "review_request", "merge_request"),
     )
     artifacts = _ReadableRepositoryPlanArtifacts()
     try:
@@ -2964,6 +2979,15 @@ async def test_existing_pr_merge_automation_parent_admits_its_resolver_child(
                 },
             },
             workflow_id="mm:existing-pr-parent",
+        )
+        parent_access = parent.envelope.payload.resolvedTools["repositoryAccess"]
+        parent_selection = json.loads(
+            artifacts.payloads[
+                parent_access["collaboration"]["artifactRef"].removeprefix("artifact:")
+            ]
+        )["selection"]
+        assert ("merge_request" in parent_selection["operations"]) is (
+            finish_mode == "merge"
         )
         child = await _compile_opencode_plan(
             monkeypatch,

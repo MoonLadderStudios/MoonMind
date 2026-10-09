@@ -1104,6 +1104,12 @@ async def _admit_repository_plan_inputs(
             resolved_skills=resolved_skills,
         )
     )
+    # The resolver child narrows from this plan, so a merging gate must hold
+    # the merge action it will re-admit; fix_only never merges.
+    if resolver_publishes and (
+        not isinstance(finish_mode, str) or finish_mode.strip() in {"", "merge"}
+    ):
+        operations = tuple(dict.fromkeys((*operations, "merge_request")))
     slots = {} if native_review else {"source": ("source_read", ("read",))}
     # Native review gates require collaboration even without an agent gh tool.
     if (
