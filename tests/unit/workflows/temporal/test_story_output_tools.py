@@ -5756,3 +5756,477 @@ async def test_default_story_fetcher_resolves_credentials_for_requested_reposito
     )
     resolve.assert_awaited_once_with(repo="owner/repo")
     assert client.get.await_count == 1
+
+
+class _AdmittedReader:
+    """Repository reader double that records the admitted run per read."""
+
+    def __init__(self, pull_request: dict[str, Any], *, fail: bool = False) -> None:
+        self.pull_request = pull_request
+        self.fail = fail
+        self.reads: list[tuple[str, str]] = []
+
+    async def read_pull_request(self, repository, url, *, admitted_workflow_id=""):
+        self.reads.append(("pull_request", admitted_workflow_id))
+        if self.fail:
+            raise RuntimeError("provider page truncated")
+        return self.pull_request
+
+    async def read_repository_target(self, repository, ref="", *, admitted_workflow_id=""):
+        self.reads.append(("target", admitted_workflow_id))
+        return {"ref": "refs/heads/main", "revision": "d" * 40,
+                "contentDigest": "git-tree:" + "e" * 40}
+
+    async def commit_is_ancestor(self, repository, ancestor, descendant, *, admitted_workflow_id=""):
+        self.reads.append(("ancestor", admitted_workflow_id))
+        return True
+
+
+def _merged_pr(head_repository: str = "acme/repo") -> dict[str, Any]:
+    return {
+        "number": 7,
+        "state": "closed",
+        "merged": True,
+        "merge_commit_sha": "c" * 40,
+        "title": "Fix acme/repo#4",
+        "body": "",
+        "base": {"ref": "main", "repo": {"full_name": "acme/repo"}},
+        "head": {"ref": "feature", "sha": "a" * 40,
+                 "repo": {"full_name": head_repository}},
+    }
+
+
+_MERGED_HANDOFF = {
+    "repo": "acme/repo", "number": 7, "url": "https://github.com/acme/repo/pull/7",
+    "headSha": "a" * 40, "headBranch": "feature", "baseBranch": "main",
+}
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_reads_every_fact_with_admitted_run() -> None:
+    reader = _AdmittedReader(_merged_pr())
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason is None
+    assert reader.reads == [
+        ("pull_request", "mm:parent-run"),
+        ("target", "mm:parent-run"),
+        ("ancestor", "mm:parent-run"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_post_merge_handoff_rejects_same_branch_from_fork() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == "The pull request does not match the current published candidate"
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_partial_pull_request_lookup_is_unavailable_not_absent() -> None:
+    reader = _AdmittedReader(_merged_pr(), fail=True)
+
+    reason = await story_tools._validate_post_merge_issue_handoff(
+        reader, repository="acme/repo", issue_ref="acme/repo#4",
+        pull_request=_MERGED_HANDOFF, admitted_workflow_id="mm:parent-run",
+    )
+
+    assert reason == (
+        "Read the matching GitHub pull request through the authorized "
+        "repository reader (RuntimeError)"
+    )
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    [
+        ({"admittedWorkflowId": "mm:parent-run", "workflow_id": "merge-gate"}, "mm:parent-run"),
+        ({"workflow_id": "mm:run"}, "mm:run"),
+        (None, ""),
+    ],
+)
+def test_admitted_repository_workflow_prefers_named_parent(context, expected) -> None:
+    assert story_tools._admitted_repository_workflow(context) == expected
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_post_merge_reads_with_parent_run() -> None:
+    reader = _AdmittedReader(_merged_pr(head_repository="someone/repo"))
+
+    result = await update_github_issue_status(
+        {"repository": "acme/repo", "issueNumber": 4, "mode": "done"},
+        {"admittedWorkflowId": "mm:parent-run", "execution_owner": "default/merge-gate"},
+        github_service_factory=lambda: reader,
+        merged_pull_request=_MERGED_HANDOFF,
+    )
+
+    assert result.status == "FAILED"
+    assert reader.reads == [("pull_request", "mm:parent-run")]
+
+
+@pytest.mark.asyncio
+async def test_child_started_workflow_reads_handoff_with_owning_run_connection(
+    monkeypatch, tmp_path
+) -> None:
+    """#4010: a resolver/remediation child acts with its recorded owner's selected PAT B.
+
+    The child has no canonical record; the reader follows its Temporal parent
+    chain (remediation -> resolver -> owning run) to the recorded authority.
+    """
+
+    import dataclasses
+
+    import httpx
+    from temporalio import activity
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from tests.helpers.repository_connections import (
+        TemporalParentClient,
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    owner = "mm:owner-run"
+    resolver = "merge-automation:mm:owner-run:acme/repo:7:resolver:1"
+    remediation = f"{resolver}:remediation"
+    parents = {remediation: resolver, resolver: owner}
+
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path == "/repos/acme/repo/pulls/7":
+            return httpx.Response(200, json={**_merged_pr(), "body": "Fixes acme/repo#4"})
+        if path.endswith("/commits/refs%2Fheads%2Fmain") or path.endswith(
+            "/commits/refs/heads/main"
+        ):
+            return httpx.Response(
+                200, json={"sha": "d" * 40, "commit": {"tree": {"sha": "e" * 40}}}
+            )
+        if path.startswith("/repos/acme/repo/compare/"):
+            return httpx.Response(200, json={"status": "ahead"})
+        raise AssertionError(f"Unexpected provider request: {request.method} {path}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-a")
+    monkeypatch.setenv("TEAM_B_PAT", "selected-token-b")
+    client = TemporalParentClient(parents)
+    monkeypatch.setattr(activity, "client", lambda: client)
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:team-b", "TEAM_B_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:team-b", "acme/repo")
+        ],
+        admitted_runs={
+            owner: {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:team-b",
+                    "repository": {"name": "acme/repo"},
+                }
+            }
+        },
+    )
+
+    async def validate() -> str | None:
+        return await story_tools._validate_post_merge_issue_handoff(
+            GitHubService(), repository="acme/repo", issue_ref="acme/repo#4",
+            pull_request=_MERGED_HANDOFF,
+            admitted_workflow_id=story_tools._admitted_repository_workflow(
+                {"workflow_id": "authored-input-is-ignored"}
+            ),
+        )
+
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(env.info, workflow_id=remediation)
+    try:
+        reason = await env.run(validate)
+    finally:
+        await engine.dispose()
+
+    assert reason is None
+    # Each provider read resolves only through the recorded parent chain. The
+    # credential acquirer may perform a second bounded authority read before
+    # falling back to a historical connection, so do not freeze that internal
+    # lookup count here.
+    assert len(client.described) >= 6
+    assert len(client.described) % 2 == 0
+    assert all(
+        pair == (remediation, resolver)
+        for pair in zip(client.described[::2], client.described[1::2])
+    )
+    assert [r.url.path.split("/")[4] for r in requests] == ["pulls", "commits", "compare"]
+    assert {r.headers["Authorization"] for r in requests} == {"Bearer selected-token-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_assessment_block_reports_durable_reason_before_writes(
+    monkeypatch, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Mandatory source unavailable. Restore the source and rerun assessment.",
+            }
+        }
+    )
+    service = _FakeGitHubService()
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactRef": "art_blocked",
+            "previousOutputs": {"assessmentVerdict": "NOT_IMPLEMENTED"},
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentVerdict"] == "BLOCKED"
+    assert result.outputs["assessmentArtifactRef"] == "art_blocked"
+    assert "Mandatory source unavailable" in result.outputs["summary"]
+    assert "art_blocked" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+    assert service.create_issue_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [None, {}, {"verdict": "UNKNOWN"}, ["BLOCKED"]])
+async def test_github_blocker_check_rejects_unusable_assessment(monkeypatch, payload):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService({"art_invalid": payload})
+    service = _FakeGitHubService()
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_invalid",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "art_invalid" in result.outputs["summary"]
+    assert "Re-run the assessment" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict", ["FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED"]
+)
+async def test_github_blocker_check_prefers_nonblocked_durable_assessment(
+    monkeypatch, verdict
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_current": {"verdict": verdict}}
+    )
+    service = _FakeGitHubService()
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_current",
+            "previousOutputs": {"assessmentVerdict": "BLOCKED"},
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "continue"
+    assert result.outputs["assessmentVerdict"] == verdict
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"verdict": "UNKNOWN"},
+        {"verdict": "BLOCKED", "summary": "Source unavailable"},
+    ],
+)
+async def test_github_assessment_local_handoff_fails_closed(
+    monkeypatch, tmp_path, tool, payload
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    assessment = tmp_path / "assessment.json"
+    if payload is not None:
+        assessment.write_text(json.dumps(payload), encoding="utf-8")
+    service = _FakeGitHubService()
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": str(assessment),
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["assessmentArtifactName"] == assessment.name
+    if payload and payload["verdict"] == "BLOCKED":
+        assert "Source unavailable" in result.outputs["summary"]
+    else:
+        assert "Re-run the assessment" in result.outputs["summary"]
+    assert service.added_labels == service.removed_labels == []
+
+
+@pytest.mark.asyncio
+async def test_github_blocked_summary_is_bounded_and_redacted(monkeypatch):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "token=ghp_" + "a" * 36 + " " + "x" * 3000,
+                "manualOnly": {"reason": "Incomplete declaration"},
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert result.completion_disposition is None
+    assert "ghp_" + "a" * 36 not in result.outputs["summary"]
+    assert len(result.outputs["summary"]) < 2300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_reuses_successful_artifact_read(
+    monkeypatch, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+
+    class OneReadArtifactService(_FakeAssessmentArtifactService):
+        async def read(self, **kwargs):
+            if self.read_calls:
+                raise RuntimeError("Transient artifact service outage")
+            return await super().read(**kwargs)
+
+    artifacts = OneReadArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+            "mode": "start",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert artifacts.read_calls == ["art_blocked"]
+
+
+@pytest.mark.asyncio
+async def test_github_blocked_diagnostic_preserves_issue_read_failure(monkeypatch):
+    async def unavailable_issue(**_kwargs):
+        return None, "GitHub issue read unavailable."
+
+    monkeypatch.setattr(story_tools, "_fetch_github_issue", unavailable_issue)
+    artifacts = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert "GitHub issue read unavailable" in result.outputs["summary"]
+    assert result.outputs["assessmentArtifactRef"] == "art_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_omits_private_host_path(
+    monkeypatch, tmp_path, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    private_directory = tmp_path / ".auth" / ("ghp_" + "a" * 36)
+    private_directory.mkdir(parents=True)
+    path = private_directory / "assessment.json"
+    path.write_text(json.dumps({"verdict": "BLOCKED", "summary": "Source unavailable"}))
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactPath": str(path),
+            "mode": "start",
+        },
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert str(private_directory) not in json.dumps(result.outputs)
+    assert "ghp_" + "a" * 36 not in json.dumps(result.outputs)
+    assert result.outputs["assessmentArtifactName"] == "assessment.json"

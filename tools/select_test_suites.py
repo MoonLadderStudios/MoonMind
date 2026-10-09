@@ -37,7 +37,6 @@ OUTPUT_KEYS = (
     "temporal_boundary",
     "integration_ci",
     "integration_hermetic",
-    "integration_host_update_transport",
     "integration_fresh_journey",
     "integration_upgrade_journey",
     "integration_controller_journey",
@@ -55,16 +54,12 @@ OUTPUT_KEYS = (
 # Stable row order is part of the emitted Actions matrix contract.
 INTEGRATION_LANES = (
     "hermetic",
-    "host-update-transport",
     "fresh-journey",
     "upgrade-journey",
     "controller-journey",
 )
-JOURNEY_LANES = INTEGRATION_LANES[2:]
+JOURNEY_LANES = INTEGRATION_LANES[1:]
 INTEGRATION_LANE_EXACT = {
-    "tests/integration/host_update/test_host_updater_transport.py": (
-        "host-update-transport",
-    ),
     "tests/integration/host_update/test_journal_transition.py": ("controller-journey",),
     "tests/integration/host_update/journal_transition_actor.py": (
         "controller-journey",
@@ -106,12 +101,11 @@ FORCE_FULL_EXACT = {
     "tools/test_unit.sh",
     "tools/test_unit_docker.sh",
     "tools/test_integration.sh",
-    # The host updater must qualify its child Docker transport against real
-    # Compose, including stale socket recovery and healthy proxy preservation.
+    # The host updater installs and submits through the standalone controller;
+    # its handoff is qualified across the full suite, including the journeys.
     "tools/update-moonmind.sh",
     ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
     ".agents/skills/update-moonmind/scripts/update_release.py",
-    "tests/unit/test_update_moonmind_transport.py",
     "tools/select_test_suites.py",
     "tests/conftest.py",
     "tests/unit/conftest.py",
@@ -274,7 +268,14 @@ INTEGRATION_CI_PREFIXES = (
 
 INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
 
-UNIT_SLOW_PREFIXES = ("tests/unit/api/routers/test_agent_runs.py",)
+UNIT_SLOW_PREFIXES = (
+    "tests/unit/api/routers/test_agent_runs.py",
+    # The resolver's subprocess journeys retain their existing required owner
+    # on direct test/helper changes as well as on full-backend runs.
+    "tests/unit/test_pr_resolver_wait_polling.py",
+    ".agents/skills/pr-resolver/",
+    ".agents/skills/fix-comments/",
+)
 
 RELIABILITY_JOURNEY_EXACT = {
     "api_service/main.py",
@@ -501,9 +502,19 @@ EXACT_ARTIFACT_EXACT = {
     "moonmind/omnigent/exact_artifact_conformance.py",
     "tools/omnigent_exact_artifact_probe.py",
     "tools/run_omnigent_exact_artifact_conformance.py",
+    # Credential-free recovery executes these owners inside the candidate image.
+    "tools/ci/run_credential_free_host_recovery.py",
+    "tests/unit/tools/test_run_credential_free_host_recovery.py",
+    "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+    "moonmind/omnigent/oauth_host_runtime.py",
+    "moonmind/omnigent/bridge_store.py",
+    "moonmind/omnigent/workspace_publication.py",
+    "tools/register_omnigent_agent.py",
 }
 
 EXACT_ARTIFACT_PREFIXES = (
+    "moonmind/omnigent/host_services/",
+    "services/omnigent/agents/opencode-native-ui/",
     "api_service/docker/",
     "docker/",
 )
@@ -568,7 +579,6 @@ class SuiteSelection:
     temporal_boundary: bool = False
     integration_ci: bool = False
     integration_hermetic: bool = False
-    integration_host_update_transport: bool = False
     integration_fresh_journey: bool = False
     integration_upgrade_journey: bool = False
     integration_controller_journey: bool = False
@@ -749,7 +759,7 @@ def _integration_lanes(paths: list[str], selection: SuiteSelection) -> set[str]:
     """Narrow only audited lane-local inputs; shared boundaries keep every lane.
 
     A new integration test belongs to the hermetic corpus by default. The
-    separately invoked host transport and controller tests override that owner.
+    separately invoked controller tests override that owner.
     Omnigent contracts retain the complete cross-layer gate.
     """
     lanes: set[str] = set()
@@ -759,7 +769,7 @@ def _integration_lanes(paths: list[str], selection: SuiteSelection) -> set[str]:
         elif path.startswith("tests/integration/host_update/"):
             # Standalone lanes invoke only their exact modules. New marked
             # tests and shared fixtures must also reach the hermetic collector.
-            lanes.update(("hermetic", "host-update-transport", "controller-journey"))
+            lanes.update(("hermetic", "controller-journey"))
         elif (
             path in {"tests/integration/conftest.py", "tests/conftest.py"}
             or is_omnigent_contract_owned(path)

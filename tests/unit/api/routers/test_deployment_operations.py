@@ -32,7 +32,7 @@ from moonmind.workflows.skills.deployment_tools import (
 def _no_installed_controller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """These journeys cover a deployment without an installed controller.
+    """These cases cover admission, policy, and history without a controller.
 
     Controller-owned updates are exercised against the real controller in
     ``test_deployment_operations_controller.py``.
@@ -46,19 +46,16 @@ def _no_installed_controller(
         monkeypatch.delenv(name, raising=False)
 
 
-class _FakeExecutionRecord:
-    workflow_id = "mm:deployment-update"
-    run_id = "11111111-2222-3333-4444-555555555555"
-
-
 class _FakeExecutionService:
+    """Serves workflow-backed history; an update must never create one."""
+
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
         self.execution_items: list[object] = []
 
-    async def create_execution(self, **kwargs: object) -> _FakeExecutionRecord:
+    async def create_execution(self, **kwargs: object) -> object:
         self.requests.append(kwargs)
-        return _FakeExecutionRecord()
+        raise AssertionError("an update must not create a MoonMind.UserWorkflow")
 
     async def list_executions(self, **_kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(items=self.execution_items)
@@ -135,26 +132,6 @@ def _valid_update_payload() -> dict[str, object]:
     }
 
 
-def _rollback_payload(**overrides: object) -> dict[str, object]:
-    payload = _valid_update_payload()
-    payload.update(
-        {
-            "image": {
-                "repository": "ghcr.io/moonladderstudios/moonmind",
-                "reference": "stable",
-            },
-            "reason": "Rollback after failed update depupd_recent",
-            "operationKind": "rollback",
-            "rollbackSourceActionId": "depupd_recent",
-            "confirmation": (
-                "Rollback to ghcr.io/moonladderstudios/moonmind:stable confirmed"
-            ),
-        }
-    )
-    payload.update(overrides)
-    return payload
-
-
 def _recent_action_service(*, eligible: bool = True) -> DeploymentOperationsService:
     eligibility = RollbackEligibilityDecision(
         eligible=eligible,
@@ -198,7 +175,7 @@ def _recent_action_service(*, eligible: bool = True) -> DeploymentOperationsServ
     )
 
 
-def test_admin_can_submit_policy_valid_deployment_update(
+def test_update_without_a_controller_returns_the_repair_route_and_no_workflow(
     admin_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
     client, execution_service = admin_client
@@ -207,124 +184,11 @@ def test_admin_can_submit_policy_valid_deployment_update(
         json=_valid_update_payload(),
     )
 
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["deploymentUpdateRunId"].startswith("depupd_")
-    assert payload["taskId"] == "mm:deployment-update"
-    assert payload["workflowId"] == "mm:deployment-update"
-    assert payload["owner"] == "workflow"
-    assert payload["operationId"] is None
-    assert payload["status"] == "QUEUED"
-    assert len(execution_service.requests) == 1
-    request = execution_service.requests[0]
-    assert request["workflow_type"] == "MoonMind.UserWorkflow"
-    assert request["owner_type"] == "user"
-    assert request["integration"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    parameters = request["initial_parameters"]
-    assert isinstance(parameters, dict)
-    plan = parameters["task"]["plan"]
-    steps = parameters["task"]["steps"]
-    assert plan[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert plan[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
-    assert plan[0]["inputs"]["stack"] == "moonmind"
-    assert steps[0]["type"] == "tool"
-    assert steps[0]["tool"]["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert steps[0]["tool"]["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
-    assert steps[0]["tool"]["inputs"]["stack"] == "moonmind"
-
-
-def test_deployment_update_uses_canonical_policy_stack_for_queued_run(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-    payload = _valid_update_payload()
-    payload["stack"] = " moonmind "
-
-    response = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
-    )
-
-    assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    assert parameters["task"]["plan"][0]["inputs"]["stack"] == "moonmind"
-
-
-def test_explicit_retry_submission_creates_distinct_audited_update_request(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-
-    first = client.post(
-        "/api/v1/operations/deployment/update",
-        json=_valid_update_payload(),
-    )
-    second_payload = _valid_update_payload()
-    second_payload["reason"] = "Explicit retry after failed deployment update"
-    second = client.post(
-        "/api/v1/operations/deployment/update",
-        json=second_payload,
-    )
-
-    assert first.status_code == 202
-    assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
-    )
-
-
-def test_repeated_update_submission_without_reason_reuses_idempotency_key(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-    payload = _valid_update_payload()
-    payload.pop("reason")
-
-    first = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
-    )
-    second = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
-    )
-
-    assert first.status_code == 202
-    assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] == (
-        execution_service.requests[1]["idempotency_key"]
-    )
-
-
-def test_mutable_tag_update_submission_without_reason_is_not_stale_idempotent(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-    payload = _valid_update_payload()
-    payload["image"] = {
-        "repository": "ghcr.io/moonladderstudios/moonmind",
-        "reference": "latest",
-    }
-    payload.pop("reason")
-
-    first = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
-    )
-    second = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
-    )
-
-    assert first.status_code == 202
-    assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
-    )
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "deployment_controller_not_installed"
+    assert detail["repairCommand"] == "./tools/update-moonmind.sh"
+    assert execution_service.requests == []
 
 
 def test_non_admin_cannot_submit_deployment_update(
@@ -409,11 +273,10 @@ def test_deployment_update_reason_is_optional(
         json=payload,
     )
 
-    assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    plan_inputs = parameters["task"]["plan"][0]["inputs"]
-    assert "reason" not in plan_inputs
+    # Policy admits it; only the missing controller stops the submission.
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "deployment_controller_not_installed"
+    assert execution_service.requests == []
 
 
 def test_arbitrary_shell_and_path_fields_are_not_accepted(
@@ -460,30 +323,6 @@ def test_current_deployment_state_returns_typed_shape(
     assert "latestAction" in payload
     assert payload["controller"]["installed"] is False
     assert payload["controller"]["reachable"] is False
-
-
-def test_deployment_state_returns_recent_failure_action_with_rollback_eligibility(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, _execution_service = admin_client
-    _override_deployment_service(client.app, _recent_action_service())
-
-    response = client.get("/api/v1/operations/deployment/stacks/moonmind")
-
-    assert response.status_code == 200
-    action = response.json()["recentActions"][0]
-    assert action["kind"] == "failure"
-    assert action["status"] == "FAILED"
-    assert action["rollbackEligibility"] == {
-        "eligible": True,
-        "sourceActionId": "depupd_recent",
-        "targetImage": {
-            "repository": "ghcr.io/moonladderstudios/moonmind",
-            "reference": "stable",
-        },
-        "reason": None,
-        "evidenceRef": "art:sha256:before",
-    }
 
 
 def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
@@ -578,62 +417,24 @@ def test_allowed_image_targets_return_digest_guidance(
     assert "latest" in repository["allowedReferences"]
 
 
-def test_admin_can_submit_rollback_through_typed_deployment_update(
+@pytest.mark.parametrize(
+    "rollback_fields",
+    [
+        {"operationKind": "rollback"},
+        {"rollbackSourceActionId": "depupd_recent"},
+        {"confirmation": "Rollback to ghcr.io/moonladderstudios/moonmind:stable"},
+    ],
+)
+def test_rollback_through_the_retired_workflow_updater_is_not_accepted(
     admin_client: tuple[TestClient, _FakeExecutionService],
+    rollback_fields: dict[str, str],
 ) -> None:
     client, execution_service = admin_client
 
     response = client.post(
         "/api/v1/operations/deployment/update",
-        json=_rollback_payload(),
-    )
-
-    assert response.status_code == 202
-    parameters = execution_service.requests[0]["initial_parameters"]
-    assert isinstance(parameters, dict)
-    operation = parameters["task"]["operation"]
-    plan_inputs = parameters["task"]["plan"][0]["inputs"]
-    assert operation["kind"] == "rollback"
-    assert operation["rollbackSourceActionId"] == "depupd_recent"
-    assert plan_inputs["operationKind"] == "rollback"
-    assert plan_inputs["rollbackSourceActionId"] == "depupd_recent"
-    assert plan_inputs["confirmation"].startswith("Rollback to")
-    assert plan_inputs["image"]["reference"] == "stable"
-
-
-def test_repeated_rollback_submissions_are_distinct_explicit_actions(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-
-    first = client.post(
-        "/api/v1/operations/deployment/update",
-        json=_rollback_payload(),
-    )
-    second = client.post(
-        "/api/v1/operations/deployment/update",
-        json=_rollback_payload(),
-    )
-
-    assert first.status_code == 202
-    assert second.status_code == 202
-    assert len(execution_service.requests) == 2
-    assert execution_service.requests[0]["idempotency_key"] != (
-        execution_service.requests[1]["idempotency_key"]
-    )
-
-
-def test_rollback_submission_requires_explicit_confirmation(
-    admin_client: tuple[TestClient, _FakeExecutionService],
-) -> None:
-    client, execution_service = admin_client
-    payload = _rollback_payload(confirmation=" ")
-
-    response = client.post(
-        "/api/v1/operations/deployment/update",
-        json=payload,
+        json={**_valid_update_payload(), **rollback_fields},
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "deployment_confirmation_required"
     assert execution_service.requests == []

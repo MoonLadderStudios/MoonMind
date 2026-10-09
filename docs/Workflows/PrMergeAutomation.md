@@ -296,7 +296,9 @@ Completion includes the provider's submitted review, its request-bound clean
 comment, or its qualified clean-review reaction. A clean comment opens with the
 provider's clean-result sentence (for Codex, `Codex Review: Didn't find any
 major issues.`); the rest of that line is flair the provider varies, and any
-further text must be P2/medium-or-below findings. When the comment names the
+further text must be P2/medium-or-below findings. Completion settles review
+freshness only: those findings still need a disposition like any other current
+finding. When the comment names the
 commit it reviewed (Codex's abbreviated `Reviewed commit` line), that commit
 must be the current head. Ordinary clean comments and PR-level reactions must
 be newer than the request on its unchanged head. Pending, unknown, blank, or

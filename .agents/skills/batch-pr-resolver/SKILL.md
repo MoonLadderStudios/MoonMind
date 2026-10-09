@@ -1,6 +1,6 @@
 ---
 name: batch-pr-resolver
-description: Discover open PRs in a repository and enqueue one `pr-resolver` task for each.
+description: Discover open PRs in a repository, optionally limited to selected PR numbers, and enqueue one `pr-resolver` task for each.
 metadata:
   sideEffect:
     kind: enqueue_children
@@ -29,6 +29,7 @@ on child publishing; do not infer one from the coordinator's local mode.
 
 - `repo` (string, required): Target repository in `owner/repo` form.
 - `state` (string, optional): PR state filter for discovery. Default is `open`. Using other states prints a warning.
+- `pullRequests` (string, optional): Only queue these PRs, as numbers or inclusive ranges such as `4724-4746, 4765`. The helper inherits this field from the parent task context when its CLI override is omitted. When omitted everywhere, every open PR is queued.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
@@ -81,6 +82,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
 2. Map inputs to flags:
    - `repo` -> `--repo`
    - `state` -> `--state`
+   - `pullRequests` -> `--pull-requests`
    - `maxAttempts` -> `--max-attempts`
    - `priority` -> `--priority`
    - `mergeMethod` -> `--merge-method`
@@ -98,7 +100,13 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
    The adopting PR coordinator carries these instructions through its durable
    gate into each repair and final resolver pass.
 
-3. For each open PR in the target repo:
+   When the request names specific PRs or a PR range (for example "Select PRs
+   from #4724 to #4746"), pass that selection with `--pull-requests` so the
+   helper filters discovery before it submits anything. Never wrap, shim, or
+   monkeypatch the helper to narrow its selection; a selection the flag cannot
+   express is a blocker to report, not a reason to queue every open PR.
+
+3. For each selected open PR in the target repo (every open PR when no selection is given):
    - Skip PRs identified as cross-repository (`isCrossRepository=true`) or whose head is not on `owner/repo`.
    - Build a canonical queue task with:
      - `type: "task"`

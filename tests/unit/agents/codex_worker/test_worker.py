@@ -1177,6 +1177,49 @@ async def test_run_once_redacts_task_context_payload(
     assert secret_value not in task_context_content
     assert "[REDACTED]" in task_context_content
 
+async def test_run_once_task_context_carries_canonical_skill_inputs(
+    tmp_path: Path,
+) -> None:
+    """Skills inherit canonical ``skill.inputs`` through task_context.json."""
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "a/b",
+            "targetRuntime": "codex",
+            "workflow": {
+                "instructions": "run",
+                "skill": {
+                    "id": "speckit",
+                    "inputs": {"pullRequests": "4724-4746"},
+                },
+                "runtime": {"mode": "codex"},
+                "git": {"startingBranch": "main", "targetBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="done", error_message=None)
+    )
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    assert await worker.run_once() is True
+
+    task_context_path = tmp_path / str(job.id) / "artifacts" / "task_context.json"
+    task_context = json.loads(task_context_path.read_text(encoding="utf-8"))
+    assert task_context["skill"]["args"] == {"pullRequests": "4724-4746"}
+
 async def test_run_once_unsupported_type_fails_job(tmp_path: Path) -> None:
     """Unsupported claimed job types should be failed explicitly."""
 

@@ -8052,44 +8052,26 @@ export interface components {
             pruneOldImages: boolean;
             /** Reason */
             reason?: string | null;
-            /**
-             * Operationkind
-             * @default update
-             * @enum {string}
-             */
-            operationKind: "update" | "rollback";
-            /** Rollbacksourceactionid */
-            rollbackSourceActionId?: string | null;
-            /** Confirmation */
-            confirmation?: string | null;
+            /** Requestid */
+            requestId?: string | null;
         };
         /**
          * DeploymentUpdateResponse
-         * @description The accepted update and who owns it.
-         *
-         *     A controller-owned update is identified by its durable controller
-         *     ``operationId``; ``taskId``/``workflowId`` are set only for the
-         *     transitional workflow updater, never manufactured for a local operation.
+         * @description The accepted update, identified by its durable controller operation.
          */
         DeploymentUpdateResponse: {
-            /** Deploymentupdaterunid */
-            deploymentUpdateRunId: string;
-            /** Taskid */
-            taskId?: string | null;
-            /** Workflowid */
-            workflowId?: string | null;
             /** Operationid */
-            operationId?: string | null;
+            operationId: string;
             /**
              * Owner
-             * @enum {string}
+             * @constant
              */
-            owner: "controller" | "workflow";
+            owner: "controller";
             /**
              * Status
              * @enum {string}
              */
-            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIALLY_VERIFIED" | "FAILED" | "SUPERSEDED";
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIALLY_VERIFIED" | "FAILED" | "SUPERSEDED" | "UNKNOWN";
         };
         /** DeploymentVerificationCheckModel */
         DeploymentVerificationCheckModel: {

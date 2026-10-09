@@ -8,13 +8,13 @@ import inspect
 import json
 import re
 import time as _time
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 import httpx
+from temporalio import activity as temporal_activity
 
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.models import (
@@ -4731,6 +4731,7 @@ async def update_jira_issue_status(
     if mode == "finalize_after_pr_or_done":
         pr_url = _github_status_pull_request_url(inputs, _context)
         gate = await _objective_verification_payload(inputs, _context)
+        admitted = _admitted_repository_workflow(_context)
         reason = None
         if pr_url:
             repository = _github_repository_from_inputs(inputs)
@@ -4748,7 +4749,7 @@ async def update_jira_issue_status(
             service = github_service_factory()
             pr, reason = await _read_bound_issue_pull_request(
                 service, repository=repository, url=pr_url, issue_ref=issue_key,
-                head_sha=head_sha, branch=branch,
+                head_sha=head_sha, branch=branch, admitted_workflow_id=admitted,
             )
             if not reason and (pr.get("state") != "open" or pr.get("merged") or pr.get("draft")):
                 reason = "The confirmed pull request must be open and ready for review"
@@ -4764,7 +4765,8 @@ async def update_jira_issue_status(
                 # actual published tree, not that earlier HEAD alone.
                 try:
                     published_target = await service.read_repository_target(
-                        repository, f"refs/heads/{_mapping(pr.get('head')).get('ref', '')}"
+                        repository, f"refs/heads/{_mapping(pr.get('head')).get('ref', '')}",
+                        admitted_workflow_id=admitted,
                     )
                 except Exception:
                     published_target = {}
@@ -4780,7 +4782,9 @@ async def update_jira_issue_status(
             reason = await validate_completion_target(
                 gate or {}, repository=repository, source_ref=issue_key,
                 expected_ref=_string(inputs.get("completionTargetRef")),
-                read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+                read_target=lambda repo, ref: github_service_factory().read_repository_target(
+                    repo, ref, admitted_workflow_id=admitted
+                ),
             )
             target_status = "Done"
         if reason:
@@ -5871,11 +5875,10 @@ async def check_github_issue_blockers(
     # Carry the assessment verdict + durable ref forward so the In Progress step
     # (which sits after this blocker step) can resolve the verdict by ref without
     # sharing the assessment agent's filesystem. Use the shared assessment
-    # resolver (compact previousOutputs, local handoff file, free text, then
-    # durable ref) so GitHub and Jira stay on one canonical verdict path.
-    assessment_verdict, _ = await _resolve_jira_assessment_verdict(
-        inputs,
-        _context,
+    # resolver (durable ref first, then local/compact/text fallback) so GitHub
+    # and Jira stay on one canonical verdict path.
+    assessment_verdict, assessment_available, assessment_payload = (
+        await _resolve_issue_assessment(inputs, _context)
     )
     assessment_ref = _assessment_artifact_ref(inputs, _context)
     assessment_output: dict[str, Any] = {}
@@ -5884,6 +5887,20 @@ async def check_github_issue_blockers(
     if assessment_ref:
         assessment_output["assessmentArtifactRef"] = assessment_ref
     if issue_data is None:
+        assessment_failure = _github_assessment_failure(
+            inputs,
+            _context,
+            issue_ref=issue_ref,
+            verdict=assessment_verdict,
+            available=assessment_available,
+            payload=assessment_payload,
+        )
+        if assessment_failure is not None:
+            assessment_failure.outputs["summary"] += (
+                " GitHub blocker check also failed: "
+                + redact_comment_body(error or "Issue data unavailable.")[:1000]
+            )
+            return assessment_failure
         return ToolResult(
             status="FAILED",
             outputs={
@@ -5894,8 +5911,11 @@ async def check_github_issue_blockers(
             },
         )
     issue = _github_issue_payload(issue_data, repository)
-    if assessment_verdict != "FULLY_IMPLEMENTED":
-        manual_only = _manual_only_declaration(await _assessment_payload(inputs, _context))
+    if (
+        _normalize_assessment_verdict(assessment_verdict)
+        and assessment_verdict != "FULLY_IMPLEMENTED"
+    ):
+        manual_only = _manual_only_declaration(assessment_payload)
         if manual_only is not None:
             return await _mark_github_issue_manual_only(
                 repository=repository,
@@ -5906,6 +5926,16 @@ async def check_github_issue_blockers(
                 service=github_service_factory(),
                 assessment_output=assessment_output,
             )
+    assessment_failure = _github_assessment_failure(
+        inputs,
+        _context,
+        issue_ref=issue_ref,
+        verdict=assessment_verdict,
+        available=assessment_available,
+        payload=assessment_payload,
+    )
+    if assessment_failure is not None:
+        return assessment_failure
     # This is the completion gate, not the start gate: it holds acceptance and
     # closure while a declared completion dependency is still open, even though
     # selection admits the issue's independently useful implementation work.
@@ -5951,19 +5981,65 @@ async def check_github_issue_blockers(
     )
 
 
-async def _assessment_payload(
-    inputs: Mapping[str, Any], context: Mapping[str, Any] | None
-) -> Mapping[str, Any] | None:
-    """The assessment handoff itself, preferring its durable ref."""
+def _github_assessment_failure(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    *,
+    issue_ref: str,
+    verdict: str,
+    available: bool,
+    payload: Mapping[str, Any] | None,
+) -> ToolResult | None:
+    """Stop before implementation with the assessment's own bounded diagnostic.
+
+    Both the blocker step and the defensive start gate use the same failed
+    outcome. Durable workflow finalization still owns claim/attempt cleanup.
+    """
     ref = _assessment_artifact_ref(inputs, context)
+    path = _string(
+        inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
+    )
+    required = bool(ref or path)
+    verdict = _normalize_assessment_verdict(verdict)
+    if verdict != "BLOCKED" and not (required and (not available or not verdict)):
+        return None
+    outputs: dict[str, Any] = {"issueRef": issue_ref, "decision": "blocked"}
+    location = ""
     if ref:
-        payload = await _read_json_artifact_by_ref(ref, context)
-        if payload is not None:
-            return payload
-    path = _string(inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path"))
+        outputs["assessmentArtifactRef"] = ref
+        location += f" assessment ref {ref}"
     if path:
-        return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
-    return None
+        # A host path may contain private auth directories or credentials.
+        # Keep only a redacted filename in persisted diagnostics.
+        artifact_name = redact_comment_body(Path(path).name)
+        outputs["assessmentArtifactName"] = artifact_name
+        location += f" (local artifact {artifact_name})"
+    if verdict == "BLOCKED":
+        outputs["assessmentVerdict"] = verdict
+        # A fallback verdict must not inherit a contradictory artifact's reason.
+        from moonmind.workflows.temporal.assessment_verdict import (
+            normalize_assessment_payload,
+        )
+
+        reason = ""
+        if (
+            payload is not None
+            and normalize_assessment_payload(payload)[0] == "BLOCKED"
+        ):
+            reason = redact_comment_body(_string(payload.get("summary")).strip())[:2000]
+        outputs["summary"] = (
+            f"GitHub issue {issue_ref} is blocked by its assessment. "
+            + (reason or "The assessment did not provide a readable blocker summary.")
+            + (f" See{location}." if location else "")
+        )
+    else:
+        outputs["summary"] = (
+            f"GitHub issue {issue_ref} requires a usable assessment, but it was unavailable"
+            f" or had no valid verdict{location}. Re-run the assessment step so it writes "
+            "a JSON object with verdict as exactly one of FULLY_IMPLEMENTED, "
+            "PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED."
+        )
+    return ToolResult(status="FAILED", outputs=outputs)
 
 
 def _manual_only_declaration(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -6129,38 +6205,60 @@ async def resolve_pull_request_target(
         )
 
     # Only the trusted workflow context may supply repository authority;
-    # tool inputs and selectors cannot choose a credential or plan.
+    # tool inputs and selectors cannot choose a credential or plan. Review-only
+    # merge automation supplies its frozen authority; every other run reads
+    # with the connection admitted for it (MoonLadderStudios/MoonMind#4010).
     if isinstance(context, Mapping) and "repositoryAuthority" in context:
         from moonmind.workflows.temporal.merge_automation_repository_access import (
             merge_automation_repository_token,
         )
 
-        credential_context = merge_automation_repository_token(
+        async with merge_automation_repository_token(
             context["repositoryAuthority"], repository=repository, operation="read"
+        ) as github_token:
+            return await _resolve_pull_request_target(
+                repository=repository,
+                selector=selector,
+                credential={"github_token": github_token},
+                github_service_factory=github_service_factory,
+            )
+    return await _resolve_pull_request_target(
+        repository=repository,
+        selector=selector,
+        credential={"admitted_workflow_id": _admitted_repository_workflow(context)},
+        github_service_factory=github_service_factory,
+    )
+
+
+async def _read_pull_request_with_token(
+    service: GitHubService, *, repository: str, pr_number: int, github_token: str
+) -> Any:
+    headers = service._github_headers(github_token)
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
+        response = await client.get(
+            f"https://api.github.com/repos/{repository}/pulls/{pr_number}",
+            headers=headers,
         )
-    else:
-        credential_context = nullcontext(None)
-    async with credential_context as github_token:
-        return await _resolve_pull_request_target(
-            repository=repository,
-            selector=selector,
-            github_token=github_token,
-            github_service_factory=github_service_factory,
-        )
+        response.raise_for_status()
+        return response.json()
 
 
 async def _resolve_pull_request_target(
     *,
     repository: str,
     selector: str,
-    github_token: str | None,
+    credential: Mapping[str, str],
     github_service_factory: Callable[[], GitHubService],
 ) -> ToolResult:
+    """Resolve and read the pull request with exactly one credential source.
+
+    ``credential`` is either the review-only ``github_token`` or the
+    ``admitted_workflow_id`` whose recorded connection both reads use; a
+    connection that cannot read fails here and no ambient token is tried.
+    """
     service = github_service_factory()
     resolution = await service.resolve_pull_request_selector(
-        repo=repository,
-        selector=selector,
-        **({"github_token": github_token} if github_token is not None else {}),
+        repo=repository, selector=selector, **credential
     )
     if not resolution.resolved or not resolution.pr_number:
         return ToolResult(
@@ -6172,53 +6270,62 @@ async def _resolve_pull_request_target(
             },
         )
 
-    if github_token is not None:
-        token, resolution_error = github_token, None
-    else:
-        token, resolution_error = await service.resolve_github_token(repo=repository)
-    if not token:
+    try:
+        if "github_token" in credential:
+            pr_data = await _read_pull_request_with_token(
+                service,
+                repository=repository,
+                pr_number=resolution.pr_number,
+                github_token=credential["github_token"],
+            )
+        else:
+            pr_data = await service.read_pull_request(
+                repository,
+                f"https://github.com/{repository}/pull/{resolution.pr_number}",
+                admitted_workflow_id=credential["admitted_workflow_id"],
+            )
+    except httpx.HTTPStatusError as exc:
         return ToolResult(
             status="FAILED",
             outputs={
                 "repository": repository,
                 "prNumber": resolution.pr_number,
-                "summary": resolution_error
-                or "GitHub auth is not configured for pull request resolution.",
+                "summary": (
+                    "GitHub pull request fetch failed with HTTP "
+                    f"{exc.response.status_code}."
+                ),
             },
         )
-    headers = service._github_headers(token)
-    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
-        try:
-            response = await client.get(
-                f"https://api.github.com/repos/{repository}/pulls/{resolution.pr_number}",
-                headers=headers,
-            )
-            response.raise_for_status()
-            pr_data = response.json()
-        except httpx.HTTPStatusError as exc:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "repository": repository,
-                    "prNumber": resolution.pr_number,
-                    "summary": (
-                        "GitHub pull request fetch failed with HTTP "
-                        f"{exc.response.status_code}."
-                    ),
-                },
-            )
-        except (httpx.TransportError, httpx.TimeoutException) as exc:
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "repository": repository,
-                    "prNumber": resolution.pr_number,
-                    "summary": (
-                        "GitHub pull request fetch failed: "
-                        f"{exc.__class__.__name__}."
-                    ),
-                },
-            )
+    except (httpx.TransportError, httpx.TimeoutException) as exc:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": (
+                    "GitHub pull request fetch failed: "
+                    f"{exc.__class__.__name__}."
+                ),
+            },
+        )
+    except Exception as exc:
+        if "github_token" in credential:
+            raise
+        from moonmind.utils.logging import redact_sensitive_text
+
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": (
+                    "The admitted repository connection could not read pull "
+                    f"request {repository}#{resolution.pr_number} "
+                    f"({type(exc).__name__}: {redact_sensitive_text(str(exc))}); "
+                    "no other GitHub credential is used."
+                ),
+            },
+        )
 
     if not isinstance(pr_data, dict):
         return ToolResult(
@@ -6389,22 +6496,22 @@ def _local_json_artifact_from_path(
 def _assessment_verdict_from_artifact(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Mapping[str, Any] | None]:
     artifact_path = _string(
         inputs.get("assessmentArtifactPath")
         or inputs.get("assessment_artifact_path")
     )
     if not artifact_path:
-        return "", True
+        return "", True, None
     payload = _local_json_artifact_from_path(
         artifact_path=artifact_path,
         inputs=inputs,
         context=context,
     )
     if payload is None:
-        return "", False
+        return "", False, None
     verdict = _string(payload.get("verdict")).upper()
-    return verdict, True
+    return verdict, True, payload
 
 
 _ASSESSMENT_VERDICTS = frozenset(
@@ -6441,22 +6548,23 @@ def _assessment_verdict_from_text(value: Any) -> str:
 def _jira_assessment_verdict(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Mapping[str, Any] | None]:
     artifact_path = _string(
         inputs.get("assessmentArtifactPath")
         or inputs.get("assessment_artifact_path")
     )
+    payload = None
     if artifact_path:
-        artifact_verdict, artifact_available = _assessment_verdict_from_artifact(
+        artifact_verdict, artifact_available, payload = _assessment_verdict_from_artifact(
             inputs,
             context,
         )
         if artifact_available and artifact_verdict:
-            return artifact_verdict, True
+            return artifact_verdict, True, payload
 
     verdict = _assessment_verdict_from_mapping(inputs)
     if verdict:
-        return verdict, True
+        return verdict, True, payload
 
     previous_outputs = _mapping(
         inputs.get("previousOutputs")
@@ -6466,20 +6574,20 @@ def _jira_assessment_verdict(
     )
     verdict = _assessment_verdict_from_mapping(previous_outputs)
     if verdict:
-        return verdict, True
+        return verdict, True, payload
     for key in ("lastAssistantText", "assistantText", "summary", "operator_summary"):
         verdict = _assessment_verdict_from_text(previous_outputs.get(key))
         if verdict:
-            return verdict, True
+            return verdict, True, payload
 
     for key in ("lastAssistantText", "assistantText", "summary", "operator_summary"):
         verdict = _assessment_verdict_from_text(inputs.get(key))
         if verdict:
-            return verdict, True
+            return verdict, True, payload
 
     if artifact_path:
-        return "", False
-    return "", True
+        return "", False, payload
+    return "", True, payload
 
 
 def _assessment_artifact_ref(
@@ -6550,10 +6658,10 @@ async def _read_json_artifact_by_ref(
 
 
 async def _augment_assessment_verdict_with_ref(
-    base: tuple[str, bool],
+    base: tuple[str, bool, Mapping[str, Any] | None],
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, Mapping[str, Any] | None]:
     """Fall back to the published assessment artifact ref when no verdict is found.
 
     The ref path can only UPGRADE a missing verdict to a real one; it never
@@ -6568,18 +6676,18 @@ async def _augment_assessment_verdict_with_ref(
     minor schema difference.
     """
 
-    verdict, available = base
+    verdict, available, source_payload = base
     if verdict:
-        return verdict, True
+        return verdict, True, source_payload
     ref = _assessment_artifact_ref(inputs, context)
     if ref:
         payload = await _read_json_artifact_by_ref(ref, context)
         if payload is None:
-            return verdict, False
+            return verdict, False, source_payload
         if payload is not None:
             ref_verdict = _normalize_assessment_verdict(payload.get("verdict"))
             if ref_verdict:
-                return ref_verdict, True
+                return ref_verdict, True, payload
             try:
                 from moonmind.workflows.temporal.assessment_verdict import (
                     normalize_assessment_payload,
@@ -6615,14 +6723,22 @@ async def _augment_assessment_verdict_with_ref(
                     assistant_text=assistant_hint,
                 )
                 if norm_verdict:
-                    return norm_verdict, True
-    return verdict, available
+                    return norm_verdict, True, payload
+    return verdict, available, source_payload
 
 
 async def _resolve_jira_assessment_verdict(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
 ) -> tuple[str, bool]:
+    verdict, available, _payload = await _resolve_issue_assessment(inputs, context)
+    return verdict, available
+
+
+async def _resolve_issue_assessment(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> tuple[str, bool, Mapping[str, Any] | None]:
     """Resolve the issue-implement assessment verdict, preferring durable ref.
 
     Shared by Jira and GitHub flows. When ``assessmentArtifactRef`` is present,
@@ -6631,7 +6747,8 @@ async def _resolve_jira_assessment_verdict(
     replay / context restoration. Only when no usable durable verdict exists
     does resolution fall back to synchronous sources (local handoff file,
     compact mapping, free text). Histories carrying no ref behave identically
-    to before.
+    to before. Return the resolved payload snapshot as well, so diagnostics and
+    manual-only handling cannot lose evidence through a second artifact read.
     """
 
     ref = _assessment_artifact_ref(inputs, context)
@@ -6669,13 +6786,13 @@ async def _resolve_jira_assessment_verdict(
                     assistant_text=assistant_hint,
                 )
                 if ref_verdict:
-                    return ref_verdict, True
+                    return ref_verdict, True, payload
             else:
                 ref_verdict = _normalize_assessment_verdict(
                     payload.get("verdict") if isinstance(payload, Mapping) else ""
                 )
                 if ref_verdict:
-                    return ref_verdict, True
+                    return ref_verdict, True, payload
         # Ref present but unreadable/unusable: fall through to sync sources so
         # a valid compact verdict can still proceed; ultimate unavailable is
         # decided by the sync path (which returns False when artifact path set).
@@ -6822,19 +6939,43 @@ async def _objective_verification_payload(
     return None
 
 
+def _admitted_repository_workflow(context: Mapping[str, Any] | None) -> str:
+    """The run whose recorded repository authority governs these reads.
+
+    A child gate acting for its parent run names it; otherwise the owning
+    Activity supplies it, never a tool's authored inputs.
+    """
+    admitted = _string(_mapping(context).get("admittedWorkflowId"))
+    if admitted:
+        return admitted
+    if temporal_activity.in_activity():
+        return temporal_activity.info().workflow_id
+    return _string(_mapping(context).get("workflow_id"))
+
+
 async def _read_bound_issue_pull_request(
     service: GitHubService, *, repository: str, url: str, issue_ref: str,
-    head_sha: str, branch: str = "",
+    head_sha: str, branch: str = "", admitted_workflow_id: str = "",
 ) -> tuple[Mapping[str, Any], str | None]:
     """Validate the existing publication owner's handoff against GitHub facts."""
     if not repository or not head_sha:
         return {}, "Resolve the published candidate repository and exact head before finalizing its issue"
     try:
-        pr = await service.read_pull_request(repository, url)
-    except Exception:
-        return {}, "Read the matching GitHub pull request through the authorized repository reader"
+        pr = await service.read_pull_request(
+            repository, url, admitted_workflow_id=admitted_workflow_id
+        )
+    except Exception as exc:
+        return {}, (
+            "Read the matching GitHub pull request through the authorized "
+            f"repository reader ({type(exc).__name__})"
+        )
     head = _mapping(pr.get("head"))
-    if head.get("sha") != head_sha or (branch and head.get("ref") != branch):
+    head_repository = _string(_mapping(head.get("repo")).get("full_name"))
+    if (
+        head.get("sha") != head_sha
+        or (branch and head.get("ref") != branch)
+        or head_repository.casefold() != repository.casefold()
+    ):
         return {}, "The pull request does not match the current published candidate"
     text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
     references = [issue_ref]
@@ -6853,6 +6994,7 @@ async def _validate_post_merge_issue_handoff(
     service: GitHubService, *, repository: str, issue_ref: str,
     pull_request: Mapping[str, Any],
     expected_ref: str = "",
+    admitted_workflow_id: str = "",
 ) -> str | None:
     """Validate an actual merge, independently of assessment/verification prose.
 
@@ -6866,6 +7008,7 @@ async def _validate_post_merge_issue_handoff(
         service, repository=repository, url=_string(pull_request.get("url")),
         issue_ref=issue_ref, head_sha=_string(pull_request.get("headSha")),
         branch=_string(pull_request.get("headBranch")),
+        admitted_workflow_id=admitted_workflow_id,
     )
     if reason:
         return reason
@@ -6881,12 +7024,14 @@ async def _validate_post_merge_issue_handoff(
         base_branch = base_branch.removeprefix(prefix)
     try:
         target = await service.read_repository_target(
-            repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else "")
+            repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else ""),
+            admitted_workflow_id=admitted_workflow_id,
         )
         if target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}":
             return "The pull request merged into a different branch than the completion target"
         contained = target.get("revision") == merge_commit or await service.commit_is_ancestor(
-            repository, merge_commit, _string(target.get("revision"))
+            repository, merge_commit, _string(target.get("revision")),
+            admitted_workflow_id=admitted_workflow_id,
         )
     except Exception as exc:
         return (
@@ -8442,47 +8587,32 @@ async def _update_github_issue_status(
     mode = _github_status_mode(inputs)
     requested_mode = mode
     was_finalize_after_pr = requested_mode == "finalize_after_pr_or_done"
-    # Use the shared assessment resolver (compact previousOutputs, local handoff
-    # file, free text, then durable ref) so GitHub start/in-progress gating stays
+    # Use the shared assessment resolver (durable ref first, then local/compact/
+    # text fallback) so GitHub start/in-progress gating stays
     # on one canonical verdict path with the Jira assessment flow. The ref is the
     # bridge-compatible channel when the assessment ran on an Omnigent host whose
     # workspace this tool cannot mount.
-    assessment_verdict, assessment_available = await _resolve_jira_assessment_verdict(
-        inputs,
-        _context,
+    assessment_verdict, assessment_available, assessment_payload = (
+        await _resolve_issue_assessment(inputs, _context)
     )
     issue_ref = f"{repository}#{issue_number}"
     require_verification = _github_status_requires_verification(inputs)
-    if mode in {"start", "in_progress"} and (
-        inputs.get("assessmentArtifactPath") or inputs.get("assessment_artifact_path")
-        or _assessment_artifact_ref(inputs, _context)
-    ):
-        if not assessment_available:
-            assessment_ref = _assessment_artifact_ref(inputs, _context)
-            assessment_path = _string(
-                inputs.get("assessmentArtifactPath")
-                or inputs.get("assessment_artifact_path")
-            )
-            detail = (
-                f" assessment ref {assessment_ref}" if assessment_ref else ""
-            )
-            if assessment_path:
-                detail += f" (path {assessment_path})"
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "summary": (
-                        "GitHub issue status update requires an assessment artifact, "
-                        f"but it was unavailable{detail}. Re-run the assessment step "
-                        "so it writes a JSON object with verdict as exactly one of "
-                        "FULLY_IMPLEMENTED, PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, "
-                        "or BLOCKED."
-                    ),
-                },
-            )
-        if assessment_verdict == "FULLY_IMPLEMENTED":
+    if mode in {"start", "in_progress"}:
+        assessment_failure = _github_assessment_failure(
+            inputs,
+            _context,
+            issue_ref=issue_ref,
+            verdict=assessment_verdict,
+            available=assessment_available,
+            payload=assessment_payload,
+        )
+        if assessment_failure is not None:
+            return assessment_failure
+        if assessment_verdict == "FULLY_IMPLEMENTED" and (
+            inputs.get("assessmentArtifactPath")
+            or inputs.get("assessment_artifact_path")
+            or _assessment_artifact_ref(inputs, _context)
+        ):
             return ToolResult(
                 status="COMPLETED",
                 outputs={
@@ -8490,16 +8620,6 @@ async def _update_github_issue_status(
                     "decision": "skipped",
                     "assessmentVerdict": assessment_verdict,
                     "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is FULLY_IMPLEMENTED.",
-                },
-            )
-        if assessment_verdict == "BLOCKED":
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "assessmentVerdict": assessment_verdict,
-                    "summary": f"Skipped GitHub issue In Progress update for {issue_ref} because assessment verdict is BLOCKED.",
                 },
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
@@ -8511,13 +8631,16 @@ async def _update_github_issue_status(
                     github_service_factory(), repository=repository,
                     issue_ref=issue_ref, pull_request=merged_pull_request,
                     expected_ref=_string(inputs.get("completionTargetRef")),
+                    admitted_workflow_id=_admitted_repository_workflow(_context),
                 )
             else:
                 gate = await _objective_verification_payload(inputs, _context)
                 reason = await validate_completion_target(
                     gate or {}, repository=repository, source_ref=issue_ref,
                     expected_ref=_string(inputs.get("completionTargetRef")),
-                    read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+                    read_target=lambda repo, ref: github_service_factory().read_repository_target(
+                        repo, ref, admitted_workflow_id=_admitted_repository_workflow(_context)
+                    ),
                 )
             if reason:
                 return ToolResult(status="FAILED", outputs={

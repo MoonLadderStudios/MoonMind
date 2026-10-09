@@ -190,6 +190,10 @@ The backend pins the definition and target, resolves context bindings, checks sc
 
 A batch child receives its parent's frozen publishing/finish intent and validated per-PR target, not the coordinator's local None, a workspace default, or a freshly interpreted child recommendation. The single UI control explains whether fixes will be pushed and whether merging is enabled.
 
+The batch helper queues every open same-repository PR unless `pullRequests`
+(`--pull-requests`) narrows discovery to listed numbers or inclusive ranges;
+listed numbers that are not open are recorded as `not-open` skips.
+
 The batch helper appends explicit `childInstructions` to each per-PR task.
 Existing-PR adoption retains those task instructions through the durable merge
 gate and into every resolver pass, alongside the selected Provider Profile,

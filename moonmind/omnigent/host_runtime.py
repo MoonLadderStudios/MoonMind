@@ -111,6 +111,18 @@ class GenericOmnigentHostRuntime:
         self._attestor = host_attestor
         self._cleanup = cleanup_service
 
+    async def validate_repository_intent(
+        self, *, request: AgentExecutionRequest, plan: OmnigentExecutionPlanEnvelope
+    ) -> None:
+        """Check the immutable collaboration contract without acquiring values.
+
+        Resumed hosts retain their projection, so this is also a delivery
+        precondition rather than only a materialization check.
+        """
+        await self._github_credentials.validate_repository_intent(
+            request=request, plan=plan
+        )
+
     async def prepare(
         self,
         *,
@@ -120,7 +132,10 @@ class GenericOmnigentHostRuntime:
         launch_policy: LaunchPolicy,
         repository_owner_ref: str,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        github_projection_reservation: dict[str, Any] | None = None,
+        github_projection_verifier: Callable[[], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
+        await self.validate_repository_intent(request=request, plan=plan)
         workspace = await self._workspace.materialize(
             request,
             mutation=plan.payload.workspaceMutation,
@@ -180,8 +195,6 @@ class GenericOmnigentHostRuntime:
                 owner_ref=repository_owner_ref,
             )
         )
-        if anticipated_github is not None and authority_sink is not None:
-            await authority_sink({**anticipated_github, "kind": "github_credentials"})
         github_credentials = await self._github_credentials.materialize(
             request=request,
             resolved_tools=plan.payload.resolvedTools,
@@ -192,8 +205,16 @@ class GenericOmnigentHostRuntime:
             expected_omnigent_version=str(host_class.omnigentVersion or ""),
             plan=plan,
             authority_sink=authority_sink,
+            projection_reservation=github_projection_reservation,
+            projection_verifier=github_projection_verifier,
         )
-        if github_credentials != anticipated_github:
+        if (github_credentials is None) != (anticipated_github is None) or (
+            anticipated_github is not None
+            and any(
+                github_credentials.get(key) != value
+                for key, value in anticipated_github.items()
+            )
+        ):
             raise HarnessPlatformError(
                 "GitHub credential materialization changed its anticipated authority",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
@@ -468,6 +489,16 @@ class GenericOmnigentHostRuntime:
     async def cleanup_authorities(
         self, authorities: tuple[str | dict[str, Any], ...]
     ) -> None:
+        historical_image = next(
+            (
+                str(item["sourceRef"])[len("image:") :]
+                for item in authorities
+                if isinstance(item, dict)
+                and item.get("kind") == "image"
+                and str(item.get("sourceRef", "")).startswith("image:")
+            ),
+            None,
+        )
         for authority in reversed(authorities):
             if isinstance(authority, dict) and authority.get("kind") == "skills":
                 await self._skills.cleanup(authority)
@@ -475,7 +506,13 @@ class GenericOmnigentHostRuntime:
                 isinstance(authority, dict)
                 and authority.get("kind") == "github_credentials"
             ):
-                await self._github_credentials.cleanup(authority)
+                await self._github_credentials.cleanup(
+                    {
+                        **authority,
+                        "projectionImageRef": authority.get("projectionImageRef")
+                        or historical_image,
+                    }
+                )
 
 
 __all__ = ["GenericOmnigentHostRuntime", "PreparedHostInputs"]

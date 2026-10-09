@@ -211,6 +211,7 @@ async def test_workflow_verifies_already_merged_before_terminal_publication(
         resolver_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id="resolver-1", run_id="run-1", namespace="default"
         ),
     )
@@ -265,6 +266,7 @@ async def test_repeated_blocker_without_remote_progress_stops_bounded(
         resolver_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id="resolver-1", run_id="run-1", namespace="default"
         ),
     )
@@ -332,6 +334,7 @@ async def test_existing_history_keeps_legacy_degraded_ci_precedence(
         resolver_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id="resolver-1", run_id="run-1", namespace="default"
         ),
     )
@@ -364,6 +367,7 @@ async def test_cancellation_prevents_new_mutations(
         resolver_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id="resolver-1", run_id="run-1", namespace="default"
         ),
     )
@@ -399,6 +403,7 @@ async def test_hard_activity_failure_publishes_failed_terminal_result(
         resolver_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id="resolver-1", run_id="run-1", namespace="default"
         ),
     )

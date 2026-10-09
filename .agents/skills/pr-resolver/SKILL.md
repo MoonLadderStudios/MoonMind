@@ -9,6 +9,7 @@ metadata:
     terminalContractId: pr_resolver_terminal.v1
     terminalSchemaVersion: moonmind.pr-resolver-result.v1
   publish:
+    githubOperations: [write, branch_write, review_request]
     mode: auto
     owner: agent
     requiresEvidence: true
@@ -171,9 +172,20 @@ metadata flag.
    ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$PR_RESOLVER_SKILL_DIR")}"
    test -n "$PR_RESOLVER_SKILL_DIR" && test -f "$PR_RESOLVER_SKILL_DIR/SKILL.md"
    ```
-2. Run the finalize gate checker. It refreshes PR metadata, CI, the complete
-   comment inventory, and automated-review evidence for the exact head SHA
-   before deciding whether merge is allowed. Review/reaction retrieval errors
+2. Run the finalize gate checker. Before any remediation or completion it
+   collects PR metadata, CI, the complete comment inventory, and automated-review
+   evidence for the exact head SHA, then revalidates the target and head.
+   The existing branch API supplies the base commit, including on older GitHub
+   CLI versions without a `baseRefOid` JSON field. Reuse that metadata for branch
+   requirements, and verify the base and effective requirements again after
+   collecting the inventory. Requirements participate in the wait fingerprint,
+   so protection/rules changes cannot leave a formerly required status waiting.
+   An unchanged `ci_running` retry reads only PR/base metadata and exact-head CI
+   observations (including Actions workflow/attempt evidence when needed).
+   Its explicitly wait-only snapshot cannot authorize remediation, a clean
+   receipt, or merge. A changed observation or review policy forces a full
+   refresh. Direct snapshot and full-classifier commands always refresh fully.
+   Review/reaction retrieval errors
    must fail with their diagnostics; they are never evidence of a pending or
    absent review. Always pass the review-loop inputs
    exactly as supplied; omitting them silently disables the fresh-review
@@ -224,9 +236,17 @@ metadata flag.
    - `ci_infra_rerun_failed`: GitHub refused the rerun itself (for example the
      token lacks Actions write access). Publish the finalize result unchanged;
      its `decision` carries GitHub's error.
+   - `ci_workflow_terminal`: queued or running check jobs belong to a workflow
+     GitHub already reports as completed. Preserve the workflow/check evidence
+     and report the external CI blocker; do not wait forever for stranded jobs
+     or edit the PR to manufacture a passing check. Reconcile CI with its owner
+     before a new full gate check.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
-     handled current review threads on GitHub.
+     handled current review threads on GitHub. Every current finding needs an
+     applicability decision, including P2 and lower priorities. Severity alone
+     never dismisses a finding; use the existing addressed/not-applicable
+     dispositions and verified resolved/outdated thread evidence.
    - `fresh_review_required_after_remediation`: the current head SHA has no
      fresh review from the configured provider and none has been requested for
      it. Publish `mergeAutomationDisposition=request_review` with the typed
@@ -269,6 +289,16 @@ metadata flag.
    expected-head guard. A clean review signal satisfies review freshness; it does
    not erase independent actionable findings, CI failures, or conflicts. When
    those gates are clear, finish on the same head without another request.
+   The comment collector reads submitted reviews and issue replies before the
+   inline/thread inventory, and the snapshot reuses those raw reviews. A clean
+   issue reply or reaction observed afterward still requires another inventory
+   refresh, including review bodies. CI supersession
+   requires the same head, workflow, event, app and check name, with matching
+   observed PR/base context and nonempty matching head branches across runs;
+   a later unrelated or unproven check never erases an older failure.
+   Same-run reruns require verified job
+   attempt evidence. Missing checks, unknown states and unresolved identities
+   stay blocked, and security checks remain gating.
    Forward `finishMode`, review provider/policy, and freshness settings
    through every resolver invocation, delegated step, retry, and documented
    command: a requested review result must match the current head, and

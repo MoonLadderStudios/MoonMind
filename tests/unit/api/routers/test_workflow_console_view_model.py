@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -385,6 +387,66 @@ def test_build_runtime_config_sanitizes_repository_options_and_errors(
         {"value": "Another/Repo", "label": "Another/Repo", "source": "configured"},
     ]
     assert "ghp_secret_token" not in config["system"]["repositoryOptions"]["error"]
+
+def test_build_runtime_config_carries_discovered_default_branches(
+    monkeypatch,
+) -> None:
+    """Discovery already returns each repository's default branch, so the
+    Create page can show it without waiting on a second GitHub lookup."""
+
+    monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.github, "github_repos", "Example/App")
+    monkeypatch.setattr(settings.github, "github_token", "ghp_default_branch_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model, "_GITHUB_REPOSITORY_OPTIONS_CACHE", {}
+    )
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> object:
+            return [
+                {"full_name": "octo/repo", "default_branch": "trunk"},
+                {
+                    "full_name": "MoonLadderStudios/MoonMind",
+                    "default_branch": "main",
+                },
+            ]
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
+
+    config = dashboard_view_model.build_runtime_config("/workflows/new")
+
+    assert config["system"]["repositoryOptions"]["items"] == [
+        {
+            "value": "Octo/Repo",
+            "label": "Octo/Repo",
+            "source": "default",
+            "defaultBranch": "trunk",
+        },
+        {"value": "Example/App", "label": "Example/App", "source": "configured"},
+        {
+            "value": "MoonLadderStudios/MoonMind",
+            "label": "MoonLadderStudios/MoonMind",
+            "source": "github",
+            "defaultBranch": "main",
+        },
+    ]
 
 def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None:
     monkeypatch.setattr(settings.github, "github_token", "ghp_test_token")
@@ -1492,3 +1554,45 @@ async def test_resolve_dashboard_runtime_config_no_session_falls_back() -> None:
 
     # Default config still has providerProfiles but no defaultProfileRef.
     assert "defaultProfileRef" not in config["system"]["providerProfiles"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_dashboard_runtime_config_keeps_event_loop_free_during_discovery(
+    monkeypatch,
+) -> None:
+    """Repository discovery is blocking GitHub HTTP. The single API event loop
+    must keep serving branch lookups while /api/ui/info waits on it."""
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_discovery(token: str):
+        started.set()
+        release.wait(timeout=2)
+        return [], None
+
+    monkeypatch.setattr(settings.github, "github_token", "ghp_loop_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    monkeypatch.setattr(
+        dashboard_view_model, "_GITHUB_REPOSITORY_OPTIONS_CACHE", {}
+    )
+    monkeypatch.setattr(
+        dashboard_view_model, "_fetch_github_repository_options", slow_discovery
+    )
+
+    config_task = asyncio.create_task(
+        dashboard_view_model.resolve_dashboard_runtime_config(
+            "/workflows/new", session=None
+        )
+    )
+    for _ in range(200):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    assert started.is_set()
+    # The loop got control back while discovery is still in flight.
+    assert not config_task.done()
+    release.set()
+    config = await asyncio.wait_for(config_task, timeout=5)
+    assert config["system"]["repositoryOptions"]["error"] is None

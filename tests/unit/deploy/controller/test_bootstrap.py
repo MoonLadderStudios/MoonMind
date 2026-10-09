@@ -654,3 +654,146 @@ def test_no_service_outside_the_controller_link_can_see_controller_state(
     # Docker never creates that mountpoint as the daemon's user before
     # bootstrap, running as the operator, writes there.
     assert (repo / state).is_dir()
+
+
+def test_install_from_the_application_image_runs_its_shipped_controller(
+    controller_path, tmp_path
+):
+    """The standalone controller image is unpublished, so the default install
+    uses the MoonMind release image, which ships deploy/controller."""
+    bootstrap = load("bootstrap")
+    image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(tmp_path), "--image", image], env={}
+        )
+        == 0
+    )
+    rendered = (tmp_path / "controller-compose.yaml").read_text()
+    assert f"    image: {image}\n" in rendered
+    assert '    entrypoint: ["python", "/app/deploy/controller/server.py"]\n' in rendered
+    # The same Docker-socket authority as the root standalone image.
+    assert '    user: "0:0"\n' in rendered
+    # Already digest-pinned: verified without a registry round trip.
+    assert bootstrap.load_controller_image(tmp_path)["verified"] is True
+
+
+def test_standalone_controller_image_keeps_its_own_entrypoint(
+    controller_path, tmp_path
+):
+    bootstrap = load("bootstrap")
+    rendered = bootstrap.render_compose_file(
+        state_dir=tmp_path,
+        repo=tmp_path,
+        image="ghcr.io/moonladderstudios/moonmind-controller@sha256:" + "b" * 64,
+    ).read_text()
+    assert "entrypoint:" not in rendered
+    assert "    user:" not in rendered
+
+
+def test_ensure_keeps_the_application_image_process_identity(
+    controller_path, tmp_path, monkeypatch
+):
+    """ensure refreshes an application-image install without a second user."""
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472, target_project="installed")
+    compose = bootstrap.render_compose_file(
+        state_dir=state,
+        repo=tmp_path,
+        image="ghcr.io/moonladderstudios/moonmind@sha256:" + "c" * 64,
+    )
+    upgraded = False
+
+    def compose_run(*args):
+        nonlocal upgraded
+        upgraded = True
+        return 0
+
+    monkeypatch.setattr(
+        bootstrap, "_application_controller_image", lambda *args: "sha256:" + "d" * 64
+    )
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+    )
+    assert (
+        bootstrap.main(
+            ["ensure", "--state-dir", str(state), "--repo", str(tmp_path)], env={}
+        )
+        == 0
+    )
+    text = compose.read_text()
+    assert text.count("    entrypoint:") == 1
+    assert text.count("    user:") == 1
+    assert '    user: "0:0"\n' in text
+
+
+def test_controller_capabilities_never_traverse_an_ambient_proxy(
+    controller_path, monkeypatch
+):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    bootstrap = load("bootstrap")
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.headers.get("Authorization"))
+            body = json.dumps({"capabilities": ["active-journal-transition"]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        capabilities = bootstrap.controller_capabilities(
+            f"http://127.0.0.1:{server.server_address[1]}", "bearer-value"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert capabilities == {"active-journal-transition"}
+    assert seen == ["Bearer bearer-value"]
+
+
+@pytest.mark.parametrize("command", ["restore", "update", "start"])
+def test_lifecycle_without_an_image_keeps_the_installed_application_controller(
+    controller_path, tmp_path, monkeypatch, command
+):
+    """A repair never swaps the host-installed controller for an unpublished image."""
+    bootstrap = load("bootstrap")
+    installed = "ghcr.io/moonladderstudios/moonmind@sha256:" + "d" * 64
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(tmp_path), "--image", installed], env={}
+        )
+        == 0
+    )
+    monkeypatch.setattr(bootstrap, "_compose", lambda *args: 0)
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+
+    assert bootstrap.main([command, "--state-dir", str(tmp_path)], env={}) == 0
+
+    rendered = (tmp_path / "controller-compose.yaml").read_text()
+    assert f"image: {installed}" in rendered
+    assert "/app/deploy/controller/server.py" in rendered
+    assert bootstrap.load_controller_image(tmp_path)["pinned"] == installed

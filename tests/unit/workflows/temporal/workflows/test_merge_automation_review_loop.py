@@ -234,6 +234,7 @@ class _Harness:
             merge_automation_module.workflow,
             "info",
             lambda: SimpleNamespace(
+                task_queue="mm.workflow.user.v2",
                 workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
                 run_id=OWNER_RUN_ID,
                 parent=SimpleNamespace(workflow_id="wf-parent", run_id="run-parent"),
@@ -395,6 +396,16 @@ async def test_clean_response_crosses_activity_skill_and_workflow_without_anothe
     monkeypatch.setattr(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
         lambda **kwargs: client_type(transport=transport, **kwargs),
+    )
+    # The fix_only gate reads with the default connection, unrecorded here, so
+    # the deployment declaration supplies the fixture token (#4010).
+    async def unrecorded_connection(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        unrecorded_connection,
     )
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
@@ -1853,6 +1864,7 @@ async def test_review_only_requires_actual_owning_temporal_parent_before_activit
         merge_automation_module.workflow,
         "info",
         lambda: SimpleNamespace(
+            task_queue="mm.workflow.user.v2",
             workflow_id=MERGE_AUTOMATION_WORKFLOW_ID,
             run_id=OWNER_RUN_ID,
             parent=parent,
