@@ -272,6 +272,20 @@ OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
 OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID = (
     "agent-run-omnigent-profile-bound-remaining-budget-v1"
 )
+OMNIGENT_PROFILE_BOUND_RECONCILIATION_PATCH_ID = (
+    "agent-run-omnigent-profile-bound-reconciliation-v1"
+)
+# The canonical delivery boundary parks these provider observations as
+# delivery_unknown. Remaining time cannot authorize another delivery of that
+# command; preserve the original failure for its reconciliation owner. These
+# are the exception types retained by Temporal's failure converter.
+_OMNIGENT_RECONCILIATION_REQUIRED_ERROR_TYPES = frozenset(
+    {
+        "OmnigentSessionStillRunningError",
+        "_MarkedTurnStalledError",
+        "OmnigentSameSessionContinuationRequired",
+    }
+)
 #: Minimum per-attempt execution budget for a profile-bound retry (seconds).
 PROFILE_BOUND_RETRY_MINIMUM_SECONDS = 60
 
@@ -5601,6 +5615,18 @@ class MoonMindAgentRun:
             cause = exc
             while cause is not None:
                 if getattr(cause, "non_retryable", False):
+                    raise
+                if (
+                    getattr(cause, "type", type(cause).__name__)
+                    in _OMNIGENT_RECONCILIATION_REQUIRED_ERROR_TYPES
+                    and self._workflow_patch_enabled(
+                        OMNIGENT_PROFILE_BOUND_RECONCILIATION_PATCH_ID
+                    )
+                ):
+                    # The runtime already tried its bounded same-session
+                    # recovery and left uncertain work behind a parked command.
+                    # A same-key retry would only hit that fence and obscure
+                    # this cause. Old histories retain their recorded retry.
                     raise
                 cause = getattr(cause, "cause", None)
             budget_start = getattr(exc, "_omnigent_capacity_admitted_at", lane_start)
