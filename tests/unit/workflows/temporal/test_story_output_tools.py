@@ -6103,7 +6103,7 @@ async def test_github_assessment_local_handoff_fails_closed(
 
     assert result.status == "FAILED"
     assert result.outputs["decision"] == "blocked"
-    assert result.outputs["assessmentArtifactPath"] == str(assessment)
+    assert result.outputs["assessmentArtifactName"] == assessment.name
     if payload and payload["verdict"] == "BLOCKED":
         assert "Source unavailable" in result.outputs["summary"]
     else:
@@ -6136,3 +6136,97 @@ async def test_github_blocked_summary_is_bounded_and_redacted(monkeypatch):
     assert result.completion_disposition is None
     assert "ghp_" + "a" * 36 not in result.outputs["summary"]
     assert len(result.outputs["summary"]) < 2300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_reuses_successful_artifact_read(
+    monkeypatch, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+
+    class OneReadArtifactService(_FakeAssessmentArtifactService):
+        async def read(self, **kwargs):
+            if self.read_calls:
+                raise RuntimeError("Transient artifact service outage")
+            return await super().read(**kwargs)
+
+    artifacts = OneReadArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+            "mode": "start",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert artifacts.read_calls == ["art_blocked"]
+
+
+@pytest.mark.asyncio
+async def test_github_blocked_diagnostic_preserves_issue_read_failure(monkeypatch):
+    async def unavailable_issue(**_kwargs):
+        return None, "GitHub issue read unavailable."
+
+    monkeypatch.setattr(story_tools, "_fetch_github_issue", unavailable_issue)
+    artifacts = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "Original mandatory source is unavailable.",
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifacts},
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert "Original mandatory source" in result.outputs["summary"]
+    assert "GitHub issue read unavailable" in result.outputs["summary"]
+    assert result.outputs["assessmentArtifactRef"] == "art_blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool", [check_github_issue_blockers, update_github_issue_status]
+)
+async def test_github_blocked_diagnostic_omits_private_host_path(
+    monkeypatch, tmp_path, tool
+):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    private_directory = tmp_path / ".auth" / ("ghp_" + "a" * 36)
+    private_directory.mkdir(parents=True)
+    path = private_directory / "assessment.json"
+    path.write_text(json.dumps({"verdict": "BLOCKED", "summary": "Source unavailable"}))
+    result = await tool(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactPath": str(path),
+            "mode": "start",
+        },
+        github_service_factory=_FakeGitHubService,
+    )
+    assert result.status == "FAILED"
+    assert str(private_directory) not in json.dumps(result.outputs)
+    assert "ghp_" + "a" * 36 not in json.dumps(result.outputs)
+    assert result.outputs["assessmentArtifactName"] == "assessment.json"

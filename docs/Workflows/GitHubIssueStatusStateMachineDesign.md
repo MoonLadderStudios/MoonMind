@@ -265,7 +265,7 @@ The label is applied only after the comment is confirmed on GitHub, including af
 A `BLOCKED` assessment without a valid manual-only declaration fails at the
 blocker step, before the later In Progress step or implementation. The failure
 carries the assessment's bounded, redacted summary and artifact reference (or
-local path); a missing summary is reported as unavailable rather than inferred
+redacted local filename); a missing summary is reported as unavailable rather than inferred
 from issue history. A required but unreadable or malformed assessment likewise
 fails with repair guidance. The defensive In Progress gate uses the same failure
 report. Durable assessment verdicts take precedence over stale compact outputs.
