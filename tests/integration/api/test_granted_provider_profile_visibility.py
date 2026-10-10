@@ -217,19 +217,28 @@ async def test_granted_identity_visible_before_and_after_child_termination(
         parent = client.get_workflow_handle(workflow_id)
         child = client.get_workflow_handle(f"{workflow_id}:agent")
 
-        async def visible(params: list[tuple[str, str]]) -> list[str]:
+        async def observe(params: list[tuple[str, str]]) -> tuple[list[str], int]:
             count_query, list_query = _production_query(
                 params, owner_id=owner, usable_search_attributes=usable
             )
             ids = await _listed_ids(client, list_query)
-            assert (await client.count_workflows(query=count_query)).count == len(ids)
+            count = (await client.count_workflows(query=count_query)).count
+            return ids, count
+
+        async def visible(params: list[tuple[str, str]]) -> list[str]:
+            ids, count = await observe(params)
+            assert count == len(ids)
             return ids
 
         async def wait_for_profile(profile: str) -> None:
+            # A Search Attribute upsert can land between the list and count
+            # reads, so poll for the settled list and count together and leave
+            # strict parity to the assertions that follow.
             async with asyncio.timeout(30):
-                while await visible([("providerProfileIdIn", profile)]) != [
-                    workflow_id
-                ]:
+                while await observe([("providerProfileIdIn", profile)]) != (
+                    [workflow_id],
+                    1,
+                ):
                     await asyncio.sleep(0.1)
 
         def worker() -> Worker:
