@@ -20,9 +20,11 @@ from urllib.parse import quote
 
 import httpx
 
-_normalize_runtime_id = runpy.run_path(
+_EXECUTION_CLIENT = runpy.run_path(
     str(Path(__file__).resolve().parents[2] / "_shared" / "workflow_execution_client.py")
-)["normalize_runtime_id"]
+)
+_normalize_runtime_id = _EXECUTION_CLIENT["normalize_runtime_id"]
+_load_repository_connection_ref = _EXECUTION_CLIENT["load_repository_connection_ref"]
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,12 @@ def _run_command(cmd: list[str]) -> str:
         raise RuntimeError(f"command failed: {' '.join(cmd)}: {message}") from exc
     return (result.stdout or "").strip()
 
-def _normalize_repo(value: str | None) -> str | None:
+def _normalize_repo(value: Any) -> str | None:
+    if isinstance(value, dict):
+        if str(value.get("provider") or "").strip().lower() != "git":
+            return None
+        repository = value.get("repository")
+        value = repository.get("name") if isinstance(repository, dict) else None
     if not value:
         return None
     candidate = str(value).strip()
@@ -116,9 +123,10 @@ def _load_parent_repository(task_context_path: str | None = None) -> str | None:
         if not isinstance(payload, dict):
             continue
 
-        normalized = _normalize_repo(payload.get("repository"))
-        if normalized:
-            return normalized
+        for target in (payload.get("repositoryTarget"), payload.get("repository")):
+            normalized = _normalize_repo(target)
+            if normalized:
+                return normalized
     return None
 
 def _resolve_repo(raw_repo: str | None, task_context_path: str | None = None) -> str:
@@ -310,6 +318,8 @@ def _resolve_artifacts_dir(
         return spool_path
 
     for candidate in _repo_context_candidates(task_context_path):
+        if not candidate.is_file():
+            continue
         artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
         if artifacts_dir is not None:
             return artifacts_dir
@@ -573,6 +583,7 @@ def _build_queue_request(
     batch_scope: str | None = None,
     inherit_runtime_from_caller: bool = False,
     child_instructions: str | None = None,
+    repository_connection_ref: str | None = None,
 ) -> dict[str, Any]:
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
@@ -585,7 +596,15 @@ def _build_queue_request(
         runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
-        "repository": repo,
+        "repository": (
+            {
+                "provider": "git",
+                "connectionRef": repository_connection_ref,
+                "repository": {"name": repo},
+            }
+            if repository_connection_ref
+            else repo
+        ),
         "requiredCapabilities": ["gh"],
         "task": {
             "title": branch,
@@ -648,6 +667,11 @@ def _parse_args() -> argparse.Namespace:
         "--repo",
         default=None,
         help="Target repository in owner/repo format.",
+    )
+    parser.add_argument(
+        "--repository-connection-ref",
+        default=None,
+        help="Existing repository connection (default: inherit task context or managed environment).",
     )
     parser.add_argument(
         "--state",
@@ -898,6 +922,11 @@ def _build_request_records(
     batch_scope = _parent_run_scope(args.task_context_path)
     inherit_from_caller = _task_workflow_id_from_env() is not None
     child_instructions = _resolve_child_instructions(args)
+    repository_connection_ref = (
+        _runtime_text(getattr(args, "repository_connection_ref", None))
+        or _load_repository_connection_ref(_repo_context_candidates(args.task_context_path))
+        or _runtime_text(os.getenv("MOONMIND_REPOSITORY_CONNECTION_REF"))
+    )
 
     for pr in open_prs_sorted:
         number = pr.get("number")
@@ -918,6 +947,7 @@ def _build_request_records(
             batch_scope=batch_scope,
             inherit_runtime_from_caller=inherit_from_caller,
             child_instructions=child_instructions,
+            repository_connection_ref=repository_connection_ref,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
