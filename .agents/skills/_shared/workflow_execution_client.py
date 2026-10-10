@@ -52,10 +52,8 @@ def load_repository_connection_ref(context_paths: Iterable[Path]) -> str | None:
             connection_ref = target.get("connectionRef")
             if isinstance(connection_ref, str) and connection_ref.strip():
                 return connection_ref.strip()
-        auth = payload.get("auth")
-        connection_ref = auth.get("repoAuthRef") if isinstance(auth, dict) else None
-        if isinstance(connection_ref, str) and connection_ref.strip():
-            return connection_ref.strip()
+        # Legacy auth.repoAuthRef identifies a Vault secret, not a connection.
+        # Only canonical repository targets can select parent authority here.
     return None
 
 

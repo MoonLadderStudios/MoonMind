@@ -601,6 +601,7 @@ def _build_queue_request(
                 "provider": "git",
                 "connectionRef": repository_connection_ref,
                 "repository": {"name": repo},
+                "branch": {"name": branch},
             }
             if repository_connection_ref
             else repo
