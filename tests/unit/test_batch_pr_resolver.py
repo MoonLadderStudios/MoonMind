@@ -109,6 +109,7 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
                 "provider": "git",
                 "connectionRef": "repository-connection:existing-parent",
                 "repository": {"name": incident["repository"]},
+                "branch": {"name": body["payload"]["task"]["title"]},
             }:
                 self.respond(
                     {"detail": "repository route is missing or ambiguous; select a connection"},
@@ -686,9 +687,35 @@ def test_child_repository_route_inherits_context_with_optional_override(
         "provider": "git",
         "connectionRef": override or "repository-connection:parent",
         "repository": {"name": "owner/repo"},
+        "branch": {"name": "existing-pr-head"},
     }
     # Existing-PR adoption derives branch scope; do not copy the parent's branch.
     assert requests[0].queue_request["payload"]["task"]["inputs"]["repository"] == repo
+
+def test_legacy_secret_ref_does_not_shadow_managed_repository_connection(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_module()
+    context = tmp_path / "task_context.json"
+    context.write_text(json.dumps({
+        "repository": "owner/repo",
+        "auth": {"repoAuthRef": "vault://repository/legacy#credential"},
+    }))
+    monkeypatch.setenv("MOONMIND_REPOSITORY_CONNECTION_REF", "repository-connection:managed")
+    monkeypatch.setattr(sys, "argv", [
+        "batch_pr_resolver.py", "--task-context-path", str(context),
+    ])
+    args = module["_parse_args"]()
+    requests, skipped = module["_build_request_records"](
+        "owner/repo",
+        [{"number": 42, "headRefName": "existing-pr-head",
+          "headRepository": {"nameWithOwner": "owner/repo"}}],
+        args, module["RuntimeSelection"](),
+    )
+    assert skipped == []
+    assert requests[0].queue_request["payload"]["repository"]["connectionRef"] == (
+        "repository-connection:managed"
+    )
 
 def test_resolve_repo_prefers_task_context_over_env(monkeypatch, tmp_path: Path):
     module = _load_module()

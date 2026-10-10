@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,8 +40,10 @@ from tests.unit.api.routers.test_executions import (
 @pytest.mark.parametrize(
     "artifact_field", [None, "planArtifactRef", "inputArtifactRef"]
 )
+@pytest.mark.parametrize("managed_batch", [False, True])
 async def test_system_owned_fanout_expands_existing_pr_preset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, artifact_field: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, artifact_field: str | None,
+    managed_batch: bool,
 ) -> None:
     """Replay the failed batch child without treating SYSTEM as a user UUID."""
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/fanout.db")
@@ -159,6 +162,22 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
                 )
             await session.commit()
 
+        repository_payload = repository
+        if managed_batch:
+            # Validate the shipped producer's target through real admission,
+            # fan-out authentication and persisted preset expansion.
+            helper = runpy.run_path(str(
+                Path(__file__).resolve().parents[4]
+                / ".agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py"
+            ))
+            generated = helper["_build_queue_request"](
+                repository, 2752, "moonmind-job-47d25995",
+                runtime=helper["RuntimeSelection"](),
+                merge_method="rebase", max_iterations=7, priority=0, max_attempts=3,
+                repository_connection_ref="repository-connection:git-default",
+            )
+            repository_payload = generated["payload"]["repository"]
+
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -172,7 +191,7 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
                     "type": "task",
                     "payload": {
                         **({artifact_field: artifact_ref} if artifact_field else {}),
-                        "repository": repository,
+                        "repository": repository_payload,
                         "executionPrincipal": {
                             "kind": "operator",
                             "scopes": ["deployment_control", "docker_admin"],
@@ -210,6 +229,9 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
             )
             assert creation[argument] == artifact_ref
         initial = creation["initial_parameters"]
+        if managed_batch:
+            assert initial["repository"]["branch"] == {"name": "moonmind-job-47d25995"}
+            assert initial["repository"]["connectionRef"] == "repository-connection:git-default"
         assert initial["executionPrincipal"] == {
             "kind": "workflow",
             "workflowId": parent_id,
