@@ -19,6 +19,8 @@ from typing import Any, Literal, Optional, cast, get_args
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from moonmind.core.artifacts import canonical_artifact_ref
+
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
     is_historical_workflow_type,
@@ -2037,7 +2039,7 @@ def _branch_comparison_record(
 def _checkpoint_ref_artifact_value(ref: object) -> str:
     if isinstance(ref, Mapping):
         ref = ref.get("artifactRef") or ref.get("checkpointRef") or ref.get("ref")
-    return str(ref or "").strip()
+    return canonical_artifact_ref(str(ref or ""))
 
 
 async def _latest_branch_turn_for_step_execution(
@@ -2163,7 +2165,11 @@ def _is_protected_ref(ref: str | None) -> bool:
     return normalized in _PROTECTED_BRANCH_REFS or normalized.startswith("release/")
 
 
-def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryModel]:
+def _checkpoint_summaries_from_record(
+    record: Any,
+    *,
+    step_ledger: StepLedgerSnapshotModel | None = None,
+) -> list[CheckpointSummaryModel]:
     seen: set[tuple[str, str]] = set()
     items: list[CheckpointSummaryModel] = []
 
@@ -2192,15 +2198,20 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
             ordinal_value = int(execution_ordinal)
         digest_value = str(digest or "").strip() or None
         if key in seen:
-            if digest_value:
-                for item in items:
-                    if (
-                        item.checkpoint_ref == ref_value
-                        and item.checkpoint_boundary == boundary_value
-                        and not item.checkpoint_digest
-                    ):
+            for item in items:
+                if (
+                    item.checkpoint_ref == ref_value
+                    and item.checkpoint_boundary == boundary_value
+                ):
+                    if digest_value and not item.checkpoint_digest:
                         item.checkpoint_digest = digest_value
-                        break
+                    if not item.logical_step_id:
+                        item.logical_step_id = (
+                            str(logical_step_id or "").strip() or None
+                        )
+                    if item.execution_ordinal is None:
+                        item.execution_ordinal = ordinal_value
+                    break
             return
         seen.add(key)
         items.append(
@@ -2236,15 +2247,31 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
             digest=recovery_manifest.get("checkpointDigest"),
         )
 
-    def walk(value: object, *, logical_step_id: object | None = None) -> None:
+    def walk(
+        value: object,
+        *,
+        logical_step_id: object | None = None,
+        execution_ordinal: object | None = None,
+    ) -> None:
         if isinstance(value, Mapping):
             step_id = (
                 value.get("logicalStepId") or value.get("stepId") or logical_step_id
             )
-            ordinal = value.get("executionOrdinal") or value.get("attempt")
+            ordinal = (
+                value.get("executionOrdinal")
+                or value.get("attempt")
+                or execution_ordinal
+            )
             refs = value.get("checkpointRefsByBoundary")
+            row_refs = value.get("refs")
+            if not isinstance(refs, Mapping) and isinstance(row_refs, Mapping):
+                refs = row_refs.get("checkpointRefsByBoundary")
+            declared_boundaries: dict[str, list[str]] = {}
             if isinstance(refs, Mapping):
                 for boundary, ref in refs.items():
+                    declared_boundaries.setdefault(
+                        _checkpoint_ref_artifact_value(ref), []
+                    ).append(str(boundary))
                     add(
                         ref,
                         boundary=boundary,
@@ -2258,22 +2285,82 @@ def _checkpoint_summaries_from_record(record: Any) -> list[CheckpointSummaryMode
                 ("checkpointBeforeRef", "before_execution"),
                 ("checkpointAfterRef", "after_execution"),
             ):
-                add(
-                    value.get(key),
-                    boundary=boundary,
-                    logical_step_id=step_id,
-                    execution_ordinal=ordinal,
-                    digest=value.get("checkpointDigest"),
+                ref = value.get(key)
+                boundaries = declared_boundaries.get(
+                    _checkpoint_ref_artifact_value(ref), [boundary]
                 )
+                for declared_boundary in boundaries:
+                    add(
+                        ref,
+                        boundary=declared_boundary,
+                        logical_step_id=step_id,
+                        execution_ordinal=ordinal,
+                        digest=value.get("checkpointDigest"),
+                    )
             for child in value.values():
-                walk(child, logical_step_id=step_id)
+                walk(child, logical_step_id=step_id, execution_ordinal=ordinal)
         elif isinstance(value, list):
             for child in value:
-                walk(child, logical_step_id=logical_step_id)
+                walk(
+                    child,
+                    logical_step_id=logical_step_id,
+                    execution_ordinal=execution_ordinal,
+                )
 
     walk(params)
     walk(finish)
+    if step_ledger is not None:
+        walk(step_ledger.model_dump(by_alias=True, mode="json"))
     return items
+
+
+async def _load_execution_checkpoint_summaries(
+    *,
+    record: Any,
+    temporal_client_adapter: TemporalClientAdapter,
+) -> list[CheckpointSummaryModel]:
+    persisted_checkpoints = _checkpoint_summaries_from_record(record)
+    if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
+        return persisted_checkpoints
+    try:
+        temporal_client = await asyncio.wait_for(
+            temporal_client_adapter.get_client(),
+            timeout=_step_ledger_query_timeout_seconds(record),
+        )
+    except (RPCError, TimeoutError, RuntimeError, OSError) as exc:
+        logger.warning(
+            "Serving persisted checkpoints for %s: Temporal connection unavailable (%s)",
+            record.workflow_id,
+            type(exc).__name__,
+        )
+        return persisted_checkpoints
+    try:
+        ledger = await _load_execution_step_ledger(
+            temporal_client=temporal_client,
+            workflow_id=record.workflow_id,
+            fallback_record=record,
+        )
+    except HTTPException as exc:
+        if (
+            exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE
+            or not isinstance(exc.detail, Mapping)
+            or exc.detail.get("code") != "temporal_unavailable"
+        ):
+            raise
+        logger.info(
+            "Serving persisted checkpoints for %s: Temporal ledger unavailable",
+            record.workflow_id,
+        )
+        return persisted_checkpoints
+    if ledger.workflow_id != record.workflow_id or ledger.run_id != record.run_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_source",
+                "reason": "checkpoint_ledger_execution_mismatch",
+            },
+        )
+    return _checkpoint_summaries_from_record(record, step_ledger=ledger)
 
 
 def _validate_branch_source(
@@ -2281,6 +2368,7 @@ def _validate_branch_source(
     workflow_id: str,
     record: Any,
     source: Any,
+    checkpoints: Sequence[CheckpointSummaryModel] | None = None,
 ) -> None:
     source_workflow_id = str(getattr(source, "workflow_id", "") or "").strip()
     if source_workflow_id and source_workflow_id != workflow_id:
@@ -2295,7 +2383,8 @@ def _validate_branch_source(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "invalid_source", "reason": "source_run_mismatch"},
         )
-    checkpoints = _checkpoint_summaries_from_record(record)
+    if checkpoints is None:
+        checkpoints = _checkpoint_summaries_from_record(record)
     if not checkpoints:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -14350,32 +14439,27 @@ def _context_selected_checkpoint(
     context_payload: Mapping[str, Any],
     checkpoint_ref: str,
 ) -> Mapping[str, Any] | None:
-    def _artifact_ref_value(value: Any) -> str:
-        if isinstance(value, Mapping):
-            value = value.get("ref") or value.get("artifactRef") or value
-        return str(value or "").strip()
-
     selected_steps = context_payload.get("selectedSteps")
     if not isinstance(selected_steps, list):
         return None
     for item in selected_steps:
         if not isinstance(item, Mapping):
             continue
-        if str(item.get("checkpointRef") or "").strip() == checkpoint_ref:
+        if _checkpoint_ref_artifact_value(item.get("checkpointRef")) == checkpoint_ref:
             return item
         artifact_refs = item.get("artifactRefs")
         if isinstance(artifact_refs, list) and checkpoint_ref in {
-            _artifact_ref_value(ref) for ref in artifact_refs
+            _checkpoint_ref_artifact_value(ref) for ref in artifact_refs
         }:
             return item
     return None
 
 
 def _checkpoint_summary_for_ref(
-    record: Any,
+    checkpoints: Sequence[CheckpointSummaryModel],
     checkpoint_ref: str,
 ) -> CheckpointSummaryModel | None:
-    for checkpoint in _checkpoint_summaries_from_record(record):
+    for checkpoint in checkpoints:
         if checkpoint.checkpoint_ref == checkpoint_ref:
             return checkpoint
     return None
@@ -14569,6 +14653,9 @@ async def create_remediation_checkpoint_branch(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     links = await service.list_remediation_targets(workflow_id)
@@ -14619,7 +14706,10 @@ async def create_remediation_checkpoint_branch(
                 "reason": "checkpoint_not_selected_in_remediation_context",
             },
         )
-    target_checkpoint = _checkpoint_summary_for_ref(target_record, checkpoint_ref)
+    target_checkpoints = await _load_execution_checkpoint_summaries(
+        record=target_record, temporal_client_adapter=temporal_client_adapter
+    )
+    target_checkpoint = _checkpoint_summary_for_ref(target_checkpoints, checkpoint_ref)
     workspace_policy = payload.workspacePolicy
     runtime_context_policy = payload.runtimeContextPolicy
     _validate_branch_policy(
@@ -14655,6 +14745,7 @@ async def create_remediation_checkpoint_branch(
         workflow_id=link.target_workflow_id,
         record=target_record,
         source=source,
+        checkpoints=target_checkpoints,
     )
     request_digest = _operation_digest(
         {
@@ -16557,11 +16648,19 @@ async def list_execution_checkpoints(
     workflow_id: str,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointListResponse:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user, allow_historical=True
     )
-    return CheckpointListResponse(items=_checkpoint_summaries_from_record(record))
+    return CheckpointListResponse(
+        items=await _load_execution_checkpoint_summaries(
+            record=record,
+            temporal_client_adapter=temporal_client_adapter,
+        )
+    )
 
 
 @router.get(
@@ -16605,12 +16704,21 @@ async def create_checkpoint_branch(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
+    temporal_client_adapter: TemporalClientAdapter = Depends(
+        get_temporal_client_adapter
+    ),
 ) -> CheckpointBranchModel:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
     _validate_branch_source(
-        workflow_id=workflow_id, record=record, source=payload.source
+        workflow_id=workflow_id,
+        record=record,
+        source=payload.source,
+        checkpoints=await _load_execution_checkpoint_summaries(
+            record=record,
+            temporal_client_adapter=temporal_client_adapter,
+        ),
     )
     _validate_branch_policy(
         workspace_policy=payload.workspace_policy,

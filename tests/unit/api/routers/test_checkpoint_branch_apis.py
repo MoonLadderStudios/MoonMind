@@ -11,17 +11,21 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
     _checkpoint_branch_git_context,
+    _checkpoint_summaries_from_record,
     _get_service,
+    _validate_branch_source,
     router,
 )
+from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
@@ -44,6 +48,274 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     build_branch_turn_execution_identity,
 )
+
+
+def _empty_dependency() -> SimpleNamespace:
+    """Provide a zero-argument signature for FastAPI dependency inspection."""
+    return SimpleNamespace()
+
+
+def _checkpoint_temporal_adapter() -> SimpleNamespace:
+    return SimpleNamespace(get_client=AsyncMock(return_value=SimpleNamespace()))
+
+
+@pytest.mark.parametrize("prefix", ["", "artifact:", "artifact://"])
+def test_checkpoint_projection_accepts_durable_capture_reference_shapes(prefix):
+    ref = prefix + "art_capture1"
+    record = SimpleNamespace(
+        workflow_id="mm:capture-owner",
+        run_id="capture-run",
+        memo={},
+        parameters={
+            "steps": [
+                {
+                    "logicalStepId": "assess",
+                    "executionOrdinal": 1,
+                    "checkpointRefsByBoundary": {
+                        "after_execution": {
+                            "artifactRef": ref,
+                            "checkpointDigest": "sha256:" + "1" * 64,
+                        }
+                    },
+                }
+            ]
+        },
+        finish_summary_json={},
+    )
+    items = _checkpoint_summaries_from_record(record)
+    assert len(items) == 1
+    assert items[0].checkpoint_ref == "artifact://art_capture1"
+    assert items[0].checkpoint_digest == "sha256:" + "1" * 64
+    assert items[0].logical_step_id == "assess"
+    # Shape adaptation retains the original run and digest admission guards.
+    source = SimpleNamespace(
+        workflow_id=record.workflow_id,
+        run_id=record.run_id,
+        checkpoint_ref=items[0].checkpoint_ref,
+        checkpoint_boundary="after_execution",
+        checkpoint_digest=items[0].checkpoint_digest,
+    )
+    _validate_branch_source(
+        workflow_id=record.workflow_id, record=record, source=source
+    )
+    source.checkpoint_digest = "sha256:" + "2" * 64
+    with pytest.raises(HTTPException) as error:
+        _validate_branch_source(
+            workflow_id=record.workflow_id, record=record, source=source
+        )
+    assert error.value.detail["code"] == "checkpoint_digest_mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ledger_workflow,ledger_run",
+    [
+        ("mm:capture-owner", "capture-run"),
+        ("mm:capture-owner", "different-run"),
+        ("mm:other-owner", "capture-run"),
+    ],
+)
+async def test_checkpoint_list_uses_owned_execution_ledger(
+    monkeypatch, ledger_workflow, ledger_run
+):
+    from api_service.api.routers import executions
+
+    user = SimpleNamespace(id=uuid4())
+    record = SimpleNamespace(
+        workflow_id="mm:capture-owner",
+        run_id="capture-run",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        memo={"stepCheckpointRef": "art_after_assess"},
+        parameters={},
+        finish_summary_json={},
+    )
+    monkeypatch.setattr(
+        executions, "_get_owned_execution", AsyncMock(return_value=record)
+    )
+    ledger = StepLedgerSnapshotModel.model_validate(
+        {
+            "workflowId": ledger_workflow,
+            "runId": ledger_run,
+            "steps": [
+                {
+                    "logicalStepId": "assess",
+                    "order": 2,
+                    "title": "Assess issue",
+                    "tool": {"name": "agent.run", "version": "1.0"},
+                    "status": "completed",
+                    "executionOrdinal": 1,
+                    "updatedAt": "2026-10-09T04:18:00Z",
+                    "stateCheckpointRef": "art_after_assess",
+                    "stepCheckpointRef": "artifact:art_before_publish",
+                    "refs": {
+                        "checkpointRefsByBoundary": {
+                            "after_execution": "art_after_assess",
+                            "before_publication": "artifact:art_before_publish",
+                        }
+                    },
+                }
+            ],
+        }
+    )
+    load = AsyncMock(return_value=ledger)
+    monkeypatch.setattr(executions, "_load_execution_step_ledger", load)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = _empty_dependency
+    app.dependency_overrides[executions.get_temporal_client_adapter] = (
+        _checkpoint_temporal_adapter
+    )
+    _override_user_dependencies(app, user)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(f"/api/executions/{record.workflow_id}/checkpoints")
+    if ledger_run != record.run_id or ledger_workflow != record.workflow_id:
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "invalid_source"
+    else:
+        assert response.status_code == 200
+        assert {
+            (x["checkpointRef"], x["checkpointBoundary"])
+            for x in response.json()["items"]
+        } == {
+            ("artifact://art_after_assess", "after_execution"),
+            ("artifact://art_before_publish", "before_publication"),
+        }
+        assert all(x["runId"] == record.run_id for x in response.json()["items"])
+        assert all(x["logicalStepId"] == "assess" for x in response.json()["items"])
+        assert all(x["executionOrdinal"] == 1 for x in response.json()["items"])
+        load.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_status", ["failed", "completed"])
+@pytest.mark.parametrize("stored_location", ["memo", "parameters", "finish"])
+@pytest.mark.parametrize(
+    "failure", ["history_expired", "query_unavailable", "query_timeout", "connect"]
+)
+async def test_checkpoint_list_retains_persisted_checkpoints_when_temporal_unavailable(
+    monkeypatch, close_status, stored_location, failure
+):
+    from api_service.api.routers import executions
+
+    ref = "artifact://art_persisted_checkpoint"
+    digest = "sha256:" + "a" * 64
+    record = SimpleNamespace(
+        workflow_id="mm:retained-checkpoint",
+        run_id="retained-run",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        close_status=close_status,
+        memo={},
+        parameters={},
+        finish_summary_json={},
+    )
+    if stored_location == "memo":
+        record.memo = {
+            "stepCheckpointRef": {"artifactRef": ref, "checkpointDigest": digest}
+        }
+    elif stored_location == "parameters":
+        record.parameters = {
+            "steps": [{"checkpointRef": ref, "checkpointDigest": digest}]
+        }
+    else:
+        record.finish_summary_json = {
+            "recoveryManifest": {
+                "checkpointRef": ref,
+                "boundary": "after_execution",
+                "checkpointDigest": digest,
+            }
+        }
+    monkeypatch.setattr(
+        executions, "_get_owned_execution", AsyncMock(return_value=record)
+    )
+    query_error = (
+        TimeoutError("Temporal query timed out")
+        if failure == "query_timeout"
+        else RPCError(
+            "Execution history unavailable",
+            (
+                RPCStatusCode.NOT_FOUND
+                if failure == "history_expired"
+                else RPCStatusCode.UNAVAILABLE
+            ),
+            b"",
+        )
+    )
+    query = AsyncMock(side_effect=query_error)
+    monkeypatch.setattr(executions, "_query_workflow_for_detail", query)
+    adapter = SimpleNamespace(
+        get_client=AsyncMock(
+            side_effect=(
+                RuntimeError("Temporal connection unavailable")
+                if failure == "connect"
+                else None
+            ),
+            return_value=SimpleNamespace(),
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = _empty_dependency
+    app.dependency_overrides[executions.get_temporal_client_adapter] = lambda: adapter
+    _override_user_dependencies(app, SimpleNamespace(id=uuid4()))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(f"/api/executions/{record.workflow_id}/checkpoints")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [
+        {
+            "checkpointRef": ref,
+            "checkpointBoundary": "after_execution",
+            "runId": record.run_id,
+            "logicalStepId": None,
+            "executionOrdinal": None,
+            "checkpointDigest": digest,
+        }
+    ]
+    if failure == "connect":
+        query.assert_not_awaited()
+    else:
+        query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_list_does_not_hide_invalid_live_evidence(monkeypatch):
+    from api_service.api.routers import executions
+
+    record = SimpleNamespace(
+        workflow_id="mm:invalid-checkpoint-ledger",
+        run_id="source-run",
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        close_status="failed",
+        memo={"stepCheckpointRef": "artifact://art_persisted_checkpoint"},
+        parameters={},
+        finish_summary_json={},
+    )
+    monkeypatch.setattr(
+        executions, "_get_owned_execution", AsyncMock(return_value=record)
+    )
+    monkeypatch.setattr(
+        executions,
+        "_query_workflow_for_detail",
+        AsyncMock(return_value={"workflowId": record.workflow_id, "steps": [{}]}),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[_get_service] = _empty_dependency
+    app.dependency_overrides[executions.get_temporal_client_adapter] = (
+        _checkpoint_temporal_adapter
+    )
+    _override_user_dependencies(app, SimpleNamespace(id=uuid4()))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(f"/api/executions/{record.workflow_id}/checkpoints")
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "invalid_execution_query_payload"
 
 
 def _record_like(user: SimpleNamespace) -> SimpleNamespace:
@@ -185,6 +457,16 @@ async def checkpoint_branch_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
     app.include_router(router)
     service = SimpleNamespace(describe_execution=AsyncMock(return_value=record))
     app.dependency_overrides[_get_service] = lambda: service
+    from api_service.api.routers import executions
+    app.dependency_overrides[executions.get_temporal_client_adapter] = (
+        _checkpoint_temporal_adapter
+    )
+    async def _empty_ledger(*, fallback_record, **_kwargs):
+        return StepLedgerSnapshotModel(
+            workflowId=fallback_record.workflow_id, runId=fallback_record.run_id,
+            steps=[],
+        )
+    monkeypatch.setattr(executions, "_load_execution_step_ledger", _empty_ledger)
 
     async def _session_override():
         async with session_factory() as session:
@@ -257,7 +539,7 @@ async def checkpoint_branch_client(tmp_path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest_asyncio.fixture
-async def checkpoint_branch_denied_client(tmp_path):
+async def checkpoint_branch_denied_client(tmp_path, monkeypatch):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path}/checkpoint-branches-denied.db"
     )
@@ -304,6 +586,20 @@ async def checkpoint_branch_denied_client(tmp_path):
 
     app.dependency_overrides[get_async_session] = _session_override
     _override_user_dependencies(app, user)
+    from api_service.api.routers import executions
+
+    app.dependency_overrides[executions.get_temporal_client_adapter] = (
+        _checkpoint_temporal_adapter
+    )
+
+    async def _empty_ledger(*, fallback_record, **_kwargs):
+        return StepLedgerSnapshotModel(
+            workflowId=fallback_record.workflow_id,
+            runId=fallback_record.run_id,
+            steps=[],
+        )
+
+    monkeypatch.setattr(executions, "_load_execution_step_ledger", _empty_ledger)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -605,6 +901,43 @@ async def test_checkpoint_branch_api_lists_creates_details_turns_and_is_idempote
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_branch_retains_source_guards_without_live_ledger(
+    checkpoint_branch_client: AsyncClient, monkeypatch
+):
+    from api_service.api.routers import executions
+
+    monkeypatch.setattr(
+        executions,
+        "_load_execution_step_ledger",
+        AsyncMock(
+            side_effect=HTTPException(
+                status_code=503, detail={"code": "temporal_unavailable"}
+            )
+        ),
+    )
+    for field, value, expected_code in (
+        ("runId", "foreign-run", "invalid_source"),
+        ("checkpointRef", "artifact://checkpoints/unknown", "checkpoint_invalid"),
+        ("checkpointDigest", "sha256:other-digest", "checkpoint_digest_mismatch"),
+    ):
+        payload = _create_payload("unavailable-source:" + field)
+        payload["source"][field] = value
+        rejected = await checkpoint_branch_client.post(
+            "/api/executions/mm:wf-branch/checkpoint-branches", json=payload
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert rejected.json()["detail"]["code"] == expected_code
+    created = await checkpoint_branch_client.post(
+        "/api/executions/mm:wf-branch/checkpoint-branches",
+        json=_create_payload("persisted-only-source"),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["sourceCheckpointRef"] == (
+        "artifact://checkpoints/after-implement"
+    )
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_branch_api_create_dispatches_server_owned_turn_idempotently(
     checkpoint_branch_client: AsyncClient,
 ) -> None:
@@ -828,10 +1161,14 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("from_ledger", [False, True])
 async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
     checkpoint_branch_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    from_ledger: bool,
 ) -> None:
+    from api_service.api.routers import executions
+
     user = SimpleNamespace(
         id=uuid4(),
         email="checkpoint-branches@example.com",
@@ -843,6 +1180,42 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
         **record.memo,
         "recoveryCheckpointRef": "artifact://checkpoints/before-recovery",
     }
+    checkpoint_ref = "artifact://checkpoints/before-recovery"
+    selected_ref = checkpoint_ref
+    boundary = "before_recovery_restoration"
+    if from_ledger:
+        checkpoint_ref = "artifact://art_before_recovery"
+        selected_ref = "artifact:art_before_recovery"
+        boundary = "before_publication"
+        record.memo = {
+            key: value
+            for key, value in record.memo.items()
+            if key not in {"stepCheckpointRef", "recoveryCheckpointRef"}
+        }
+        record.parameters = {
+            key: value for key, value in record.parameters.items() if key != "steps"
+        }
+        ledger = StepLedgerSnapshotModel.model_validate(
+            {
+                "workflowId": record.workflow_id,
+                "runId": record.run_id,
+                "steps": [
+                    {
+                        "logicalStepId": "implement",
+                        "order": 1,
+                        "title": "Implement",
+                        "tool": {"name": "agent.run", "version": "1.0"},
+                        "status": "completed",
+                        "executionOrdinal": 2,
+                        "updatedAt": "2026-10-09T04:18:00Z",
+                        "refs": {"checkpointRefsByBoundary": {boundary: selected_ref}},
+                    }
+                ],
+            }
+        )
+        monkeypatch.setattr(
+            executions, "_load_execution_step_ledger", AsyncMock(return_value=ledger)
+        )
     link = SimpleNamespace(
         remediation_workflow_id="mm:remediation-recovery",
         remediation_run_id="run-remediation-1",
@@ -851,17 +1224,17 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
         context_artifact_ref="ctx-remediation-recovery",
         latest_action_summary=None,
     )
-    checkpoint_branch_client.app.dependency_overrides[_get_service] = lambda: SimpleNamespace(
-        describe_execution=AsyncMock(return_value=record),
-        list_remediation_targets=AsyncMock(return_value=[link]),
+    checkpoint_branch_client.app.dependency_overrides[_get_service] = (
+        lambda: SimpleNamespace(
+            describe_execution=AsyncMock(return_value=record),
+            list_remediation_targets=AsyncMock(return_value=[link]),
+        )
     )
 
     class _ArtifactService:
         async def read(self, *, artifact_id: str, principal: str):
             return (
-                SimpleNamespace(
-                    metadata_json={"artifact_type": "remediation.context"}
-                ),
+                SimpleNamespace(metadata_json={"artifact_type": "remediation.context"}),
                 json.dumps(
                     {
                         "schemaVersion": "v1",
@@ -871,7 +1244,7 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
                         },
                         "selectedSteps": [
                             {
-                                "checkpointRef": "artifact://checkpoints/before-recovery",
+                                "checkpointRef": selected_ref,
                             }
                         ],
                     }
@@ -886,20 +1259,23 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
     response = await checkpoint_branch_client.post(
         "/api/executions/mm:remediation-recovery/remediation/checkpoint-branches",
         json={
-            "checkpointRef": "artifact://checkpoints/before-recovery",
+            "checkpointRef": checkpoint_ref,
             "instructions": {"text": "Repair from recovery checkpoint."},
             "idempotencyKey": "MM-1119:recovery-boundary",
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.json()
     async for session in checkpoint_branch_client.app.dependency_overrides[  # type: ignore[attr-defined]
         get_async_session
     ]():
-        branch = await session.get(WorkflowCheckpointBranch, response.json()["branchId"])
+        branch = await session.get(
+            WorkflowCheckpointBranch, response.json()["branchId"]
+        )
 
     assert branch is not None
-    assert branch.source_checkpoint_boundary == "before_recovery_restoration"
+    assert branch.source_checkpoint_boundary == boundary
+    assert branch.source_checkpoint_ref == checkpoint_ref
 
 
 @pytest.mark.asyncio
