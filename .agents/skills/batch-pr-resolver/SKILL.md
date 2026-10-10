@@ -28,6 +28,7 @@ on child publishing; do not infer one from the coordinator's local mode.
 ## Inputs (skill args)
 
 - `repo` (string, required): Target repository in `owner/repo` form.
+- `repositoryConnectionRef` (string, optional): Existing Git connection selector. The helper derives it from the parent's canonical repository target, then `MOONMIND_REPOSITORY_CONNECTION_REF`; this input overrides that selection. Legacy credential secret references never select a connection. Admission still verifies the connection's permitted scope and operations.
 - `state` (string, optional): PR state filter for discovery. Default is `open`. Using other states prints a warning.
 - `pullRequests` (string, optional): Only queue these PRs, as numbers or inclusive ranges such as `4724-4746, 4765`. The helper inherits this field from the parent task context when its CLI override is omitted. When omitted everywhere, every open PR is queued.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
@@ -81,6 +82,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
 
 2. Map inputs to flags:
    - `repo` -> `--repo`
+   - `repositoryConnectionRef` -> `--repository-connection-ref`
    - `state` -> `--state`
    - `pullRequests` -> `--pull-requests`
    - `maxAttempts` -> `--max-attempts`
@@ -111,7 +113,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
    - Build a canonical queue task with:
      - `type: "task"`
      - `payload.idempotencyKey`: stable per parent batch run and PR, hash-backed and capped to the execution persistence limit, so rerunning the same batch task does not create duplicate resolver workflows.
-     - `payload.repository`: target repo
+     - `payload.repository`: `{ provider: "git", connectionRef, repository: { name: repo }, branch: { name: headRefName } }` when an existing connection selector is available; otherwise the target repo string for admission to resolve. Each target uses its discovered PR head branch, never the parent's shared branch. Existing-PR adoption resolves the PR's base/head and publication scope.
      - `payload.task.taskTemplate.slug`: `pr-review-resolve`
      - `payload.task.taskTemplate.inputs`: `{ repository: repo, pull_request: pr_number, review_provider: "none", finish_with_pr_resolver: true, merge_method: mergeMethod, max_iterations: maxIterations }`
      - inherited runtime, model, effort, and Provider Profile fields.
@@ -125,7 +127,7 @@ python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
      the execution-scoped bearer and mark both calls as fan-out v1. A declared
      token file that is missing or empty is a hard failure; do not fall back to
      the ambient value.
-4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`. The helper binds it to `MOONMIND_STEP_EXECUTION_ID` and records `running` before discovery, then `queued`, `no_op`, `partial_failure`, or `failed`. MoonMind validates this terminal evidence before accepting completion; a clean harness exit with no result is incomplete.
+4. Write one summary artifact at `batch_pr_resolver_result.json` under the managed session artifact spool path when available, otherwise under the configured `--artifacts-dir`. For the default `artifacts` path, use a materialized task context's artifact directory when present; a missing context never redirects writes outside the current run workspace. The helper binds it to `MOONMIND_STEP_EXECUTION_ID` and records `running` before discovery, then `queued`, `no_op`, `partial_failure`, or `failed`. MoonMind validates this terminal evidence before accepting completion; a clean harness exit with no result is incomplete.
 5. On any submission or verification error, write `skill_outcome.json` with a
    `failed` or `partial` status so the managed runtime cannot report the batch
    as successful.
