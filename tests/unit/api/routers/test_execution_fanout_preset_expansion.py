@@ -42,7 +42,9 @@ from tests.unit.api.routers.test_executions import (
 )
 @pytest.mark.parametrize("managed_batch", [False, True])
 async def test_system_owned_fanout_expands_existing_pr_preset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, artifact_field: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_field: str | None,
     managed_batch: bool,
 ) -> None:
     """Replay the failed batch child without treating SYSTEM as a user UUID."""
@@ -166,14 +168,21 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         if managed_batch:
             # Validate the shipped producer's target through real admission,
             # fan-out authentication and persisted preset expansion.
-            helper = runpy.run_path(str(
-                Path(__file__).resolve().parents[4]
-                / ".agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py"
-            ))
+            helper = runpy.run_path(
+                str(
+                    Path(__file__).resolve().parents[4]
+                    / ".agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py"
+                )
+            )
             generated = helper["_build_queue_request"](
-                repository, 2752, "moonmind-job-47d25995",
+                repository,
+                2752,
+                "moonmind-job-47d25995",
                 runtime=helper["RuntimeSelection"](),
-                merge_method="rebase", max_iterations=7, priority=0, max_attempts=3,
+                merge_method="rebase",
+                max_iterations=7,
+                priority=0,
+                max_attempts=3,
                 repository_connection_ref="repository-connection:git-default",
             )
             repository_payload = generated["payload"]["repository"]
@@ -231,7 +240,10 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
         initial = creation["initial_parameters"]
         if managed_batch:
             assert initial["repository"]["branch"] == {"name": "moonmind-job-47d25995"}
-            assert initial["repository"]["connectionRef"] == "repository-connection:git-default"
+            assert (
+                initial["repository"]["connectionRef"]
+                == "repository-connection:git-default"
+            )
         assert initial["executionPrincipal"] == {
             "kind": "workflow",
             "workflowId": parent_id,
