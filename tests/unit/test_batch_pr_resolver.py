@@ -209,7 +209,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         assert len(descriptions) == len(submissions) == 8
         for body in submissions:
             payload = body["payload"]
-            assert payload["repository"] == incident["repository"]
+            assert payload["repository"]["repository"]["name"] == incident["repository"]
             assert payload["runtimeInheritance"] == "caller"
             assert payload["task"]["runtime"] == {
                 "mode": runtime,
@@ -672,7 +672,12 @@ def test_child_repository_route_inherits_context_with_optional_override(
     assert repo == "owner/repo"
     requests, skipped = module["_build_request_records"](
         repo,
-        [{"number": 42, "headRefName": "existing-pr-head", "isCrossRepository": False}],
+        [{
+            "number": 42,
+            "headRefName": "existing-pr-head",
+            "isCrossRepository": False,
+            "headRepository": {"nameWithOwner": "owner/repo"},
+        }],
         args,
         module["RuntimeSelection"](),
     )
