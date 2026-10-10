@@ -105,6 +105,16 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
             assert self.path == "/api/executions"
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             submissions.append(body)
+            if body["payload"]["repository"] != {
+                "provider": "git",
+                "connectionRef": "repository-connection:existing-parent",
+                "repository": {"name": incident["repository"]},
+            }:
+                self.respond(
+                    {"detail": "repository route is missing or ambiguous; select a connection"},
+                    422,
+                )
+                return
             key = body["payload"]["idempotencyKey"]
             record = records.setdefault(
                 key,
@@ -148,6 +158,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         "MOONMIND_EXECUTION_PROFILE_RUNTIME": profile_runtime,
         "MOONMIND_EXECUTION_PROFILE_REF": "codex_openai_oauth",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": str(capability_file),
+        "MOONMIND_REPOSITORY_CONNECTION_REF": "repository-connection:existing-parent",
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
         "MOONMIND_STEP_EXECUTION_ID": "batch:run:node-1:execution:1",
     }
@@ -551,6 +562,25 @@ def test_resolve_artifacts_dir_respects_explicit_path(
 
     assert resolve_artifacts_dir(str(explicit)) == explicit
 
+@pytest.mark.parametrize("raw", ["artifacts", "./artifacts", "artifacts/"])
+def test_default_artifacts_use_materialized_context_after_missing_candidate(
+    raw: str, tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_module()
+    workspace = tmp_path / "run"
+    context = workspace / "artifacts/task_context.json"
+    context.parent.mkdir(parents=True)
+    context.write_text("{}")
+    monkeypatch.chdir(workspace)
+    for key in (
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        "MOONMIND_TASK_CONTEXT_PATH",
+        "TASK_CONTEXT_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert module["_resolve_artifacts_dir"](raw) == context.parent
+
 def test_parent_run_scope_uses_managed_session_spool(
     monkeypatch: Any,
     tmp_path: Path,
@@ -613,6 +643,47 @@ def test_load_parent_repository_reads_task_context(tmp_path: Path):
     )
 
     assert load_parent_repository(str(task_context)) == "MoonLadderStudios/Tactics"
+
+@pytest.mark.parametrize("target_field", ["repositoryTarget", "repository"])
+@pytest.mark.parametrize("override", [None, "repository-connection:explicit"])
+def test_child_repository_route_inherits_context_with_optional_override(
+    target_field: str, override: str | None, tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_module()
+    context = tmp_path / "task_context.json"
+    target = {
+        "provider": "git",
+        "connectionRef": "repository-connection:parent",
+        "repository": {"name": "owner/repo"},
+        "branch": {"name": "parent-base"},
+    }
+    context.write_text(json.dumps({target_field: target}))
+    monkeypatch.setenv("MOONMIND_REPOSITORY_CONNECTION_REF", "repository-connection:ambient")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "batch_pr_resolver.py", "--task-context-path", str(context),
+            *(["--repository-connection-ref", override] if override is not None else []),
+        ],
+    )
+    args = module["_parse_args"]()
+    repo = module["_resolve_repo"](args.repo, args.task_context_path)
+    assert repo == "owner/repo"
+    requests, skipped = module["_build_request_records"](
+        repo,
+        [{"number": 42, "headRefName": "existing-pr-head", "isCrossRepository": False}],
+        args,
+        module["RuntimeSelection"](),
+    )
+    assert skipped == []
+    assert requests[0].queue_request["payload"]["repository"] == {
+        "provider": "git",
+        "connectionRef": override or "repository-connection:parent",
+        "repository": {"name": "owner/repo"},
+    }
+    # Existing-PR adoption derives branch scope; do not copy the parent's branch.
+    assert requests[0].queue_request["payload"]["task"]["inputs"]["repository"] == repo
 
 def test_resolve_repo_prefers_task_context_over_env(monkeypatch, tmp_path: Path):
     module = _load_module()
@@ -1411,6 +1482,32 @@ def _batch_terminal_evidence(workspace: Path) -> Any:
         },
         workspace_path=str(workspace),
     )
+
+
+def test_missing_task_context_keeps_default_terminal_artifact_in_workspace(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    module = _load_module()
+    workspace = tmp_path / "run"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    for key in (
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        "MOONMIND_TASK_CONTEXT_PATH",
+        "TASK_CONTEXT_PATH",
+        "MOONMIND_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", _BATCH_EXECUTION_REF)
+    monkeypatch.setattr(sys, "argv", ["batch_pr_resolver.py", "--repo", "owner/repo"])
+    monkeypatch.setitem(module["main"].__globals__, "_run_pr_list", lambda **_: [])
+
+    assert asyncio.run(module["main"]()) == 0
+    evidence = _batch_terminal_evidence(workspace)
+    assert evidence.satisfied, evidence
+    outcome = json.loads((workspace / "artifacts/skill_outcome.json").read_text())
+    assert outcome["status"] == "no_op"
+    assert not (tmp_path / "artifacts").exists()
 
 
 def _run_main_with_discovery(
