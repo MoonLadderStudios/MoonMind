@@ -911,33 +911,9 @@ def _load_parent_repository(task_context_path: str | None = None) -> str | None:
 def _load_parent_repository_connection_ref(
     task_context_path: str | None = None,
 ) -> str | None:
-    seen: set[str] = set()
-    for candidate in _task_context_candidates(task_context_path):
-        identity = str(candidate.expanduser())
-        if identity in seen:
-            continue
-        seen.add(identity)
-        if not candidate.exists() or not candidate.is_file():
-            continue
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        for target in (payload.get("repositoryTarget"), payload.get("repository")):
-            if not isinstance(target, dict):
-                continue
-            if (_text(target.get("provider")) or "").lower() != "git":
-                continue
-            connection_ref = _text(target.get("connectionRef"))
-            if connection_ref:
-                return connection_ref
-        auth = payload.get("auth") if isinstance(payload.get("auth"), dict) else {}
-        connection_ref = _text(auth.get("repoAuthRef"))
-        if connection_ref:
-            return connection_ref
-    return None
+    return _CLIENT.load_repository_connection_ref(
+        _task_context_candidates(task_context_path)
+    )
 
 
 def _resolve_runtime_selection(task_context_path: str | None) -> RuntimeSelection:

@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 SUPPORTED_CHILD_PUBLISH_MODES = frozenset(
@@ -26,6 +28,33 @@ def normalize_runtime_id(value: str | None) -> str | None:
     candidate = str(value or "").strip().lower().replace("-", "_")
     aliases = {"codex": "codex_cli", "claude": "claude_code"}
     return aliases.get(candidate, candidate) or None
+
+
+def load_repository_connection_ref(context_paths: Iterable[Path]) -> str | None:
+    """Read an existing Git connection selector from materialized parent context."""
+    seen: set[Path] = set()
+    for candidate in context_paths:
+        candidate = candidate.expanduser()
+        if candidate in seen or not candidate.is_file():
+            continue
+        seen.add(candidate)
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for target in (payload.get("repositoryTarget"), payload.get("repository")):
+            if not isinstance(target, dict):
+                continue
+            if str(target.get("provider") or "").strip().lower() != "git":
+                continue
+            connection_ref = target.get("connectionRef")
+            if isinstance(connection_ref, str) and connection_ref.strip():
+                return connection_ref.strip()
+        # Legacy auth.repoAuthRef identifies a Vault secret, not a connection.
+        # Only canonical repository targets can select parent authority here.
+    return None
 
 
 def child_idempotency_key(
