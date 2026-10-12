@@ -14,9 +14,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlparse
 
 # ``failure_class`` values share the canonical provider-failure class names so a
 # host can report them through its existing provider-failure envelope.
@@ -499,3 +500,277 @@ def latest_review_reply(
         ):
             latest = reply
     return latest
+
+
+@dataclass(frozen=True, slots=True)
+class AutomaticReviewSummary:
+    """A provider-authored completion table bound to one GitHub PR."""
+
+    comment: Mapping[str, Any]
+    repository: str
+    pr_number: int
+    commit_ref: str
+    completed_at: datetime
+    updated_at: datetime
+
+
+_CODEX_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
+_CODEX_COMPLETED_STATUS_RE = re.compile(
+    r'✅\s*\*\*Completed\*\*\s*<relative-time datetime="([^"]+)">'
+    r"([^<]+)</relative-time>"
+)
+
+
+def _provider_bot(provider: AutomatedReviewProvider, user: object) -> bool:
+    login = user.get("login") if isinstance(user, Mapping) else user
+    if isinstance(user, Mapping) and user.get("type") not in {None, "Bot"}:
+        return False
+    return (
+        str(login or "").lower().endswith("[bot]")
+        and normalize_reviewer_login(login) in provider.reviewer_logins
+    )
+
+
+def _pr_issue_comment(
+    comment: Mapping[str, Any], repository: str, pr_number: int
+) -> bool:
+    identifier = _comment_id(comment.get("id"))
+    target = urlparse(str(comment.get("url") or comment.get("html_url") or ""))
+    return bool(
+        identifier is not None
+        and comment.get("type", "issue_comment") == "issue_comment"
+        and target.scheme == "https"
+        and target.netloc == "github.com"
+        and not target.query
+        and target.path.lower() == f"/{repository}/pull/{pr_number}".lower()
+        and target.fragment == f"issuecomment-{identifier}"
+    )
+
+
+def _timestamp(value: object) -> datetime | None:
+    return _comment_time({"created_at": value})
+
+
+def automatic_review_request(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    summary: AutomaticReviewSummary,
+    head_sha: str,
+) -> ReviewRequest | None:
+    """Fail closed on undated requests and retain requests after completion.
+
+    A malformed request date cannot prove that a rerun predates this result.
+    Git commit dates cannot hide a later server-observed explicit request.
+    """
+    for comment in comments:
+        if not is_review_request_comment(provider, comment):
+            continue
+        commit = str(comment.get("commit_id") or "").strip()
+        if commit and commit != head_sha:
+            continue
+        if _comment_time(comment) is None:
+            raise RuntimeError("Unable to qualify explicit review request chronology")
+    return latest_review_request(
+        provider, comments, head_sha=head_sha, not_before=summary.completed_at
+    )
+
+
+def latest_automatic_review_summary(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    repository: str,
+    pr_number: int,
+) -> AutomaticReviewSummary | None:
+    """Read Codex's actual completion format, never quoted or human text.
+
+    Select the latest summary *before* testing completion, so a newer start,
+    failure, malformed table, or changed commit cannot revive an older result.
+    A completion table alone is not a clean result; the caller must resolve its
+    commit and qualify a later provider no-findings reaction on this PR.
+    """
+    if provider.provider != "codex" or not repository or not pr_number:
+        return None
+    candidates = []
+    for comment in comments:
+        if not isinstance(comment, Mapping) or not _provider_bot(
+            provider, comment.get("user")
+        ):
+            continue
+        if not _pr_issue_comment(comment, repository, pr_number):
+            continue
+        opening = next(
+            (
+                line
+                for line in str(comment.get("body") or "").splitlines()
+                if line.strip()
+            ),
+            "",
+        )
+        if opening != _CODEX_SUMMARY_MARKER:
+            continue
+        created = _comment_time(comment)
+        updated = _timestamp(comment.get("updated_at"))
+        if created is None or updated is None or updated < created:
+            return None  # Unknown chronology cannot supersede a known result.
+        candidates.append((updated, _comment_id(comment.get("id")), comment))
+    if not candidates:
+        return None
+    updated, _, comment = max(candidates, key=lambda item: item[:2])
+    body = str(comment.get("body") or "")
+    if has_explicit_finding_severity(body):
+        return None
+    lines = [
+        line.strip()
+        for line in _PROVIDER_FOOTER_RE.sub("", body).splitlines()
+        if line.strip()
+    ]
+    expected = [
+        _CODEX_SUMMARY_MARKER,
+        "## Codex Review Summary",
+        "This comment shows the latest Codex review activity on this pull request.",
+        "| Review | Status | Commit | Review trigger |",
+    ]
+    if len(lines) != 6 or lines[:4] != expected:
+        return None
+    cells = [cell.strip() for cell in lines[4].strip("|").split("|")]
+    if len(cells) != 4 or not all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+        return None
+    cells = [cell.strip() for cell in lines[5].strip("|").split("|")]
+    if len(cells) != 4 or cells[0] != "📝 **Code Review**" or not cells[3]:
+        return None
+    status = _CODEX_COMPLETED_STATUS_RE.fullmatch(cells[1])
+    commit = re.fullmatch(r"`([0-9a-fA-F]{7,40})`", cells[2])
+    if status is None or commit is None:
+        return None
+    completed = _timestamp(status.group(1))
+    if completed is None or _timestamp(status.group(2)) != completed:
+        return None
+    # REST updated_at has second precision; the rendered completion can have
+    # microseconds within that same server timestamp bucket.
+    second_precision = "." not in str(comment.get("updated_at"))
+    after_update = (
+        completed >= updated + timedelta(seconds=1)
+        if second_precision
+        else completed > updated
+    )
+    if completed < _comment_time(comment) or after_update:
+        return None
+    return AutomaticReviewSummary(
+        comment, repository, pr_number, commit.group(1).lower(), completed, updated
+    )
+
+
+def automatic_review_reply(
+    provider: AutomatedReviewProvider,
+    comments: Iterable[Any],
+    *,
+    summary: AutomaticReviewSummary,
+    head_sha: str,
+) -> tuple[ReviewReply | None, Mapping[str, Any] | None]:
+    """Preserve authoritative replies and flag newer unclassified feedback.
+
+    Marked findings remain owned by the independent comment inventory. A new
+    provider message without a qualified outcome cannot reuse an older clean
+    signal, including when an old comment was edited after completion.
+    """
+    latest = None
+    unknown = None
+    unknown_at = None
+    undated = None
+    # The exact reviewed SHA binds the head; Git author/committer dates cannot
+    # establish when GitHub observed it. Use server comment chronology only.
+    lower_bound = _comment_time(summary.comment)
+    for comment in comments:
+        if not isinstance(comment, Mapping) or not _provider_bot(
+            provider, comment.get("user")
+        ):
+            continue
+        if not _pr_issue_comment(comment, summary.repository, summary.pr_number):
+            continue
+        if comment.get("id") == summary.comment.get("id"):
+            continue
+        commit = str(comment.get("commit_id") or "").strip()
+        if commit and commit != head_sha:
+            continue
+        created = _comment_time(comment)
+        updated = _timestamp(comment.get("updated_at")) or created
+        if created is None or updated < created:
+            undated = comment
+            continue
+        effective = {**comment, "created_at": updated.isoformat()}
+        reply = classify_review_reply(
+            provider,
+            effective,
+            requested_at=lower_bound,
+            head_sha=head_sha,
+            request_comment_id=summary.comment.get("id"),
+        )
+        if reply is not None and (
+            latest is None
+            or review_comment_is_after(
+                reply.created_at,
+                comment.get("id"),
+                latest.created_at,
+                latest.comment.get("id"),
+            )
+        ):
+            latest = ReviewReply(comment, reply.created_at, reply.failure_class)
+        body = str(comment.get("body") or "")
+        opening = next((line for line in body.splitlines() if line.strip()), "")
+        if (
+            reply is None
+            and opening != _CODEX_SUMMARY_MARKER
+            and not has_explicit_finding_severity(body)
+            and updated > summary.completed_at
+            and (
+                unknown is None
+                or review_comment_is_after(
+                    updated, comment.get("id"), unknown_at, unknown.get("id")
+                )
+            )
+        ):
+            unknown, unknown_at = comment, updated
+    if (
+        unknown is not None
+        and latest is not None
+        and not latest.failure_class
+        and latest.created_at > unknown_at
+    ):
+        unknown = None
+    return latest, undated if undated is not None else unknown
+
+
+def automatic_review_reaction(
+    provider: AutomatedReviewProvider,
+    reactions: Iterable[Any],
+    *,
+    summary: AutomaticReviewSummary,
+    not_before: datetime,
+) -> Mapping[str, Any] | None:
+    """Require a later PR-scoped no-findings reaction, never stale thumbs-up."""
+    candidates = []
+    starts = []
+    lower_bound = max(summary.completed_at, summary.updated_at, not_before)
+    for reaction in reactions:
+        if not isinstance(reaction, Mapping) or not _provider_bot(
+            provider, reaction.get("user")
+        ):
+            continue
+        content = str(reaction.get("content") or "")
+        if content not in {*provider.clean_review_reactions, "eyes"}:
+            continue
+        created = _timestamp(reaction.get("created_at"))
+        if created is None or _comment_id(reaction.get("id")) is None:
+            return None
+        if content == "eyes":
+            starts.append(created)
+        elif created > lower_bound:
+            candidates.append((created, reaction))
+    if not candidates:
+        return None
+    created, reaction = max(candidates, key=lambda item: item[0])
+    if any(start >= created for start in starts):
+        return None
+    return reaction

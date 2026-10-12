@@ -353,6 +353,10 @@
         },
         "latestProviderReview": {
           "type": "object"
+        },
+        "automaticSummary": {
+          "type": "object",
+          "description": "Automatic provider completion candidate: summary comment, exact resolved commit, completion/update times, confirming reaction, and any superseding feedback. Only a qualified candidate makes freshReviewForHead true."
         }
       },
       "required": [
