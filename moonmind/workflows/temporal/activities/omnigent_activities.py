@@ -882,7 +882,7 @@ async def _try_generic_realizer_dispatch(
                 else "integration_error"
             ),
             providerErrorCode=code,
-            retryRecommendation=remediation_for(code),
+            retryRecommendation=_successor_remediation(exc, remediation_for(code)),
             metadata=_capacity_cleanup_receipt(exc),
         )
     except Exception as exc:
@@ -921,12 +921,30 @@ async def omnigent_execute_activity(
 
 
 def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
+    receipt: dict[str, Any] = {}
     completed = getattr(exc, "admitted_provider_capacity_cleanup_completed", None)
-    return (
-        {"admittedProviderCapacityCleanupCompleted": completed}
-        if isinstance(completed, bool)
-        else {}
-    )
+    if isinstance(completed, bool):
+        receipt["admittedProviderCapacityCleanupCompleted"] = completed
+    # MoonMind#4627: the interrupted attempt's verified save is the successor
+    # Step Execution's restore input.
+    saved = getattr(exc, "saved_workspace_checkpoint", None)
+    if isinstance(saved, dict) and saved:
+        receipt["savedWorkspaceCheckpoint"] = dict(saved)
+    stopped = getattr(exc, "predecessor_stop_confirmed", None)
+    if isinstance(stopped, bool):
+        receipt["predecessorStopConfirmed"] = stopped
+    return receipt
+
+
+def _successor_remediation(exc: BaseException, remediation: str) -> str:
+    """No successor may write while the interrupted host's stop is unconfirmed."""
+
+    if (
+        remediation == "retry_step_execution"
+        and getattr(exc, "predecessor_stop_confirmed", None) is False
+    ):
+        return "delegate_to_janitor"
+    return remediation
 
 
 def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
@@ -951,7 +969,7 @@ def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:
         ),
         failureClass="integration_error",
         providerErrorCode=typed_code,
-        retryRecommendation=remediation_for(typed_code),
+        retryRecommendation=_successor_remediation(exc, remediation_for(typed_code)),
         metadata=_capacity_cleanup_receipt(exc),
     )
 

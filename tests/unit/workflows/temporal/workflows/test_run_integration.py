@@ -1724,6 +1724,328 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         assert all(disposition != "retryable" for _, _, disposition in manifests)
 
 
+_SAVED_ARCHIVE_REF = "artifact://saved-predecessor-worktree"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "saved_workspace",
+    [
+        {
+            "kind": "worktree_archive",
+            "archiveRef": _SAVED_ARCHIVE_REF,
+            "archiveDigest": "sha256:" + "a" * 64,
+            "checkpointRef": "artifact://saved-predecessor-checkpoint",
+        },
+        None,
+    ],
+    ids=["saved-predecessor-workspace", "no-durable-checkpoint"],
+)
+async def test_host_lost_successor_continues_from_saved_work_or_admitted_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_workspace: dict[str, Any] | None,
+) -> None:
+    """MoonMind#4627: an interrupted agent step gets a bounded successor attempt.
+
+    The predecessor's verified saved archive becomes the successor's restore
+    input. Without any durable checkpoint the successor restarts from the
+    admitted step inputs and says so, instead of failing closed for missing
+    checkpoint evidence.
+    """
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    manifest_workspaces: list[tuple[str, int, dict[str, Any]]] = []
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the interrupted change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        if len(child_requests) == 1:
+            return AgentRunResult(
+                summary="Omnigent session host was lost.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+                metadata=(
+                    {"savedWorkspaceCheckpoint": saved_workspace}
+                    if saved_workspace
+                    else {}
+                ),
+            )
+        return AgentRunResult(summary="Completed on the installed runtime.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    original_record_manifest = workflow._record_step_execution_manifest
+
+    async def recording_manifest(logical_step_id: str, **kwargs: Any) -> Any:
+        attempt = workflow._step_execution_for(logical_step_id) or 0
+        if kwargs.get("phase") == "start":
+            manifest_workspaces.append(
+                (
+                    logical_step_id,
+                    attempt,
+                    workflow._step_execution_workspace(
+                        logical_step_id,
+                        attempt=attempt,
+                        source_execution_ordinal=None,
+                    ),
+                )
+            )
+        return await original_record_manifest(logical_step_id, **kwargs)
+
+    async def fake_write_manifest(*_args: Any, **_kwargs: Any) -> str:
+        return "artifact://manifest"
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        run_workflow_module.RUN_STEP_EXECUTION_MANIFEST_PATCH,
+        run_workflow_module.RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-host-lost-successor",
+            "run_id": "run-host-lost-successor",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(workflow, "_record_step_execution_manifest", recording_manifest)
+    monkeypatch.setattr(workflow, "_write_step_execution_manifest", fake_write_manifest)
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    # The same logical step completes on one bounded successor attempt.
+    assert len(child_requests) == 2
+    successor = child_requests[1]
+    assert successor.step_execution is not None
+    assert successor.step_execution.execution_ordinal == 2
+    assert successor.step_execution.reason == "runtime_recovered"
+    successor_workspace = next(
+        workspace for _, attempt, workspace in manifest_workspaces if attempt == 2
+    )
+    assert successor_workspace["evidenceAccepted"] is True
+    if saved_workspace:
+        assert (
+            successor.workspace_spec["workspaceCheckpointRestoreRef"]
+            == _SAVED_ARCHIVE_REF
+        )
+        assert successor_workspace["policy"] == "continue_from_previous_execution"
+        assert successor_workspace["checkpointRef"] == _SAVED_ARCHIVE_REF
+        assert successor_workspace["restoreSource"] == "predecessor_saved_workspace"
+        assert "limitation" not in successor_workspace
+    else:
+        assert "workspaceCheckpointRestoreRef" not in successor.workspace_spec
+        assert successor_workspace["policy"] == "fresh_branch_from_source"
+        assert successor_workspace["limitation"] == (
+            "no_durable_checkpoint_restarted_from_admitted_inputs"
+        )
+    assert workflow._step_ledger_row_for("omnigent-turn")["status"] in {
+        "completed",
+        "succeeded",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("minutes_per_attempt", "expected_children"),
+    [(10, 3), (40, 2)],
+    ids=["remaining-budget", "budget-exhausted"],
+)
+async def test_repeated_interruptions_spend_one_step_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    minutes_per_attempt: int,
+    expected_children: int,
+) -> None:
+    """MoonMind#4627: successors cannot reset the step's agent deadline."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    clock = {"now": datetime(2026, 10, 12, 8, 0, tzinfo=timezone.utc)}
+    authored = {"timeout_seconds": 3600, "max_timeout_seconds": 3600}
+
+    async def fake_execute_typed_activity(activity_type: str, payload: Any, **_: Any):
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the interrupted change.",
+                        "runtime": {"mode": "omnigent"},
+                        "timeoutPolicy": dict(authored),
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str, request: AgentExecutionRequest, **_: Any
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        clock["now"] += timedelta(minutes=minutes_per_attempt)
+        if len(child_requests) < 3:
+            return AgentRunResult(
+                summary="Omnigent session host was lost.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+            )
+        return AgentRunResult(summary="Completed on the installed runtime.")
+
+    async def passthrough(request: AgentExecutionRequest) -> AgentExecutionRequest:
+        return request
+
+    async def no_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        run_workflow_module.RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-step-budget",
+            "run_id": "run-step-budget",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _m: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _a: None
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: clock["now"])
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type("Logger", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None}),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", lambda patch_id: patch_id in enabled_patches
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(workflow, "_maybe_bind_workflow_scoped_session", passthrough)
+    monkeypatch.setattr(workflow, "_record_step_execution_manifest", no_manifest)
+
+    if expected_children == 3:
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"}, plan_ref="plan-ref"
+        )
+    else:
+        with pytest.raises(ValueError, match="OMNIGENT_SESSION_HOST_LOST"):
+            await workflow._run_execution_stage(
+                parameters={"publishMode": "none"}, plan_ref="plan-ref"
+            )
+        row = workflow._step_ledger_row_for("omnigent-turn")
+        assert row["status"] == "failed"
+        assert "budget is exhausted across interrupted attempts" in row["summary"]
+
+    assert len(child_requests) == expected_children
+    assert child_requests[0].timeout_policy == authored
+    # Each successor receives only what remains of the first attempt's budget.
+    for ordinal, request in enumerate(child_requests[1:], start=1):
+        remaining = 3600 - ordinal * minutes_per_attempt * 60
+        assert request.timeout_policy["timeout_seconds"] == remaining
+        assert request.timeout_policy["max_timeout_seconds"] == remaining
+
+
 @pytest.mark.asyncio
 async def test_run_integration_stage_signal_driven_completion(
     mock_run_workflow: MoonMindRunWorkflow,

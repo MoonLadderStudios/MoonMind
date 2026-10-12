@@ -28,8 +28,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        ExecutionBudget,
         OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
+        resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
         CLAUDE_STOCK_AGENT_NAME,
@@ -299,6 +301,7 @@ from moonmind.workflows.temporal.step_executions import (
     plan_reattempt_compensation,
     side_effect_record,
     step_execution_operation_idempotency_key,
+    verified_saved_workspace_restore_ref,
     workspace_policy_metadata,
 )
 from moonmind.workflows.temporal.step_ledger import (
@@ -950,6 +953,13 @@ RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH = (
 )
 RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH = (
     "run-explicit-step-retry-recommendation-v1"
+)
+# MoonMind#4627: a retry_step_execution successor restores the predecessor's
+# verified saved workspace, or restarts from admitted step inputs with an
+# explicit limitation when no durable checkpoint exists. Retained histories
+# keep their recorded fail-closed launch decision.
+RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH = (
+    "run-step-retry-workspace-continuity-v1"
 )
 RUN_FAIL_FAST_STEP_FAILURE_SUMMARY_PATCH = "run-fail-fast-step-failure-summary-v1"
 # MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
@@ -1764,6 +1774,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._fresh_source_step_execution_attempts: set[str] = set()
+        # MoonMind#4627: per successor attempt, the predecessor's verified saved
+        # worktree archive, or why the successor restarts from admitted inputs.
+        self._step_execution_saved_workspace_restore_refs: dict[str, str] = {}
+        self._step_execution_restart_limitations: dict[str, str] = {}
+        # A recovered successor spends what remains of the step's agent budget;
+        # repeated interruptions cannot reset its deadline.
+        self._step_agent_budget_started_at: dict[str, datetime] = {}
+        self._step_successor_timeout_policies: dict[str, dict[str, Any]] = {}
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
         self._step_execution_context_projections: dict[
@@ -2966,6 +2984,86 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             in self._fresh_source_step_execution_attempts
         )
 
+    def _recommends_step_execution_retry(self, execution_result: Any) -> bool:
+        outputs = self._get_from_result(execution_result, "outputs")
+        return isinstance(outputs, Mapping) and (
+            str(outputs.get("retryRecommendation") or "").strip()
+            == "retry_step_execution"
+        )
+
+    def _prepare_recovered_step_execution_workspace(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        execution_result: Any,
+    ) -> None:
+        """Choose the successor workspace for an interrupted agent attempt.
+
+        A ``retry_step_execution`` successor continues from the predecessor's
+        verified saved worktree archive. Without that save and without any
+        recorded step checkpoint, the successor restarts from the admitted step
+        inputs and records the limitation; work after the last durable boundary
+        is repeated rather than the step failing for missing evidence.
+        """
+
+        if not self._recommends_step_execution_retry(execution_result):
+            return
+        outputs = self._get_from_result(execution_result, "outputs")
+        attempt_key = self._step_execution_launch_block_key(logical_step_id, attempt)
+        saved_restore_ref = verified_saved_workspace_restore_ref(
+            outputs.get("savedWorkspaceCheckpoint")
+        )
+        if saved_restore_ref:
+            self._step_execution_saved_workspace_restore_refs[attempt_key] = (
+                saved_restore_ref
+            )
+            return
+        if self._previous_step_checkpoint_refs.get(logical_step_id):
+            return
+        self._fresh_source_step_execution_attempts.add(attempt_key)
+        self._step_execution_restart_limitations[attempt_key] = (
+            "no_durable_checkpoint_restarted_from_admitted_inputs"
+        )
+
+    def _recovered_successor_timeout_policy(
+        self,
+        logical_step_id: str,
+        *,
+        agent_kind: str,
+        authored_timeout_policy: Mapping[str, Any] | None,
+        now: datetime,
+    ) -> dict[str, Any] | None:
+        """Return the remaining agent budget for a recovered successor.
+
+        ``None`` means the step's absolute execution ceiling has elapsed across
+        its interrupted attempts, so no successor may start.
+        """
+
+        authored = dict(authored_timeout_policy or {})
+        started = self._step_agent_budget_started_at.get(logical_step_id)
+        if started is None:
+            return authored
+        budget = resolve_execution_budget(
+            agent_kind=agent_kind, timeout_policy=authored
+        )
+        elapsed = max(0, int((now - started).total_seconds()))
+        remaining_max = budget.max_seconds - elapsed
+        if remaining_max <= 0:
+            return None
+        remaining_base = budget.base_seconds - elapsed
+        if remaining_base <= 0:
+            # The predecessor was already extended for observed progress; the
+            # successor gets one stall window within the unchanged ceiling.
+            remaining_base = budget.progress_stall_seconds
+        remaining = ExecutionBudget(
+            base_seconds=min(remaining_base, remaining_max),
+            max_seconds=remaining_max,
+            progress_stall_seconds=budget.progress_stall_seconds,
+            mode=budget.mode,
+        )
+        return {**authored, **remaining.as_timeout_policy()}
+
     def _record_workspace_policy_launch_block(
         self,
         logical_step_id: str,
@@ -3035,10 +3133,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             logical_step_id
         ) or self._previous_step_checkpoint_refs.get(logical_step_id)
         boundary_refs = self._step_checkpoint_refs_by_boundary.get(logical_step_id, {})
+        attempt_key = self._step_execution_launch_block_key(logical_step_id, attempt)
+        saved_restore_ref = self._step_execution_saved_workspace_restore_refs.get(
+            attempt_key
+        )
         if attempt > 1 and not self._step_execution_uses_fresh_source(
             logical_step_id,
             attempt=attempt,
         ):
+            if saved_restore_ref:
+                checkpoint_ref = saved_restore_ref
             workspace = workspace_policy_metadata(
                 policy="continue_from_previous_execution",
                 checkpoint_ref=checkpoint_ref,
@@ -3047,6 +3151,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace["sourceExecutionOrdinal"] = (
                 dict(source_execution_ordinal) if source_execution_ordinal else None
             )
+            if saved_restore_ref:
+                workspace["restoreSource"] = "predecessor_saved_workspace"
             self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
             return workspace
         workspace = workspace_policy_metadata(
@@ -3058,6 +3164,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace["sourceExecutionOrdinal"] = (
                 dict(source_execution_ordinal) if source_execution_ordinal else None
             )
+            limitation = self._step_execution_restart_limitations.get(attempt_key)
+            if limitation:
+                workspace["limitation"] = limitation
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
 
@@ -13150,6 +13259,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
+                    dispatched_agent_request: AgentExecutionRequest | None = None
                     await self._wait_if_paused_at_safe_boundary()
                     if self._cancel_requested:
                         return
@@ -13248,9 +13358,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     ),
                                 )
                             )
-                            trusted_remediation_checkpoint_restore_ref = None
+                            # A recovered successor continues from its own
+                            # predecessor's saved work before any older head.
+                            trusted_remediation_checkpoint_restore_ref = (
+                                self._step_execution_saved_workspace_restore_refs.get(
+                                    self._step_execution_launch_block_key(
+                                        node_id, current_step_execution
+                                    )
+                                )
+                            )
                             if (
-                                workflow.patched(
+                                trusted_remediation_checkpoint_restore_ref is None
+                                and workflow.patched(
                                     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
                                 )
                                 and (
@@ -13307,6 +13426,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     trusted_remediation_checkpoint_restore_ref
                                 ),
                             )
+                            if workflow.patched(
+                                RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH
+                            ):
+                                successor_timeout_policy = (
+                                    self._step_successor_timeout_policies.pop(
+                                        node_id, None
+                                    )
+                                )
+                                if (
+                                    attempt_reason == "runtime_recovered"
+                                    and successor_timeout_policy is not None
+                                ):
+                                    request = request.model_copy(
+                                        update={
+                                            "timeout_policy": successor_timeout_policy
+                                        }
+                                    )
+                                elif attempt_reason != "runtime_recovered":
+                                    self._step_agent_budget_started_at[node_id] = (
+                                        workflow.now()
+                                    )
+                            dispatched_agent_request = request
                             agent_request_for_context = request
                             if (
                                 node_id == self._recovery_failed_step_id
@@ -13986,6 +14127,39 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        if (
+                            retryable
+                            and system_retries < 3
+                            and tool_type == "agent_runtime"
+                            and dispatched_agent_request is not None
+                            and self._recommends_step_execution_retry(
+                                execution_result
+                            )
+                            and workflow.patched(
+                                RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH
+                            )
+                        ):
+                            successor_timeout_policy = (
+                                self._recovered_successor_timeout_policy(
+                                    node_id,
+                                    agent_kind=dispatched_agent_request.agent_kind,
+                                    authored_timeout_policy=node_inputs.get(
+                                        "timeoutPolicy"
+                                    ),
+                                    now=workflow.now(),
+                                )
+                            )
+                            if successor_timeout_policy is None:
+                                retryable = False
+                                step_failure_summary = (
+                                    f"{step_failure_summary} The step's execution "
+                                    "budget is exhausted across interrupted "
+                                    "attempts; no successor attempt was started."
+                                )
+                            else:
+                                self._step_successor_timeout_policies[node_id] = (
+                                    successor_timeout_policy
+                                )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
@@ -14019,6 +14193,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 node_id
                             ) or (current_step_execution + 1)
                             attempt_reason = "runtime_recovered"
+                            if tool_type == "agent_runtime" and workflow.patched(
+                                RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH
+                            ):
+                                self._prepare_recovered_step_execution_workspace(
+                                    node_id,
+                                    attempt=current_step_execution,
+                                    execution_result=execution_result,
+                                )
                             continue
 
                         diagnostics_ref = None

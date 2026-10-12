@@ -260,7 +260,7 @@ advance the installed release when a suitable new image is available for a confi
 the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
-shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+shared host image and are recreated without draining, checkpointing, or deferring for active sessions, while inactive profiles remain inactive. Recreating an active host is safe by the restartability contract in section 16; the operator does not drain or checkpoint work first. A MoonMind update
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
@@ -286,8 +286,11 @@ to block cutover.
 
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices and
-the actual image identity of attempts already in progress. A version-number
-difference by itself does not block an otherwise compatible release.
+the actual image identity of attempts already in progress. That identity is a
+historical record: an interrupted attempt may end with a distinct successor
+attempt on the installed image, and its process need not survive the update.
+A version-number difference by itself does not block an otherwise compatible
+release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
 
@@ -431,6 +434,16 @@ Rollback is an explicit authorized update to a previous allowed image through th
 Workflow submission is one optional way to request the existing privileged update. Ordinary orchestration remains Temporal-owned. Deployment recovery must not depend on a provider-capacity lease, a healthy singleton workflow, or workflow dispatch to repair those same components.
 
 Preserve queued work and schedule identity during recreation. Resume through existing execution/session recovery where safe. Do not replay missed schedule ticks as an unbounded burst, rewrite publication intent, or replace a saved checkpoint with an empty retry.
+
+### 16.1 Restartability of active work
+
+A supported update may replace API and worker processes and an active agent host at any time. Correctness does not depend on draining, last-second checkpoints, record repair, or resubmission; the updater does not supervise agent recovery.
+
+- **Observer-only replacement.** When only the worker observing a healthy session is replaced, the retried activity reattaches to the same accepted turn under the same runtime binding and operation identity. No duplicate turn or agent starts.
+- **Lost agent host.** When the host is gone, the attempt fails with `OMNIGENT_SESSION_HOST_LOST` and `retry_step_execution`. Before reporting it, the realizer saves the caller-owned workspace and confirms the old host's removal, resuming its idempotent cleanup within a bounded window if the stop acknowledgment was lost. An unconfirmed stop recommends `delegate_to_janitor` instead, so no successor races a possibly live host; auxiliary cleanup trouble after a confirmed stop does not block the successor.
+- **Successor attempt.** Only the interrupted step gets a new Step Execution under the same workflow and logical step, planned on the installed runtime with the same Harness, Provider Profile, model and publication intent. Completed steps and their outputs are not repeated. The successor restores the predecessor's verified saved worktree archive (`workspaceCheckpointRestoreRef`). With no durable checkpoint, it restarts from the admitted step inputs and records `no_durable_checkpoint_restarted_from_admitted_inputs` on its Step Execution manifest.
+- **Durable progress versus unsaved work.** Saved archives, completed steps, and recorded compute/save/publication receipts survive. Work after the last durable boundary, such as uncommitted edits made after the final save or an in-flight shell command, may be repeated; exactly-once arbitrary shell execution is not promised.
+- **Bounds.** Successors share the step's original execution budget and at most three runtime retries; repeated updates cannot reset either. An exhausted budget, explicit cancellation, or genuine authority/schema/history incompatibility ends the step truthfully instead of starting a successor.
 
 ## 17. Interaction with Settings information architecture
 

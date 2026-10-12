@@ -295,6 +295,8 @@ _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
         "providerFailure",
         "queuedChildCount",
         "queuedChildren",
+        # Compact successor restore input of an interrupted attempt (#4627).
+        "savedWorkspaceCheckpoint",
         "status",
         "terminalContractAuthority",
         "terminalContractEvidencePath",
