@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -1567,6 +1568,29 @@ class StepCheckpointCreateInput(BaseModel):
     step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
     diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _adapt_plan_artifact_ref(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        field = "planRef" if "planRef" in value else "plan_ref"
+        plan = value.get(field)
+        if not isinstance(plan, Mapping):
+            return value
+        artifact_id = plan.get("artifact_id") or plan.get("artifactId")
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            raise ValueError("planRef artifact_id is required")
+        adapted = dict(value)
+        adapted[field] = artifact_id.strip()
+        digest = str(plan.get("sha256") or "").strip()
+        if (
+            not adapted.get("planDigest")
+            and not adapted.get("plan_digest")
+            and re.fullmatch(r"[0-9a-f]{64}", digest)
+        ):
+            adapted["planDigest"] = "sha256:" + digest
+        return adapted
 
     @field_validator("plan_ref", "plan_digest", mode="before")
     @classmethod

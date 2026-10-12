@@ -5089,6 +5089,78 @@ def _typed_failed_step_recovery_target(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_prefix", ["", "artifact:", "artifact://"])
+@pytest.mark.parametrize("evidence_state", ["complete", "pending", "not_linked"])
+async def test_typed_recovery_resolves_only_readable_source_artifact_aliases(
+    tmp_path,
+    mock_client_adapter,
+    source_prefix,
+    evidence_state,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        source = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="checkpoint alias source",
+            input_artifact_ref="artifact://snapshot/source",
+            plan_artifact_ref="artifact://plan/source",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {"title": "source", "instructions": "Original"},
+            },
+            idempotency_key=None,
+        )
+        record = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
+        record.state = MoonMindWorkflowState.FAILED
+        record.close_status = TemporalExecutionCloseStatus.FAILED
+        checkpoint_id, validation_id = "art_checkpoint_alias", "art_validation_alias"
+        record.artifact_refs = [source_prefix + checkpoint_id]
+        if evidence_state != "not_linked":
+            record.artifact_refs.append(source_prefix + validation_id)
+        await _create_temporal_artifact(
+            session, artifact_id=checkpoint_id, status=TemporalArtifactStatus.COMPLETE
+        )
+        await _create_temporal_artifact(
+            session,
+            artifact_id=validation_id,
+            status=(
+                TemporalArtifactStatus.PENDING_UPLOAD
+                if evidence_state == "pending"
+                else TemporalArtifactStatus.COMPLETE
+            ),
+        )
+        payload = _typed_failed_step_recovery_target(
+            source_workflow_id=record.workflow_id,
+            source_run_id=record.run_id,
+            destination_workflow_id="mm:alias-recovery-destination",
+        ).model_dump(by_alias=True, mode="json")
+        payload["checkpoint"]["ref"] = "artifact://" + checkpoint_id
+        payload["checkpoint"]["validationRef"] = "artifact://" + validation_id
+        if evidence_state == "not_linked":
+            with pytest.raises(
+                TemporalExecutionRecoveryCheckpointError,
+                match="RECOVERY_CHECKPOINT_INVALID",
+            ):
+                await service.create_typed_recovery_execution(
+                    record, recovery_target=payload
+                )
+        elif evidence_state == "pending":
+            with pytest.raises(
+                TemporalExecutionValidationError, match="readable artifact"
+            ):
+                await service.create_typed_recovery_execution(
+                    record, recovery_target=payload
+                )
+        else:
+            result = await service.create_typed_recovery_execution(
+                record, recovery_target=payload
+            )
+            assert result["execution"]["workflowId"] == "mm:alias-recovery-destination"
+
+
+@pytest.mark.asyncio
 async def test_typed_recovery_creates_one_pinned_destination_and_frozen_lineage(
     tmp_path, mock_client_adapter
 ):
@@ -11603,4 +11675,3 @@ async def test_3510_recovery_lost_ack_can_concurrency_cleanup_and_rotation_matri
     assert second_decision.mutation_allowed is False
     assert dict(fake_contract.continuation.__dict__) == frozen_before
     assert mock_client_adapter.start_workflow.await_count == launches_before_report
-

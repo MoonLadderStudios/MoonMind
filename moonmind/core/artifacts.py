@@ -1,6 +1,24 @@
 import enum
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
+
+
+def temporal_artifact_id(ref: str) -> str | None:
+    """Resolve known Temporal artifact wire forms without granting access."""
+
+    value = str(ref or "").strip()
+    if value.startswith("artifact:"):
+        value = value.removeprefix("artifact:").removeprefix("//")
+    return value if re.fullmatch(r"art_[A-Za-z0-9_-]+", value) else None
+
+
+def canonical_artifact_ref(ref: str) -> str:
+    """Adapt Temporal IDs to the durable URI contract; retain other refs."""
+
+    artifact_id = temporal_artifact_id(ref)
+    return f"artifact://{artifact_id}" if artifact_id else str(ref or "").strip()
+
 
 class TemporalArtifactStorageBackend(str, enum.Enum):
     """Supported backing stores for Temporal artifact bytes."""

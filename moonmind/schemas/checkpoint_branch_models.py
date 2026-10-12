@@ -60,8 +60,11 @@ class CheckpointBranchApiSourceModel(BaseModel):
     @classmethod
     def _checkpoint_boundary_is_known(cls, value: str) -> str:
         if value not in {
+            "after_prepare",
             "before_execution",
             "after_execution",
+            "after_gate",
+            "before_publication",
             "before_recovery_restoration",
         }:
             raise ValueError("checkpointBoundary is not supported")
