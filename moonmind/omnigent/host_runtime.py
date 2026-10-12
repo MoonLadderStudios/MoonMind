@@ -24,6 +24,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPolicy
+from moonmind.omnigent.interrupted_attempt import is_recovered_successor
 from moonmind.omnigent.host_ports import (
     HostLaunchSpec,
     OmnigentEgressAttestationPort,
@@ -298,6 +299,7 @@ class GenericOmnigentHostRuntime:
                 "hostLeaseGeneration": host_lease_generation,
                 "hostClassRef": host_class.ref,
                 "imageRef": host_class.imageRef,
+                "preferInstalledImage": is_recovered_successor(request),
                 "serverEndpointRef": plan.payload.endpointRef,
                 "serverUrl": self._launcher.server_url,
                 "networkRef": prepared.egress_attestation["networkRef"],

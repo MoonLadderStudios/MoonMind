@@ -4839,6 +4839,8 @@ async def _drive_authority_chain_coordinator(
     session_interruption: bool = True,
     credential_resolver=None,
     resolve_source_credential: bool = False,
+    stop_host_error: Exception | None = None,
+    workspace_preservation=None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -4850,6 +4852,8 @@ async def _drive_authority_chain_coordinator(
     ordered: list[str] = []
     authority_metadata: list[dict] = []
     completion_sequence = list(completion_evidence or [])
+    if workspace_preservation is not None:
+        workspace_preservation.ordered = ordered
 
     provider_lease = SimpleNamespace(
         profile_id="codex",
@@ -4968,6 +4972,8 @@ async def _drive_authority_chain_coordinator(
 
         async def stop_host(self, **_kwargs):
             ordered.append("host_cleanup")
+            if stop_host_error is not None:
+                raise stop_host_error
 
         async def publish_workspace(self, **_kwargs):
             return publication or {
@@ -5028,6 +5034,7 @@ async def _drive_authority_chain_coordinator(
         run_store=Store(),
         execution_runner=execute,
         artifact_gateway=object(),
+        workspace_preservation=workspace_preservation,
     )
     # Repository credential selection has its own coverage; this harness has no
     # repository connection store.
@@ -5700,6 +5707,113 @@ async def test_coordinator_records_returned_runner_failure_in_authority_chain() 
     assert reason["code"] == "429"
     assert reason["failureClass"] == "integration_error"
     assert reason["remediationAction"] == "retry_after_provider_cooldown"
+
+
+class _InterruptedWorkspaceSaver:
+    """Records when the caller-owned workspace is saved relative to host stop."""
+
+    def __init__(self, *, fails: bool = False):
+        self.ordered: list[str] = []
+        self.fails = fails
+        self.saved: list[str] = []
+
+    async def save_request_workspace(self, request):
+        self.saved.append(request.idempotency_key)
+        self.ordered.append("workspace_saved")
+        if self.fails:
+            raise RuntimeError("artifact storage unavailable")
+        return {
+            "kind": "worktree_archive",
+            "baseCommit": "b" * 40,
+            "archiveRef": "artifact://profile-bound-saved-worktree",
+            "archiveDigest": "sha256:" + "a" * 64,
+            "workspaceDigest": "sha256:" + "c" * 64,
+            "checkpointRef": "artifact://profile-bound-saved-checkpoint",
+            "recoveryEvidence": {"large": "x" * 4096},
+        }
+
+
+async def _host_lost_runner(request, **_kwargs):
+    # The production execution boundary returns host loss as a typed result.
+    return AgentRunResult(
+        summary="Omnigent host was lost before the turn finished",
+        failureClass="integration_error",
+        providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+        retryRecommendation="retry_step_execution",
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_host_loss_saves_after_confirmed_stop_for_successor() -> (
+    None
+):
+    """MoonMind#4627: the profile-bound path hands off like the generic host.
+
+    The old host's stop is confirmed before the caller-owned workspace is saved,
+    and the returned result carries that compact save and stop verdict so the
+    successor Step Execution restores it.
+    """
+
+    saver = _InterruptedWorkspaceSaver()
+    ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        _host_lost_runner, workspace_preservation=saver
+    )
+
+    # A stopped host can no longer advance the workspace it shared.
+    assert ordered.index("host_stopped") < ordered.index("workspace_saved")
+    assert saver.saved == ["idem-1"]
+    assert result.retry_recommendation == "retry_step_execution"
+    assert metadata["predecessorStopConfirmed"] is True
+    assert metadata["savedWorkspaceCheckpoint"] == {
+        "kind": "worktree_archive",
+        "baseCommit": "b" * 40,
+        "archiveRef": "artifact://profile-bound-saved-worktree",
+        "archiveDigest": "sha256:" + "a" * 64,
+        "workspaceDigest": "sha256:" + "c" * 64,
+        "checkpointRef": "artifact://profile-bound-saved-checkpoint",
+    }
+    from moonmind.workflows.temporal.step_executions import (
+        verified_saved_workspace_restore_ref,
+    )
+
+    assert verified_saved_workspace_restore_ref(
+        metadata["savedWorkspaceCheckpoint"]
+    ) == ("artifact://profile-bound-saved-worktree")
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_host_loss_with_unconfirmed_stop_starts_no_successor() -> (
+    None
+):
+    """A failed stop leaves a possibly live host: no save, no successor."""
+
+    saver = _InterruptedWorkspaceSaver()
+    ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        _host_lost_runner,
+        workspace_preservation=saver,
+        stop_host_error=RuntimeError("docker stop acknowledgment lost"),
+    )
+
+    assert "host_stopped" not in ordered
+    assert saver.saved == []
+    assert result.retry_recommendation == "delegate_to_janitor"
+    assert metadata["predecessorStopConfirmed"] is False
+    assert "savedWorkspaceCheckpoint" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_host_loss_without_a_save_restarts_from_inputs() -> None:
+    """A failed save after a confirmed stop still permits a successor."""
+
+    saver = _InterruptedWorkspaceSaver(fails=True)
+    _ordered, _authority, metadata, result = await _drive_authority_chain_coordinator(
+        _host_lost_runner, workspace_preservation=saver
+    )
+
+    assert saver.saved == ["idem-1"]
+    assert result.retry_recommendation == "retry_step_execution"
+    assert metadata["predecessorStopConfirmed"] is True
+    assert "savedWorkspaceCheckpoint" not in metadata
 
 
 @pytest.mark.asyncio

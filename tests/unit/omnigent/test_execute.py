@@ -6627,6 +6627,36 @@ def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:
         loop.close()
 
 
+def test_completed_compute_is_never_reported_as_host_loss() -> None:
+    """MoonMind#4627: host loss only interrupts unfinished compute.
+
+    Once the marked turn has its final answer, a host removed by an update is
+    not an interruption. The attempt keeps its completed compute receipt and
+    resumes only saving and publication, never a successor's new turn.
+    """
+
+    loop = asyncio.new_event_loop()
+    try:
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, host_loss_grace_seconds=60.0
+        )
+        finished = {
+            "boundarySource": "marker",
+            "progress": True,
+            "terminalAssistantAfterWork": True,
+        }
+        now = loop.time()
+        for offset in (0.0, 61.0, 180.0, 900.0):
+            watchdog.observe(
+                _host_lost_snapshot("current-marker"),
+                finished,
+                observation_started_at=now + offset,
+            )
+        assert watchdog.host_offline_since is None
+    finally:
+        loop.close()
+
+
 def _codex_native_snapshot(
     status: str, marker: str, *work: dict[str, Any]
 ) -> dict[str, Any]:

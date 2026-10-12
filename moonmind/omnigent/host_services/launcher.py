@@ -255,6 +255,7 @@ class DockerOmnigentHostLauncher:
         host_class: HostClass | None = None,
         *,
         required_executables: tuple[str, ...] = (),
+        prefer_installed: bool = False,
     ) -> str:
         """Return the image to launch: exact when usable, else qualified local.
 
@@ -272,13 +273,18 @@ class DockerOmnigentHostLauncher:
         different qualified image that owns those tools, launch that instead.
         The planned image stays authoritative whenever it satisfies the plan,
         and nothing is probed unless such an alternative exists.
+
+        ``prefer_installed`` marks a runtime-recovered successor (#4627). It is
+        a fresh attempt, so it follows the installed runtime: the deployment's
+        qualified same-repository image when present locally and owning the
+        required tools, even while the predecessor's image is still cached.
         """
 
         requested = str(requested_ref or "").strip()
         if not requested:
             return requested
         requested_present = await self._image_present(requested)
-        if requested_present and not required_executables:
+        if requested_present and not required_executables and not prefer_installed:
             return requested
         if "@sha256:" not in requested:
             return requested
@@ -297,8 +303,30 @@ class DockerOmnigentHostLauncher:
             fallback = None
         if fallback is None:
             return requested
-        if requested_present and await self._image_owns_tools(
-            requested, required_executables, host_class
+        if (
+            prefer_installed
+            and await self._image_present(fallback)
+            and (
+                not required_executables
+                or await self._image_owns_tools(
+                    fallback, required_executables, host_class
+                )
+            )
+        ):
+            import logging
+
+            logging.getLogger(__name__).info(
+                "host launch: recovered successor follows the installed image "
+                "(planned=%s installed=%s)",
+                requested[:80],
+                fallback[:80],
+            )
+            return fallback
+        if requested_present and (
+            not required_executables
+            or await self._image_owns_tools(
+                requested, required_executables, host_class
+            )
         ):
             return requested
         if not await self._image_present(fallback):
@@ -392,6 +420,7 @@ class DockerOmnigentHostLauncher:
             host_class.imageRef,
             host_class,
             required_executables=_image_owned_executables(spec.toolAttachments),
+            prefer_installed=spec.preferInstalledImage,
         )
         await self._backend.run(
             [

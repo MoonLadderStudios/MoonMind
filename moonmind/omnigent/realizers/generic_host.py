@@ -30,7 +30,11 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
-    successor_remediation,
+)
+from moonmind.omnigent.interrupted_attempt import (
+    compact_saved_workspace,
+    gate_interrupted_result as _gate_interrupted_result,
+    is_interruption,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
@@ -91,28 +95,13 @@ def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     return "completed_clean" if released else "leaked"
 
 
-_SAVED_WORKSPACE_RESTORE_KEYS = (
-    "kind",
-    "baseCommit",
-    "archiveRef",
-    "archiveDigest",
-    "manifestRef",
-    "manifestDigest",
-    "workspaceDigest",
-    "checkpointRef",
-)
-
-
 def saved_workspace_restore_identity(
     binding: StableRuntimeBinding | None,
 ) -> dict[str, Any] | None:
     """Return the compact restore identity of the attempt's durable save."""
 
-    saved = ((binding.phaseResults or {}) if binding is not None else {}).get("saved")
-    if not isinstance(saved, dict):
-        return None
-    compact = {key: saved[key] for key in _SAVED_WORKSPACE_RESTORE_KEYS if key in saved}
-    return compact if compact.get("archiveRef") else None
+    phases = (binding.phaseResults or {}) if binding is not None else {}
+    return compact_saved_workspace(phases.get("saved"))
 
 
 def carry_saved_workspace_checkpoint(
@@ -136,36 +125,13 @@ def gate_interrupted_result(
     binding: StableRuntimeBinding | None,
     predecessor_stop_confirmed: bool,
 ) -> AgentRunResult:
-    """Gate a returned interruption on the old host's confirmed stop.
+    """Gate a returned interruption on the old host's confirmed stop."""
 
-    The production host-loss outcome is a returned ``retry_step_execution``
-    result, not a raised error. It carries the same stop verdict and saved
-    workspace as a raised interruption, and an unconfirmed stop starts no
-    successor (MoonMind#4627).
-    """
-
-    metadata = {
-        **(result.metadata or {}),
-        "predecessorStopConfirmed": predecessor_stop_confirmed,
-    }
-    compact = saved_workspace_restore_identity(binding)
-    if compact is not None:
-        metadata["savedWorkspaceCheckpoint"] = compact
-    return result.model_copy(
-        update={
-            "metadata": metadata,
-            "retry_recommendation": successor_remediation(
-                result.retry_recommendation or "",
-                predecessor_stop_confirmed=predecessor_stop_confirmed,
-            ),
-        }
-    )
-
-
-def _is_interruption(result: AgentRunResult | None) -> bool:
-    return (
-        result is not None
-        and result.retry_recommendation == "retry_step_execution"
+    phases = (binding.phaseResults or {}) if binding is not None else {}
+    return _gate_interrupted_result(
+        result,
+        saved=phases.get("saved"),
+        predecessor_stop_confirmed=predecessor_stop_confirmed,
     )
 
 
@@ -833,7 +799,7 @@ class GenericOmnigentHostRealizer:
                 primary_error, asyncio.CancelledError
             )
             if interrupted_error or (
-                primary_error is None and _is_interruption(result)
+                primary_error is None and is_interruption(result)
             ):
                 (
                     binding,
@@ -1131,7 +1097,7 @@ class GenericOmnigentHostRealizer:
         interrupted_error = primary_error is not None and not isinstance(
             primary_error, asyncio.CancelledError
         )
-        if interrupted_error or (primary_error is None and _is_interruption(result)):
+        if interrupted_error or (primary_error is None and is_interruption(result)):
             (
                 current,
                 cleanup_error,
@@ -1225,7 +1191,7 @@ class GenericOmnigentHostRealizer:
         """An interrupted save/publish resumes without a host or provider turn."""
         async with self._runtime_bindings.finalization(binding.bindingId) as current:
             result = await self._reconcile_owned_finalization(request, current)
-        if _is_interruption(result):
+        if is_interruption(result):
             # Cleanup marks the host lease cleaned before the binding, so a
             # cleaned binding's predecessor stop is already confirmed.
             result = gate_interrupted_result(

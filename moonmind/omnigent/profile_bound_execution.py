@@ -75,6 +75,10 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
 )
 from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
+from moonmind.omnigent.interrupted_attempt import (
+    gate_interrupted_result,
+    is_interruption,
+)
 from moonmind.omnigent.host_failures import (
     HOST_CREDENTIAL_RECOVERY_ERROR, HOST_CREDENTIAL_RECOVERY_KEY,
     OmnigentOAuthHostError,
@@ -2739,6 +2743,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 ),
                             },
                         )
+            if is_interruption(authority_result):
+                await self._hand_off_interrupted_attempt(
+                    request,
+                    authority_result,
+                    predecessor_stop_confirmed=safe_to_release_provider,
+                )
             for deferred_terminal in deferred_bridge_terminals:
                 try:
                     await self._run_store.mark_terminal(
@@ -3075,6 +3085,43 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
                 ignore_errors=True,
             )
+
+    async def _hand_off_interrupted_attempt(
+        self,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+        *,
+        predecessor_stop_confirmed: bool,
+    ) -> None:
+        """Hand a lost-host attempt to its successor Step Execution (#4627).
+
+        The same contract as the generic host realizer: only a confirmed stop
+        of the old (static or on-demand) host permits a successor. The stopped
+        host can no longer advance the caller-owned workspace, so that save is
+        the successor's restore input. Without a save the successor restarts
+        from its admitted inputs. ``return result`` is evaluated before the
+        caller's ``finally`` block, so the same envelope is updated in place.
+        """
+
+        saved = None
+        if predecessor_stop_confirmed:
+            try:
+                saved = await self._workspace_preservation.save_request_workspace(
+                    request
+                )
+            except Exception:
+                logger.warning(
+                    "Saving the interrupted attempt's workspace failed; its "
+                    "successor restarts from admitted inputs",
+                    exc_info=True,
+                )
+        gated = gate_interrupted_result(
+            result,
+            saved=saved,
+            predecessor_stop_confirmed=predecessor_stop_confirmed,
+        )
+        result.metadata = gated.metadata
+        result.retry_recommendation = gated.retry_recommendation
 
     async def recover_from_checkpoint(
         self,
