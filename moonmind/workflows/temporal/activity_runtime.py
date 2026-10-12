@@ -272,6 +272,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.core.artifacts import canonical_artifact_ref, temporal_artifact_id
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     build_github_credential_descriptor_for_launch,
     resolve_managed_api_key_reference,
@@ -367,6 +368,22 @@ def _saved_work_execution_link(model: Any) -> ExecutionRef:
         workflow_id=model.identity.workflow_id,
         run_id=model.identity.run_id,
         link_type="output.checkpoint",
+    )
+
+
+def _checkpoint_activity_execution_link() -> ExecutionRef | None:
+    """Use the actual Activity execution, never a caller-supplied read scope."""
+
+    try:
+        info = temporal_activity.info()
+    except RuntimeError:
+        return None
+    return ExecutionRef(
+        namespace=info.namespace,
+        workflow_id=info.workflow_id,
+        run_id=info.workflow_run_id,
+        link_type="output.checkpoint",
+        created_by_activity_type=info.activity_type,
     )
 
 
@@ -2661,6 +2678,7 @@ class TemporalSandboxActivities:
                     content_type=content_type,
                     metadata_json=dict(metadata or {}),
                     scope=artifact_kind,
+                    link=_checkpoint_activity_execution_link(),
                 )
             )
             return _compact_artifact_ref_text(build_artifact_ref(completed))
@@ -2673,9 +2691,13 @@ class TemporalSandboxActivities:
 
     async def _read_checkpoint_bytes(self, artifact_ref: str) -> bytes:
         if self._artifact_service is not None:
+            execution_link = _checkpoint_activity_execution_link()
             _artifact, payload = await self._artifact_service.read(
-                artifact_id=artifact_ref,
+                artifact_id=temporal_artifact_id(artifact_ref) or artifact_ref,
                 principal="system",
+                admitted_principal=(
+                    f"workflow:{execution_link.workflow_id}" if execution_link else None
+                ),
                 allow_restricted_raw=True,
             )
             return payload
@@ -16278,6 +16300,7 @@ class TemporalCheckpointActivities:
                 principal=self._principal,
                 content_type=content_type,
                 metadata_json=dict(metadata or {}),
+                link=_checkpoint_activity_execution_link(),
             )
             completed = await self._artifact_service.write_complete(
                 artifact_id=artifact.artifact_id,
@@ -16285,7 +16308,9 @@ class TemporalCheckpointActivities:
                 payload=payload,
                 content_type=content_type,
             )
-            return _compact_artifact_ref_text(build_artifact_ref(completed))
+            return canonical_artifact_ref(
+                _compact_artifact_ref_text(build_artifact_ref(completed))
+            )
         artifact = self._artifact_store.put_bytes(
             payload,
             content_type=content_type,
@@ -16299,9 +16324,13 @@ class TemporalCheckpointActivities:
 
             return await LocalOmnigentArtifactGateway().read_bytes(artifact_ref)
         if self._artifact_service is not None:
+            execution_link = _checkpoint_activity_execution_link()
             _artifact, payload = await self._artifact_service.read(
-                artifact_id=artifact_ref,
+                artifact_id=temporal_artifact_id(artifact_ref) or artifact_ref,
                 principal=self._principal,
+                admitted_principal=(
+                    f"workflow:{execution_link.workflow_id}" if execution_link else None
+                ),
                 allow_restricted_raw=True,
             )
             return payload
@@ -16316,11 +16345,24 @@ class TemporalCheckpointActivities:
             if isinstance(request, StepCheckpointCreateInput)
             else StepCheckpointCreateInput.model_validate(request)
         )
+        execution_link = _checkpoint_activity_execution_link()
+        if execution_link and (
+            model.identity.workflow_id != execution_link.workflow_id
+            or model.identity.run_id != execution_link.run_id
+        ):
+            raise TemporalActivityRuntimeError(
+                "checkpoint source identity does not match the Activity execution"
+            )
         omnigent_checkpoint = model.omnigent
         if omnigent_checkpoint is None and model.omnigent_capture is not None:
-            omnigent_checkpoint = await self._materialize_omnigent_checkpoint_identity(
-                model
-            )
+            try:
+                omnigent_checkpoint = (
+                    await self._materialize_omnigent_checkpoint_identity(model)
+                )
+            except ValidationError:
+                # Preserve the checkpoint and a negative capability projection
+                # when captured evidence cannot satisfy the strict identity.
+                omnigent_checkpoint = None
         step_outputs = dict(model.step_outputs)
         if model.omnigent_capture is not None and omnigent_checkpoint is None:
             step_outputs["omnigentCheckpointValidation"] = {
@@ -16369,17 +16411,29 @@ class TemporalCheckpointActivities:
         """
 
         capture = dict(model.omnigent_capture or {})
+        for field in (
+            "externalStateRef",
+            "captureManifestRef",
+            "terminalRef",
+            "diagnosticsRef",
+        ):
+            if isinstance(capture.get(field), str):
+                capture[field] = canonical_artifact_ref(capture[field])
+        capture["instructionRefs"] = [
+            canonical_artifact_ref(ref) if isinstance(ref, str) else ref
+            for ref in capture.get("instructionRefs") or []
+        ]
         external_ref = str(capture.get("externalStateRef") or "").strip()
-        workspace_ref = str(
-            model.workspace.archive_ref
-            or model.workspace.patch_ref
-            or model.workspace.workspace_artifact_ref
-            or ""
-        ).strip()
+        workspace_ref = canonical_artifact_ref(
+            str(
+                model.workspace.archive_ref
+                or model.workspace.patch_ref
+                or model.workspace.workspace_artifact_ref
+                or ""
+            )
+        )
         workspace_digest = str(
-            model.workspace.archive_digest
-            or model.workspace.workspace_digest
-            or ""
+            model.workspace.archive_digest or model.workspace.workspace_digest or ""
         ).strip()
         required = (
             external_ref,
@@ -16412,6 +16466,8 @@ class TemporalCheckpointActivities:
         response_ids = first_message.get("responseIdentifiers")
         response_ids = response_ids if isinstance(response_ids, Mapping) else {}
         first_digest = str(first_message.get("digest") or "").strip() or None
+        if first_digest and re.fullmatch(r"[0-9a-f]{64}", first_digest):
+            first_digest = "sha256:" + first_digest
         first_id = str(
             response_ids.get("itemId")
             or response_ids.get("pendingId")
@@ -16492,7 +16548,10 @@ class TemporalCheckpointActivities:
             headCommit=model.workspace.head_commit,
             headRef=workspace_ref,
             headDigest=workspace_digest,
-            diffRef=model.workspace.patch_ref,
+            diffRef=(
+                canonical_artifact_ref(model.workspace.patch_ref)
+                if model.workspace.patch_ref else None
+            ),
             diffDigest=(workspace_digest if model.workspace.patch_ref else None),
             workspaceCheckpointRef=workspace_ref,
             workspaceCheckpointDigest=workspace_digest,
