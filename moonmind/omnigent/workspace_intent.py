@@ -154,6 +154,21 @@ def authored_starting_branch(request: AgentExecutionRequest) -> str | None:
     return None
 
 
+def request_publication_identity(request: AgentExecutionRequest) -> str:
+    """Return the stable identity of the request's logical publication effect.
+
+    The publication branch/PR derives from this identity. A recovered successor
+    Step Execution carries its predecessor's identity as reserved workflow
+    authority (MoonMind#4627), so the same logical effect survives an
+    agent-attempt change; any other request uses its own idempotency key.
+    """
+
+    inherited = str(_parameters(request).get("publicationIdentity") or "").strip()
+    if inherited and inherited.startswith(f"{request.correlation_id}:"):
+        return inherited
+    return request.idempotency_key
+
+
 def authored_target_branch(request: AgentExecutionRequest) -> str | None:
     value = str(_spec(request).get("targetBranch") or "").strip()
     return value or None

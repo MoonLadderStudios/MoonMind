@@ -57,6 +57,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
     MoonMindRunWorkflow,
 )
+from moonmind.omnigent.workspace_intent import request_publication_identity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
 from moonmind.workflows.temporal.activity_catalog import (
@@ -1773,7 +1774,12 @@ async def test_host_lost_successor_continues_from_saved_work_or_admitted_inputs(
                     "tool": {"type": "agent_runtime", "name": "omnigent"},
                     "inputs": {
                         "instructions": "Implement the interrupted change.",
-                        "runtime": {"mode": "omnigent"},
+                        "runtime": {
+                            "mode": "omnigent",
+                            "model": "gpt-5.5-codex",
+                            "effort": "high",
+                        },
+                        "publishMode": "pr",
                     },
                 }
             ]
@@ -1899,6 +1905,32 @@ async def test_host_lost_successor_continues_from_saved_work_or_admitted_inputs(
     assert successor.step_execution is not None
     assert successor.step_execution.execution_ordinal == 2
     assert successor.step_execution.reason == "runtime_recovered"
+    # The logical publication effect keeps the interrupted attempt's identity,
+    # so the successor reconciles the same branch/PR instead of a new one.
+    predecessor = child_requests[0]
+    assert "publicationIdentity" not in predecessor.parameters
+    assert successor.idempotency_key != predecessor.idempotency_key
+    assert successor.parameters["publicationIdentity"] == predecessor.idempotency_key
+    assert request_publication_identity(successor) == request_publication_identity(
+        predecessor
+    )
+    # Fresh admission keeps the step's harness, model/effort, profile and
+    # publication intent; only attempt identity and restore input change.
+    assert successor.agent_id == predecessor.agent_id
+    assert successor.execution_profile_ref == predecessor.execution_profile_ref
+    for key in ("model", "effort", "publishMode"):
+        assert successor.parameters[key] == predecessor.parameters[key]
+    # Only per-attempt identity (ledger metadata, publication carry) differs.
+    attempt_keys = {"metadata", "publicationIdentity"}
+    assert {
+        key: value
+        for key, value in successor.parameters.items()
+        if key not in attempt_keys
+    } == {
+        key: value
+        for key, value in predecessor.parameters.items()
+        if key not in attempt_keys
+    }
     successor_workspace = next(
         workspace for _, attempt, workspace in manifest_workspaces if attempt == 2
     )
@@ -2044,6 +2076,113 @@ async def test_repeated_interruptions_spend_one_step_budget(
         remaining = 3600 - ordinal * minutes_per_attempt * 60
         assert request.timeout_policy["timeout_seconds"] == remaining
         assert request.timeout_policy["max_timeout_seconds"] == remaining
+        # Repeated interruptions keep the first attempt's publication identity.
+        assert request.parameters["publicationIdentity"] == (
+            child_requests[0].idempotency_key
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_interrupted_attempt_starts_no_successor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#4627: explicit cancellation stays a stop, not a host loss."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+
+    async def fake_execute_typed_activity(activity_type: str, payload: Any, **_: Any):
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the interrupted change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str, request: AgentExecutionRequest, **_: Any
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        # The operator cancels while the update interrupts the attempt.
+        workflow._cancel_requested = True
+        return AgentRunResult(
+            summary="Omnigent session host was lost.",
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+            retryRecommendation="retry_step_execution",
+        )
+
+    async def passthrough(request: AgentExecutionRequest) -> AgentExecutionRequest:
+        return request
+
+    async def no_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        run_workflow_module.RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-cancelled-interruption",
+            "run_id": "run-cancelled-interruption",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _m: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "upsert_search_attributes", lambda _a: None
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc)
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type("Logger", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None}),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", lambda patch_id: patch_id in enabled_patches
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(workflow, "_maybe_bind_workflow_scoped_session", passthrough)
+    monkeypatch.setattr(workflow, "_record_step_execution_manifest", no_manifest)
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"}, plan_ref="plan-ref"
+    )
+
+    # No successor attempt is prepared or started for a cancelled step.
+    assert len(child_requests) == 1
+    row = workflow._step_ledger_row_for("omnigent-turn")
+    assert row["status"] not in {"completed", "succeeded"}
+    assert workflow._step_execution_for("omnigent-turn") == 1
+    assert not workflow._step_execution_publication_identities
 
 
 @pytest.mark.asyncio

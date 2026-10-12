@@ -733,7 +733,9 @@ async def _try_generic_realizer_dispatch(
                 ),
                 failureClass="integration_error",
                 providerErrorCode=provider_error_code,
-                retryRecommendation=remediation_for(provider_error_code),
+                retryRecommendation=_successor_remediation(
+                    exc, remediation_for(provider_error_code)
+                ),
                 metadata={
                     "dispatchError": str(exc)[:1000],
                     **_capacity_cleanup_receipt(exc),
@@ -939,12 +941,13 @@ def _capacity_cleanup_receipt(exc: BaseException) -> dict[str, Any]:
 def _successor_remediation(exc: BaseException, remediation: str) -> str:
     """No successor may write while the interrupted host's stop is unconfirmed."""
 
-    if (
-        remediation == "retry_step_execution"
-        and getattr(exc, "predecessor_stop_confirmed", None) is False
-    ):
-        return "delegate_to_janitor"
-    return remediation
+    from moonmind.omnigent.harness_platform.failures import successor_remediation
+
+    stopped = getattr(exc, "predecessor_stop_confirmed", None)
+    return successor_remediation(
+        remediation,
+        predecessor_stop_confirmed=stopped if isinstance(stopped, bool) else None,
+    )
 
 
 def _typed_platform_failure_result(exc: BaseException) -> AgentRunResult | None:

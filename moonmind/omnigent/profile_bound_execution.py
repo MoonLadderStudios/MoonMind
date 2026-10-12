@@ -103,6 +103,7 @@ from moonmind.omnigent.workspace_intent import (
     authored_starting_branch,
     authored_target_branch,
     compile_workspace_intent,
+    request_publication_identity,
 )
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
@@ -1932,7 +1933,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         current_step_execution_id=(
                                             step_execution_id or request.idempotency_key
                                         ),
-                                        publication_identity=request.idempotency_key,
+                                        publication_identity=request_publication_identity(
+                                            request
+                                        ),
                                         publish_mode=publish_mode,
                                         base_branch=self._starting_branch(request),
                                         repository=self._repository_source(request),

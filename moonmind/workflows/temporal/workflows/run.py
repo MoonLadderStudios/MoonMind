@@ -40,6 +40,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.omnigent.workspace_intent import (
         authored_repository_source,
         authored_starting_branch,
+        request_publication_identity,
     )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
@@ -1778,6 +1779,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # worktree archive, or why the successor restarts from admitted inputs.
         self._step_execution_saved_workspace_restore_refs: dict[str, str] = {}
         self._step_execution_restart_limitations: dict[str, str] = {}
+        # The logical publication effect of a recovered step keeps the first
+        # attempt's identity, so a successor reconciles that same branch/PR.
+        self._step_execution_publication_identities: dict[str, str] = {}
         # A recovered successor spends what remains of the step's agent budget;
         # repeated interruptions cannot reset its deadline.
         self._step_agent_budget_started_at: dict[str, datetime] = {}
@@ -2997,6 +3001,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         *,
         attempt: int,
         execution_result: Any,
+        predecessor_request: AgentExecutionRequest | None = None,
     ) -> None:
         """Choose the successor workspace for an interrupted agent attempt.
 
@@ -3004,13 +3009,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         verified saved worktree archive. Without that save and without any
         recorded step checkpoint, the successor restarts from the admitted step
         inputs and records the limitation; work after the last durable boundary
-        is repeated rather than the step failing for missing evidence.
+        is repeated rather than the step failing for missing evidence. The
+        successor keeps the predecessor's publication identity, so the logical
+        branch/PR effect survives the agent-attempt change.
         """
 
         if not self._recommends_step_execution_retry(execution_result):
             return
         outputs = self._get_from_result(execution_result, "outputs")
         attempt_key = self._step_execution_launch_block_key(logical_step_id, attempt)
+        if predecessor_request is not None:
+            self._step_execution_publication_identities[attempt_key] = (
+                request_publication_identity(predecessor_request)
+            )
         saved_restore_ref = verified_saved_workspace_restore_ref(
             outputs.get("savedWorkspaceCheckpoint")
         )
@@ -14200,6 +14211,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     node_id,
                                     attempt=current_step_execution,
                                     execution_result=execution_result,
+                                    predecessor_request=dispatched_agent_request,
                                 )
                             continue
 
@@ -22077,6 +22089,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if step_execution is not None:
+            # Reserved authority, absent from parameter_keys: only a recovered
+            # successor inherits its predecessor's publication identity.
+            publication_identity = self._step_execution_publication_identities.get(
+                self._step_execution_launch_block_key(node_id, step_execution)
+            )
+            if publication_identity:
+                parameters["publicationIdentity"] = publication_identity
         if self._workflow_patch_enabled(RUN_GITHUB_ACTION_PERMISSIONS_PATCH):
             # Presence matters: a malformed null declaration must not disappear
             # into the default read-only path. Old histories keep their payload.
