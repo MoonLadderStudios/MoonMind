@@ -634,6 +634,46 @@ def test_journal_inventory_survives_bounded_subprocess_diagnostics(
     assert "--format" in inspection
 
 
+def test_journal_inventory_reads_every_row_of_a_full_project(
+    controller_path, tmp_path, monkeypatch
+):
+    """A normal stack has ~25 project containers; projected rows still
+    exceed the runner's diagnostic tail, which must not truncate the data."""
+    import subprocess
+
+    record = load("record")
+    server = load("server")
+    store = record.OperationStore(tmp_path / "state")
+    writers = ["temporal-worker-agent-runtime", "temporal-worker-artifacts"]
+    others = [f"service-{index:02d}" for index in range(23)]
+    target = {"project": "moonmind-test", "services": [*writers, *others]}
+    operation = _begin_op(record, store, target)
+    rows = [{"Image": f"sha256:{service}-{'0' * 64}", "Config": {"Env": [""], "Labels": {
+        "com.docker.compose.project": target["project"],
+        "com.docker.compose.service": service,
+    }}} for service in [*writers, *others]]
+
+    def command(args, **kwargs):
+        args = tuple(args)
+        if args[:2] == ("docker", "ps"):
+            output = "\n".join(f"id-{index:02d}" for index in range(len(rows)))
+        else:
+            assert args[:2] == ("docker", "inspect")
+            output = "\n".join(json.dumps(row) for row in rows)
+        return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(server.engine.subprocess, "run", command)
+    monkeypatch.setattr(server, "run_omnigent_step", lambda *args, **kwargs: {
+        "status": "prepared",
+    })
+    server.prepare_controller_journals(
+        store, operation, runner=server.engine.subprocess_runner(), overlay="overlay"
+    )
+    assert store.load(operation["operationId"])["journalTransition"]["sourceImages"] == [
+        row["Image"] for row in rows[:2]
+    ]
+
+
 def test_journal_preparation_falls_back_to_capable_staged_target(
     controller_path, tmp_path, monkeypatch
 ):

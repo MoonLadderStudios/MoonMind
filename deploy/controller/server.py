@@ -36,8 +36,8 @@ OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
 CONTROLLER_CAPABILITIES = ("active-journal-transition",)
 # Full Docker inspection includes mounts, network state, and environment
-# secrets. Project only journal ownership before the runner keeps its bounded
-# diagnostic tail; otherwise even a few containers produce truncated JSON.
+# secrets. Project only journal ownership; rows are parsed from the runner's
+# complete stdout, never its bounded diagnostic tail.
 JOURNAL_CONSUMER_INSPECT_FORMAT = (
     '{{$fleet := ""}}{{range .Config.Env}}'
     '{{if or (eq . "TEMPORAL_WORKER_FLEET=agent_runtime") '
@@ -1093,7 +1093,7 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
         ), timeout_seconds=30)
         if int(listed.get("exit", 0)) != 0:
             raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumers unavailable")
-        identifiers = str(listed.get("output") or "").split()
+        identifiers = engine.command_stdout(listed).split()
         rows = []
         if identifiers:
             inspected = engine.run_command(runner, (
@@ -1102,7 +1102,7 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
             ), timeout_seconds=30)
             if int(inspected.get("exit", 0)) != 0:
                 raise engine.ApplyError("journal-consumer-observation", 1, "Docker consumer images unavailable")
-            rows = [json.loads(line) for line in str(inspected.get("output") or "").splitlines()]
+            rows = [json.loads(line) for line in engine.command_stdout(inspected).splitlines()]
             if len(rows) != len(identifiers) or any(not isinstance(row, dict) for row in rows):
                 raise ValueError("Journal consumer inventory is incomplete")
         selected = set(target.get("services") or ())

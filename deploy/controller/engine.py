@@ -76,7 +76,16 @@ class SelfReplacementError(RuntimeError):
 
 class Runner(Protocol):
     def run(self, args: Sequence[str], timeout_seconds: int) -> Mapping[str, Any]:
-        """Run a command; return a mapping with at least ``exit``/``output``."""
+        """Run a command; return a mapping with at least ``exit``/``output``.
+
+        ``output`` is a bounded, redacted diagnostic. A runner may also
+        return ``stdout``: the complete standard output for parsing.
+        """
+
+
+def command_stdout(result: Mapping[str, Any]) -> str:
+    """Complete standard output for parsing; never the bounded diagnostic tail."""
+    return str(result.get("stdout", result.get("output")) or "")
 
 
 def assert_safe_command(args: Sequence[str]) -> None:
@@ -280,7 +289,7 @@ def observe_services(
             int(result.get("exit", 1)),
             redact_text(tail_text(str(result.get("output", "")))),
         )
-    raw = str(result.get("output", "") or "").strip()
+    raw = command_stdout(result).strip()
     records: list = []
     if raw.startswith("["):
         try:
@@ -440,7 +449,9 @@ def subprocess_runner() -> Runner:
             if completed.returncode != 0:
                 name = str(args[2]) if len(args) > 2 else str(args[0])
                 raise CommandError(name, completed.returncode, output)
-            return {"exit": 0, "output": output}
+            # Structured observations (inspect/ps rows) grow with the project;
+            # parsing the diagnostic tail would lose the leading rows.
+            return {"exit": 0, "output": output, "stdout": completed.stdout or ""}
 
     return _SubprocessRunner()
 
