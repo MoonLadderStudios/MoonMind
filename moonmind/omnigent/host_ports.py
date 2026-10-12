@@ -69,6 +69,9 @@ class HostLaunchSpec(BaseModel):
     controlAttachment: dict[str, Any] | None = Field(None, alias="controlAttachment")
     stateAttachment: dict[str, Any] = Field(alias="stateAttachment")
     labels: dict[str, str]
+    # A runtime-recovered successor is a fresh attempt: it launches on the
+    # installed compatible image, not its interrupted predecessor's (#4627).
+    preferInstalledImage: bool = Field(False, alias="preferInstalledImage")
 
     @model_validator(mode="after")
     def secret_free(self) -> "HostLaunchSpec":

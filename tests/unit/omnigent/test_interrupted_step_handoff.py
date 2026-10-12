@@ -10,6 +10,7 @@ an unconfirmed stop is reconciled within bounds, never raced by new compute.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -658,22 +659,23 @@ async def test_persisted_plan_dispatch_failure_with_unconfirmed_stop_starts_no_s
     assert result.metadata["predecessorStopConfirmed"] is False
 
 
-@pytest.mark.asyncio
-async def test_successor_attempt_reconciles_the_predecessors_publication(
-    tmp_path, monkeypatch
-):
-    """A lost push acknowledgment does not fork the step's branch/PR effect.
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
 
-    The predecessor attempt pushed before its host was lost and the workflow
-    never saw the acknowledgment. The successor Step Execution inherits the
-    logical publication identity, so the real publisher reconciles the same
-    remote branch and PR instead of orphaning it under a new name.
+
+def _publication_attempts(tmp_path, monkeypatch, *, workflow_id: str, pr_lookup):
+    """A real bare remote plus one ``step(ordinal)`` factory per attempt.
+
+    Each attempt gets its own sandbox workspace and Step Execution identity,
+    published by the real Omnigent workspace publisher. Only the credential
+    and the GitHub PR lookup are supplied by the test.
     """
 
     from unittest.mock import AsyncMock
 
     from moonmind.config.settings import settings
-    from moonmind.omnigent.workspace_intent import request_publication_identity
     from moonmind.omnigent.workspace_publication import (
         OmnigentWorkspacePublicationService,
     )
@@ -681,11 +683,6 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
         SandboxWorkspaceRecord,
         SandboxWorkspaceRecordStore,
     )
-
-    def git(cwd, *args):
-        return subprocess.run(
-            ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
-        ).stdout.strip()
 
     monkeypatch.setattr(settings.security, "high_security_mode", False)
     for prefix in ("AUTHOR", "COMMITTER"):
@@ -695,15 +692,10 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
         "moonmind.omnigent.workspace_publication.resolve_github_credential",
         AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
     )
-    resolve_pr = AsyncMock(
-        return_value=SimpleNamespace(
-            resolved=True, pr_url="https://github.com/example/repository/pull/7"
-        )
-    )
     monkeypatch.setattr(
         "moonmind.omnigent.workspace_publication.GitHubService."
         "resolve_pull_request_selector",
-        resolve_pr,
+        pr_lookup,
     )
     origin = tmp_path / "origin.git"
     subprocess.check_call(
@@ -712,11 +704,9 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
     seed = tmp_path / "seed"
     subprocess.check_call(["git", "init", "-q", "--initial-branch=main", str(seed)])
     (seed / "file.txt").write_text("base\n")
-    git(seed, "add", ".")
-    git(seed, "commit", "-qm", "base")
-    git(seed, "push", "-q", str(origin), "main")
-
-    workflow_id = "wf-publication-restart"
+    _git(seed, "add", ".")
+    _git(seed, "commit", "-qm", "base")
+    _git(seed, "push", "-q", str(origin), "main")
 
     def step(ordinal: int, *, inherited: str | None = None):
         step_id = f"{workflow_id}:run-1:implement:execution:{ordinal}"
@@ -752,10 +742,42 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
         )
         return request, step_id, workspace
 
-    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    return SimpleNamespace(
+        origin=origin,
+        step=step,
+        publisher=OmnigentWorkspacePublicationService(tmp_path),
+    )
+
+
+@pytest.mark.asyncio
+async def test_successor_attempt_reconciles_the_predecessors_publication(
+    tmp_path, monkeypatch
+):
+    """A lost push acknowledgment does not fork the step's branch/PR effect.
+
+    The predecessor attempt pushed before its host was lost and the workflow
+    never saw the acknowledgment. The successor Step Execution inherits the
+    logical publication identity, so the real publisher reconciles the same
+    remote branch and PR instead of orphaning it under a new name.
+    """
+
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent.workspace_intent import request_publication_identity
+
+    resolve_pr = AsyncMock(
+        return_value=SimpleNamespace(
+            resolved=True, pr_url="https://github.com/example/repository/pull/7"
+        )
+    )
+    workflow_id = "wf-publication-restart"
+    attempts = _publication_attempts(
+        tmp_path, monkeypatch, workflow_id=workflow_id, pr_lookup=resolve_pr
+    )
+    origin, step, publisher = attempts.origin, attempts.step, attempts.publisher
     predecessor, predecessor_step, predecessor_workspace = step(1)
     (predecessor_workspace / "file.txt").write_text("interrupted work\n")
-    git(predecessor_workspace, "commit", "-qam", "interrupted work")
+    _git(predecessor_workspace, "commit", "-qam", "interrupted work")
     first = await publisher.publish_request_workspace(
         request=predecessor,
         current_workflow_id=workflow_id,
@@ -769,11 +791,11 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
         2, inherited=request_publication_identity(predecessor)
     )
     # The successor restored the predecessor's saved work, then continued.
-    git(successor_workspace, "pull", "-q", str(predecessor_workspace), "main")
+    _git(successor_workspace, "pull", "-q", str(predecessor_workspace), "main")
     (successor_workspace / "more.txt").write_text("successor work\n")
-    git(successor_workspace, "add", ".")
-    git(successor_workspace, "commit", "-qm", "successor work")
-    successor_head = git(successor_workspace, "rev-parse", "HEAD")
+    _git(successor_workspace, "add", ".")
+    _git(successor_workspace, "commit", "-qm", "successor work")
+    successor_head = _git(successor_workspace, "rev-parse", "HEAD")
     for _delivery in range(2):
         # The second delivery replays a lost acknowledgment of the first.
         second = await publisher.publish_request_workspace(
@@ -786,12 +808,324 @@ async def test_successor_attempt_reconciles_the_predecessors_publication(
         assert second["pull_request_url"].endswith("/pull/7")
 
     branch = first["push_branch"]
-    assert git(origin, "branch", "--format=%(refname:short)").splitlines() == [
+    assert _git(origin, "branch", "--format=%(refname:short)").splitlines() == [
         "main",
         branch,
     ]
-    assert git(origin, "show", f"{branch}:file.txt") == "interrupted work"
-    assert git(origin, "show", f"{branch}:more.txt") == "successor work"
+    assert _git(origin, "show", f"{branch}:file.txt") == "interrupted work"
+    assert _git(origin, "show", f"{branch}:more.txt") == "successor work"
     assert [call.kwargs["selector"] for call in resolve_pr.await_args_list] == [
         branch
     ] * 3
+
+
+@pytest.mark.asyncio
+async def test_push_success_then_lost_pr_acknowledgment_across_an_attempt_change(
+    tmp_path, monkeypatch
+):
+    """Push success, host loss, then a lost PR create acknowledgment.
+
+    The predecessor's push landed but its attempt was interrupted before any
+    pull request existed. The successor pushes its continued work to that same
+    branch, and the workflow's existing ``repo.create_pr`` owner opens the PR.
+    GitHub creates it but the acknowledgment is lost; the retried Activity
+    adopts it. Exactly one push branch, one PR create, and the PR head is the
+    successor's verified remote head.
+    """
+
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from temporalio.exceptions import ApplicationError
+
+    from moonmind.omnigent.workspace_intent import request_publication_identity
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_create_pr_activity,
+    )
+
+    workflow_id = "wf-publication-pr-ack"
+    attempts = _publication_attempts(
+        tmp_path,
+        monkeypatch,
+        workflow_id=workflow_id,
+        pr_lookup=AsyncMock(return_value=SimpleNamespace(resolved=False)),
+    )
+    origin, step, publisher = attempts.origin, attempts.step, attempts.publisher
+
+    predecessor, predecessor_step, predecessor_workspace = step(1)
+    (predecessor_workspace / "file.txt").write_text("interrupted work\n")
+    _git(predecessor_workspace, "commit", "-qam", "interrupted work")
+    first = await publisher.publish_request_workspace(
+        request=predecessor,
+        current_workflow_id=workflow_id,
+        current_step_execution_id=predecessor_step,
+    )
+    assert first["push_status"] == "pushed"
+    branch = first["push_branch"]
+
+    successor, successor_step, successor_workspace = step(
+        2, inherited=request_publication_identity(predecessor)
+    )
+    _git(successor_workspace, "pull", "-q", str(predecessor_workspace), "main")
+    (successor_workspace / "more.txt").write_text("successor work\n")
+    _git(successor_workspace, "add", ".")
+    _git(successor_workspace, "commit", "-qm", "successor work")
+    successor_head = _git(successor_workspace, "rev-parse", "HEAD")
+    second = await publisher.publish_request_workspace(
+        request=successor,
+        current_workflow_id=workflow_id,
+        current_step_execution_id=successor_step,
+    )
+    assert second["push_branch"] == branch
+    assert second["push_head_sha"] == successor_head
+
+    # GitHub's pulls API backed by the real remote's branch tips.
+    calls: list[str] = []
+    pulls: list[dict] = []
+
+    def github(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/example/repository/pulls"
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json=list(pulls))
+        assert request.method == "POST"
+        body = json.loads(request.content)
+        pulls.append(
+            {
+                "number": 9,
+                "html_url": "https://github.com/example/repository/pull/9",
+                "draft": False,
+                "head": {
+                    "ref": body["head"],
+                    "sha": _git(origin, "rev-parse", f"refs/heads/{body['head']}"),
+                    "repo": {"full_name": "example/repository"},
+                },
+                "base": {
+                    "ref": body["base"],
+                    "repo": {"full_name": "example/repository"},
+                },
+            }
+        )
+        return httpx.Response(500, json={"message": "lost acknowledgment"})
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(github), **kwargs),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    payload = {
+        "repo": "example/repository",
+        "head": branch,
+        "base": "main",
+        "title": "Interrupted step candidate",
+    }
+    with pytest.raises(ApplicationError):
+        await repo_create_pr_activity(payload)
+    # Temporal's retry of the same Activity re-reads before creating.
+    adopted = await repo_create_pr_activity(payload)
+
+    assert adopted["adopted"] is True
+    assert adopted["url"].endswith("/pull/9")
+    assert calls == ["GET", "POST", "GET"]
+    assert len(pulls) == 1 and pulls[0]["head"]["sha"] == successor_head
+    assert _git(origin, "branch", "--format=%(refname:short)").splitlines() == [
+        "main",
+        branch,
+    ]
+    assert _git(origin, "show", f"{branch}:file.txt") == "interrupted work"
+    assert _git(origin, "show", f"{branch}:more.txt") == "successor work"
+
+
+def _opencode_host_class(image_ref: str):
+    from moonmind.omnigent.harness_platform.host_classes import HostClass
+
+    return HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": image_ref,
+            "omnigentVersion": "0.13.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [
+                {
+                    "harnessId": "opencode-native",
+                    "implementationRef": "omnigent-harness-implementation:sha256:"
+                    + "3" * 64,
+                    "runtimeDependencies": [{"name": "opencode", "version": "1.18.11"}],
+                }
+            ],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {
+                "workspaceBind": True,
+                "restrictedEgress": True,
+                "mountedSkills": True,
+            },
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_recovered_successor_launches_on_the_installed_image(
+    tmp_path, monkeypatch
+):
+    """A successor follows the installed runtime, not its predecessor's image.
+
+    The update installed a new same-repository host image while the image the
+    interrupted attempt ran is still cached. Ordinary launches keep the plan's
+    image; only the runtime-recovered successor (a fresh attempt) launches on
+    the installed one. Harness, Provider Profile, model and Host Class are the
+    unchanged plan's, so only the image differs.
+    """
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+    from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
+    from moonmind.omnigent.host_runtime import (
+        GenericOmnigentHostRuntime,
+        PreparedHostInputs,
+    )
+    from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
+    from moonmind.omnigent.host_services.runtime_scripts import (
+        OmnigentRuntimeScriptService,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    repo = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+    predecessor_image = repo + "@sha256:" + "a" * 64
+    installed_image = repo + "@sha256:" + "b" * 64
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
+    )
+    for key in (
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_PI_HOST_IMAGE_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    store.save_resolved_state(
+        ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:"
+                + "c" * 64,
+                "sharedHostImageRef": installed_image,
+                "omnigentBuildDigest": "sha256:" + "c" * 64,
+                "architecture": "linux/amd64",
+                "details": {
+                    "hostImageProvenance": {
+                        installed_image: {
+                            "buildDigest": "sha256:" + "2" * 64,
+                            "version": "0.13.1",
+                        }
+                    }
+                },
+            }
+        )
+    )
+
+    class BothImagesCached:
+        async def run(self, argv, **_kwargs):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if command[3] in {predecessor_image, installed_image}:
+                    return 0, "sha256:present", ""
+                return 1, "", "No such image"
+            raise AssertionError(command)
+
+    launcher = DockerOmnigentHostLauncher(
+        backend=BothImagesCached(),
+        runtime_scripts=OmnigentRuntimeScriptService(),
+        server_url="http://omnigent:8000",
+    )
+    host_class = _opencode_host_class(predecessor_image)
+    assert await launcher._resolve_launch_image(predecessor_image, host_class) == (
+        predecessor_image
+    )
+    assert (
+        await launcher._resolve_launch_image(
+            predecessor_image, host_class, prefer_installed=True
+        )
+        == installed_image
+    )
+
+    # The production host runtime marks only the recovered successor's launch.
+    plan = _plan("opencode-go/model")
+    specs = []
+
+    class CapturingLauncher:
+        server_url = "http://omnigent:8080"
+
+        async def launch(self, *, spec, **_kwargs):
+            specs.append(spec)
+            raise RuntimeError("launch captured")
+
+    class Cleanup:
+        async def cleanup(self, **_kwargs):
+            return {"containerRemoved": True}
+
+    class RuntimeEnvironment:
+        def build(self, **_kwargs):
+            return {}
+
+    runtime = GenericOmnigentHostRuntime(
+        launcher=CapturingLauncher(),
+        workspace_service=object(),
+        skill_service=object(),
+        tool_service=object(),
+        github_credential_service=object(),
+        egress_service=object(),
+        runtime_environment_service=RuntimeEnvironment(),
+        registration_waiter=object(),
+        host_attestor=object(),
+        cleanup_service=Cleanup(),
+    )
+    prepared = PreparedHostInputs(
+        workspace_attachment={
+            "kind": "bind",
+            "sourceRef": "/tmp/work",
+            "targetPath": "/workspaces/run",
+            "accessMode": "read-write",
+        },
+        skill_attachment={
+            "kind": "bind",
+            "sourceRef": "/tmp/skills",
+            "targetPath": "/opt/moonmind-skills",
+            "accessMode": "read-only",
+        },
+        tool_attachments=(),
+        egress_attestation={
+            "networkRef": "egress",
+            "profileRef": "egress-profile:default",
+            "profileDigest": "sha256:" + "a" * 64,
+            "appliedRuleDigest": "sha256:" + "b" * 64,
+            "attestationRef": "artifact://egress",
+        },
+    )
+    predecessor, _ = _step_request(tmp_path / "worker", workflow_id="wf-img", ordinal=1)
+    successor, _ = _step_request(tmp_path / "worker", workflow_id="wf-img", ordinal=2)
+    successor = successor.model_copy(
+        update={
+            "step_execution": successor.step_execution.model_copy(
+                update={"reason": "runtime_recovered"}
+            )
+        }
+    )
+    for request in (predecessor, successor):
+        with pytest.raises(RuntimeError, match="launch captured"):
+            await runtime.realize(
+                request=request,
+                plan=plan,
+                runtime_binding_id="omnigent-runtime-binding:"
+                + request.idempotency_key,
+                host_lease_ref="omnigent-host-lease:sha256:" + "c" * 64,
+                host_lease_generation=1,
+                host_class=host_class,
+                launch_policy=get_launch_policy("omnigent-on-demand@1"),
+                prepared=prepared,
+                credential_handles=[],
+            )
+    assert [spec.preferInstalledImage for spec in specs] == [False, True]
+    assert {spec.imageRef for spec in specs} == {predecessor_image}
