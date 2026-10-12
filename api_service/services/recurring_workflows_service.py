@@ -794,11 +794,9 @@ class RecurringWorkflowsService:
                     target=target,
                     initial_parameters=initial_parameters,
                 )
-            if previous is None:
-                return await self._admit_plan_less_omnigent_target(
-                    definition, target=target
-                )
-            return False
+            return await self._admit_plan_less_omnigent_target(
+                definition, target=target
+            )
         if not has_plan and target.get("agentProfileSnapshot") != previous:
             raise RecurringWorkflowValidationError(
                 "managed schedule Agent Profile snapshot identities conflict"
@@ -863,24 +861,29 @@ class RecurringWorkflowsService:
                 target=target,
                 initial_parameters=initial_parameters,
             )
+        if not current:
+            # Single-user (#4351): schedule refresh uses the definition's real
+            # frozen inputs, not a present-day user row. Legacy owner is
+            # provenance only.
+            actor = None
+            refreshed = await refresh_managed_bootstrap_snapshot(
+                self._session,
+                parameters=initial_parameters,
+                consumer_type="schedule",
+                consumer_id=str(definition.id),
+                user=actor,
+                replace_existing_usage=True,
+            )
+            target["initialParameters"] = refreshed
+            target["agentProfile"] = dict(refreshed["agentProfile"])
+            target["agentProfileSnapshot"] = dict(refreshed["agentProfileSnapshot"])
+        # The advanced snapshot is compiled onto the plan owner in the same
+        # revision (MoonLadderStudios/MoonMind#3935).
+        if await self._admit_plan_less_omnigent_target(definition, target=target):
+            return True
         if current:
             return False
-
-        # Single-user (#4351): schedule refresh uses the definition's real
-        # frozen inputs, not a present-day user row. Legacy owner is
-        # provenance only.
-        actor = None
-        refreshed = await refresh_managed_bootstrap_snapshot(
-            self._session,
-            parameters=initial_parameters,
-            consumer_type="schedule",
-            consumer_id=str(definition.id),
-            user=actor,
-            replace_existing_usage=True,
-        )
-        target["initialParameters"] = refreshed
-        target["agentProfile"] = dict(refreshed["agentProfile"])
-        target["agentProfileSnapshot"] = dict(refreshed["agentProfileSnapshot"])
+        # A target that does not select Omnigent still follows the cutover.
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -897,7 +900,9 @@ class RecurringWorkflowsService:
 
         Definitions saved before creation and edits compiled a plan
         (MoonLadderStudios/MoonMind#3935) would otherwise start new plan-less
-        work in the retained session supervisor on every occurrence.
+        work in the retained session supervisor on every occurrence. A stored
+        Agent Profile snapshot is compiled from its verified durable usage,
+        exactly as a target edit is; an unverified one is rejected.
         """
 
         if target.get("workflowType") not in _SUPPORTED_RECURRING_WORKFLOW_TYPES:
