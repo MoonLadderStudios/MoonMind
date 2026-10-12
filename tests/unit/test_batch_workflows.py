@@ -645,6 +645,17 @@ def test_load_parent_repository_connection_reads_canonical_task_context(tmp_path
     ) == "repository-connection:tactics"
 
 
+def test_parent_legacy_secret_ref_is_not_a_repository_connection(tmp_path):
+    module = _load_module()
+    context = tmp_path / "task_context.json"
+    context.write_text(json.dumps({
+        "repository": "MoonLadderStudios/Tactics",
+        "auth": {"repoAuthRef": "vault://repository/legacy#credential"},
+    }))
+
+    assert module["_load_parent_repository_connection_ref"](str(context)) is None
+
+
 def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     module = _load_module()
     runtime = module["RuntimeSelection"](
