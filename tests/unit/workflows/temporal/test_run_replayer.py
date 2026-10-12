@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
+    RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     GateTransitionDecision,
@@ -1708,3 +1709,63 @@ async def test_final_verifier_gate_pre_and_post_patch_histories_replay() -> None
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+@workflow.defn(name="MM4627InterruptedStepSuccessorReplayFixture")
+class _LegacyInterruptedStepSuccessorReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        # Retained histories failed closed: no successor command was scheduled.
+        return False
+
+
+@workflow.defn(name="MM4627InterruptedStepSuccessorReplayFixture")
+class _CurrentInterruptedStepSuccessorReplayFixture:
+    @workflow.run
+    async def run(self) -> bool:
+        parent = MoonMindRunWorkflow()
+        if workflow.patched(RUN_STEP_RETRY_WORKSPACE_CONTINUITY_PATCH):
+            parent._prepare_recovered_step_execution_workspace(
+                "agent",
+                attempt=2,
+                execution_result={
+                    "status": "FAILED",
+                    "outputs": {"retryRecommendation": "retry_step_execution"},
+                },
+            )
+        workspace = parent._step_execution_workspace(
+            "agent", attempt=2, source_execution_ordinal=None
+        )
+        launch = workspace["evidenceAccepted"] is True
+        if launch:
+            # Stands in for the successor's child workflow command.
+            await workflow.sleep(1)
+        return launch
+
+
+@pytest.mark.asyncio
+async def test_interrupted_step_successor_pre_and_post_patch_histories_replay():
+    histories = []
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        for kind, implementation, expected in (
+            ("legacy", _LegacyInterruptedStepSuccessorReplayFixture, False),
+            ("current", _CurrentInterruptedStepSuccessorReplayFixture, True),
+        ):
+            queue = f"mm4627-interrupted-step-{kind}"
+            async with Worker(
+                env.client,
+                task_queue=queue,
+                workflows=[implementation],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    implementation.run, id=queue, task_queue=queue
+                )
+                assert await handle.result() is expected
+                histories.append(await handle.fetch_history())
+    replayer = Replayer(
+        workflows=[_CurrentInterruptedStepSuccessorReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    for history in histories:
+        await replayer.replay_workflow(history)

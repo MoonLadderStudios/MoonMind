@@ -175,6 +175,28 @@ def workspace_policy_metadata(
     return metadata
 
 
+def verified_saved_workspace_restore_ref(saved: Any) -> str | None:
+    """Return the restorable archive ref of a verified saved-workspace receipt.
+
+    The Omnigent saver reads remote bytes back before returning this receipt,
+    so a worktree archive with a durable artifact ref and content digest is
+    real saved content. Paths, synthetic strings and other receipt kinds are
+    not a save and yield ``None``.
+    """
+
+    if not isinstance(saved, Mapping):
+        return None
+    if str(saved.get("kind") or "").strip() != "worktree_archive":
+        return None
+    archive_ref = str(saved.get("archiveRef") or "").strip()
+    archive_digest = str(saved.get("archiveDigest") or "").strip()
+    if not archive_ref.startswith("artifact://") or archive_ref == "artifact://":
+        return None
+    if not archive_digest.startswith("sha256:"):
+        return None
+    return archive_ref
+
+
 def validate_workspace_policy_launch(
     *,
     policy: WorkspacePolicy,

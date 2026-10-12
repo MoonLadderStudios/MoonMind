@@ -90,6 +90,36 @@ def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     return "completed_clean" if released else "leaked"
 
 
+_SAVED_WORKSPACE_RESTORE_KEYS = (
+    "kind",
+    "baseCommit",
+    "archiveRef",
+    "archiveDigest",
+    "manifestRef",
+    "manifestDigest",
+    "workspaceDigest",
+    "checkpointRef",
+)
+
+
+def carry_saved_workspace_checkpoint(
+    error: BaseException, binding: StableRuntimeBinding | None
+) -> None:
+    """Attach the attempt's saved workspace to its failure (MoonMind#4627).
+
+    Cleanup saves the caller-owned workspace before host removal. A successor
+    Step Execution can restore only what the failed attempt reports, so carry
+    the compact restore identity of that durable save on the error.
+    """
+
+    saved = ((binding.phaseResults or {}) if binding is not None else {}).get("saved")
+    if not isinstance(saved, dict):
+        return
+    compact = {key: saved[key] for key in _SAVED_WORKSPACE_RESTORE_KEYS if key in saved}
+    if compact.get("archiveRef"):
+        error.saved_workspace_checkpoint = compact
+
+
 def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
     """Fold a host log tail captured by an earlier removal into this evidence.
 
@@ -750,6 +780,20 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
+            if primary_error is not None and not isinstance(
+                primary_error, asyncio.CancelledError
+            ):
+                binding, cleanup_error = await self._reconcile_interrupted_attempt(
+                    primary_error,
+                    request=request,
+                    binding=binding,
+                    host_lease=host_lease,
+                    host_context=host_context,
+                    prepared=prepared,
+                    credential_handles=credential_handles,
+                    acquired=acquired,
+                    cleanup_error=cleanup_error,
+                )
         elif acquired:
             try:
                 await self._provider_leases.release_all(acquired)
@@ -1020,6 +1064,20 @@ class GenericOmnigentHostRealizer:
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
             cleanup_error = exc
+        if primary_error is not None and not isinstance(
+            primary_error, asyncio.CancelledError
+        ):
+            current, cleanup_error = await self._reconcile_interrupted_attempt(
+                primary_error,
+                request=request,
+                binding=current,
+                host_lease=host_lease,
+                host_context=host_context,
+                prepared=None,
+                credential_handles=credential_handles,
+                acquired=acquired,
+                cleanup_error=cleanup_error,
+            )
         self._record_cleanup_outcome(
             harness_id=plan.payload.harnessId,
             primary_error=primary_error,
@@ -1296,6 +1354,84 @@ class GenericOmnigentHostRealizer:
                 sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, current)
                 await sink.record_phase("saveDeferred", dict(retention))
                 return sink.binding
+
+    # Bounded in-run reconciliation of an interrupted attempt's cleanup (#4627).
+    _INTERRUPTED_CLEANUP_RETRY_DELAYS: tuple[float, ...] = (5.0, 15.0, 40.0)
+
+    async def _predecessor_host_stopped(self, host_lease: Any | None) -> bool:
+        if host_lease is None:
+            return True
+        try:
+            current = await self._host_leases.get(host_lease.leaseRef)
+        except Exception:
+            # An unreadable lease is not proof that the old host stopped.
+            logger.warning("Reading the interrupted host lease failed", exc_info=True)
+            return False
+        return current is None or current.status == "cleaned"
+
+    async def _latest_binding(
+        self, binding: StableRuntimeBinding
+    ) -> StableRuntimeBinding:
+        try:
+            return await self._runtime_bindings.get(binding.bindingId) or binding
+        except Exception:
+            logger.warning("Reading the interrupted runtime binding failed", exc_info=True)
+            return binding
+
+    async def _reconcile_interrupted_attempt(
+        self,
+        primary_error: BaseException,
+        *,
+        request: AgentExecutionRequest,
+        binding: StableRuntimeBinding,
+        host_lease: Any | None,
+        host_context: dict[str, Any] | None,
+        prepared: Any | None,
+        credential_handles: tuple[CredentialRuntimeHandle, ...],
+        acquired: tuple[Any, ...],
+        cleanup_error: BaseException | None,
+    ) -> tuple[StableRuntimeBinding, BaseException | None]:
+        """Establish whether a successor may take over an interrupted attempt.
+
+        An expired lease, lost heartbeat or offline projection does not stop a
+        partitioned host that still has filesystem or external access. Resume
+        this attempt's idempotent cleanup within bounds until the old host's
+        removal is confirmed; never race it with successor compute. Auxiliary
+        trouble after a confirmed stop stays with the janitor. Records the
+        verdict and saved work on ``primary_error`` for the typed failure.
+        """
+
+        if cleanup_error is not None:
+            for delay in self._INTERRUPTED_CLEANUP_RETRY_DELAYS:
+                if await self._predecessor_host_stopped(host_lease):
+                    break
+                await asyncio.sleep(delay)
+                try:
+                    current_lease = (
+                        await self._host_leases.get(host_lease.leaseRef)
+                        if host_lease is not None
+                        else None
+                    )
+                    binding, host_lease = await self._cleanup(
+                        request=request,
+                        binding=await self._latest_binding(binding),
+                        host_lease=current_lease or host_lease,
+                        host_context=host_context,
+                        prepared=prepared,
+                        credential_handles=credential_handles,
+                        acquired=acquired,
+                    )
+                except Exception as exc:
+                    cleanup_error = exc
+                else:
+                    cleanup_error = None
+                    break
+            binding = await self._latest_binding(binding)
+        primary_error.predecessor_stop_confirmed = (
+            await self._predecessor_host_stopped(host_lease)
+        )
+        carry_saved_workspace_checkpoint(primary_error, binding)
+        return binding, cleanup_error
 
     async def _cleanup(
         self,

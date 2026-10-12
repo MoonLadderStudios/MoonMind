@@ -127,6 +127,33 @@ def test_auto_publish_evidence_ref_survives_workflow_history_compaction() -> Non
 
 
 @pytest.mark.parametrize("pressure", ["annotations", "durable_refs"])
+def test_saved_workspace_restore_input_survives_result_compaction(pressure: str) -> None:
+    """MoonMind#4627: an oversized interrupted result keeps its successor restore input."""
+
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+
+    saved = {
+        "kind": "worktree_archive",
+        "archiveRef": "artifact://saved-worktree",
+        "archiveDigest": "sha256:" + "a" * 64,
+    }
+    metadata: dict = {"savedWorkspaceCheckpoint": saved}
+    for index in range(24):
+        key = f"auxiliary{index}Ref" if pressure == "durable_refs" else f"annotation{index}"
+        metadata[key] = "x" * 900
+    compacted = compact_published_agent_run_result_payload(
+        {
+            "summary": "host lost",
+            "failureClass": "integration_error",
+            "retryRecommendation": "retry_step_execution",
+            "metadata": metadata,
+        }
+    )
+    result = AgentRunResult.model_validate(compacted)
+    assert result.metadata["savedWorkspaceCheckpoint"] == saved
+
+
+@pytest.mark.parametrize("pressure", ["annotations", "durable_refs"])
 def test_acceptance_survives_final_result_compaction(pressure: str) -> None:
     from moonmind.schemas.agent_runtime_models import AgentRunResult
     from moonmind.workflows.skills.approval_policy import parse_step_gate_result
