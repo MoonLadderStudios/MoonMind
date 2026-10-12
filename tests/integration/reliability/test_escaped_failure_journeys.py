@@ -30,7 +30,9 @@ from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentPolicy,
     OmnigentPolicyVersion,
@@ -1246,8 +1248,35 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
     definition_id = UUID(manifest["definitionId"])
-    old_snapshot = manifest["storedSnapshot"]
-    active_snapshot = manifest["activeSnapshot"]
+    # The incident manifest trims the upstream agent identity that every
+    # admitted snapshot carries; plan compilation requires it.
+    old_snapshot = {**manifest["storedSnapshot"], "agentId": "upstream-codex-agent"}
+    active_snapshot = {
+        **manifest["activeSnapshot"],
+        "agentId": "upstream-codex-agent",
+    }
+    plan_binding = {
+        "planRef": "omnigent-execution-plan:sha256:" + "b" * 64,
+        "planDigest": "sha256:" + "b" * 64,
+        "planArtifactRef": "art_plan",
+        "taskInputSnapshotRef": "art_task",
+        "taskInputSnapshotDigest": "sha256:" + "c" * 64,
+    }
+    compile_plan = AsyncMock(
+        return_value=SimpleNamespace(
+            binding=SimpleNamespace(model_dump=lambda **_kwargs: dict(plan_binding)),
+            artifact_refs=("art_profile", "art_skills", "art_plan"),
+            resolved_skillset_ref="art_skills",
+        )
+    )
+    monkeypatch.setattr(
+        omnigent_execution_plan_service, "compile_and_persist_execution_plan", compile_plan
+    )
+    monkeypatch.setattr(
+        omnigent_execution_plan_service,
+        "persist_json_artifact",
+        AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+    )
 
     async def refresh_snapshot(
         session,
@@ -1261,6 +1290,14 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
         assert consumer_type == "schedule"
         assert consumer_id == str(definition_id)
         assert replace_existing_usage is True
+        usage = await session.scalar(
+            select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_id == consumer_id
+            )
+        )
+        usage.version = active_snapshot["version"]
+        usage.digest = active_snapshot["digest"]
+        usage.effective_snapshot = active_snapshot
         return {
             **dict(parameters),
             "agentProfile": {
@@ -1327,6 +1364,19 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
             session.add_all(
                 [
                     definition,
+                    ManagedAgentProviderProfile(
+                        profile_id=old_snapshot["providerProfileRef"],
+                        runtime_id="codex_cli",
+                        provider_id="openai",
+                    ),
+                    OmnigentAgentProfileUsage(
+                        consumer_type="schedule",
+                        consumer_id=str(definition_id),
+                        profile_id=old_snapshot["profileId"],
+                        version=old_snapshot["version"],
+                        digest=old_snapshot["digest"],
+                        effective_snapshot=old_snapshot,
+                    ),
                     OmnigentAgentProfile(
                         profile_id=active_snapshot["profileId"],
                         display_name="Codex via Omnigent",
@@ -1355,6 +1405,7 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
             service = RecurringWorkflowsService(
                 session,
                 temporal_client_adapter=adapter,
+                artifact_service=SimpleNamespace(),
             )
             old_workflow_type, old_workflow_input = (
                 service._workflow_bundle_for_definition(definition)
@@ -1389,6 +1440,12 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
             assert update_input["initial_parameters"]["omnigent"][
                 "launchPolicyRef"
             ] == expected["refreshedLaunchPolicyRef"]
+            # MoonLadderStudios/MoonMind#3935: the refreshed occurrence
+            # launches through the plan owner, not plan-less supervision.
+            compile_plan.assert_awaited_once()
+            assert update_input["initial_parameters"][
+                "omnigentExecutionPlan"
+            ] == plan_binding
     finally:
         await engine.dispose()
 
