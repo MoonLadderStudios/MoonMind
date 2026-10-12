@@ -22,6 +22,7 @@ from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
     authored_starting_branch,
+    request_publication_identity,
 )
 from moonmind.publish.service import PublishResult, PublishService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -1073,7 +1074,7 @@ class OmnigentWorkspacePublicationService:
                     workspace_locator=workspace_locator,
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
-                    publication_identity=request.idempotency_key,
+                    publication_identity=request_publication_identity(request),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -1088,7 +1089,7 @@ class OmnigentWorkspacePublicationService:
                 workspace_locator=workspace_locator,
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
-                publication_identity=request.idempotency_key,
+                publication_identity=request_publication_identity(request),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,

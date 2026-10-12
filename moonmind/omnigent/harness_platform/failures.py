@@ -135,3 +135,19 @@ _FAILURE_REMEDIATION: dict[str, str] = {
 
 def remediation_for(code: HarnessPlatformFailure | str) -> str:
     return _FAILURE_REMEDIATION.get(str(code), "contact_administrator")
+
+
+def successor_remediation(
+    remediation: str, *, predecessor_stop_confirmed: bool | None
+) -> str:
+    """Withhold a successor Step Execution until its predecessor stopped.
+
+    MoonMind#4627: an expired lease or lost heartbeat does not stop a
+    partitioned host that still has filesystem or external access, so a
+    ``retry_step_execution`` whose old host removal is unconfirmed goes to the
+    janitor instead of starting parallel compute.
+    """
+
+    if remediation == "retry_step_execution" and predecessor_stop_confirmed is False:
+        return "delegate_to_janitor"
+    return remediation

@@ -30,6 +30,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
+    successor_remediation,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
@@ -102,6 +103,18 @@ _SAVED_WORKSPACE_RESTORE_KEYS = (
 )
 
 
+def saved_workspace_restore_identity(
+    binding: StableRuntimeBinding | None,
+) -> dict[str, Any] | None:
+    """Return the compact restore identity of the attempt's durable save."""
+
+    saved = ((binding.phaseResults or {}) if binding is not None else {}).get("saved")
+    if not isinstance(saved, dict):
+        return None
+    compact = {key: saved[key] for key in _SAVED_WORKSPACE_RESTORE_KEYS if key in saved}
+    return compact if compact.get("archiveRef") else None
+
+
 def carry_saved_workspace_checkpoint(
     error: BaseException, binding: StableRuntimeBinding | None
 ) -> None:
@@ -112,12 +125,48 @@ def carry_saved_workspace_checkpoint(
     the compact restore identity of that durable save on the error.
     """
 
-    saved = ((binding.phaseResults or {}) if binding is not None else {}).get("saved")
-    if not isinstance(saved, dict):
-        return
-    compact = {key: saved[key] for key in _SAVED_WORKSPACE_RESTORE_KEYS if key in saved}
-    if compact.get("archiveRef"):
+    compact = saved_workspace_restore_identity(binding)
+    if compact is not None:
         error.saved_workspace_checkpoint = compact
+
+
+def gate_interrupted_result(
+    result: AgentRunResult,
+    *,
+    binding: StableRuntimeBinding | None,
+    predecessor_stop_confirmed: bool,
+) -> AgentRunResult:
+    """Gate a returned interruption on the old host's confirmed stop.
+
+    The production host-loss outcome is a returned ``retry_step_execution``
+    result, not a raised error. It carries the same stop verdict and saved
+    workspace as a raised interruption, and an unconfirmed stop starts no
+    successor (MoonMind#4627).
+    """
+
+    metadata = {
+        **(result.metadata or {}),
+        "predecessorStopConfirmed": predecessor_stop_confirmed,
+    }
+    compact = saved_workspace_restore_identity(binding)
+    if compact is not None:
+        metadata["savedWorkspaceCheckpoint"] = compact
+    return result.model_copy(
+        update={
+            "metadata": metadata,
+            "retry_recommendation": successor_remediation(
+                result.retry_recommendation or "",
+                predecessor_stop_confirmed=predecessor_stop_confirmed,
+            ),
+        }
+    )
+
+
+def _is_interruption(result: AgentRunResult | None) -> bool:
+    return (
+        result is not None
+        and result.retry_recommendation == "retry_step_execution"
+    )
 
 
 def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
@@ -780,11 +829,17 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
-            if primary_error is not None and not isinstance(
+            interrupted_error = primary_error is not None and not isinstance(
                 primary_error, asyncio.CancelledError
+            )
+            if interrupted_error or (
+                primary_error is None and _is_interruption(result)
             ):
-                binding, cleanup_error = await self._reconcile_interrupted_attempt(
-                    primary_error,
+                (
+                    binding,
+                    cleanup_error,
+                    stop_confirmed,
+                ) = await self._reconcile_interrupted_attempt(
                     request=request,
                     binding=binding,
                     host_lease=host_lease,
@@ -794,6 +849,15 @@ class GenericOmnigentHostRealizer:
                     acquired=acquired,
                     cleanup_error=cleanup_error,
                 )
+                if interrupted_error:
+                    primary_error.predecessor_stop_confirmed = stop_confirmed
+                    carry_saved_workspace_checkpoint(primary_error, binding)
+                else:
+                    result = gate_interrupted_result(
+                        result,
+                        binding=binding,
+                        predecessor_stop_confirmed=stop_confirmed,
+                    )
         elif acquired:
             try:
                 await self._provider_leases.release_all(acquired)
@@ -1064,11 +1128,15 @@ class GenericOmnigentHostRealizer:
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
             cleanup_error = exc
-        if primary_error is not None and not isinstance(
+        interrupted_error = primary_error is not None and not isinstance(
             primary_error, asyncio.CancelledError
-        ):
-            current, cleanup_error = await self._reconcile_interrupted_attempt(
-                primary_error,
+        )
+        if interrupted_error or (primary_error is None and _is_interruption(result)):
+            (
+                current,
+                cleanup_error,
+                stop_confirmed,
+            ) = await self._reconcile_interrupted_attempt(
                 request=request,
                 binding=current,
                 host_lease=host_lease,
@@ -1078,6 +1146,13 @@ class GenericOmnigentHostRealizer:
                 acquired=acquired,
                 cleanup_error=cleanup_error,
             )
+            if interrupted_error:
+                primary_error.predecessor_stop_confirmed = stop_confirmed
+                carry_saved_workspace_checkpoint(primary_error, current)
+            else:
+                result = gate_interrupted_result(
+                    result, binding=current, predecessor_stop_confirmed=stop_confirmed
+                )
         self._record_cleanup_outcome(
             harness_id=plan.payload.harnessId,
             primary_error=primary_error,
@@ -1149,7 +1224,16 @@ class GenericOmnigentHostRealizer:
     async def _reconcile_finalization(self, request, binding):
         """An interrupted save/publish resumes without a host or provider turn."""
         async with self._runtime_bindings.finalization(binding.bindingId) as current:
-            return await self._reconcile_owned_finalization(request, current)
+            result = await self._reconcile_owned_finalization(request, current)
+        if _is_interruption(result):
+            # Cleanup marks the host lease cleaned before the binding, so a
+            # cleaned binding's predecessor stop is already confirmed.
+            result = gate_interrupted_result(
+                result,
+                binding=await self._latest_binding(current),
+                predecessor_stop_confirmed=True,
+            )
+        return result
 
     async def _reconcile_owned_finalization(self, request, binding):
         from moonmind.omnigent.attempt_completion import recorded_attempt_result
@@ -1380,7 +1464,6 @@ class GenericOmnigentHostRealizer:
 
     async def _reconcile_interrupted_attempt(
         self,
-        primary_error: BaseException,
         *,
         request: AgentExecutionRequest,
         binding: StableRuntimeBinding,
@@ -1390,15 +1473,16 @@ class GenericOmnigentHostRealizer:
         credential_handles: tuple[CredentialRuntimeHandle, ...],
         acquired: tuple[Any, ...],
         cleanup_error: BaseException | None,
-    ) -> tuple[StableRuntimeBinding, BaseException | None]:
+    ) -> tuple[StableRuntimeBinding, BaseException | None, bool]:
         """Establish whether a successor may take over an interrupted attempt.
 
         An expired lease, lost heartbeat or offline projection does not stop a
         partitioned host that still has filesystem or external access. Resume
         this attempt's idempotent cleanup within bounds until the old host's
         removal is confirmed; never race it with successor compute. Auxiliary
-        trouble after a confirmed stop stays with the janitor. Records the
-        verdict and saved work on ``primary_error`` for the typed failure.
+        trouble after a confirmed stop stays with the janitor. Returns the
+        latest binding, any remaining cleanup error, and whether the old
+        host's stop is confirmed.
         """
 
         if cleanup_error is not None:
@@ -1427,11 +1511,11 @@ class GenericOmnigentHostRealizer:
                     cleanup_error = None
                     break
             binding = await self._latest_binding(binding)
-        primary_error.predecessor_stop_confirmed = (
-            await self._predecessor_host_stopped(host_lease)
+        return (
+            binding,
+            cleanup_error,
+            await self._predecessor_host_stopped(host_lease),
         )
-        carry_saved_workspace_checkpoint(primary_error, binding)
-        return binding, cleanup_error
 
     async def _cleanup(
         self,
