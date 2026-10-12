@@ -4841,6 +4841,9 @@ async def _drive_authority_chain_coordinator(
     resolve_source_credential: bool = False,
     stop_host_error: Exception | None = None,
     workspace_preservation=None,
+    step_execution_reason: str | None = None,
+    prepared_launches: list[dict] | None = None,
+    present_images: set[str] | None = None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -4934,7 +4937,12 @@ async def _drive_authority_chain_coordinator(
             return None
 
     class Runtime:
+        async def image_present(self, image_ref):
+            return image_ref in (present_images or set())
+
         async def prepare_host(self, **_kwargs):
+            if prepared_launches is not None:
+                prepared_launches.append(dict(_kwargs["effective_launch"]))
             if resolve_source_credential:
                 await _kwargs["github_token_resolver"]()
             return {
@@ -5059,6 +5067,11 @@ async def _drive_authority_chain_coordinator(
     coordinator._profile_authority.resolve = AsyncMock(  # type: ignore[method-assign]
         return_value=_launch_ready_profile()
     )
+    step_execution_id = (
+        "workflow-1:run-1:implement:execution:2"
+        if step_execution_reason is not None
+        else "idem-1"
+    )
     coordinator_result = await coordinator.execute(
         AgentExecutionRequest(
             agentKind="external",
@@ -5070,7 +5083,7 @@ async def _drive_authority_chain_coordinator(
                 "workspaceLocator": {
                     "kind": "sandbox",
                     "workspaceId": hashlib.sha256(
-                        b"workflow-1:idem-1"
+                        f"workflow-1:{step_execution_id}".encode()
                     ).hexdigest()[:24],
                 },
                 "repository": "owner/repo",
@@ -5083,6 +5096,21 @@ async def _drive_authority_chain_coordinator(
                 "omnigent": {"session": {"workspace": "owner/repo"}},
                 **dict(request_parameters or {}),
             },
+            **(
+                {
+                    "stepExecution": {
+                        "workflowId": "workflow-1",
+                        "runId": "run-1",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": 2,
+                        "stepExecutionId": step_execution_id,
+                        "reason": step_execution_reason,
+                        "runtimeContextPolicy": "fresh_agent_run",
+                    }
+                }
+                if step_execution_reason is not None
+                else {}
+            ),
         )
     )
     return (
@@ -5814,6 +5842,100 @@ async def test_profile_bound_host_loss_without_a_save_restarts_from_inputs() -> 
     assert result.retry_recommendation == "retry_step_execution"
     assert metadata["predecessorStopConfirmed"] is True
     assert "savedWorkspaceCheckpoint" not in metadata
+
+
+_PLANNED_HOST_IMAGE = "images/host@sha256:" + "2" * 64
+_INSTALLED_HOST_IMAGE = "images/host@sha256:" + "3" * 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "present", "expected_image"),
+    [
+        # A recovered successor is a fresh attempt on the installed runtime.
+        (
+            "runtime_recovered",
+            {_PLANNED_HOST_IMAGE, _INSTALLED_HOST_IMAGE},
+            _INSTALLED_HOST_IMAGE,
+        ),
+        # Ordinary launches keep their admitted image while it is usable.
+        (None, {_PLANNED_HOST_IMAGE, _INSTALLED_HOST_IMAGE}, _PLANNED_HOST_IMAGE),
+        (
+            "initial_execution",
+            {_PLANNED_HOST_IMAGE, _INSTALLED_HOST_IMAGE},
+            _PLANNED_HOST_IMAGE,
+        ),
+        # An installed image that is not present locally is never launched.
+        ("runtime_recovered", {_PLANNED_HOST_IMAGE}, _PLANNED_HOST_IMAGE),
+    ],
+)
+async def test_profile_bound_recovered_successor_launches_on_the_installed_image(
+    monkeypatch, reason, present, expected_image
+) -> None:
+    """MoonMind#4627: a profile-bound successor follows the installed runtime.
+
+    After an update the deployment's resolved shared host image is a
+    same-repository rebuild of the image the admitted launch policy pinned.
+    The interrupted predecessor keeps its recorded launch; only the
+    ``runtime_recovered`` successor launches on the installed image, with a
+    launch snapshot that stays internally consistent.
+    """
+
+    from moonmind.omnigent.bootstrap import store as bootstrap_store
+    from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+    from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+
+    monkeypatch.setattr(
+        bootstrap_store,
+        "load_resolved_state",
+        lambda: ResolvedOmnigentDeploymentState(
+            sharedHostImageRef=_INSTALLED_HOST_IMAGE,
+            details={
+                "hostImageProvenance": {
+                    _INSTALLED_HOST_IMAGE: {"version": "0.9.2"},
+                }
+            },
+        ),
+    )
+    launches: list[dict] = []
+
+    async def finished(request, **_kwargs):
+        return AgentRunResult(summary="done")
+
+    await _drive_authority_chain_coordinator(
+        finished,
+        step_execution_reason=reason,
+        prepared_launches=launches,
+        present_images=present,
+    )
+
+    assert [launch["hostImageRef"] for launch in launches] == [expected_image]
+    launch = launches[0]
+    assert launch["boundaries"]["host"]["hostImageRef"] == expected_image
+    # Harness, policy and profile authority are unchanged by the image choice.
+    assert launch["harness"] == "codex-native"
+    assert launch["executionProfileRef"] == "omnigent-codex@1"
+    validate_effective_launch_snapshot(launch)
+
+
+@pytest.mark.asyncio
+async def test_host_runtime_image_presence_never_pulls() -> None:
+    """The successor image choice reads local presence through the host owner."""
+
+    commands: list[tuple[str, ...]] = []
+
+    async def run(*args, **_kwargs):
+        commands.append(args)
+        if args[-1] == _INSTALLED_HOST_IMAGE:
+            return 0, "sha256:" + "9" * 64, ""
+        return 1, "", "No such image"
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = run  # type: ignore[method-assign]
+
+    assert await runtime.image_present(_INSTALLED_HOST_IMAGE) is True
+    assert await runtime.image_present(_PLANNED_HOST_IMAGE) is False
+    assert {command[:3] for command in commands} == {("docker", "image", "inspect")}
 
 
 @pytest.mark.asyncio

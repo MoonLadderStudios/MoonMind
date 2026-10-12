@@ -2688,6 +2688,11 @@ class OmnigentOAuthHostRuntime:
     async def _container_present(self, container_name: str) -> bool:
         return await self._containers.container_present(container_name)
 
+    async def image_present(self, image_ref: str) -> bool:
+        """Observe whether an image is available locally, without pulling."""
+
+        return await self._containers.image_present(image_ref)
+
     async def _volume_present(self, volume_name: str) -> bool:
         return await self._containers.volume_present(volume_name)
 

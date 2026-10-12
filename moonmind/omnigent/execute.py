@@ -317,6 +317,8 @@ class OmnigentSessionHostLostError(OmnigentTurnUnrecoverableError):
     resumable, and the turn stays frozen, typically inside a tool call whose
     output can never arrive. Its workspace survives in the saved checkpoint,
     so the step is retried on a fresh host instead of waiting on the dead one.
+    A static host recreated by an update comes back online under the same
+    identity without the turn's runner, which is the same lost attempt.
     """
 
     code = "OMNIGENT_SESSION_HOST_LOST"
@@ -336,24 +338,37 @@ class OmnigentSessionHostLostError(OmnigentTurnUnrecoverableError):
         snapshot = self.snapshot or {}
         return {
             "hostId": snapshot.get("host_id"),
+            "hostOnline": snapshot.get("host_online"),
+            "runnerOnline": snapshot.get("runner_online"),
             "hostOfflineSeconds": self.offline_seconds,
             "hostLossGraceSeconds": _SESSION_HOST_LOSS_GRACE_SECONDS,
         }
 
 
-def _snapshot_projects_lost_host(snapshot: Mapping[str, Any]) -> bool:
-    """Whether Omnigent reports the session's runner and host gone for good.
+def _snapshot_projects_lost_host(
+    snapshot: Mapping[str, Any], *, turn_ran: bool
+) -> bool:
+    """Whether Omnigent reports the runner of the marked turn gone for good.
 
     Only explicit ``False`` liveness counts: a snapshot without the fields
     proves nothing, and a resumable host is expected to come back. An omitted
     ``host_resumable`` is uncertain liveness and must preserve existing work,
     so only an explicit ``False`` establishes a non-resumable host.
+
+    An update that recreates a static host re-registers the same host
+    identity, so Omnigent projects the host online while the session's runner
+    died with the old container (MoonMind#4627). Omnigent relaunches a dead
+    runner only for a new message, so once that runner had run the turn
+    (``turn_ran``) the turn cannot continue either. A runner still launching
+    before the turn started stays owned by the turn-start budget.
     """
 
+    if snapshot.get("runner_online") is not False:
+        return False
+    if snapshot.get("host_online") is True:
+        return turn_ran
     return (
-        snapshot.get("runner_online") is False
-        and snapshot.get("host_online") is False
-        and snapshot.get("host_resumable") is False
+        snapshot.get("host_online") is False and snapshot.get("host_resumable") is False
     )
 
 
@@ -377,8 +392,9 @@ class _MarkedTurnStartWatchdog:
 
     The same observations also bound an unfinished turn whose host is gone:
     once every observation across ``host_loss_grace_seconds`` projects the
-    runner and host offline and not resumable, progress (or its absence) no
-    longer matters and :class:`OmnigentSessionHostLostError` is raised. Any
+    runner and host offline and not resumable, or the runner that ran the turn
+    offline on a re-registered host, progress (or its absence) no longer
+    matters and :class:`OmnigentSessionHostLostError` is raised. Any
     observation that does not project a lost host restarts that grace.
     """
 
@@ -589,9 +605,9 @@ class _MarkedTurnStartWatchdog:
         *,
         observation_started_at: float,
     ) -> None:
-        if not _snapshot_projects_lost_host(snapshot) or turn_state.get(
-            "terminalAssistantAfterWork"
-        ):
+        if not _snapshot_projects_lost_host(
+            snapshot, turn_ran=self.ever_active or self.progress
+        ) or turn_state.get("terminalAssistantAfterWork"):
             # A finished turn no longer needs its host.
             self.host_offline_since = None
             return
@@ -602,8 +618,13 @@ class _MarkedTurnStartWatchdog:
         if offline_seconds < self.host_loss_grace_seconds:
             return
         host_id = str(snapshot.get("host_id") or "unknown")
+        lost = (
+            "lost its session runner"
+            if snapshot.get("host_online") is True
+            else "has been offline and not resumable"
+        )
         raise OmnigentSessionHostLostError(
-            f"Omnigent session host {host_id} has been offline and not resumable "
+            f"Omnigent session host {host_id} {lost} "
             f"for {offline_seconds}s (host-loss grace "
             f"{self.host_loss_grace_seconds:g}s) with the marked turn unfinished; "
             "the turn cannot continue, retry as a new step execution",

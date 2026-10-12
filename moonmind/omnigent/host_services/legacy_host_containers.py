@@ -63,6 +63,18 @@ class LegacyOmnigentHostContainerService:
         )
         return result[0] == 0 and bool(result[1].strip())
 
+    async def image_present(self, image_ref: str) -> bool:
+        result = await self._run(
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            image_ref,
+            check=False,
+        )
+        return result[0] == 0 and bool(result[1].strip())
+
     async def volume_present(self, volume_name: str) -> bool:
         result = await self._run(
             "docker",

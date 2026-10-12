@@ -78,10 +78,15 @@ from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.interrupted_attempt import (
     gate_interrupted_result,
     is_interruption,
+    is_recovered_successor,
 )
 from moonmind.omnigent.host_failures import (
     HOST_CREDENTIAL_RECOVERY_ERROR, HOST_CREDENTIAL_RECOVERY_KEY,
     OmnigentOAuthHostError,
+)
+from moonmind.omnigent.host_image_drift import (
+    compatible_deployed_fallback,
+    reconcile_effective_launch_to_selected_host,
 )
 from moonmind.omnigent.oauth_hosts import (
     HEARTBEAT_HOST_STATES,
@@ -1102,6 +1107,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 policy_snapshot=policy_snapshot,
                 effective_launch=effective_launch,
             )
+            if is_recovered_successor(request):
+                effective_launch = await self._successor_launch_on_installed_image(
+                    effective_launch
+                )
             if (
                 self._repository_mutation_required(request)
                 and not effective_launch["repositoryMutation"]
@@ -3085,6 +3094,41 @@ class OmnigentProfileBoundExecutionCoordinator:
                 },
                 ignore_errors=True,
             )
+
+    async def _successor_launch_on_installed_image(
+        self, effective_launch: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Launch a recovered successor on the installed host image (#4627).
+
+        The admitted launch was verified above and stays the predecessor's
+        recorded authority. A successor is a fresh attempt, so an on-demand
+        host follows the deployment's qualified same-repository image when it
+        is present locally, keeping Harness, profile and policy authority. A
+        different image family, an unqualified image, or one absent locally
+        keeps the admitted image. A static host runs whatever image its
+        deployment-owned Compose service was recreated on.
+        """
+
+        if effective_launch.get("hostMode") != "on_demand_docker":
+            return effective_launch
+        planned = str(effective_launch.get("hostImageRef") or "")
+        installed = compatible_deployed_fallback(planned)
+        if installed is None or not await self._host_preparation.image_present(
+            installed
+        ):
+            return effective_launch
+        reconciled = reconcile_effective_launch_to_selected_host(
+            effective_launch, installed
+        )
+        if reconciled is None:
+            return effective_launch
+        logger.info(
+            "Recovered successor follows the installed host image "
+            "(planned=%s installed=%s)",
+            planned[:80],
+            installed[:80],
+        )
+        return reconciled
 
     async def _hand_off_interrupted_attempt(
         self,

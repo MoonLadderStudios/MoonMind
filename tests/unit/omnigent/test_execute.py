@@ -6454,9 +6454,16 @@ class _RestartedOmnigentTransportPool:
     heartbeat-only frames a session with a dead runner receives.
     """
 
-    def __init__(self, marker: str, *, refused_connections: int) -> None:
+    def __init__(
+        self,
+        marker: str,
+        *,
+        refused_connections: int,
+        snapshot: dict[str, Any] | None = None,
+    ) -> None:
         self.refused = {"remaining": refused_connections, "count": 0}
         self.paths: list[str] = []
+        session_snapshot = snapshot or _host_lost_snapshot(marker)
 
         async def heartbeats():
             while True:
@@ -6490,7 +6497,7 @@ class _RestartedOmnigentTransportPool:
                     headers={"content-type": "text/event-stream"},
                 )
             if path == "/v1/sessions/session-1" and request.method == "GET":
-                return httpx.Response(200, json=_host_lost_snapshot(marker))
+                return httpx.Response(200, json=session_snapshot)
             return httpx.Response(200, json={})
 
         self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -6500,9 +6507,11 @@ class _RestartedOmnigentTransportPool:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("host_outcome", ["host_removed", "static_host_recreated"])
 async def test_run_omnigent_execution_recovers_turn_orphaned_by_host_loss(
     monkeypatch,
     tmp_path,
+    host_outcome,
 ) -> None:
     """Replay resolver:pr:4554:head:122131097cc7 through the production boundary.
 
@@ -6512,6 +6521,10 @@ async def test_run_omnigent_execution_recovers_turn_orphaned_by_host_loss(
     The execution must wait out the server outage, then report the lost host
     as a typed, step-retryable failure instead of an untyped transport error
     or an indefinite wait on a tool call that can never finish.
+
+    MoonMind#4627: an update that recreates a static host instead re-registers
+    the same host identity while the session's runner died with the old
+    container. That attempt is interrupted the same way and gets a successor.
     """
 
     correlation_id = "corr-host-lost"
@@ -6525,7 +6538,15 @@ async def test_run_omnigent_execution_recovers_turn_orphaned_by_host_loss(
     store.row.omnigent_session_id = "session-1"
     store.row.first_message_state = "posted"
     store.row.first_message_posted_at = object()
-    pool = _RestartedOmnigentTransportPool(marker, refused_connections=3)
+    pool = _RestartedOmnigentTransportPool(
+        marker,
+        refused_connections=3,
+        snapshot=(
+            _recreated_host_snapshot(marker)
+            if host_outcome == "static_host_recreated"
+            else None
+        ),
+    )
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
@@ -6623,6 +6644,114 @@ def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:
                 observation_started_at=now + 621.0,
             )
         assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
+    finally:
+        loop.close()
+
+
+def _recreated_host_snapshot(marker: str) -> dict[str, Any]:
+    """A static host recreated by an update under an active turn.
+
+    The new container re-registers the same host identity, so Omnigent projects
+    the host online, while the session's runner died with the old container.
+    Omnigent relaunches a dead runner only for a new message.
+    """
+
+    snapshot = _host_lost_snapshot(marker)
+    snapshot["host_online"] = True
+    snapshot["runner_online"] = False
+    return snapshot
+
+
+def test_dead_runner_on_a_recreated_host_is_host_loss() -> None:
+    """MoonMind#4627: a recreated static host reaches the successor outcome."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, host_loss_grace_seconds=60.0
+        )
+        marker = "current-marker"
+        progress = {"boundarySource": "marker", "progress": True}
+        now = loop.time()
+        watchdog.observe(
+            {**_recreated_host_snapshot(marker), "active_response_id": "resp-1"},
+            progress,
+            observation_started_at=now,
+        )
+        watchdog.observe(
+            _recreated_host_snapshot(marker),
+            progress,
+            observation_started_at=now + 30.0,
+        )
+        with pytest.raises(OmnigentSessionStillRunningError) as excinfo:
+            watchdog.observe(
+                _recreated_host_snapshot(marker),
+                progress,
+                observation_started_at=now + 61.0,
+            )
+        assert excinfo.value.code == "OMNIGENT_SESSION_HOST_LOST"
+        assert excinfo.value.terminal_diagnostics()["runnerOnline"] is False
+        assert excinfo.value.terminal_diagnostics()["hostOnline"] is True
+    finally:
+        loop.close()
+
+
+def test_runner_tunnel_blip_on_a_live_host_keeps_the_turn() -> None:
+    """A runner that reconnects within the grace is not a lost attempt."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=300.0, host_loss_grace_seconds=60.0
+        )
+        marker = "current-marker"
+        progress = {"boundarySource": "marker", "progress": True}
+        now = loop.time()
+        watchdog.observe(
+            _recreated_host_snapshot(marker), progress, observation_started_at=now
+        )
+        watchdog.observe(
+            _host_lost_snapshot(marker, host_online=True),
+            progress,
+            observation_started_at=now + 40.0,
+        )
+        watchdog.observe(
+            _recreated_host_snapshot(marker),
+            progress,
+            observation_started_at=now + 61.0,
+        )
+        watchdog.observe(
+            _recreated_host_snapshot(marker),
+            progress,
+            observation_started_at=now + 120.0,
+        )
+        assert watchdog.host_offline_since == now + 61.0
+    finally:
+        loop.close()
+
+
+def test_runner_not_yet_connected_before_the_turn_started_is_not_host_loss() -> None:
+    """A runner still launching on a live host never ran the marked turn.
+
+    That case stays owned by the turn-start budget, so a slow runner start is
+    not misreported as an interrupted attempt.
+    """
+
+    loop = asyncio.new_event_loop()
+    try:
+        watchdog = _MarkedTurnStartWatchdog(
+            loop=loop, timeout_seconds=900.0, host_loss_grace_seconds=60.0
+        )
+        marker = "current-marker"
+        not_started = {"boundarySource": "marker", "progress": False}
+        now = loop.time()
+        for offset in (0.0, 61.0, 200.0):
+            watchdog.observe(
+                _recreated_host_snapshot(marker),
+                not_started,
+                observation_started_at=now + offset,
+            )
+        assert watchdog.host_offline_since is None
     finally:
         loop.close()
 
