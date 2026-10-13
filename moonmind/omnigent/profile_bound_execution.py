@@ -2703,7 +2703,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 launch_evidence_ref
                             )
                         try:
-                            await self._hosts.mark_host_lease_failed(
+                            # The stop is unconfirmed: the container may still
+                            # run. Keep the profile's exclusive host fenced
+                            # until the janitor confirms it, so no successor
+                            # attempt starts beside it.
+                            await self._hosts.record_unconfirmed_host_cleanup(
                                 host_lease.lease_id,
                                 code=type(cleanup_exc).__name__,
                                 summary=str(cleanup_exc),
