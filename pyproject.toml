@@ -37,7 +37,7 @@ docker = ">=7.1,<7.3"
 "fastapi-users" = { version = "~=15.0.5", extras = ["sqlalchemy"] }
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
 alembic = ">=1.18.4,<1.21.0"
-sqlalchemy-utils = "~=0.42.1"
+sqlalchemy-utils = ">=0.42.1,<0.44.0"
 cryptography = ">=46.0.7,<50.1.0"
 psycopg2-binary = "~=2.9.11"
 jinja2 = "~=3.1.4"
