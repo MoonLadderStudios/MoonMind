@@ -3026,7 +3026,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
             or {}
         ).get("after_execution")
-        archive_ref = ""
+        archive_ref = None
         if (
             isinstance(evidence, Mapping)
             and evidence.get("workspaceKind") == "worktree_archive"
@@ -3036,8 +3036,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             and str(evidence.get("checkpointManifestRef") or "").strip()
         ):
-            archive_ref = str(evidence.get("workspaceArchiveRef") or "").strip()
-        if archive_ref.startswith("artifact://"):
+            # Capture records compact ``art_`` ids; restore takes a durable ref.
+            archive_ref = self._bounded_story_loop_artifact_ref(
+                evidence.get("workspaceArchiveRef")
+            )
+        if archive_ref:
             self._interrupted_step_restore_refs[key] = archive_ref
             return
         self._fresh_source_step_execution_attempts.add(key)
