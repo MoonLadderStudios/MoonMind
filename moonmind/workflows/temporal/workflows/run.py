@@ -1094,6 +1094,14 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# MoonMind#4627: an Omnigent Step retried after its host was lost or replaced
+# restores the predecessor's verified after-execution worktree archive into the
+# successor sandbox. Without one, the successor restarts from its admitted
+# inputs and records that limitation instead of a blocked launch. Older
+# histories keep their recorded fresh-sandbox retry.
+RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
+    "run-omnigent-interrupted-step-workspace-v1"
+)
 # GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
 # and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
 # candidate into doc reconciliation, then publish that reconciled archive (or
@@ -1764,6 +1772,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._fresh_source_step_execution_attempts: set[str] = set()
+        # Interrupted Omnigent successors keyed by ``step:attempt``: the
+        # verified predecessor archive to restore, or a recorded restart from
+        # admitted inputs when no verified save exists.
+        self._interrupted_step_restore_refs: dict[str, str] = {}
+        self._interrupted_step_restart_limitations: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
         self._step_execution_context_projections: dict[
@@ -2966,6 +2979,42 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             in self._fresh_source_step_execution_attempts
         )
 
+    def _carry_interrupted_omnigent_step_workspace(
+        self,
+        logical_step_id: str,
+        *,
+        next_attempt: int,
+    ) -> None:
+        """Hand the interrupted attempt's latest durable save to its successor.
+
+        A replaced host leaves no live sandbox to continue. Only the
+        after-execution worktree archive, captured with verified digests into
+        artifact storage, is real saved work. Without one the successor
+        restarts from the Step's admitted inputs and says so.
+        """
+
+        key = self._step_execution_launch_block_key(logical_step_id, next_attempt)
+        evidence = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        ).get("after_execution")
+        archive_ref = ""
+        if (
+            isinstance(evidence, Mapping)
+            and evidence.get("workspaceKind") == "worktree_archive"
+            and str(evidence.get("workspaceDigest") or "").startswith("sha256:")
+            and str(evidence.get("workspaceIdentityDigest") or "").startswith(
+                "sha256:"
+            )
+            and str(evidence.get("checkpointManifestRef") or "").strip()
+        ):
+            archive_ref = str(evidence.get("workspaceArchiveRef") or "").strip()
+        if archive_ref.startswith("artifact://"):
+            self._interrupted_step_restore_refs[key] = archive_ref
+            return
+        self._fresh_source_step_execution_attempts.add(key)
+        self._interrupted_step_restart_limitations.add(key)
+
     def _record_workspace_policy_launch_block(
         self,
         logical_step_id: str,
@@ -3058,6 +3107,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace["sourceExecutionOrdinal"] = (
                 dict(source_execution_ordinal) if source_execution_ordinal else None
             )
+        if (
+            self._step_execution_launch_block_key(logical_step_id, attempt)
+            in self._interrupted_step_restart_limitations
+        ):
+            # Work after the interrupted attempt's last durable boundary is
+            # repeated from the admitted Step inputs.
+            workspace["restartLimitation"] = "no_verified_workspace_checkpoint"
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
 
@@ -13293,6 +13349,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
+                            if (
+                                trusted_remediation_checkpoint_restore_ref is None
+                                and current_step_execution > 1
+                                and workflow.patched(
+                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
+                                )
+                            ):
+                                trusted_remediation_checkpoint_restore_ref = (
+                                    self._interrupted_step_restore_refs.get(
+                                        self._step_execution_launch_block_key(
+                                            node_id, current_step_execution
+                                        )
+                                    )
+                                )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
@@ -14010,6 +14080,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             await self._wait_if_paused_at_safe_boundary()
                             if self._cancel_requested:
                                 return
+                            if (
+                                tool_type == "agent_runtime"
+                                and _normalize_agent_runtime_id(
+                                    self._agent_id_from_runtime_inputs(
+                                        node_inputs=node_inputs,
+                                        fallback_name=tool_name,
+                                    )
+                                )
+                                == "omnigent"
+                                and workflow.patched(
+                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
+                                )
+                            ):
+                                self._carry_interrupted_omnigent_step_workspace(
+                                    node_id,
+                                    next_attempt=(
+                                        self._step_execution_for(node_id)
+                                        or current_step_execution
+                                    )
+                                    + 1,
+                                )
                             self._mark_step_running(
                                 node_id,
                                 updated_at=workflow.now(),
