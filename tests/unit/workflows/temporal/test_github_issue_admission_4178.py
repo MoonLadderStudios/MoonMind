@@ -356,7 +356,7 @@ class _AdmissionFakeService(ClaimCommentFixture):
         self.labels = list(labels) if labels is not None else []
         self.operations: list[tuple[str, str]] = []
 
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, *, repo: str, operations=()):
         return "ghs-test", None
 
     def _github_headers(self, token: str) -> dict[str, str]:

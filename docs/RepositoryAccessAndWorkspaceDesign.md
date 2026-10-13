@@ -361,8 +361,21 @@ reports the operation unavailable; this path adds no grant or credential fallbac
 The `github.resolve_pull_request_target` tool resolves its selector and reads
 the pull request with the executing run's admitted connection the same way.
 Review-only merge automation and saved publication supply their own admitted
-credentials. Issue-lifecycle helpers still take an explicit token and fall back
-to deployment resolution when it is omitted.
+credentials.
+
+Issue collaboration (claim and lifecycle labels, attempt comments, issue
+reads, closing, search and reconciliation) uses the default connection's
+`issues` operation through `GitHubService.resolve_github_token`. A recorded
+default is authoritative: it must admit `issues` and serve
+`api.github.com`, an App connection issues an `issues: write` token for the
+named repository only, and a PAT connection reads only its own SecretRef.
+Only an unrecorded default derives from the deployment declaration. A denied
+operation, unreadable credential or other host reports the operation
+unavailable without sending a request; no ambient token of another account is
+substituted. Revision 394 grants `issues` to the default that revision 391
+mapped from the deployment credential while the operator has not edited it.
+An explicit token stays explicit. Content and comparison reads made by the
+same helpers request `read`.
 
 ### INV-004 Ambient identity cannot override admitted identity
 
@@ -374,7 +387,7 @@ Delivery objects belong to an attempt and use generation-fenced cleanup. Stale c
 
 Where a CLI requires authentication for a declared operation, the selected runtime either provides an explicitly supported portable unauthenticated interface or rejects the combination. It does not fabricate credentials or move a Skill's semantic behavior into a parallel native implementation.
 
-Current Omnigent delivery (implemented): both realizers clone with a Git process environment that keeps only transport routing and trust (proxy and CA variables) and replaces home, global/system configuration, helpers, and extra headers, so the admitted credential or no credential is all Git can send. Fixed, trusted Git LFS filters are restored explicitly without importing arbitrary ambient filter commands. Agent-side `gh` reads an attempt-owned `hosts.yml` written atomically through stdin by the shared projection writer: the generic host reads its read-only projection mount in place, and the profile-bound host reads the copy written into its lease cache volume before launch. Neither passes the token as a container variable. The profile-bound host receives that projection only when the step declares `gh`; a clone-only credential stays with the trusted clone. A same-owner rewrite is visible to the running reader, but no in-session refresh is scheduled yet: a projection is rewritten only when its attempt relaunches, so an expiring App issuance bounds how long agent-side `gh` stays authenticated.
+Current Omnigent delivery (implemented): both realizers clone with a Git process environment that keeps only transport routing and trust (proxy and CA variables) and replaces home, global/system configuration, helpers, and extra headers, so the admitted credential or no credential is all Git can send. Fixed, trusted Git LFS filters are restored explicitly without importing arbitrary ambient filter commands. Agent-side `gh` reads an attempt-owned `hosts.yml` written atomically through stdin by the shared projection writer: the generic host reads its read-only projection mount in place, and the profile-bound host reads the copy written into its lease cache volume before launch. Neither passes the token as a container variable. The profile-bound host receives that projection only when the step declares `gh`; a clone-only credential stays with the trusted clone. A same-owner rewrite is visible to the running reader, and an expiring issuance is re-issued in session: ten minutes before a GitHub App token lapses (at once for a resumed generic host, which cannot tell how much remains), the realizer reserves a newer projection and runs the same reserve, acquire and publish order, so an older writer cannot replace it. The generic host re-acquires its frozen collaboration binding, so the refresh keeps the connection, installation, repository and operations and fails when the connection is disabled or its credential revision changes. The profile-bound host re-reads its default-connection selection and refuses one that now names another source. A refused or failed re-issue publishes nothing and is retried each heartbeat while the current issuance is valid. A PAT does not expire and is not re-issued.
 
 ### QUALITY-003 Routing and confinement are separate guarantees
 

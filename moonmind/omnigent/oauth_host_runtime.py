@@ -3571,6 +3571,56 @@ class OmnigentOAuthHostRuntime:
                 code=HOST_CREDENTIAL_RECOVERY_ERROR,
             ) from exc
 
+    async def refresh_github_projection(
+        self,
+        *,
+        host_lease: OmnigentHostLease,
+        effective_launch: Mapping[str, Any],
+        evidence_request: AgentExecutionRequest,
+        cleanup_authority_store: Any,
+        reservation: Mapping[str, Any],
+        github_token_resolver: Callable[[], Awaitable[str | None]],
+    ) -> None:
+        """Re-issue a live host's gh projection under a newer reservation.
+
+        Host preparation's order applies: the destination fence is installed
+        before the value is acquired and rechecked before it is published, so
+        an older writer cannot replace it and a refused acquisition publishes
+        nothing.
+        """
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
+
+        async def validate() -> None:
+            await cleanup_authority_store.validate_github_projection(
+                request=evidence_request,
+                host_lease_ref=host_lease.lease_id,
+                reservation=reservation,
+            )
+
+        await self.reserve_github_projection(
+            host_lease=host_lease,
+            effective_launch=effective_launch,
+            reservation=reservation,
+        )
+        await validate()
+        github_token = await github_token_resolver()
+        if not github_token:
+            raise OmnigentOAuthHostError(
+                "selected GitHub credential is unavailable",
+                code=HOST_CREDENTIAL_RECOVERY_ERROR,
+            )
+        await validate()
+        await self._project_github_credential(
+            github_token,
+            github_projection_reservation=reservation,
+            cache_volume=f"{container_name}-cache",
+            host_image_ref=str(effective_launch["hostImageRef"]),
+            runtime_uid=int(effective_launch["runtimeUid"]),
+            runtime_gid=int(effective_launch["runtimeGid"]),
+        )
+
     async def reserve_github_projection(
         self,
         *,

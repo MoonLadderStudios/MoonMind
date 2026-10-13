@@ -757,15 +757,22 @@ async def validate_default_github_connection_operations(
 
 
 async def resolve_default_github_connection_credential(
-    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
+    *,
+    repo: str | None = None,
+    required_operations: tuple[str, ...] = (),
+    expected_api_base: str | None = None,
 ) -> Any:
     """Resolve only the default credential after its assigned actions admit use.
 
     A recorded default is authoritative. Only true absence uses the deployment
     declaration; denied operations and unreadable records never read or replace
     a secret. Assignment narrowing is shared with the metadata-only preflight.
+    ``expected_api_base`` names the API the caller will send the credential
+    to; a recorded default serving another host is refused before any read.
     """
     from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
         resolve_connection_github_credential,
         resolve_deployment_github_credential,
     )
@@ -777,12 +784,35 @@ async def resolve_default_github_connection_credential(
         return error
     if connection is None:
         return await resolve_deployment_github_credential(repo=repo)
+    if expected_api_base is not None and _api_base_served(
+        connection
+    ) != expected_api_base.rstrip("/"):
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=str(connection.id),
+            repo=repo,
+            diagnostic=(
+                f"{connection.id} does not serve {expected_api_base}; MoonMind "
+                "does not send its credential to another host or substitute "
+                "another GitHub credential."
+            ),
+        )
     return await resolve_connection_github_credential(
         connection,
         repo=repo,
         operations=required_operations,
         principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
     )
+
+
+def _api_base_served(connection: Any) -> str:
+    """The trusted API base a connection serves, or ``""`` when none is."""
+    from moonmind.auth.github_app_wiring import github_api_base_for
+
+    try:
+        return github_api_base_for(connection.endpoint_ref).rstrip("/")
+    except ValueError:
+        return ""
 
 
 def _github_user_api_url() -> str:
