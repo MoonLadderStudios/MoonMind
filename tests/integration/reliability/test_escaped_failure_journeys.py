@@ -1286,20 +1286,13 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
         consumer_id,
         user,
         replace_existing_usage,
-        persist_usage=True,
+        persist_usage,
     ):
         assert consumer_type == "schedule"
         assert consumer_id == str(definition_id)
         assert replace_existing_usage is True
-        if persist_usage:
-            usage = await session.scalar(
-                select(OmnigentAgentProfileUsage).where(
-                    OmnigentAgentProfileUsage.consumer_id == consumer_id
-                )
-            )
-            usage.version = active_snapshot["version"]
-            usage.digest = active_snapshot["digest"]
-            usage.effective_snapshot = active_snapshot
+        # Usage advances with the admitted schedule revision, not here.
+        assert persist_usage is False
         return {
             **dict(parameters),
             "agentProfile": {
@@ -1448,6 +1441,12 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
             assert update_input["initial_parameters"][
                 "omnigentExecutionPlan"
             ] == plan_binding
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_id == str(definition_id)
+                )
+            )
+            assert usage.effective_snapshot == active_snapshot
     finally:
         await engine.dispose()
 
