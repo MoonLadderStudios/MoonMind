@@ -7919,6 +7919,8 @@ async def test_checkpoint_branch_turn_restart_matrix_preserves_exact_once_author
     # failed result rather than raising, so the harness also re-enters those
     # completed calls once after the injected failure is observed.
     for _attempt in range(3):
+        # A lost stop acknowledgment stays fenced until the janitor confirms it.
+        ledger.confirm_unconfirmed_host_stops()
         try:
             result = await execute_checkpoint_branch_request(
                 request,
@@ -7934,11 +7936,13 @@ async def test_checkpoint_branch_turn_restart_matrix_preserves_exact_once_author
     assert ledger.failure_injected is True
     assert result is not None
     if result.failure_class:
+        ledger.confirm_unconfirmed_host_stops()
         result = await execute_checkpoint_branch_request(request, ledger=ledger)
     assert result.failure_class is None
 
     # Duplicate delivery after terminal completion must reattach to the exact
     # same authority rather than create a second external effect.
+    ledger.confirm_unconfirmed_host_stops()
     replayed = await execute_checkpoint_branch_request(request, ledger=ledger)
     assert replayed.failure_class is None
 
