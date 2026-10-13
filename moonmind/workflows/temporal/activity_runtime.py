@@ -4310,6 +4310,47 @@ def _publication_pull_request_unavailable(
     )
 
 
+async def _checkpoint_recovery_destination_credential(
+    repository: str, *, operations: tuple[str, ...]
+) -> Any:
+    """Return the default connection's credential for a recovery destination.
+
+    This is the selection the recovery's candidate push uses, so the push,
+    observation and PR effect act as one identity. A recorded connection reads
+    only its own credential; a selection failure is an unresolved credential
+    carrying its correction, never another credential.
+    """
+
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+        RepositoryRouteError,
+    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    try:
+        access = await managed_api_key_resolve.select_github_access_for_launch(
+            DEFAULT_GIT_CONNECTION_REF,
+            repository=repository,
+            required_operations=operations,
+        )
+    except RepositoryContractError as exc:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            repo=repository,
+            diagnostic=str(exc),
+            retryable=(
+                exc.code == "REPOSITORY_CONNECTION_UNAVAILABLE"
+                and not isinstance(exc.__cause__, RepositoryRouteError)
+            ),
+        )
+    return access.credential
+
+
 async def _saved_work_destination_authority(
     contract: Any, *, admitted_authority_ref: str | None = None
 ) -> tuple[str, str]:
@@ -4561,13 +4602,15 @@ class TemporalIntegrationActivities:
             repository_name = repository.partition("/")[2]
             if fork_owner and repository_name and branch_head:
                 branch_repository = f"{fork_owner}/{repository_name}"
-        token, error = await GitHubService.resolve_github_token(repo=repository)
-        if not token:
+        credential = await _checkpoint_recovery_destination_credential(
+            repository, operations=("read",)
+        )
+        if not credential.token:
             return {
                 "authoritative": True,
                 "authorityAvailable": False,
             }
-        headers = GitHubService._github_headers(token)
+        headers = GitHubService._github_headers(credential.token)
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 branch_response = await client.get(
@@ -4623,7 +4666,6 @@ class TemporalIntegrationActivities:
         the same head/base (including closed and merged results) before any
         create and accepts adoption only for the expected head (#4018).
         """
-        from moonmind.auth.github_credentials import resolve_github_credential
         from moonmind.publish.service import PublishService
 
         contract = dict((payload or {}).get("contract") or {})
@@ -4642,7 +4684,9 @@ class TemporalIntegrationActivities:
                 f"{continuation.get('remainingWorkRef')}"
             )
         repository = str(intent.get("repository") or "")
-        credential = await resolve_github_credential(repo=repository)
+        credential = await _checkpoint_recovery_destination_credential(
+            repository, operations=("read", "review_request")
+        )
         if not credential.token:
             raise _publication_authority_unavailable(credential)
         outcome = await PublishService().publish_pull_request(
@@ -12836,7 +12880,7 @@ class TemporalAgentRuntimeActivities:
                 attempted=False,
                 idempotencyKey=request.idempotency_key,
             )
-        token = await self._resolve_workspace_push_github_token(record.workspace_path)
+        token = await self._resolve_workspace_push_github_token(record)
         env = self._workspace_command_env(record.workspace_path, github_token=token)
         if request.existing_branch and request.existing_head_sha:
             try:
@@ -13021,9 +13065,7 @@ class TemporalAgentRuntimeActivities:
                         record.workspace_path
                     )
                     workspace_github_token = (
-                        await self._resolve_workspace_push_github_token(
-                            record.workspace_path
-                        )
+                        await self._resolve_workspace_push_github_token(record)
                     )
             # pr-resolver runs inside the session container where GitHub auth
             # or mergeability state may lag the activity worker's view. Re-check
@@ -14373,12 +14415,45 @@ class TemporalAgentRuntimeActivities:
         return env
 
     @staticmethod
-    async def _resolve_workspace_push_github_token(workspace: str) -> str:
-        repo = TemporalAgentRuntimeActivities._detect_repo_from_workspace(workspace)
-        from moonmind.auth.github_credentials import resolve_github_credential
+    async def _resolve_workspace_push_github_token(record: Any) -> str:
+        """Return the push credential of the connection the run's launch selected.
 
-        resolved = await resolve_github_credential(repo=repo or None)
-        return str(resolved.token or "").strip()
+        Launch records its selected connection in ``resolvedRepositoryTarget``;
+        a run without one derives the default connection as launch does. The
+        shared selected-connection read serves PAT and App connections alike.
+        A selection that cannot push yields no token, never another credential.
+        """
+        from moonmind.workflows.executions.repository_contract import (
+            DEFAULT_GIT_CONNECTION_REF,
+            RepositoryContractError,
+        )
+        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+            select_github_access_for_launch,
+        )
+
+        repo = TemporalAgentRuntimeActivities._detect_repo_from_workspace(
+            record.workspace_path
+        )
+        target = record.resolved_repository_target or {}
+        connection_ref = (
+            str(target.get("connectionRef") or "").strip()
+            or DEFAULT_GIT_CONNECTION_REF
+        )
+        try:
+            access = await select_github_access_for_launch(
+                connection_ref,
+                repository=repo or None,
+                required_operations=("write", "branch_write"),
+            )
+        except RepositoryContractError as exc:
+            logger.warning("Workspace push credential unavailable: %s", exc)
+            return ""
+        if not access.credential.token:
+            logger.warning(
+                "Workspace push credential unavailable: %s",
+                access.credential.safe_summary,
+            )
+        return str(access.credential.token or "").strip()
 
     async def _commit_workspace_changes_if_needed(
         self,
@@ -14694,7 +14769,7 @@ class TemporalAgentRuntimeActivities:
             resolved_github_token = str(github_token or "").strip()
             if not resolved_github_token:
                 resolved_github_token = await self._resolve_workspace_push_github_token(
-                    workspace
+                    record
                 )
             command_env = self._workspace_command_env(workspace)
             auth_command_env = self._workspace_command_env(

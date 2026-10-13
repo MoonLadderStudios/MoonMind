@@ -426,11 +426,16 @@ class PublishService:
                 raise RuntimeError(
                     "accepted publication candidate no longer matches its remote head"
                 )
-            if branch_name == base_branch:
-                if getattr(remote_result, "returncode", 1) != 0 or not re.fullmatch(
-                    r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha
-                ):
-                    raise RuntimeError("selected publication branch has no remote head")
+            if branch_name == base_branch and (
+                getattr(remote_result, "returncode", 1) != 0
+                or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha)
+            ):
+                raise RuntimeError("selected publication branch has no remote head")
+            if remote_sha:
+                # Any existing tip, including a generated PR candidate branch,
+                # is only kept or fast-forwarded. A freshly observed foreign
+                # commit never becomes the lease that permits replacing it; a
+                # lost push acknowledgment reconciles as an exact match.
                 ancestry = await run_command(
                     [
                         self._git_binary,
@@ -444,7 +449,7 @@ class PublishService:
                 )
                 if getattr(ancestry, "returncode", 1) != 0:
                     raise RuntimeError(
-                        "selected publication branch is not a fast-forward of the remote head"
+                        "publication branch is not a fast-forward of the remote head"
                     )
 
         async def run_dependency_git(

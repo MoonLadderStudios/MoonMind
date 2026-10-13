@@ -5758,6 +5758,149 @@ async def test_explicit_recorded_connection_is_selected_among_several(
     assert set(loaded) == {"repository-connection:team-b"}
 
 
+def _app_provider_edge(monkeypatch, token: str) -> list[dict[str, object]]:
+    """Synthetic GitHub App provider at the production acquirer seam (#4022)."""
+
+    from datetime import datetime, timedelta, timezone
+
+    from moonmind.auth import github_app_wiring as wiring
+
+    issued: list[dict[str, object]] = []
+
+    async def _post(*, jwt: str, payload: dict):
+        assert jwt == "launcher-test-jwt"
+        issued.append(dict(payload))
+        return {
+            "token": token,
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=55)
+            ).isoformat(),
+            "permissions": dict(payload["permissions"]),
+            "repositories": list(payload["repositories"]),
+        }
+
+    async def _get_installation(*, jwt: str):
+        assert jwt == "launcher-test-jwt"
+        return {
+            "app_ref": "github-app:moonmind-test",
+            "installation_ref": "installation:123",
+            "account": "MoonLadderStudios",
+            "repositories": ["MoonLadderStudios/MoonMind"],
+            "suspended": False,
+        }
+
+    real_factory = wiring.build_bound_acquirer_for_connection
+
+    def _factory(connection, **kwargs):
+        edge = {
+            "resolve_secret": lambda _ref: b"fake-app-private-key",
+            "make_jwt": lambda _key: "launcher-test-jwt",
+            "http_post": _post,
+            "get_installation": _get_installation,
+            "app_id": "123456",
+            "installation_id": "123",
+            "expected_account": "MoonLadderStudios",
+        }
+        edge.update({k: v for k, v in kwargs.items() if v not in (None, "", (), [])})
+        return real_factory(connection, **edge)
+
+    monkeypatch.setattr(wiring, "build_bound_acquirer_for_connection", _factory)
+    return issued
+
+
+@pytest.mark.asyncio
+async def test_selected_github_app_connection_reaches_launch_over_ambient_and_default(
+    tmp_path, monkeypatch
+):
+    """#4003/#4011: a selected App connection issues through bound acquisition.
+
+    The launcher uses the App installation token of the selected connection
+    B, restricted to the target repository and its admitted operations,
+    instead of failing closed or reading the ambient token or default PAT A.
+    """
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("DEFAULT_PAT_A", "default-token-A")
+    app_connection = _recorded_connection(
+        "repository-connection:app-b",
+        {
+            "source": "github_app",
+            "appRef": "github-app:moonmind-test",
+            "installationRef": "installation:123",
+        },
+    ).model_copy(update={"allowed_repository_ids": ("MoonLadderStudios/MoonMind",)})
+    loaded = _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "DEFAULT_PAT_A"},
+                },
+            ),
+            "repository-connection:app-b": app_connection,
+        },
+    )
+    secret_reads: list[str] = []
+
+    async def _no_secret_ref(ref: str, **_kwargs):
+        secret_reads.append(ref)
+        raise AssertionError("an App launch must not read a PAT SecretRef")
+
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
+        _no_secret_ref,
+    )
+    issued = _app_provider_edge(monkeypatch, "ghs_selected_app_b")
+    launcher = _ready_launcher(tmp_path)
+    request = _git_target_request("repository-connection:app-b", publish_mode="pr")
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+    token = await _request_github_token(launcher, request)
+
+    assert resolved is not None
+    assert resolved.connection_ref == "repository-connection:app-b"
+    assert token == "ghs_selected_app_b"
+    assert set(loaded) == {"repository-connection:app-b"}
+    assert secret_reads == []
+    assert issued
+    for payload in issued:
+        # Issuance is narrowed to the target repository and the connection's
+        # admitted operations; nothing is requested without restrictions.
+        assert payload["repositories"] == ["MoonMind"]
+        assert payload["permissions"]["contents"] == "write"
+        assert payload["permissions"]["pull_requests"] == "write"
+
+
+@pytest.mark.asyncio
+async def test_selected_github_app_issuance_failure_blocks_launch_without_fallback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    app_connection = _recorded_connection(
+        "repository-connection:app-b",
+        {
+            "source": "github_app",
+            "appRef": "github-app:moonmind-test",
+            "installationRef": "installation:123",
+        },
+    ).model_copy(update={"allowed_repository_ids": ("acme/other",)})
+    _record_connections(monkeypatch, {"repository-connection:app-b": app_connection})
+    issued = _app_provider_edge(monkeypatch, "ghs_must_not_issue")
+    launcher = _ready_launcher(tmp_path)
+    request = _git_target_request("repository-connection:app-b")
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await _request_github_token(launcher, request)
+
+    assert issued == []
+    assert "repository-connection:app-b" in str(excinfo.value)
+    assert "ambient-token-A" not in str(excinfo.value)
+
+
 @pytest.mark.asyncio
 async def test_unrecorded_explicit_connection_is_unavailable_not_default(
     tmp_path, monkeypatch
