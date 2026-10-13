@@ -423,9 +423,20 @@ steps, then the update stops the agent worker mid-turn and removes the third
 step's actual host container. A fresh worker re-observes the accepted turn
 without starting another agent and confirms the stop. Only that step then runs
 again, on a new host that restores the workspace archive captured into
-artifact storage, and the workflow completes. Its hosts are inert containers
-driven by a controlled provider, so it does not qualify a real Omnigent host or
-admission on a newly installed image.
+artifact storage, and the workflow completes. In the reliability shards its
+hosts are inert containers driven by a controlled provider.
+
+The `omnigent-exact-artifact` job's credential-free recovery row runs the same
+journey on the pinned Omnigent server and host images, with the canonical
+Temporal service added to its isolated stack. There, each host is launched,
+registered and cleaned up by the production generic host runtime, sessions are
+opened on the real Omnigent server, and host loss is the production predicate
+over that server's session projection. The row's internal network has no
+provider route, so the provider stays controlled: it creates the session and
+writes workspace bytes in the host instead of running a model turn. The row
+has no Skill, tool, repository or deployment egress gateway, and it binds
+each host to the pinned image instead of running full host attestation.
+Neither row qualifies admission on a newly installed image.
 
 ### 12.3 Verification failure rule
 

@@ -322,6 +322,7 @@ def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials(
         "omnigent-agent-init",
         "omnigent",
         "sandbox-egress-proxy",
+        "temporal",
     }
     assert document["networks"] == {"test": {"internal": True}}
     for name, service in document["services"].items():
@@ -350,6 +351,18 @@ def test_compose_reuses_canonical_owners_with_test_only_network_and_credentials(
     assert server["environment"]["OMNIGENT_AUTH_HEADER"] == "Authorization"
     assert server["environment"]["OMNIGENT_AUTH_HEADER_STRIP_PREFIX"] == (
         "Bearer moonmind-test-"
+    )
+    temporal = document["services"]["temporal"]
+    assert temporal["image"] == source["services"]["temporal"]["image"]
+    assert temporal["ports"] == []
+    assert temporal["depends_on"] == {"postgres": {"condition": "service_healthy"}}
+    assert temporal["environment"]["POSTGRES_SEEDS"] == "postgres"
+    assert temporal["environment"]["POSTGRES_PWD"] == (
+        document["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"]
+    )
+    assert driver.DATABASE_URL.endswith(
+        "@postgres:5432/"
+        + document["services"]["postgres"]["environment"]["POSTGRES_DB"]
     )
 
 
@@ -516,6 +529,7 @@ def test_raw_inspect_or_unknown_fields_are_not_accepted(tmp_path, location):
         "tools/ci/run_credential_free_host_recovery.py",
         "tests/unit/tools/test_run_credential_free_host_recovery.py",
         "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+        "tests/integration/reliability/test_interrupted_step_replacement_journey.py",
         "moonmind/omnigent/oauth_host_runtime.py",
         "moonmind/omnigent/bridge_store.py",
         "moonmind/omnigent/workspace_publication.py",
@@ -697,7 +711,7 @@ def test_main_checks_exact_server_then_probes_before_recovery(
                     else "server-container"
                 )
             if "up" in args:
-                assert args[-2:] == ["omnigent", "sandbox-egress-proxy"]
+                assert args[-3:] == ["omnigent", "sandbox-egress-proxy", "temporal"]
         elif args[:2] == ["docker", "inspect"]:
             container = args[-1]
             assert container in {"server-container", "proxy-container"}
@@ -717,6 +731,12 @@ def test_main_checks_exact_server_then_probes_before_recovery(
                 "moonmind-test-recovery-"
             )
             observed.append("readiness")
+        elif args[-1] == driver.TEMPORAL_READINESS_SCRIPT:
+            assert observed == ["server-image", "proxy-image", "readiness"]
+            assert args[args.index("--network") + 1].startswith(
+                "moonmind-test-recovery-"
+            )
+            observed.append("temporal")
         elif args[:6] == ["docker", "run", "--rm", "--network", "none", "--entrypoint"]:
             assert args[7] == IMAGE_ID
             assert args[args.index("--network") + 1] == "none"
@@ -729,17 +749,30 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         return SimpleNamespace(stdout=output, stderr="", returncode=0)
 
     def run_test(args, _root, **_identity):
-        assert observed == ["server-image", "proxy-image", "readiness"]
+        assert observed == ["server-image", "proxy-image", "readiness", "temporal"]
         assert IMAGE_ID in args
         assert args[args.index("--network") + 1].startswith("moonmind-test-recovery-")
         assert _identity["expected_harness_identity"] == HARNESS_IDENTITY
         observed.append("recovery")
         return receipt()
 
+    def run_journey(args, root, **identity):
+        assert observed[-1] == "recovery"
+        assert any(arg.endswith("::" + driver.JOURNEY_TEST_NAME) for arg in args)
+        assert (root / "driver" / driver.JOURNEY_TEST_FILE).is_file()
+        assert identity == {
+            "source_commit": SHA,
+            "host_image_ref": HOST_REF,
+            "host_image_id": IMAGE_ID,
+        }
+        observed.append("journey")
+        return journey_receipt()
+
     monkeypatch.setattr(driver.shutil, "which", lambda _name: "/test/docker")
     monkeypatch.setattr(driver, "_image", image)
     monkeypatch.setattr(driver, "_command", command)
     monkeypatch.setattr(driver, "run_test", run_test)
+    monkeypatch.setattr(driver, "run_journey", run_journey)
     monkeypatch.setattr(driver, "_cleanup", lambda *_args: None)
     assert driver.main(
         [
@@ -760,8 +793,16 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         ]
     ) == (0 if proxy_image_matches else 1)
     assert observed == ["server-image", "proxy-image"] + (
-        ["readiness", "recovery"] if proxy_image_matches else []
+        ["readiness", "temporal", "recovery", "journey"] if proxy_image_matches else []
     )
+    if proxy_image_matches:
+        evidence = tmp_path / "evidence"
+        report = json.loads((evidence / "credential-recovery-result.json").read_text())
+        assert report["status"] == "passed"
+        assert report["interruptedStep"] == journey_receipt()
+        assert json.loads((evidence / driver.JOURNEY_RECEIPT).read_text()) == (
+            journey_receipt()
+        )
     if not proxy_image_matches:
         report = json.loads(
             (tmp_path / "evidence/credential-recovery-result.json").read_text()
@@ -842,3 +883,202 @@ def test_actions_failure_is_annotated_without_the_test_owner_token(
         "::error title=Credential-free recovery setup failed::"
         "daemon refused [test-owner]%0A100%25 unavailable"
     ]
+
+
+def journey_receipt():
+    from tests.integration.reliability.test_interrupted_step_replacement_journey import (
+        COMPLETED_AFTER_UPDATE,
+        SAVED_BEFORE_UPDATE,
+        _exact_journey_receipt,
+    )
+
+    def launch(step, ordinal, name):
+        return {
+            "container": f"mm-omnigent-host-{name}",
+            "hostId": f"fixture-host-{name}",
+            "step": step,
+            "ordinal": ordinal,
+            "imageId": IMAGE_ID,
+        }
+
+    launches = [
+        launch("prepare", 1, "prepare"),
+        launch("analyze", 1, "analyze"),
+        launch("implement", 1, "lost"),
+        launch("implement", 2, "successor"),
+    ]
+    return _exact_journey_receipt(
+        source_commit=SHA,
+        image_ref=HOST_REF,
+        journey={
+            "workflowId": "interrupted-step-fixture",
+            "rows": [
+                {"logicalStepId": step, "status": "completed"}
+                for step in driver.JOURNEY_STEPS
+            ],
+            "launches": launches,
+            "deliveries": [
+                (item["step"], item["ordinal"], item["container"], "started", f"s-{i}")
+                for i, item in enumerate(launches)
+            ]
+            + [("implement", 1, launches[2]["container"], "observed", "s-2")],
+            "restoredBytes": SAVED_BEFORE_UPDATE,
+            "completedBytes": SAVED_BEFORE_UPDATE + COMPLETED_AFTER_UPDATE,
+        },
+        lost_snapshot={
+            "runnerOnline": False,
+            "hostOnline": False,
+            "hostResumable": False,
+        },
+    )
+
+
+def write_journey_evidence(root, row=None, *, skipped=False):
+    (root / driver.JOURNEY_RECEIPT).write_text(json.dumps(row or journey_receipt()))
+    skip = '<skipped message="missing Docker"/>' if skipped else ""
+    (root / driver.JOURNEY_JUNIT).write_text(
+        f'<testsuites><testsuite><testcase name="{driver.JOURNEY_TEST_NAME}">{skip}'
+        "</testcase></testsuite></testsuites>"
+    )
+
+
+def validate_journey(root):
+    return driver.validate_journey_evidence(
+        root, source_commit=SHA, host_image_ref=HOST_REF, host_image_id=IMAGE_ID
+    )
+
+
+def test_interrupted_step_successor_on_a_new_exact_host_is_accepted(tmp_path):
+    write_journey_evidence(tmp_path)
+    row = validate_journey(tmp_path)
+    assert row["predecessor"]["executionOrdinal"] == 1
+    assert row["successor"]["executionOrdinal"] == 2
+
+
+def test_skipped_interrupted_step_journey_is_not_passing_evidence(tmp_path):
+    write_journey_evidence(tmp_path, skipped=True)
+    with pytest.raises(driver.RecoveryError, match="executed"):
+        validate_journey(tmp_path)
+
+
+def test_missing_interrupted_step_receipt_is_unavailable(tmp_path):
+    with pytest.raises(driver.RecoveryError, match="unavailable"):
+        validate_journey(tmp_path)
+
+
+@pytest.mark.parametrize("field", ["containerName", "hostId", "sessionId"])
+def test_successor_must_run_on_a_new_host_and_session(tmp_path, field):
+    row = journey_receipt()
+    row["successor"][field] = row["predecessor"][field]
+    write_journey_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match=f"new {field}"):
+        validate_journey(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda row: row.update(sourceCommit="2" * 40), "stale"),
+        (lambda row: row.update(hostImageRef="other@" + IMAGE_ID), "host ref"),
+        (
+            lambda row: row["successor"].update(hostImageId="sha256:" + "9" * 64),
+            "host image",
+        ),
+        (
+            lambda row: row.update(restoredWorkspaceDigest="sha256:" + "8" * 64),
+            "restore",
+        ),
+        (
+            lambda row: row.update(
+                completedWorkspaceDigest=row["savedWorkspaceDigest"]
+            ),
+            "complete the step",
+        ),
+        (lambda row: row["steps"][1].update(status="failed"), "every step"),
+        (lambda row: row["steps"].pop(0), "every step"),
+        (lambda row: row["hostLoss"].update(hostResumable=None), "host loss"),
+        (lambda row: row["successor"].update(executionOrdinal=1), "attempt"),
+        (lambda row: row.update(logicalStepId="analyze"), "interrupted step"),
+    ],
+)
+def test_journey_receipt_checks_observed_successor_facts(tmp_path, mutate, message):
+    row = journey_receipt()
+    mutate(row)
+    write_journey_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match=message):
+        validate_journey(tmp_path)
+
+
+@pytest.mark.parametrize("location", ["root", "predecessor", "successor"])
+def test_journey_receipt_rejects_unknown_fields(tmp_path, location):
+    row = journey_receipt()
+    target = row if location == "root" else row[location]
+    target["Config"] = {"Env": ["TOKEN=must-not-be-published"]}
+    write_journey_evidence(tmp_path, row)
+    with pytest.raises(driver.RecoveryError, match="unrecognized"):
+        validate_journey(tmp_path)
+
+
+def test_failed_journey_reports_its_own_pytest_failure(tmp_path, monkeypatch):
+    write_journey_evidence(tmp_path)
+
+    def failing_journey(command, **kwargs):
+        assert not (tmp_path / driver.JOURNEY_RECEIPT).exists()
+        assert kwargs["timeout"] > 600
+        (tmp_path / driver.JOURNEY_JUNIT).write_text(
+            f'<testsuites><testsuite><testcase name="{driver.JOURNEY_TEST_NAME}">'
+            '<failure message="AssertionError: successor never restored"/>'
+            "</testcase></testsuite></testsuites>"
+        )
+        return type("Result", (), {"returncode": 1})()
+
+    monkeypatch.setattr(driver.subprocess, "run", failing_journey)
+    with pytest.raises(driver.RecoveryError) as raised:
+        driver.run_journey(
+            ["docker", "run"],
+            tmp_path,
+            source_commit=SHA,
+            host_image_ref=HOST_REF,
+            host_image_id=IMAGE_ID,
+        )
+    assert "interrupted-step journey failed (exit 1)" in str(raised.value)
+    assert "successor never restored" in str(raised.value)
+
+
+def test_journey_runs_repository_journey_inside_the_candidate(tmp_path):
+    command = driver.journey_command(
+        image=IMAGE_ID,
+        network="moonmind-test-fixture_test",
+        name="moonmind-test-fixture-driver",
+        work=tmp_path,
+        dependencies=tmp_path / "deps",
+        source_commit=SHA,
+        host_image_ref=HOST_REF,
+        token="moonmind-test-" + "e" * 32,
+        project="moonmind-test-fixture",
+    )
+    assert command[command.index("--entrypoint") + 1] == "python"
+    assert IMAGE_ID in command
+    assert not any("dst=/app" in arg for arg in command)
+    assert "PYTHONPATH=/app:/test-driver" in command
+    assert f"MOONMIND_TEST_TEMPORAL_ADDRESS={driver.TEMPORAL_ADDRESS}" in command
+    assert f"MOONMIND_TEST_POSTGRES_URL={driver.DATABASE_URL}" in command
+    assert "MOONMIND_OMNIGENT_CONCURRENCY_HOST_IMAGE=" + HOST_REF in command
+    assert "--noconftest" in command
+    assert (
+        f"/test-driver/{driver.JOURNEY_TEST_FILE}::{driver.JOURNEY_TEST_NAME}"
+        in command
+    )
+    assert f"--junitxml={tmp_path / driver.JOURNEY_JUNIT}" in command
+
+
+def test_temporal_readiness_runs_in_the_private_test_network():
+    command = driver.temporal_readiness_command(
+        image=IMAGE_ID, network="moonmind-test-fixture_test"
+    )
+    assert command[command.index("--network") + 1] == "moonmind-test-fixture_test"
+    assert IMAGE_ID in command
+    assert "--read-only" in command
+    assert not {"--publish", "-p", "--mount", "--privileged"}.intersection(command)
+    assert command[-1] == driver.TEMPORAL_READINESS_SCRIPT
+    assert driver.TEMPORAL_ADDRESS in driver.TEMPORAL_READINESS_SCRIPT
