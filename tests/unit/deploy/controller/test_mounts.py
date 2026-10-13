@@ -13,12 +13,33 @@ def test_windows_drive_path_maps_to_desktop_host_namespace(controller_path):
     assert mounts.daemon_visible_host_path("D:/x") == "/run/desktop/mnt/host/d/x"
 
 
-def test_wsl_short_distro_path_maps_to_desktop_host_namespace(controller_path):
+def test_wsl_distro_drive_path_keeps_the_distro_spelling(controller_path):
+    """Docker Desktop resolves a WSL distro client's binds in that distro.
+
+    There ``/run/desktop/mnt/host`` does not exist and becomes an empty
+    directory, so the distro's own ``/mnt/<drive>`` spelling must pass through.
+    """
     mounts = load("mounts")
-    assert (
-        mounts.daemon_visible_host_path("/mnt/c/repo/data")
-        == "/run/desktop/mnt/host/c/repo/data"
+    assert mounts.daemon_visible_host_path("/mnt/c/repo/data") == "/mnt/c/repo/data"
+
+
+def test_desktop_path_takes_the_wsl_spelling_this_client_sees(
+    controller_path, tmp_path, monkeypatch
+):
+    mounts = load("mounts")
+    monkeypatch.setattr(mounts, "WSL_DRIVE_ROOT", tmp_path)
+    visible = tmp_path / "d" / "code" / "state"
+    visible.mkdir(parents=True)
+    assert mounts.wsl_distro_host_path("/run/desktop/mnt/host/d/code/state") == str(
+        visible
     )
+    # A client without that drive mount (a raw-daemon container) keeps the
+    # daemon-namespace spelling, as do paths outside the Desktop namespace.
+    assert (
+        mounts.wsl_distro_host_path("/run/desktop/mnt/host/e/absent")
+        == "/run/desktop/mnt/host/e/absent"
+    )
+    assert mounts.wsl_distro_host_path("/var/run/docker.sock") == "/var/run/docker.sock"
 
 
 def test_longer_mnt_mounts_and_posix_paths_pass_through(controller_path):

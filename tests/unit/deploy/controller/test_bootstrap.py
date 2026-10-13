@@ -54,8 +54,9 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     def compose_run(state_dir, project, *args):
         nonlocal upgraded
         assert lock_mod.StackLock(state_dir, "moonmind").probe()
-        assert "--pull" in args and "never" in args
-        upgraded = True
+        if args[0] == "up":
+            assert "--pull" in args and "never" in args
+            upgraded = True
         return 0
 
     monkeypatch.setattr(bootstrap, "_run_capture", run)
@@ -183,8 +184,10 @@ def test_controller_prerequisite_can_retry_failed_recreation(
     attempts = []
     upgraded = False
 
-    def recreate(*args):
+    def recreate(state_dir, project, *args):
         nonlocal upgraded
+        if args[0] != "up":
+            return 0
         attempts.append(compose.read_text())
         if len(attempts) == 1:
             return 1
@@ -291,10 +294,128 @@ def test_bootstrap_render_resolves_daemon_visible_bind_sources(
 
     rendered = bootstrap.render_compose_file(
         state_dir=tmp_path,
-        repo=Path("/mnt/c/moonmind"),
+        repo=Path("C:/moonmind"),
     )
     content = rendered.read_text()
     assert "/run/desktop/mnt/host/c/moonmind" in content
+
+
+def _legacy_desktop_binds(compose, mapping):
+    """Spell bind sources the way the previous adapter rendered WSL paths."""
+    text = compose.read_text()
+    for local, desktop in mapping.items():
+        text = text.replace(f"      - {local}:", f"      - {desktop}:")
+    compose.write_text(text)
+
+
+def test_ensure_replaces_a_stopped_controller_on_wsl_spelled_binds(
+    controller_path, tmp_path, monkeypatch
+):
+    """A stopped controller is replaced, never restarted on stale state.
+
+    Its recorded link-network ID can be gone after the target stack was
+    redeployed, and binds rendered in the Desktop daemon namespace resolve
+    to empty directories for a WSL distro's Docker client.
+    """
+    from types import SimpleNamespace
+
+    bootstrap = load("bootstrap")
+    monkeypatch.setattr(bootstrap.mounts_mod, "WSL_DRIVE_ROOT", tmp_path / "mnt")
+    repo = tmp_path / "mnt" / "d" / "code" / "MoonMind"
+    state = repo / "deploy" / "state" / "controller"
+    state.mkdir(parents=True)
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(
+        state, repo, 8472, target_network="moonmind_link", target_project="moonmind"
+    )
+    compose = bootstrap.render_compose_file(
+        state_dir=state,
+        repo=repo,
+        target_network="moonmind_link",
+        target_project="moonmind",
+    )
+    local_mounts = compose.read_text().split("    volumes:", 1)[1]
+    _legacy_desktop_binds(
+        compose,
+        {
+            state: "/run/desktop/mnt/host/d/code/MoonMind/deploy/state/controller",
+            repo: "/run/desktop/mnt/host/d/code/MoonMind",
+        },
+    )
+    calls = []
+    upgraded = False
+
+    def fake_run(args):
+        calls.append(("run", tuple(args[:3])))
+        if args[:3] == ["docker", "network", "inspect"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
+        if args[:3] == ["docker", "image", "inspect"]:
+            return SimpleNamespace(returncode=0, stdout='""', stderr="")
+        return SimpleNamespace(returncode=0, stdout="id", stderr="")
+
+    def fake_compose(state_dir, project, *args):
+        nonlocal upgraded
+        calls.append(("compose", args, compose.read_text()))
+        upgraded = upgraded or args[0] == "up"
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", fake_run)
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "_application_controller_image", lambda *args: "sha256:" + "e" * 64
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: ({"active-journal-transition"} if upgraded else set()),
+    )
+    assert (
+        bootstrap.main(
+            ["ensure", "--state-dir", str(state), "--repo", str(repo)], env={}
+        )
+        == 0
+    )
+    composes = [call for call in calls if call[0] == "compose"]
+    assert [call[1] for call in composes] == [
+        ("rm", "--force", "controller"),
+        ("up", "-d", "--wait", "--pull", "never", "controller"),
+    ]
+    # The link network exists before Compose resolves it by name.
+    kinds = [call[:2] for call in calls]
+    assert kinds.index(("run", ("docker", "network", "create"))) < kinds.index(
+        composes[0][:2]
+    )
+    # The recreated controller binds the directories this client sees.
+    assert composes[1][2].split("    volumes:", 1)[1] == local_mounts
+
+
+@pytest.mark.parametrize("command", ["start", "update", "restore"])
+def test_lifecycle_replaces_a_stopped_controller_before_up(
+    controller_path, tmp_path, monkeypatch, command
+):
+    bootstrap = load("bootstrap")
+    installed = "ghcr.io/moonladderstudios/moonmind@sha256:" + "d" * 64
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(tmp_path), "--image", installed], env={}
+        )
+        == 0
+    )
+    calls = []
+
+    def fake_compose(state_dir, project, *args):
+        calls.append(args)
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_compose", fake_compose)
+    monkeypatch.setattr(
+        bootstrap, "ensure_target_network", lambda network, project: None
+    )
+    assert bootstrap.main([command, "--state-dir", str(tmp_path)], env={}) == 0
+    ups = [index for index, args in enumerate(calls) if args[0] == "up"]
+    assert len(ups) == 1
+    assert calls[ups[0] - 1] == ("rm", "--force", "controller")
+    assert calls[ups[0]][-1] == "controller"
 
 
 def test_bootstrap_derives_stable_per_deployment_identity(

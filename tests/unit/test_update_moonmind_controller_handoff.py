@@ -215,6 +215,94 @@ def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
     assert len(controller.applied) == 1
 
 
+def test_host_repairs_the_controller_with_the_requested_source_when_installed_fails(
+    installed, monkeypatch
+):
+    """An installed source that cannot repair the controller is not the last word.
+
+    A newer release carries repairs the installed one lacks, such as
+    replacing a stopped controller whose link network was recreated.
+    """
+    repo, controller = installed()
+    request = update._controller_call
+    bootstrapped = False
+    attempted = []
+
+    def old_health(url, secret, method, path, *args, **kwargs):
+        if path == "/v1/healthz" and not bootstrapped:
+            raise update.ControllerUnreachableError("controller is stopped")
+        return request(url, secret, method, path, *args, **kwargs)
+
+    def run(command, **kwargs):
+        nonlocal bootstrapped
+        if command[:3] == ["docker", "compose", "config"]:
+            return json.dumps({"services": {"api": {}}})
+        if command[:2] == ["docker", "ps"]:
+            return "installed-api"
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Image": "sha256:installed",
+                        "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                    }
+                ]
+            )
+        if command[:2] == ["docker", "run"]:
+            source = "sha256:installed" if "sha256:installed" in command else IMAGE
+            assert source in command
+            return json.dumps({"bootstrap.py": f"# {source} lifecycle"})
+        assert "ensure" in command
+        source = Path(command[1]).read_text()
+        attempted.append(source)
+        if "sha256:installed" in source:
+            raise RuntimeError("Controller prerequisite recreation failed (exit 1).")
+        bootstrapped = True
+        return ""
+
+    monkeypatch.setattr(update, "_controller_call", old_health)
+    monkeypatch.setattr(update, "run", run)
+    record = {
+        "project": "moonmind",
+        "image": IMAGE,
+        "inputs": {},
+        "context": {"idempotency_key": "host-update:fallback-test"},
+    }
+    assert (
+        update._submit_via_controller(
+            record, repo, controller_url=controller.url, secret_file=None
+        )
+        == 0
+    )
+    assert attempted == ["# sha256:installed lifecycle", f"# {IMAGE} lifecycle"]
+    assert len(controller.applied) == 1
+
+
+def test_host_reports_the_prerequisite_failure_when_no_source_repairs_it(
+    installed, monkeypatch
+):
+    repo, controller = installed()
+
+    def unreachable(url, secret, method, path, *args, **kwargs):
+        raise update.ControllerUnreachableError("controller is stopped")
+
+    def run(command, **kwargs):
+        if command[:2] == ["docker", "ps"]:
+            return ""
+        if command[:2] == ["docker", "run"]:
+            return json.dumps({"bootstrap.py": "# lifecycle"})
+        assert "ensure" in command
+        raise RuntimeError("Controller prerequisite recreation failed (exit 1).")
+
+    monkeypatch.setattr(update, "_controller_call", unreachable)
+    monkeypatch.setattr(update, "run", run)
+    with pytest.raises(RuntimeError, match="recreation failed"):
+        update._ensure_controller_journal_transition(
+            {"project": "moonmind", "image": IMAGE}, repo, controller.url, SECRET
+        )
+    assert controller.applied == []
+
+
 def test_host_lost_acknowledgment_observes_instead_of_resubmitting(
     installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
