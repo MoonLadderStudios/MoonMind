@@ -752,7 +752,8 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
 
     The portable script extracts only trusted, image-owned Python sources;
     it does not depend on a checked-out release or a healthy API/worker.
-    Installed source comes first so a rollback can use current repair code.
+    Installed source comes first so a rollback can use current repair code;
+    when its repair fails, the requested release's newer repair code runs.
     """
     try:
         _, health = _controller_call(
@@ -787,31 +788,44 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
                 if image and image not in candidates:
                     candidates.append(image)
     candidates.append(record["image"])
+    failure = None
     for image in candidates:
         bundle = _controller_sources(image, repo)
         if not bundle:
             continue
-        with _materialized_controller(bundle) as bootstrap:
-            run(
-                [
-                    sys.executable,
-                    str(bootstrap),
-                    "ensure",
-                    "--state-dir",
-                    str(repo / "deploy" / "state" / "controller"),
-                    "--repo",
-                    str(repo),
-                    "--stack",
-                    "moonmind",
-                    "--target-project",
-                    record["project"],
-                    "--image",
-                    record["image"],
-                    "--controller-url",
-                    controller_url,
-                ],
-                cwd=repo,
+        try:
+            with _materialized_controller(bundle) as bootstrap:
+                run(
+                    [
+                        sys.executable,
+                        str(bootstrap),
+                        "ensure",
+                        "--state-dir",
+                        str(repo / "deploy" / "state" / "controller"),
+                        "--repo",
+                        str(repo),
+                        "--stack",
+                        "moonmind",
+                        "--target-project",
+                        record["project"],
+                        "--image",
+                        record["image"],
+                        "--controller-url",
+                        controller_url,
+                    ],
+                    cwd=repo,
+                )
+        except RuntimeError as exc:
+            # A later source may carry the repair this one lacks; ensure is
+            # serialized by the stack lock and never replaces a controller
+            # that owns an open operation, so the next source may retry it.
+            print(
+                f"Controller prerequisite from {image} failed; trying the "
+                f"next source.\n{exc}",
+                flush=True,
             )
+            failure = exc
+            continue
         _, health = _controller_call(
             controller_url, secret, "GET", "/v1/healthz", timeout=5
         )
@@ -820,6 +834,8 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
                 "Controller prerequisite did not expose journal transition support."
             )
         return
+    if failure is not None:
+        raise failure
     raise RuntimeError(
         "Neither installed source nor requested image supplies the controller prerequisite."
     )
