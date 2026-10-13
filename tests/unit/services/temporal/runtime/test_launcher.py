@@ -5758,20 +5758,26 @@ async def test_explicit_recorded_connection_is_selected_among_several(
     assert set(loaded) == {"repository-connection:team-b"}
 
 
-def _app_provider_edge(monkeypatch, token: str) -> list[dict[str, object]]:
-    """Synthetic GitHub App provider at the production acquirer seam (#4022)."""
+def _app_provider_edge(
+    monkeypatch, token: str | list[str]
+) -> list[dict[str, object]]:
+    """Synthetic GitHub App provider at the production acquirer seam (#4022).
+
+    A list issues its tokens in order, one per installation-token request.
+    """
 
     from datetime import datetime, timedelta, timezone
 
     from moonmind.auth import github_app_wiring as wiring
 
     issued: list[dict[str, object]] = []
+    tokens = [token] if isinstance(token, str) else list(token)
 
     async def _post(*, jwt: str, payload: dict):
         assert jwt == "launcher-test-jwt"
         issued.append(dict(payload))
         return {
-            "token": token,
+            "token": tokens[0] if len(tokens) == 1 else tokens.pop(0),
             "expires_at": (
                 datetime.now(timezone.utc) + timedelta(minutes=55)
             ).isoformat(),
@@ -5871,6 +5877,78 @@ async def test_selected_github_app_connection_reaches_launch_over_ambient_and_de
         assert payload["repositories"] == ["MoonMind"]
         assert payload["permissions"]["contents"] == "write"
         assert payload["permissions"]["pull_requests"] == "write"
+
+
+@pytest.mark.asyncio
+async def test_launched_github_app_token_renews_through_the_selected_connection(
+    tmp_path, monkeypatch
+):
+    """#4011: a launch hands its broker a renewal of the selected App access.
+
+    Git/gh in a run longer than one installation token re-issue through the
+    same recorded connection, restricted as at launch, and never through the
+    ambient token or another connection. A PAT selection has no renewal.
+    """
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    _capture_launch_env(monkeypatch)
+    connections = {
+        "repository-connection:git-default": _recorded_connection(
+            "repository-connection:git-default",
+            {
+                "source": "github_app",
+                "appRef": "github-app:moonmind-test",
+                "installationRef": "installation:123",
+            },
+        ).model_copy(
+            update={"allowed_repository_ids": ("MoonLadderStudios/MoonMind",)}
+        )
+    }
+    _record_connections(monkeypatch, connections)
+    issued = _app_provider_edge(monkeypatch, [f"ghs_{n}" for n in range(1, 10)])
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    launcher._github_auth_brokers.start = AsyncMock()
+    workspace_root = tmp_path / "workspaces" / "app-run" / "repo"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="app-run",
+        request=_make_request(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    start = launcher._github_auth_brokers.start.await_args.kwargs
+    assert start["token"].startswith("ghs_")
+    assert start["expires_at"] is not None
+    launch_issuances = len(issued)
+    renewed_token, renewed_expiry = await start["renew"]()
+    assert renewed_token == f"ghs_{launch_issuances + 1}" != start["token"]
+    assert renewed_expiry is not None
+    # One re-issuance, restricted exactly as at launch.
+    assert len(issued) == launch_issuances + 1
+    assert issued[-1] == issued[0]
+
+    # The recorded connection changed to another account mid-run: renewal
+    # fails closed instead of switching accounts.
+    connections["repository-connection:git-default"] = connections[
+        "repository-connection:git-default"
+    ].model_copy(update={"id": "repository-connection:other-account"})
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CONNECTION_MISMATCH"):
+        await start["renew"]()
+    assert len(issued) == launch_issuances + 1
 
 
 @pytest.mark.asyncio

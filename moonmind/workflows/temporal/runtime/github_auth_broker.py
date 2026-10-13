@@ -10,20 +10,35 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import socket
 import sys
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _BROKER_SOCKET_TIMEOUT_SECONDS = 5.0
 _BROKER_SOCKET_PATH_MAX_BYTES = 100
 _SHARED_WORKSPACE_ROOT = Path("/work/agent_jobs")
 _SHARED_SOCKET_DIRNAME = ".moonmind-gh"
 _LEGACY_SHARED_SOCKET_DIRNAME = "mm-gh"
+# Renew an expiring token this long before it lapses, so a Git or gh call
+# started just before expiry still finishes with a valid credential.
+_RENEWAL_MARGIN = timedelta(minutes=5)
+
+#: Re-issue the run's token through its own selection: ``(token, expiresAt)``.
+TokenRenewal = Callable[[], Awaitable[tuple[str, datetime | None]]]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def build_github_socket_path(
@@ -209,6 +224,48 @@ def render_git_credential_helper_script(*, socket_path: str) -> str:
         "    raise SystemExit(main())\n"
     )
 
+
+@dataclass(slots=True)
+class _BrokeredToken:
+    """The run's current token and, for an expiring one, its renewal.
+
+    A renewal re-issues through the launch's own selected connection; a
+    failed renewal never substitutes another credential, and a lapsed token
+    is never served (#4011).
+    """
+
+    token: str
+    expires_at: datetime | None = None
+    renew: TokenRenewal | None = None
+    clock: Callable[[], datetime] = _utc_now
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def _due(self) -> bool:
+        return (
+            self.renew is not None
+            and self.expires_at is not None
+            and self.clock() >= self.expires_at - _RENEWAL_MARGIN
+        )
+
+    async def current(self) -> str:
+        if not self._due():
+            return self.token
+        async with self._lock:
+            if self._due():
+                try:
+                    token, expires_at = await self.renew()  # type: ignore[misc]
+                    if not token:
+                        raise RuntimeError("GitHub token renewal returned no token")
+                except Exception as exc:
+                    logger.warning("GitHub token renewal failed: %s", exc)
+                    # Retry on the next call while the current token is valid.
+                    if self.clock() < self.expires_at:  # type: ignore[operator]
+                        return self.token
+                    raise
+                self.token, self.expires_at = token, expires_at
+        return self.token
+
+
 @dataclass(slots=True)
 class GitHubAuthBrokerHandle:
     """Per-run in-memory GitHub token broker."""
@@ -217,7 +274,7 @@ class GitHubAuthBrokerHandle:
     socket_path: str
     server: asyncio.AbstractServer
     serve_task: asyncio.Task[None]
-    token: str
+    token: _BrokeredToken
 
     async def close(self) -> None:
         """Stop serving broker requests and remove the socket."""
@@ -247,9 +304,19 @@ class GitHubAuthBrokerManager:
         run_id: str,
         token: str,
         socket_path: str,
+        expires_at: datetime | None = None,
+        renew: TokenRenewal | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> GitHubAuthBrokerHandle:
-        """Start or replace a broker for one managed run."""
+        """Start or replace a broker for one managed run.
+
+        An expiring ``token`` with a ``renew`` is re-issued shortly before
+        ``expires_at`` so Git and gh keep access for the whole run.
+        """
         await self.stop(run_id)
+        brokered = _BrokeredToken(
+            token=token, expires_at=expires_at, renew=renew, clock=clock or _utc_now
+        )
 
         path = Path(socket_path)
         shared_root = path.parent.parent
@@ -281,7 +348,7 @@ class GitHubAuthBrokerManager:
                 if command == "ping":
                     response: dict[str, Any] = {"ok": True}
                 elif command == "github_token":
-                    response = {"ok": True, "token": token}
+                    response = {"ok": True, "token": await brokered.current()}
                 else:
                     response = {"ok": False, "error": f"unsupported command: {command}"}
                 writer.write((json.dumps(response) + "\n").encode("utf-8"))
@@ -311,7 +378,7 @@ class GitHubAuthBrokerManager:
             socket_path=str(path),
             server=server,
             serve_task=serve_task,
-            token=token,
+            token=brokered,
         )
         self._handles[run_id] = handle
         await wait_for_broker_socket(str(path))

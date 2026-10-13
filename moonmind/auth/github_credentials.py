@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Sequence
 
@@ -32,6 +33,9 @@ class ResolvedGitHubCredential(BaseModel):
     # read as the value. Connection revisions alone do not fence its rotation.
     reference_revision: str | None = Field(None, alias="referenceRevision")
     repo: str | None = None
+    # When an issued token (a GitHub App installation token) lapses; a
+    # long-lived PAT has none. Holders renew through the same selection.
+    expires_at: datetime | None = Field(None, alias="expiresAt")
     diagnostic: str | None = None
     # A configured reference that could not be read (for example during a
     # brief secret-store outage) may resolve on retry; missing or empty
@@ -500,9 +504,11 @@ async def _acquire_app_connection_credential(
         token = acquired.credential.use_now(lambda material: material.decode())
     finally:
         acquired.credential.clear()
+    expires_at = acquired.binding.expires_at
     return ResolvedGitHubCredential(
         token=token,
         source=GitHubCredentialSource.GITHUB_APP,
         sourceName=connection_id,
         repo=repo,
+        expiresAt=datetime.fromisoformat(expires_at) if expires_at else None,
     )

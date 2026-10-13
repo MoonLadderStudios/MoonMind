@@ -4789,12 +4789,15 @@ class TemporalIntegrationActivities:
             )
         from moonmind.workflows.adapters.github_service import GitHubService
 
-        token, _error = await GitHubService.resolve_github_token(repo=repository)
-        if not token:
+        # Measure as the identity that pushed and opened the PR (#4003).
+        credential = await _checkpoint_recovery_destination_credential(
+            repository, operations=("read",)
+        )
+        if not credential.token:
             raise TemporalActivityRuntimeError(
                 "publication recovery could not measure remote candidate identity"
             )
-        headers = GitHubService._github_headers(token)
+        headers = GitHubService._github_headers(credential.token)
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 commit_response = await client.get(
