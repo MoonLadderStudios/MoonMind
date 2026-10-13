@@ -19,7 +19,13 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
 )
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
+from tests.helpers.repository_connections import (  # noqa: F401
+    deployment_without_recorded_connections,
+)
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
 
 # The import registers the shared fixture; the alias keeps import linters that
 # do not model pytest fixture injection from flagging the registration.

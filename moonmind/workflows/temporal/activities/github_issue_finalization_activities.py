@@ -149,7 +149,11 @@ async def _reuse_attempt_comment(
 
 async def _fetch_issue(*, service: Any, repository: str, issue_number: int) -> dict[str, Any]:
     """Read the current issue through the production token boundary."""
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS
+
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return {"ok": False, "reasonCode": "auth_unavailable", "summary": resolution_error or "GitHub issue read unavailable."}
     import httpx

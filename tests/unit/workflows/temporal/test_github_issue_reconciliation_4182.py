@@ -92,7 +92,7 @@ class FakeGitHubService:
     def _github_headers(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
 
-    async def resolve_github_token(self, explicit_token=None, *, repo=None):
+    async def resolve_github_token(self, explicit_token=None, *, repo=None, operations=()):
         return "fake-token", None
 
     async def issue_claim_actor(self, *, repo: str) -> dict[str, Any]:
@@ -519,7 +519,7 @@ def test_missing_credentials_are_actionable_not_silent_fallback() -> None:
 @pytest.mark.asyncio
 async def test_activity_refuses_mutations_without_credentials(tmp_path) -> None:
     class NoAuthService(FakeGitHubService):
-        async def resolve_github_token(self, explicit_token=None, *, repo=None):
+        async def resolve_github_token(self, explicit_token=None, *, repo=None, operations=()):
             return "", "no token configured"
 
     result = await acts.reconcile_github_issue_handoffs(repository=REPO, issue_numbers=[11], state_dir=str(tmp_path), service=NoAuthService())

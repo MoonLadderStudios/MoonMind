@@ -14,7 +14,10 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.security import OutboundScanResult
-from tests.helpers.repository_connections import TemporalParentClient
+from tests.helpers.repository_connections import (  # noqa: F401
+    TemporalParentClient,
+    deployment_without_recorded_connections,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -689,6 +692,7 @@ async def test_default_jules_client_uses_shared_runtime_gate_message():
 
 
 @pytest.mark.parametrize('failure', [500, 503, 429, 'timeout'])
+@pytest.mark.usefixtures('deployment_without_recorded_connections')
 async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monkeypatch, failure):
     """Real adapter/activity handoff: retry reconciles a remotely created PR."""
     import httpx

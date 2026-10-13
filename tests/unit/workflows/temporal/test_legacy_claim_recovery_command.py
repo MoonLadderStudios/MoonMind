@@ -19,6 +19,9 @@ from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # no
 # The `journey` fixture is consumed by name in the test signatures below.
 assert journey is not None
 
+from tests.helpers.repository_connections import (  # noqa: F401
+    deployment_without_recorded_connections,
+)
 from tests.unit.workflows.temporal.test_issue_reservation_policy import (
     CUTOVER,
     ISSUE,
@@ -26,6 +29,9 @@ from tests.unit.workflows.temporal.test_issue_reservation_policy import (
     _legacy_comment,
 )
 from tools import recover_legacy_issue_claims as command
+
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
 
 
 def _args(tmp_path, *, apply=False):

@@ -62,6 +62,8 @@ The #4003 implementation attempts also changed these consumers (candidate branch
 - Immediate PR-mode publication fast-forwards or exactly reconciles an existing generated candidate branch and never force-replaces a competing tip.
 - The Create page reads Skill and preset publication constraints from the backend (`publishContract`, `workflowPublish`). A blank source submits save-only (`none`) unless the operator chose a mode, an explicit choice is not rewritten by Skill or preset selection, and submission omits `connectionRef` so the backend default applies instead of a hard-coded reference.
 - A scratch journey (`tests/integration/reliability/test_scratch_saved_work_journey.py`) admits, executes, saves and downloads generated output after the workspace is removed, with every repository credential entrypoint forbidden.
+- Issue collaboration (claim and lifecycle labels, attempt comments, issue reads, closing, search and reconciliation) resolves through the default repository connection and requires its new `issues` operation (App permission `issues: write`) instead of the deployment's ambient token. Only an unrecorded default derives from the deployment declaration. Revision 394 grants `issues` to the unedited default that revision 391 mapped.
+- Omnigent agent-side `gh` re-issues an expiring App projection in session on both realizers before it lapses: the generic host through its frozen collaboration binding, the profile-bound host through its default-connection selection. A changed, disabled or revoked selection is refused, and nothing is published.
 
 Profile-bound and OAuth host credential-recovery saves that fail keep the host and every byte and defer cleanup (`test_legacy_github_host_recovery.py::test_save_failure_retains_current_host_and_all_bytes`); they need no separate unsaved-retention marker.
 
@@ -71,11 +73,10 @@ Remaining repository work, each with its existing owner:
 
 | Gap | Owner |
 | --- | --- |
-| Deployment-identity issue and tool operations (`GitHubService.resolve_github_token` callers in issue search, claim recovery and reconciliation) and the live-worktree publish process-token fallback still use the deployment declaration. Repository-scoped ones are candidates for admitted-connection readers. `codex_worker` and the no-plan `workspace_publication` branch are historical-only | #4010 / #4011 |
-| Omnigent agent-side `gh` reads an attempt-owned `hosts.yml` that is rewritten only when its attempt relaunches; no in-session refresh is scheduled, so an App issuance bounds how long agent-side `gh` stays authenticated (design, Current Omnigent delivery). The launcher and Codex managed sessions renew through their brokers | #4011 |
+| The live-worktree publish process-token fallback still uses the deployment declaration. `codex_worker` and the no-plan `workspace_publication` branch are historical-only. Issue operations that need the acting account (claim actor, authored-issue search scope, retry-reset operator) read `GET /user`, which an App installation token cannot answer, so they report the identity unavailable on an App default | #4010 / #4011 |
 | Generic (non-GitHub) anonymous Git sources are not admitted and need a design decision before support is claimed | #2615 (awaiting operator clarification) |
 | Create has no connection selector or anonymous/artifact/checkpoint source inputs. Blank-source save-only applies to Create, not edit, rerun or remediation drafts | #2619 (awaiting operator clarification) |
-| First-run journey extended to generated output downloaded after cleanup, in current-candidate CI | #3938, with remaining integrated evidence in #4024 |
+| First-run journey extended to generated output downloaded after cleanup, in current-candidate CI. The credential-free Compose stack has no controlled model substitute: the seeded free route calls opencode.ai, and the runtime refuses custom model endpoints. The controlled eligible-model availability that TEST-004 assumes needs a substitute mechanism the operator chooses first | #3938, with remaining integrated evidence in #4024 |
 
 Not observed: GitHub App behavior against a live installation (PR #4492 used synthetic provider responses) and any live deployment rollout of these paths. They remain separately authorized observations, not repository defects.
 

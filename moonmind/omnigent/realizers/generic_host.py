@@ -13,6 +13,7 @@ import logging
 import time
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
@@ -74,6 +75,39 @@ class _CapabilityRenewalSchedule:
     renew: Callable[[], Awaitable[tuple[str, ...]]]
     interval_seconds: float
     due_at: float
+
+
+#: How long before an expiring gh issuance lapses its projection is re-issued.
+_GITHUB_PROJECTION_REFRESH_LEAD_SECONDS = 600.0
+
+
+@dataclass(frozen=True)
+class _GithubProjectionRenewal:
+    """When a live host's agent-side gh projection is next re-issued."""
+
+    refresh: Callable[[], Awaitable[str | None]]
+    due_at: float
+
+
+def _github_refresh_due(
+    expires_at: str | None, *, minimum_seconds: float
+) -> float | None:
+    """Monotonic time to re-issue an issuance expiring at ``expires_at``.
+
+    ``None`` means the issuance does not expire (a PAT) and needs no refresh.
+    An issuance shorter than the lead is still refreshed no more often than
+    ``minimum_seconds``.
+    """
+
+    if not expires_at:
+        return None
+    expiry = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+    return time.monotonic() + max(
+        minimum_seconds, remaining - _GITHUB_PROJECTION_REFRESH_LEAD_SECONDS
+    )
 
 
 def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
@@ -612,6 +646,18 @@ class GenericOmnigentHostRealizer:
                 ],
                 authority_sink=record_host_launch,
             )
+            # A resumed host re-issues its gh projection with the writer it
+            # launched with, without re-resolving current host defaults.
+            github_projection_renewal = (
+                {
+                    "writerImageRef": host_class.imageRef,
+                    "expectedOmnigentVersion": str(host_class.omnigentVersion or ""),
+                    "runtimeUid": int(host_class.runtime.get("uid", 1000)),
+                    "runtimeGid": int(host_class.runtime.get("gid", 1000)),
+                }
+                if prepared.github_credential_attachment is not None
+                else None
+            )
             host_lease = await self._host_leases.mark_ready(
                 host_lease.leaseRef,
                 expected_generation=host_lease.generation,
@@ -628,6 +674,11 @@ class GenericOmnigentHostRealizer:
                     **(
                         {"capabilityRenewal": host_context["capabilityRenewal"]}
                         if host_context.get("capabilityRenewal")
+                        else {}
+                    ),
+                    **(
+                        {"githubProjectionRenewal": github_projection_renewal}
+                        if github_projection_renewal is not None
                         else {}
                     ),
                 },
@@ -675,6 +726,14 @@ class GenericOmnigentHostRealizer:
                         plan=plan,
                         host_lease_ref=host_lease.leaseRef,
                         host_context=host_context,
+                        renew_first=False,
+                    ),
+                    github_renewal=self._github_projection_renewal(
+                        request=request,
+                        plan=plan,
+                        sink=sink,
+                        settings=github_projection_renewal,
+                        expires_at=prepared.github_issuance_expires_at,
                         renew_first=False,
                     ),
                 )
@@ -971,6 +1030,15 @@ class GenericOmnigentHostRealizer:
                             plan=plan,
                             host_lease_ref=host_lease.leaseRef,
                             host_context=host_context,
+                            renew_first=True,
+                        ),
+                        # Nor how long its gh issuance has left.
+                        github_renewal=self._github_projection_renewal(
+                            request=request,
+                            plan=plan,
+                            sink=sink,
+                            settings=host_context.get("githubProjectionRenewal"),
+                            expires_at=None,
                             renew_first=True,
                         ),
                     )
@@ -1572,6 +1640,86 @@ class GenericOmnigentHostRealizer:
             return None
         return replace(schedule, due_at=time.monotonic() + schedule.interval_seconds)
 
+    def _github_projection_renewal(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        sink: RuntimeBindingSessionAuthoritySink,
+        settings: Any,
+        expires_at: str | None,
+        renew_first: bool,
+    ) -> _GithubProjectionRenewal | None:
+        """Re-issue the agent's gh projection before its issuance lapses.
+
+        Each refresh reserves a newer projection under the session's binding
+        lock and re-acquires the same frozen collaboration binding, so it
+        never changes connection, installation, repositories or operations;
+        the projection fence keeps an older writer from replacing it.
+        """
+
+        if not isinstance(settings, dict):
+            return None
+        due_at = (
+            time.monotonic()
+            if renew_first
+            else _github_refresh_due(
+                expires_at, minimum_seconds=self._heartbeat_interval
+            )
+        )
+        if due_at is None:
+            return None
+
+        async def refresh() -> str | None:
+            from moonmind.omnigent.runtime_bindings import validate_github_projection
+
+            reservation = await sink.reserve_github_projection()
+
+            async def verify() -> None:
+                await validate_github_projection(
+                    self._runtime_bindings, sink.binding.bindingId, reservation
+                )
+
+            return await self._host_runtime.refresh_github_projection(
+                request=request,
+                plan=plan,
+                writer_image_ref=str(settings["writerImageRef"]),
+                expected_omnigent_version=str(
+                    settings.get("expectedOmnigentVersion") or ""
+                ),
+                runtime_uid=int(settings["runtimeUid"]),
+                runtime_gid=int(settings["runtimeGid"]),
+                repository_owner_ref=str(reservation["ownerRef"]),
+                authority_sink=sink.record_authority,
+                projection_reservation=reservation,
+                projection_verifier=verify,
+            )
+
+        return _GithubProjectionRenewal(refresh=refresh, due_at=due_at)
+
+    async def _refresh_github_projection(
+        self, schedule: _GithubProjectionRenewal
+    ) -> _GithubProjectionRenewal | None:
+        try:
+            expires_at = await schedule.refresh()
+        except Exception as exc:
+            # The published issuance stays in place while it is valid; a
+            # failed or refused re-issue never writes another credential.
+            logger.warning(
+                "generic host GitHub projection refresh failed; retrying in %ss: "
+                "%s: %s",
+                self._heartbeat_interval,
+                type(exc).__name__,
+                exc,
+            )
+            return replace(
+                schedule, due_at=time.monotonic() + self._heartbeat_interval
+            )
+        due_at = _github_refresh_due(
+            expires_at, minimum_seconds=self._heartbeat_interval
+        )
+        return None if due_at is None else replace(schedule, due_at=due_at)
+
     async def _drive_session(
         self,
         *,
@@ -1580,6 +1728,7 @@ class GenericOmnigentHostRealizer:
         host_lease: Any,
         plan: OmnigentExecutionPlanEnvelope,
         capability_renewal: _CapabilityRenewalSchedule | None = None,
+        github_renewal: _GithubProjectionRenewal | None = None,
     ) -> AgentRunResult:
         """Keep both durable ownership leases fresh while a turn is active."""
 
@@ -1615,7 +1764,7 @@ class GenericOmnigentHostRealizer:
                     )
 
         async def renewal_loop(
-            schedule: _CapabilityRenewalSchedule | None,
+            schedule: Any, renew: Callable[[Any], Awaitable[Any]]
         ) -> None:
             # Separate from the ownership heartbeats so a slow Docker command
             # during renewal can never let the leases lapse.
@@ -1627,7 +1776,7 @@ class GenericOmnigentHostRealizer:
                     )
                     return
                 except TimeoutError:
-                    schedule = await self._renew_capabilities(schedule)
+                    schedule = await renew(schedule)
 
         async def deliver_continuation(ordinal, instruction, recorded_result):
             from moonmind.omnigent.control_plane.turn_sources import TurnSource
@@ -1683,9 +1832,17 @@ class GenericOmnigentHostRealizer:
             # A resumed agent may call `moonmind container` at once, so an
             # already-due renewal completes before the session is driven.
             renewal = await self._renew_capabilities(renewal)
+        if github_renewal is not None and time.monotonic() >= github_renewal.due_at:
+            # Likewise its first `gh` call needs a live issuance.
+            github_renewal = await self._refresh_github_projection(github_renewal)
         driver_task = asyncio.create_task(complete_attempt())
         heartbeat_task = asyncio.create_task(heartbeat_loop())
-        renewal_task = asyncio.create_task(renewal_loop(renewal))
+        renewal_task = asyncio.create_task(
+            renewal_loop(renewal, self._renew_capabilities)
+        )
+        github_renewal_task = asyncio.create_task(
+            renewal_loop(github_renewal, self._refresh_github_projection)
+        )
         try:
             done, _pending = await asyncio.wait(
                 {driver_task, heartbeat_task},
@@ -1706,7 +1863,12 @@ class GenericOmnigentHostRealizer:
             return result
         finally:
             stop.set()
-            for task in (driver_task, heartbeat_task, renewal_task):
+            for task in (
+                driver_task,
+                heartbeat_task,
+                renewal_task,
+                github_renewal_task,
+            ):
                 if not task.done():
                     task.cancel()
                     with suppress(asyncio.CancelledError):

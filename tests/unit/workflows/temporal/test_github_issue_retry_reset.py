@@ -34,7 +34,13 @@ from moonmind.workflows.temporal.github_issue_retry_reset import (
     inventory_retry_resets,
 )
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
+from tests.helpers.repository_connections import (  # noqa: F401
+    deployment_without_recorded_connections,
+)
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
 
 _JOURNEY_FIXTURE = journey  # noqa: F841 -- keeps the fixture registration explicit
 assert _JOURNEY_FIXTURE is journey

@@ -457,7 +457,7 @@ class _AttemptFakeService(ClaimCommentFixture):
         self.created_bodies: list[str] = []
         self.listed: list[dict[str, Any]] = []
 
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, *, repo: str, operations=()):
         return "ghs-test", None
 
     def _github_headers(self, token: str) -> dict[str, str]:

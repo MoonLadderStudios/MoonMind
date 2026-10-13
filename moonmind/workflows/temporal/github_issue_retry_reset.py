@@ -269,7 +269,11 @@ async def _resolve_retry_attention(
 
 async def _operator(service: Any, repository: str) -> dict[str, Any]:
     """The authenticated account that will post, and therefore authorize, a reset."""
-    token, error = await service.resolve_github_token(repo=repository)
+    from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS
+
+    token, error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         raise ValueError(
             f"auth_unavailable: {error or 'GitHub credentials are unavailable'}"

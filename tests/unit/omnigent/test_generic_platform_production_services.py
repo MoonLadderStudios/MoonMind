@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -3379,12 +3379,20 @@ async def _generic_publication_harness(
     failing_renewals: int = 0,
     hanging_renewal: bool = False,
     session_seconds: float = 0.03,
+    github_issuance_expires_at: str | None = None,
+    github_refresh_expiries: tuple[str | None, ...] = (),
 ) -> SimpleNamespace:
-    """Build the real generic-host realizer around one publication outcome."""
+    """Build the real generic-host realizer around one publication outcome.
+
+    ``github_issuance_expires_at`` prepares a gh projection whose issuance
+    expires then; each re-issue returns the next ``github_refresh_expiries``.
+    """
 
     events: list[str] = []
     renewals: list[dict[str, object]] = []
     renewal_started: list[int] = []
+    github_refreshes: list[dict[str, object]] = []
+    session_started_after_refreshes: list[int] = []
 
     class CountingRuntimeBindings(InMemoryStableRuntimeBindingStore):
         def __init__(self) -> None:
@@ -3498,7 +3506,19 @@ async def _generic_publication_harness(
                     "networkRef": "egress",
                     "attestationRef": "artifact://egress",
                 },
+                github_credential_attachment=(
+                    {"kind": "volume", "sourceRef": "mm-omnigent-github-1"}
+                    if github_issuance_expires_at is not None
+                    else None
+                ),
+                github_issuance_expires_at=github_issuance_expires_at,
             )
+
+        async def refresh_github_projection(self, **kwargs):
+            await kwargs["projection_verifier"]()
+            github_refreshes.append(kwargs)
+            index = min(len(github_refreshes), len(github_refresh_expiries)) - 1
+            return github_refresh_expiries[index] if index >= 0 else None
 
         async def realize(self, **kwargs):
             events.append("host-ready")
@@ -3573,6 +3593,7 @@ async def _generic_publication_harness(
         return host_class, get_launch_policy("omnigent-on-demand@1")
 
     async def session_driver(request, *, session_authority_sink):
+        session_started_after_refreshes.append(len(github_refreshes))
         await session_authority_sink.session_created("session-1")
         assert session_authority_sink.binding.omnigentSessionId == "session-1"
         assert request.parameters["omnigent"]["session"]["hostId"] == "host-1"
@@ -3672,6 +3693,8 @@ async def _generic_publication_harness(
         events=events,
         renewals=renewals,
         renewal_started=renewal_started,
+        github_refreshes=github_refreshes,
+        session_started_after_refreshes=session_started_after_refreshes,
         runtime_store=runtime_store,
         host_leases=host_leases,
         acquired=acquired,
@@ -3873,6 +3896,90 @@ async def test_resumed_host_renews_capabilities_before_session_starts() -> None:
     # The resumed agent may call `moonmind container` immediately, so the
     # renewal completes before the session is driven, not at a later heartbeat.
     assert renewals_when_session_started == [1]
+
+
+def _in_seconds(seconds: float) -> str:
+    return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_live_session_reissues_gh_projection_before_its_issuance_lapses() -> None:
+    """An App issuance shorter than the session is re-issued while it runs."""
+
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION,
+        github_issuance_expires_at=_in_seconds(1),
+        github_refresh_expiries=(_in_seconds(3600),),
+        session_seconds=0.2,
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.summary == "done"
+    # The hour-long replacement is not re-issued again within the session.
+    (refresh,) = harness.github_refreshes
+    # The session sink that reserved and recorded the projection.
+    binding = refresh["authority_sink"].__self__.binding
+    owner = f"{binding.bindingId}:{binding.fencingGeneration}"
+    assert refresh["repository_owner_ref"] == owner
+    assert refresh["projection_reservation"]["ownerRef"] == owner
+    assert refresh["writer_image_ref"] == "ghcr.io/example/opencode@sha256:" + "f" * 64
+    assert (refresh["runtime_uid"], refresh["runtime_gid"]) == (1000, 1000)
+    assert refresh["request"].idempotency_key == harness.publish_request.idempotency_key
+    reservations = [
+        item["projectionReservation"]
+        for item in binding.cleanupAuthorityRefs
+        if isinstance(item, dict) and item.get("kind") == "github_projection_reservation"
+    ]
+    assert reservations[-1] == refresh["projection_reservation"]
+
+
+@pytest.mark.asyncio
+async def test_non_expiring_gh_issuance_is_not_reissued() -> None:
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION, github_issuance_expires_at="", session_seconds=0.05
+    )
+
+    result = await harness.realizer.execute(
+        harness.publish_request, _plan("opencode-go/model")
+    )
+
+    assert result.summary == "done"
+    assert harness.github_refreshes == []
+
+
+@pytest.mark.asyncio
+async def test_resumed_host_reissues_gh_projection_before_session_starts() -> None:
+    """A retry cannot tell how much of the projected issuance remains."""
+
+    harness = await _generic_publication_harness(
+        _PUSHED_PUBLICATION, github_refresh_expiries=(_in_seconds(3600),)
+    )
+    plan = _exact_plan("opencode-go/model")
+    writer = {
+        "writerImageRef": "ghcr.io/example/opencode@sha256:" + "e" * 64,
+        "expectedOmnigentVersion": "0.11.0",
+        "runtimeUid": 1001,
+        "runtimeGid": 1002,
+    }
+    await _prime_attested_host_binding(
+        harness, plan, host_context_extra={"githubProjectionRenewal": writer}
+    )
+    harness.realizer._resolve_host = AsyncMock(
+        side_effect=AssertionError("resume re-resolved current host defaults")
+    )
+
+    result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+
+    assert result.summary == "done"
+    assert harness.session_started_after_refreshes == [1]
+    (refresh,) = harness.github_refreshes
+    # The launched writer and owner, not current host defaults.
+    assert refresh["writer_image_ref"] == writer["writerImageRef"]
+    assert refresh["expected_omnigent_version"] == "0.11.0"
+    assert (refresh["runtime_uid"], refresh["runtime_gid"]) == (1001, 1002)
 
 
 @pytest.mark.asyncio
