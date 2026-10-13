@@ -395,6 +395,90 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
     )
 
 
+@pytest.mark.asyncio
+async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A checkpoint without an origin baseline restores with no credential.
+
+    Its bundle carries every object, so the restore needs neither the original
+    host, a repository clone, nor any repository credential lookup (#4003).
+    """
+
+    from moonmind.workflows.temporal.runtime import checkpoint_restore
+
+    async def no_source_credential(*_args, **_kwargs):
+        raise AssertionError("self-contained restore must not look up a credential")
+
+    monkeypatch.setattr(
+        checkpoint_restore, "resolve_github_token_for_launch", no_source_credential
+    )
+    store = InMemoryArtifactStore()
+    source, _ = _repo(tmp_path / "temporal_sandbox" / "source")
+    (source / "candidate.txt").write_text("unpublished\n")
+    subprocess.run(["git", "add", "candidate.txt"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "candidate"], cwd=source, check=True, capture_output=True
+    )
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+    ).strip()
+    (source / "tracked.txt").write_text("unsaved edit\n")
+    capture = await TemporalSandboxActivities(
+        workspace_root=tmp_path, artifact_store=store
+    ).workspace_capture_checkpoint(
+        {
+            "identity": {
+                "workflowId": "source",
+                "runId": "source-run",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "before_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(source),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "capture",
+            "includeUntracked": True,
+        }
+    )
+    manifest = json.loads(store.get_bytes(capture["workspace"]["manifestRef"]))
+    assert manifest["gitHistory"]["requiresSourceObjects"] is False
+    checkpoint_ref = store.put_bytes(
+        json.dumps(
+            {
+                "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+                "source": {
+                    "workflowId": "source",
+                    "runId": "source-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                },
+                "boundary": "before_execution",
+                "workspace": capture["workspace"],
+            }
+        ).encode(),
+        content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+    ).artifact_ref
+    request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base=head)
+    shutil.rmtree(source)
+    service = ManagedCheckpointRestoreService(
+        authority_root=tmp_path / "authority", artifact_store=store
+    )
+
+    await service.restore(request)
+
+    restored = tmp_path / "authority" / "new-run" / "repo"
+    assert (
+        subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=restored, text=True
+        ).strip()
+        == head
+    )
+    assert (restored / "candidate.txt").read_text() == "unpublished\n"
+    assert (restored / "tracked.txt").read_text() == "unsaved edit\n"
+
+
 def test_restore_contract_rejects_reused_identity_and_arbitrary_destination_path() -> (
     None
 ):
