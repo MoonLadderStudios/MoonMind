@@ -1910,6 +1910,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 }
                             )
                             break
+                        from moonmind.omnigent.workspace_publication import (
+                            logical_publication_identity,
+                        )
+
                         await emit(
                             publication_stage,
                             "started",
@@ -1932,7 +1936,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         current_step_execution_id=(
                                             step_execution_id or request.idempotency_key
                                         ),
-                                        publication_identity=request.idempotency_key,
+                                        publication_identity=(
+                                            logical_publication_identity(request)
+                                        ),
                                         publish_mode=publish_mode,
                                         base_branch=self._starting_branch(request),
                                         repository=self._repository_source(request),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -944,3 +945,142 @@ async def test_omitted_branch_uses_repository_default(
     assert retry["push_branch"] == result["push_branch"]
     assert retry["push_head_sha"] == head_sha
     assert retry["remote_verified"] is True
+
+
+def _attempt_request(
+    tmp_path: Path, *, ordinal: int, logical_step_id: str = "implement"
+) -> tuple[AgentExecutionRequest, Path]:
+    workflow_id, run_id = "workflow-4627", "run-1"
+    step_id = f"{workflow_id}:{run_id}:{logical_step_id}:execution:{ordinal}"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=workflow_id,
+        idempotencyKey=f"{step_id}:agent_execute",
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": workflow_id,
+            "runId": run_id,
+            "logicalStepId": logical_step_id,
+            "executionOrdinal": ordinal,
+            "stepExecutionId": step_id,
+            "reason": "initial_execution" if ordinal == 1 else "retry",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+        parameters={"publishMode": "pr"},
+        workspaceSpec={
+            "repository": "example/repository",
+            "startingBranch": "main",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+        },
+    )
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    return request, tmp_path / "temporal_sandbox" / workspace_id / "repo"
+
+
+@pytest.mark.asyncio
+async def test_successor_attempt_reconciles_predecessor_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successor Step Execution republishes the same logical candidate."""
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    resolve_pr = AsyncMock(
+        return_value=SimpleNamespace(
+            resolved=True, pr_url="https://github.com/example/repository/pull/7"
+        )
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        resolve_pr,
+    )
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    git("init", "--initial-branch=main", cwd=source)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "main", cwd=source)
+
+    first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    first_workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(first_workspace), cwd=tmp_path)
+    (first_workspace / "work.txt").write_text("completed work\n")
+    # The verified after_execution save precedes publication, so the successor
+    # restores the agent's uncommitted result rather than the publisher commit.
+    second, second_workspace = _attempt_request(tmp_path, ordinal=2)
+    second_workspace.parent.mkdir(parents=True)
+    shutil.copytree(first_workspace, second_workspace, symlinks=True)
+
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    run = publisher._run
+    pushes: list[tuple[str, ...]] = []
+
+    async def record(*command, **kwargs):
+        if "push" in command:
+            pushes.append(command)
+        return await run(*command, **kwargs)
+
+    publisher._run = record  # type: ignore[method-assign]
+    # The predecessor's push lands, then its host is lost before the
+    # acknowledgment reaches the workflow.
+    lost = await publisher.publish_request_workspace(
+        request=first,
+        current_workflow_id="workflow-4627",
+        current_step_execution_id=first.step_execution.step_execution_id,
+    )
+    successor = await publisher.publish_request_workspace(
+        request=second,
+        current_workflow_id="workflow-4627",
+        current_step_execution_id=second.step_execution.step_execution_id,
+    )
+
+    assert successor["push_branch"] == lost["push_branch"]
+    assert (
+        successor["pull_request_url"] == "https://github.com/example/repository/pull/7"
+    )
+    assert git("branch", "--format=%(refname:short)", cwd=origin).splitlines() == [
+        "main",
+        lost["push_branch"],
+    ]
+    assert (
+        git("rev-parse", f"refs/heads/{lost['push_branch']}", cwd=origin)
+        == successor["push_head_sha"]
+    )
+    assert (
+        git("show", f"{lost['push_branch']}:work.txt", cwd=origin) == "completed work"
+    )
+    assert len(pushes) == 2
+    assert [call.kwargs["selector"] for call in resolve_pr.await_args_list] == [
+        lost["push_branch"]
+    ] * 2
+
+    # Another logical step remains a distinct publication effect.
+    other, other_workspace = _attempt_request(
+        tmp_path, ordinal=1, logical_step_id="document"
+    )
+    other_workspace.parent.mkdir(parents=True)
+    shutil.copytree(first_workspace, other_workspace, symlinks=True)
+    (other_workspace / "notes.txt").write_text("other step\n")
+    distinct = await publisher.publish_request_workspace(
+        request=other,
+        current_workflow_id="workflow-4627",
+        current_step_execution_id=other.step_execution.step_execution_id,
+    )
+    assert distinct["push_branch"] != lost["push_branch"]
