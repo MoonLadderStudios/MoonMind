@@ -1139,6 +1139,57 @@ async def test_refresh_admits_a_stored_snapshot_only_omnigent_schedule(
         assert scheduled_parameters["omnigentExecutionPlan"] == admission.plan_binding
 
 
+@pytest.mark.parametrize("stored_snapshot", [{}, None, [], False, ""])
+async def test_refresh_rejects_a_present_invalid_stored_snapshot(
+    stored_snapshot: object,
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: only an absent snapshot is admitted
+    from deployment defaults. A present but invalid stored snapshot is
+    unverified authority, so the refresh reports it instead of replacing it."""
+
+    import copy
+
+    admission = _mm3935_plan_admission(monkeypatch)
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await _mm3935_plan_less_schedule(session, service)
+        definition_id = definition.id
+        definition.target = {
+            **definition.target,
+            "initialParameters": {
+                **definition.target["initialParameters"],
+                "targetRuntime": "omnigent",
+                "agentProfileSnapshot": stored_snapshot,
+            },
+        }
+        await session.commit()
+        stored_target = copy.deepcopy(definition.target)
+        mock_temporal_adapter.reset_mock()
+
+        outcome = await service.refresh_managed_bootstrap_schedules()
+
+        assert outcome.refreshed == 0
+        [failure] = outcome.failures
+        assert str(definition_id) in failure
+        assert "Agent Profile snapshot" in failure
+        admission.default_resolver.assert_not_awaited()
+        admission.compile_plan.assert_not_awaited()
+        mock_temporal_adapter.create_schedule.assert_not_awaited()
+        mock_temporal_adapter.update_schedule.assert_not_awaited()
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, definition_id, populate_existing=True
+        )
+        assert reloaded.target == stored_target
+        assert reloaded.version == 1
+
+
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
     session = AsyncMock(spec=AsyncSession)
     session.execute.return_value = SimpleNamespace(all=lambda: [])
@@ -1797,7 +1848,9 @@ async def test_managed_refresh_recompiles_recorded_omnigent_plan(
     refresh.assert_awaited_once()
 
 
+@pytest.mark.parametrize("transient_failure", [None, "compile", "temporal"])
 async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
+    transient_failure: str | None,
     tmp_path: Path,
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
@@ -1831,6 +1884,7 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         consumer_id,
         user,
         replace_existing_usage,
+        persist_usage=True,
     ):
         refresh_calls.append(
             {
@@ -1839,15 +1893,16 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 "replaceExistingUsage": replace_existing_usage,
             }
         )
-        # The real resolver replaces the schedule's durable usage row.
-        usage = await session.scalar(
-            select(OmnigentAgentProfileUsage).where(
-                OmnigentAgentProfileUsage.consumer_id == consumer_id
+        if persist_usage:
+            # The real resolver replaces the schedule's durable usage row.
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_id == consumer_id
+                )
             )
-        )
-        usage.version = new_snapshot["version"]
-        usage.digest = new_snapshot["digest"]
-        usage.effective_snapshot = new_snapshot
+            usage.version = new_snapshot["version"]
+            usage.digest = new_snapshot["digest"]
+            usage.effective_snapshot = new_snapshot
         return {
             **dict(parameters),
             "agentProfile": {
@@ -2003,6 +2058,45 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         binding.launch_policy_ref = "codex-on-demand@4"
         await session.commit()
 
+        async def usage_snapshot():
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage)
+                .where(OmnigentAgentProfileUsage.consumer_id == str(definition_id))
+                .execution_options(populate_existing=True)
+            )
+            return usage.effective_snapshot
+
+        compiled_plan = admission.compile_plan.return_value
+        compile_failures = [transient_failure] if transient_failure == "compile" else []
+
+        async def compile_after_artifact_commit(**_kwargs):
+            # Artifact persistence commits the shared session.
+            await session.commit()
+            if compile_failures:
+                compile_failures.clear()
+                raise RuntimeError("transient compilation failure")
+            return compiled_plan
+
+        admission.compile_plan.side_effect = compile_after_artifact_commit
+        if transient_failure is not None:
+            if transient_failure == "temporal":
+                mock_temporal_adapter.update_schedule.side_effect = RuntimeError(
+                    "transient schedule update failure"
+                )
+            outcome = await service.refresh_managed_bootstrap_schedules()
+            assert outcome.refreshed == 0
+            [failure] = outcome.failures
+            assert str(definition_id) in failure
+            # A failed admission must not strand the schedule: its durable
+            # usage still matches the unchanged stored definition.
+            await session.refresh(definition)
+            assert definition.version == 1
+            assert definition.target["agentProfileSnapshot"] == old_snapshot
+            assert await usage_snapshot() == old_snapshot
+            mock_temporal_adapter.update_schedule.side_effect = None
+            admission.compile_plan.reset_mock()
+            refresh_calls.clear()
+
         assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
 
         await session.refresh(definition)
@@ -2019,6 +2113,7 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 "replaceExistingUsage": True,
             }
         ]
+        assert await usage_snapshot() == new_snapshot
         # MoonLadderStudios/MoonMind#3935: the advanced snapshot-only
         # schedule is compiled onto the plan owner in the same revision.
         admission.compile_plan.assert_awaited_once()

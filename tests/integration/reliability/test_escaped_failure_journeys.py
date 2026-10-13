@@ -1286,18 +1286,20 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
         consumer_id,
         user,
         replace_existing_usage,
+        persist_usage=True,
     ):
         assert consumer_type == "schedule"
         assert consumer_id == str(definition_id)
         assert replace_existing_usage is True
-        usage = await session.scalar(
-            select(OmnigentAgentProfileUsage).where(
-                OmnigentAgentProfileUsage.consumer_id == consumer_id
+        if persist_usage:
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_id == consumer_id
+                )
             )
-        )
-        usage.version = active_snapshot["version"]
-        usage.digest = active_snapshot["digest"]
-        usage.effective_snapshot = active_snapshot
+            usage.version = active_snapshot["version"]
+            usage.digest = active_snapshot["digest"]
+            usage.effective_snapshot = active_snapshot
         return {
             **dict(parameters),
             "agentProfile": {

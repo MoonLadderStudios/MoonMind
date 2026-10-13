@@ -866,6 +866,7 @@ class RecurringWorkflowsService:
             # frozen inputs, not a present-day user row. Legacy owner is
             # provenance only.
             actor = None
+            # Usage is published with the schedule revision after admission.
             refreshed = await refresh_managed_bootstrap_snapshot(
                 self._session,
                 parameters=initial_parameters,
@@ -873,28 +874,67 @@ class RecurringWorkflowsService:
                 consumer_id=str(definition.id),
                 user=actor,
                 replace_existing_usage=True,
+                persist_usage=False,
             )
             target["initialParameters"] = refreshed
             target["agentProfile"] = dict(refreshed["agentProfile"])
             target["agentProfileSnapshot"] = dict(refreshed["agentProfileSnapshot"])
         # The advanced snapshot is compiled onto the plan owner in the same
         # revision (MoonLadderStudios/MoonMind#3935).
-        if await self._admit_plan_less_omnigent_target(definition, target=target):
+        if await self._admit_plan_less_omnigent_target(
+            definition, target=target, durable_snapshot=previous
+        ):
             return True
         if current:
             return False
         # A target that does not select Omnigent still follows the cutover.
+        await self._publish_schedule_profile_usage(
+            definition,
+            previous=previous,
+            snapshot=target["agentProfileSnapshot"],
+        )
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
         await self._session.flush()
         return True
 
+    async def _publish_schedule_profile_usage(
+        self,
+        definition: RecurringWorkflowDefinition,
+        *,
+        previous: Any,
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        """Move a schedule's durable Agent Profile usage with its revision.
+
+        Call only after the schedule fence is held, so the usage row is
+        flushed and committed with the definition that records ``snapshot``.
+        """
+
+        if snapshot == previous:
+            return
+        usage = await self._session.scalar(
+            select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_type == "schedule",
+                OmnigentAgentProfileUsage.consumer_id == str(definition.id),
+            )
+        )
+        if usage is None or usage.effective_snapshot != previous:
+            raise RecurringWorkflowValidationError(
+                "scheduled Agent Profile usage changed during deployment refresh"
+            )
+        usage.profile_id = snapshot["profileId"]
+        usage.version = snapshot["version"]
+        usage.digest = snapshot["digest"]
+        usage.effective_snapshot = dict(snapshot)
+
     async def _admit_plan_less_omnigent_target(
         self,
         definition: RecurringWorkflowDefinition,
         *,
         target: dict[str, Any],
+        durable_snapshot: Mapping[str, Any] | None = None,
     ) -> bool:
         """Admit a stored plan-less Omnigent schedule through the plan owner.
 
@@ -903,6 +943,8 @@ class RecurringWorkflowsService:
         work in the retained session supervisor on every occurrence. A stored
         Agent Profile snapshot is compiled from its verified durable usage,
         exactly as a target edit is; an unverified one is rejected.
+        ``durable_snapshot`` names the usage a managed-bootstrap snapshot was
+        just advanced from; that usage moves only with the admitted revision.
         """
 
         if target.get("workflowType") not in _SUPPORTED_RECURRING_WORKFLOW_TYPES:
@@ -917,11 +959,12 @@ class RecurringWorkflowsService:
             agent_profile_selection=None,
             actor=None,
             require_actor=False,
+            durable_snapshot=durable_snapshot,
         )
         if admitted is None:
             return False
         # Artifact persistence may commit its session. Reacquire the schedule
-        # fence before publishing the admitted target.
+        # fence before publishing the admitted target and its usage together.
         await self._session.refresh(definition, with_for_update=True)
         if (
             definition.version != previous_version
@@ -929,6 +972,12 @@ class RecurringWorkflowsService:
         ):
             raise RecurringWorkflowConflictError(
                 "schedule changed during deployment refresh; retry from its current revision"
+            )
+        if durable_snapshot is not None:
+            await self._publish_schedule_profile_usage(
+                definition,
+                previous=durable_snapshot,
+                snapshot=admitted["agentProfileSnapshot"],
             )
         definition.target = admitted
         definition.updated_at = datetime.now(UTC)
@@ -1234,22 +1283,11 @@ class RecurringWorkflowsService:
         )
 
         await assert_plan_matches_deployed_runtime(persisted_plan.envelope.payload)
-        if snapshot != previous_target.get("agentProfileSnapshot"):
-            usage = await self._session.scalar(
-                select(OmnigentAgentProfileUsage).where(
-                    OmnigentAgentProfileUsage.consumer_type == "schedule",
-                    OmnigentAgentProfileUsage.consumer_id == str(definition.id),
-                )
-            )
-            if usage is None or usage.effective_snapshot != previous_target.get(
-                "agentProfileSnapshot"
-            ):
-                raise RecurringWorkflowValidationError(
-                    "scheduled Agent Profile usage changed during deployment refresh"
-                )
-            usage.version = snapshot["version"]
-            usage.digest = snapshot["digest"]
-            usage.effective_snapshot = dict(snapshot)
+        await self._publish_schedule_profile_usage(
+            definition,
+            previous=previous_target.get("agentProfileSnapshot"),
+            snapshot=snapshot,
+        )
 
         if current_target_payload is not None:
             target["runtimeProviderTarget"] = current_target_payload
@@ -1392,6 +1430,7 @@ class RecurringWorkflowsService:
         agent_profile_selection: Mapping[str, Any] | None,
         actor: User | None,
         require_actor: bool = True,
+        durable_snapshot: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Compile the execution plan an Omnigent schedule target launches with.
 
@@ -1399,7 +1438,9 @@ class RecurringWorkflowsService:
         definitions share this one admission owner
         (MoonLadderStudios/MoonMind#3935). Returns the admitted target, or
         None when the target selects another runtime or already carries
-        launch authority.
+        launch authority. A supplied snapshot must match the schedule's
+        durable usage, or ``durable_snapshot`` when the deployment refresh
+        has just advanced a managed-bootstrap snapshot from that usage.
         """
 
         initial_parameters = dict(target.get("initialParameters") or {})
@@ -1420,13 +1461,18 @@ class RecurringWorkflowsService:
             "omnigent" in authored_profile.runtime_ids or defaults_to_omnigent
         )
         retained_snapshot = None
+        # A present but empty or malformed snapshot is unverified authority,
+        # not an absent one that deployment defaults may fill.
         if (
             selects_omnigent
             and agent_profile_selection is None
-            and initial_parameters.get("agentProfileSnapshot")
+            and "agentProfileSnapshot" in initial_parameters
             and not initial_parameters.get("omnigentExecutionPlan")
         ):
             supplied_snapshot = initial_parameters["agentProfileSnapshot"]
+            recorded_snapshot = (
+                supplied_snapshot if durable_snapshot is None else durable_snapshot
+            )
             usage = await self._session.scalar(
                 select(OmnigentAgentProfileUsage).where(
                     OmnigentAgentProfileUsage.consumer_type == "schedule",
@@ -1435,11 +1481,13 @@ class RecurringWorkflowsService:
             )
             if (
                 not isinstance(supplied_snapshot, Mapping)
+                or not supplied_snapshot
+                or not isinstance(recorded_snapshot, Mapping)
                 or usage is None
-                or usage.profile_id != supplied_snapshot.get("profileId")
-                or usage.version != supplied_snapshot.get("version")
-                or usage.digest != supplied_snapshot.get("digest")
-                or usage.effective_snapshot != supplied_snapshot
+                or usage.profile_id != recorded_snapshot.get("profileId")
+                or usage.version != recorded_snapshot.get("version")
+                or usage.digest != recorded_snapshot.get("digest")
+                or usage.effective_snapshot != recorded_snapshot
             ):
                 raise RecurringWorkflowValidationError(
                     "an unverified Agent Profile snapshot without an execution "
@@ -1448,11 +1496,18 @@ class RecurringWorkflowsService:
                 )
             # A retained definition already owns this exact frozen authority.
             # Derive its missing plan without reselecting present-day defaults
-            # or accepting authored changes to the server-owned snapshot.
-            retained_snapshot = copy.deepcopy(dict(usage.effective_snapshot))
+            # or accepting authored changes to the server-owned snapshot. A
+            # managed-bootstrap advance is the refresh's own server resolution.
+            retained_snapshot = copy.deepcopy(
+                dict(
+                    usage.effective_snapshot
+                    if durable_snapshot is None
+                    else supplied_snapshot
+                )
+            )
         needs_profile_snapshot = (
             selects_omnigent
-            and not initial_parameters.get("agentProfileSnapshot")
+            and "agentProfileSnapshot" not in initial_parameters
             and not initial_parameters.get("omnigentExecutionPlan")
         )
         if (
