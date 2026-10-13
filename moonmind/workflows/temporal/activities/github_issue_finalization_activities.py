@@ -29,7 +29,7 @@ from typing import Any, Mapping, Sequence
 
 from moonmind.workflows.temporal import github_issue_finalization as finalization
 from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
-from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment, render_attempt_comment
+from moonmind.workflows.temporal.github_issue_attempts import AttemptHandoff, parse_attempt_comment, render_attempt_comment
 from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt, IssueClaimStore, publish_claim_comment, reconcile_claim_comment
 
 
@@ -353,6 +353,62 @@ async def _apply_failed_attempt_finalization(
     effective_labels: Sequence[Any] | None = current_labels
     if effective_labels is None and observed_labels is not None:
         effective_labels = observed_labels
+    if claim_receipt is not None and saved_plan is None:
+        retained = parse_attempt_comment(claim_receipt.comment_body).handoff
+        if retained is None:
+            raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
+        # Resolve omitted fields once, before composing either representation.
+        # Explicit empty requirements still mean that no requirements remain.
+        if remaining_requirements is None:
+            remaining_requirements = retained.remaining_requirements
+        reason = reason or retained.last_report
+        next_action = next_action or retained.next_action
+        preservation_evidence = dict(preservation_evidence or {})
+        revision = _string(preservation_evidence.get("revision"))
+        compatible_candidate = all(
+            not supplied or supplied == recorded
+            for supplied, recorded in (
+                (
+                    _string(
+                        preservation_evidence.get("prUrl")
+                        or preservation_evidence.get("pr_url")
+                    ),
+                    retained.pr_url,
+                ),
+                (
+                    _string(
+                        preservation_evidence.get("savedBranch")
+                        or preservation_evidence.get("saved_branch")
+                    ),
+                    retained.saved_branch,
+                ),
+            )
+        )
+        # A retained SHA proves only its recorded reference. A changed PR or
+        # branch needs its own revision, even when the caller says "verified".
+        for camel, snake, value in (
+            ("prUrl", "pr_url", retained.pr_url if compatible_candidate else ""),
+            (
+                "prHeadSha",
+                "pr_head_sha",
+                revision or (retained.pr_head if compatible_candidate else ""),
+            ),
+            ("prBase", "pr_base", retained.pr_base if compatible_candidate else ""),
+            (
+                "savedBranch",
+                "saved_branch",
+                retained.saved_branch if compatible_candidate else "",
+            ),
+            (
+                "savedSha",
+                "saved_sha",
+                revision or (retained.saved_sha if compatible_candidate else ""),
+            ),
+        ):
+            if value and not (
+                preservation_evidence.get(camel) or preservation_evidence.get(snake)
+            ):
+                preservation_evidence[camel] = value
     plan = saved_plan or finalization.plan_failed_attempt_finalization(
         repository=repository,
         issue_number=issue_number,
@@ -393,7 +449,68 @@ async def _apply_failed_attempt_finalization(
         return base
     base["ownershipReleasable"] = True
     if claim_receipt is not None:
-        await claim_store.record_finalization(claim_receipt.owner, "plan", asdict(plan))
+        # Save the exact portable handoff alongside the label/comment plan.
+        # A restart must not combine the committed candidate with new caller
+        # evidence, or publish richer prose than its machine-readable record.
+        if saved_plan is None:
+            parsed = parse_attempt_comment(claim_receipt.comment_body)
+            if parsed.handoff is None:
+                raise ValueError(
+                    "claim_evidence_conflict: canonical handoff is unreadable"
+                )
+            outcome, release_action, cooldown_until = terminal_attempt_outcome(
+                disposition=plan.disposition,
+                disposition_evidence=disposition_evidence,
+                attempt_ended_at=parsed.handoff.lease_expires_at,
+            )
+            remaining = (disposition_evidence or {}).get("retryRemaining")
+            if (
+                type(remaining) is not int
+                or not 0 <= remaining <= parsed.handoff.retry_remaining
+            ):
+                remaining = parsed.handoff.retry_remaining
+            payload = parsed.handoff.to_dict()
+            preservation = dict(preservation_evidence or {})
+            if (
+                finalization.preserve_authoritative_output(preservation)["reasonCode"]
+                == "preservation_verified"
+            ):
+                for field, aliases in {
+                    "prUrl": ("prUrl", "pr_url"),
+                    "prHead": ("prHeadSha", "pr_head_sha", "revision"),
+                    "prBase": ("prBase", "pr_base"),
+                    "savedBranch": ("savedBranch", "saved_branch"),
+                    "savedSha": ("savedSha", "saved_sha", "revision"),
+                }.items():
+                    value = next(
+                        (
+                            _string(preservation.get(key))
+                            for key in aliases
+                            if _string(preservation.get(key))
+                        ),
+                        "",
+                    )
+                    # This normalized preservation record is authoritative:
+                    # do not retain refs from a different earlier candidate.
+                    payload[field] = value
+            if remaining_requirements is not None:
+                payload["remainingRequirements"] = list(remaining_requirements)
+            if _string(reason):
+                payload["lastReport"] = _string(reason)
+            payload.update(
+                activity="releasing",
+                writersStopped=True,
+                pendingDisposition=plan.disposition,
+                outcome=outcome,
+                nextAction=release_action or next_action or parsed.handoff.next_action,
+                retryRemaining=remaining,
+                cooldownUntil=cooldown_until or parsed.handoff.cooldown_until,
+                verificationSummary=parsed.handoff.verification_summary or plan.summary,
+            )
+            plan = replace(
+                plan, attempt_handoff=AttemptHandoff.from_dict(payload).to_dict()
+            )
+            await claim_store.record_finalization(claim_receipt.owner, "plan", asdict(plan))
         if claim_receipt.released:
             base.update(
                 released=True,
@@ -422,34 +539,40 @@ async def _apply_failed_attempt_finalization(
     comment_body = proposed_body
     comment_id = None
     if claim_receipt is not None:
-        parsed = parse_attempt_comment(claim_receipt.comment_body)
-        if parsed.handoff is None:
-            raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
-        no_work = plan.disposition == finalization.DISPOSITION_AVAILABLE
-        outcome, release_action, cooldown_until = terminal_attempt_outcome(
-            disposition=plan.disposition,
-            disposition_evidence=disposition_evidence,
-            attempt_ended_at=parsed.handoff.lease_expires_at,
-        )
-        remaining = disposition_evidence.get("retryRemaining")
-        if type(remaining) is not int or not 0 <= remaining <= parsed.handoff.retry_remaining:
-            remaining = parsed.handoff.retry_remaining
-        releasing = replace(
-            parsed.handoff,
-            activity="releasing",
-            writers_stopped=True,
-            pending_disposition=plan.disposition,
-            outcome=outcome,
-            next_action=release_action or next_action or parsed.handoff.next_action,
-            retry_remaining=remaining,
-            cooldown_until=cooldown_until or parsed.handoff.cooldown_until,
-            verification_summary=plan.summary,
-        )
+        if plan.attempt_handoff is not None:
+            releasing = AttemptHandoff.from_dict(plan.attempt_handoff)
+        else:
+            # Retained plans predate canonical snapshots. Keep their immutable
+            # prose and the claim's last confirmed evidence; never enrich an
+            # old committed candidate from later caller inputs on restart.
+            retained = parse_attempt_comment(claim_receipt.comment_body).handoff
+            if retained is None:
+                raise ValueError(
+                    "claim_evidence_conflict: canonical handoff is unreadable"
+                )
+            outcome, release_action, cooldown_until = terminal_attempt_outcome(
+                disposition=plan.disposition,
+                disposition_evidence=disposition_evidence,
+                attempt_ended_at=retained.lease_expires_at,
+            )
+            releasing = replace(
+                retained,
+                activity="releasing",
+                writers_stopped=True,
+                pending_disposition=plan.disposition,
+                outcome=(
+                    retained.outcome if retained.outcome != "in_progress" else outcome
+                ),
+                next_action=release_action or retained.next_action,
+                cooldown_until=retained.cooldown_until or cooldown_until,
+            )
         comment_body = render_attempt_comment(releasing) + "\n\n" + proposed_body
         # Do not overwrite a pending released-comment update on restart. Its
         # remote effect is reconciled after rechecking the exact label outcome.
         if not claim_receipt.pending_comment_body:
-            comment_id = await publish_claim_comment(claim_store, claim_receipt, service, comment_body)
+            comment_id = await publish_claim_comment(
+                claim_store, claim_receipt, service, comment_body
+            )
         else:
             comment_id = claim_receipt.comment_id
     elif _string(attempt_id):

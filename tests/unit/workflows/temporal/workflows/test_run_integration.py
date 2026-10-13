@@ -9875,3 +9875,112 @@ async def test_failed_finish_summary_keeps_terminal_publication_evidence(
     assert summary["publish"]["branchName"] == "mm/workflow/recovered-work"
     assert summary["publish"]["remoteVerified"] is True
     assert summary["publish"]["evidenceRef"] == "artifact://terminal-publication"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("verdict,expected", [
+    ("BLOCKED", "verification_blocked"),
+    ("NO_DETERMINATION", "verification_blocked"),
+    (None, "verification_blocked"),
+    ("INVALID", "verification_blocked"),
+    ("ADDITIONAL_WORK_NEEDED", "failed"),
+])
+def test_preserved_draft_projects_unmet_objective_without_changing_lifecycle(
+    mock_run_workflow, monkeypatch, enabled, verdict, expected
+):
+    workflow = mock_run_workflow
+    patches = {
+        RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+        "run-objective-outcome-projection-v1",
+    }
+    if enabled:
+        patches.add("run-incomplete-draft-objective-outcome-v1")
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", patches.__contains__)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": verdict, "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == (expected if enabled else "succeeded")
+    assert ("Workflow completed successfully" in message) is not enabled
+    assert workflow._pull_request_url in message
+    assert workflow._attention_required is True
+
+
+@pytest.mark.parametrize("state,expected", [("failed", "failed"), ("canceled", "cancelled")])
+def test_incomplete_draft_keeps_failed_or_canceled_terminal_objective(
+    mock_run_workflow, monkeypatch, state, expected
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = "BLOCKED"
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._state = state
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == expected
+
+
+@pytest.mark.parametrize("draft,verdict", [(False, "BLOCKED"), (True, "FULLY_IMPLEMENTED")])
+def test_draft_objective_projection_does_not_reclassify_accepted_or_unrelated_work(
+    mock_run_workflow, monkeypatch, draft, verdict
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = verdict
+    if draft:
+        workflow._activate_moonspec_draft_publication("Earlier gate was incomplete.")
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == "succeeded"
+    assert "Workflow completed successfully" in workflow._compose_success_completion_message()
+
+
+@pytest.mark.asyncio
+async def test_preserved_draft_finalization_keeps_publication_and_blocked_objective(
+    mock_run_workflow, monkeypatch
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": "BLOCKED", "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required GPU evidence is unavailable.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_context["objectiveOutcome"] = "succeeded"
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    summary = await _finalize_and_capture_summary(
+        monkeypatch, workflow, parameters={"publishMode": "pr"}, status=status
+    )
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publishContext"]["objectiveOutcome"] == "verification_blocked"
+    assert workflow._summary_ref == "artifact://summary"
+    workflow._set_state("completed", message)
+    assert workflow._state == "completed"
+    assert memos[-1]["objectiveOutcome"] == "verification_blocked"
+    assert "completed successfully" not in memos[-1]["summary"]
+    assert workflow._pull_request_url in memos[-1]["summary"]
+    assert workflow._attention_required is True

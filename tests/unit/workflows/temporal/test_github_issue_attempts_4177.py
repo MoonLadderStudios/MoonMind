@@ -592,3 +592,97 @@ async def test_activity_path_reconciles_uncertain_creation(monkeypatch: pytest.M
     # A public marker without the durable receipt is not authority to adopt it.
     assert len(service.created_bodies) == 0
     assert result.outputs["reasonCode"] == "active_attempt_conflict"
+
+
+@pytest.mark.parametrize("remaining", [0, "0"])
+def test_transition_handoff_retains_explicit_exhausted_budget(remaining):
+    handoff = story_tools._github_attempt_handoff_for_transition(
+        mode="needs_attention",
+        repository="o/r",
+        issue_number=42,
+        inputs={"retryRemaining": remaining},
+        context={},
+        pull_request_url="",
+    )
+    assert handoff.retry_remaining == 0
+
+
+def test_sparse_transition_preserves_canonical_claim_evidence():
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        saved_branch="saved-work",
+        saved_sha="abc123",
+        last_report="Need automation proof",
+        predecessor_attempt_id="att-parent",
+        predecessor_comment_id="99",
+        retry_remaining=0,
+        next_action="verify",
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="code_review",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={"attemptId": "stale-attempt", "workflowId": "stale-workflow"},
+        context={"issue_claim_receipt": receipt},
+        pull_request_url="",
+    )
+    for field in (
+        "attempt_id",
+        "deployment_id",
+        "workflow_id",
+        "run_id",
+        "predecessor_attempt_id",
+        "predecessor_comment_id",
+        "last_report",
+        "pr_url",
+        "pr_head",
+        "pr_base",
+        "saved_branch",
+        "saved_sha",
+        "remaining_requirements",
+        "verification_summary",
+        "retry_history",
+        "retry_allowance",
+        "retry_remaining",
+    ):
+        assert getattr(result, field) == getattr(prior, field), field
+    assert result.activity == "awaiting-review"
+    assert result.outcome == "implemented"
+    assert result.next_action == "continue_review"
+    updated = story_tools._github_attempt_handoff_for_transition(
+        mode="code_review",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={
+            "saved_sha": "newsha",
+            "remainingRequirements": [],
+            "lastReport": "Verified",
+        },
+        context={"issue_claim_receipt": receipt},
+        pull_request_url=prior.pr_url,
+    )
+    assert updated.saved_sha == "newsha"
+    assert updated.remaining_requirements == ()
+    assert updated.last_report == "Verified"
+    recovering = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={},
+        context={"issue_claim_receipt": receipt},
+        pull_request_url="",
+    )
+    assert recovering.next_action == "verify"

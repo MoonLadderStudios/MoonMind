@@ -7074,8 +7074,6 @@ def _github_status_pull_request_url(
     )
 
 
-
-
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
     if "requireVerification" not in inputs:
         return True
@@ -7983,22 +7981,54 @@ def _github_attempt_handoff_for_transition(
     import os as _os
 
     previous = _mapping((context or {}).get("previousOutputs"))
+    receipt = (context or {}).get("issue_claim_receipt")
+    admitted = (
+        parse_attempt_comment(receipt.comment_body).handoff
+        if isinstance(receipt, ClaimReceipt)
+        else None
+    )
+    if admitted and (admitted.repository.casefold(), admitted.issue_number) != (
+        repository.casefold(),
+        issue_number,
+    ):
+        raise ValueError("substitution_denied: handoff targets another issue")
+    retained = admitted.to_dict() if admitted else {}
+    # Identity and lineage belong to the durable claim, not stale tool inputs.
+    identity_keys = {
+        "attemptId",
+        "workflowId",
+        "runId",
+        "deploymentId",
+        "predecessorAttemptId",
+        "predecessorCommentId",
+        "retryHistory",
+    }
+    # Activity/outcome and next action are transition decisions. Other omitted
+    # evidence must survive sparse status updates of this same attempt.
+    for key in (
+        "activity",
+        "outcome",
+        "nextAction",
+        "writersStopped",
+        "pendingDisposition",
+    ):
+        retained.pop(key, None)
 
     def _first(*keys: str, default: Any = "") -> Any:
-        for key in keys:
-            value = inputs.get(key)
-            if value is None and isinstance(inputs.get("previousOutputs"), Mapping):
-                value = _mapping(inputs.get("previousOutputs")).get(key)
-            if value is None:
-                value = previous.get(key)
-            if isinstance(value, bool) or isinstance(value, (int, float)):
-                return value
-            if isinstance(value, (list, tuple)):
-                if value:
+        if admitted and keys[0] in identity_keys:
+            return retained.get(keys[0], default)
+        for source in (
+            inputs,
+            _mapping(inputs.get("previousOutputs")),
+            previous,
+            retained,
+        ):
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, (bool, int, float, list, tuple)):
                     return value
-                continue
-            if _string(value):
-                return value
+                if _string(value):
+                    return value
         return default
 
     explicit_attempt = _string(_first("attemptId", "attempt_id"))
@@ -8047,11 +8077,11 @@ def _github_attempt_handoff_for_transition(
     if isinstance(retry_history, str):
         retry_history = [retry_history]
     try:
-        retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3) or 3)
+        retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3))
     except (TypeError, ValueError):
         retry_allowance = 3
     try:
-        retry_remaining = int(_first("retryRemaining", "retry_remaining", default=retry_allowance) or retry_allowance)
+        retry_remaining = int(_first("retryRemaining", "retry_remaining", default=retry_allowance))
     except (TypeError, ValueError):
         retry_remaining = retry_allowance
     try:
@@ -8065,7 +8095,7 @@ def _github_attempt_handoff_for_transition(
         outcome_default = "no_work" if not pull_request_url else "implemented"
     elif mode == "needs_attention":
         outcome_default = "failed"
-    next_default = "continue_implementation"
+    next_default = admitted.next_action if admitted else "continue_implementation"
     if mode == "code_review":
         next_default = "continue_review"
     elif mode == "needs_attention":
@@ -8090,7 +8120,7 @@ def _github_attempt_handoff_for_transition(
         last_report=_string(_first("lastReport", "last_report", "reason", "transitionReason", "transition_reason")),
         writers_stopped=writers_stopped,
         pending_disposition=_string(_first("pendingDisposition", "pending_disposition")),
-        pr_url=pull_request_url,
+        pr_url=pull_request_url or _string(_first("prUrl", "pr_url", "pullRequestUrl")),
         pr_head=pr_head,
         pr_base=pr_base,
         saved_branch=saved_branch,
@@ -9618,7 +9648,11 @@ async def _finalize_github_issue_failed_attempt(
         attempt_id=_first_string(inputs.get("attemptId"), inputs.get("attempt_id")),
         primary_outcome=_first_string(inputs.get("primaryOutcome"), inputs.get("primary_outcome")) or execution_event,
         met_requirements=_list(inputs.get("metRequirements", inputs.get("met_requirements"))),
-        remaining_requirements=_list(inputs.get("remainingRequirements", inputs.get("remaining_requirements"))),
+        remaining_requirements=(
+            _list(inputs.get("remainingRequirements", inputs.get("remaining_requirements")))
+            if "remainingRequirements" in inputs or "remaining_requirements" in inputs
+            else None
+        ),
         retry_history=_first_string(inputs.get("retryHistory"), inputs.get("retry_history")),
         next_action=_first_string(inputs.get("nextAction"), inputs.get("next_action")),
         reason=_first_string(inputs.get("reason")),

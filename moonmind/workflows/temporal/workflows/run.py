@@ -849,6 +849,7 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-gate-v1"
+RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-outcome-v1"
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
 )
@@ -19417,6 +19418,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         reason = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{reason}." if reason else "No repository commit was needed."
 
+    def _incomplete_draft_objective_outcome(self) -> str | None:
+        """Keep preserved output separate from the owning gate's acceptance."""
+        if self._moonspec_draft_publication_reason is None or not (
+            self._patched_or_false_outside_workflow(
+                RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH
+            )
+        ):
+            return None
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return None
+        if verdict in {"ADDITIONAL_WORK_NEEDED", "FAILED_UNRECOVERABLE"}:
+            return "failed"
+        return "verification_blocked"
+
     def _compose_success_completion_message(
         self,
         *,
@@ -19432,7 +19448,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 or self._coerce_text(self._last_step_summary, max_chars=700)
                 or "No eligible work was selected."
             )
-        parts = ["Workflow completed successfully"]
+        parts = [
+            "Workflow completed with incomplete verification"
+            if self._incomplete_draft_objective_outcome() is not None
+            else "Workflow completed successfully"
+        ]
         detail = self._coerce_text(publish_detail, max_chars=900)
         if detail and detail.lower() not in {
             "completed",
@@ -25195,6 +25215,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         }
                     )
                 finish_summary["publishContext"] = dict(self._publish_context)
+                incomplete_objective = (
+                    self._incomplete_draft_objective_outcome()
+                    if status == "success"
+                    else None
+                )
+                if incomplete_objective is not None:
+                    finish_summary["publishContext"]["objectiveOutcome"] = incomplete_objective
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
                     finish_summary["mergeAutomation"] = merge_automation_summary
@@ -25998,9 +26025,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             }
             if self._issue_search_capacity_retry_enabled:
                 terminal_outcomes[STATE_NO_COMMIT] = "succeeded"
-            memo_dict["objectiveOutcome"] = self._publish_context.get(
-                "objectiveOutcome"
-            ) or terminal_outcomes.get(self._state, "active")
+            incomplete_objective = (
+                self._incomplete_draft_objective_outcome()
+                if self._state == STATE_COMPLETED
+                else None
+            )
+            memo_dict["objectiveOutcome"] = (
+                incomplete_objective
+                or self._publish_context.get("objectiveOutcome")
+                or terminal_outcomes.get(self._state, "active")
+            )
         if workflow.patched("run-objective-progress-v1"):
             if self._remediation_loop_state is not None:
                 budgets = self._remediation_loop_state.consumed_budgets

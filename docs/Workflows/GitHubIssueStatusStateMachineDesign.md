@@ -133,6 +133,8 @@ Each attempt has a globally unique attempt ID, a stable installation-specific de
 
 The trusted integration creates one human-readable, machine-identifiable issue comment for that attempt. It updates its own comment during execution and leaves it as a terminal handoff afterward. Separate attempts do not overwrite one shared summary comment or rewrite each other's history.
 
+Sparse lifecycle updates retain the controlling claim's identity, lineage, candidate references, remaining requirements, and retry evidence unless newer evidence is supplied. Explicit empty requirements clear that list; an explicit zero retry allowance or remainder stays zero. Terminal finalization persists its canonical machine-readable handoff with the existing finalization plan, so retries and lost acknowledgments cannot combine a committed candidate with later caller data. Preserved PR/branch references and the concrete remaining gap appear in both the readable handoff and its portable metadata.
+
 The comment carries only the information required to interpret and continue the work:
 
 | Information | Contract |
