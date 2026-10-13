@@ -79,7 +79,7 @@ def _checked_capture(command: list[str]) -> str:
 
 
 def _application_controller_image(target_project: str, requested: str) -> str:
-    """Use an observed installed source on rollback, else the staged target.
+    """Use the requested release, falling back to installed source on rollback.
 
     The application already publishes these immutable image contents. No
     separate controller publication or release-version equality is needed.
@@ -116,19 +116,23 @@ def _application_controller_image(target_project: str, requested: str) -> str:
         f"sys.exit(0 if {JOURNAL_TRANSITION_CAPABILITY!r} in "
         "getattr(server,'CONTROLLER_CAPABILITIES',()) else 10)"
     )
-    for image in [*candidates, None]:
+    for image in [None, *candidates]:
         if image is None:
-            _checked_capture(["docker", "pull", requested])
-            image = _checked_capture(
-                [
-                    "docker",
-                    "image",
-                    "inspect",
-                    "--format",
-                    "{{.Id}}",
-                    requested,
-                ]
-            ).strip()
+            inspection = [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                requested,
+            ]
+            immutable = requested.startswith("sha256:") or "@sha256:" in requested
+            staged = _run_capture(inspection) if immutable else None
+            if staged is not None and staged.returncode == 0:
+                image = staged.stdout.strip()
+            else:
+                _checked_capture(["docker", "pull", requested])
+                image = _checked_capture(inspection).strip()
         result = _run_capture(
             [
                 "docker",
@@ -182,9 +186,12 @@ def cmd_ensure(args, env) -> int:
             # whether host-owned repair may proceed; never create a writer.
             return False
 
-    if supported():
-        return 0
+    ready = supported()
     if _open_operations(state_dir, args.stack):
+        if ready:
+            # A capable owner keeps its active work. The submitter will
+            # observe it or receive the existing busy refusal.
+            return 0
         raise ActiveOperationError(
             "Controller prerequisite waits for the current deployment operation to finish."
         )
@@ -192,11 +199,11 @@ def cmd_ensure(args, env) -> int:
         # Recheck after exclusion: another submission can record intent while
         # bootstrap waits for the same lock. Never replace its live owner.
         if _open_operations(state_dir, args.stack):
+            if supported():
+                return 0
             raise ActiveOperationError(
                 "Controller prerequisite waits for the current deployment operation to finish."
             )
-        if supported():
-            return 0
         image = _application_controller_image(
             str(identity.get("targetProject") or args.target_project),
             args.image,

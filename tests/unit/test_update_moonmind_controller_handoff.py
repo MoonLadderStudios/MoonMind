@@ -114,12 +114,67 @@ def _stub_host_docker(
             )
         elif args[1] == "pull":
             output = ""
+        elif args[1] == "ps":
+            output = ""
+        elif args[1] == "run":
+            if update._CONTROLLER_SOURCE_EXPORT in args:
+                output = json.dumps({"bootstrap.py": "# requested release bootstrap"})
+            else:
+                assert "ensure" in args
+                assert "--user" in args and "0:0" in args
+                assert "--network" in args
+                assert "moonmind_deployment-controller-network" in args
+                bootstrap_mount = next(
+                    part for part in args if "target=/controller-bootstrap," in part
+                )
+                source = bootstrap_mount.split("source=", 1)[1].split(",", 1)[0]
+                assert (Path(source) / "bootstrap.py").read_text() == (
+                    "# requested release bootstrap"
+                )
+                assert (
+                    "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
+                    in args
+                )
+                output = ""
         else:
             raise AssertionError(f"unexpected host docker command: {args}")
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr(update.subprocess, "run", command)
     return commands
+
+
+def test_no_argument_host_refreshes_a_capable_controller_before_submission(
+    installed, monkeypatch
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    assert update.main([]) == 0
+
+    refreshes = [command for command in commands if "ensure" in command]
+    assert len(refreshes) == 1
+    refresh = refreshes[0]
+    assert IMAGE in refresh
+    assert f"http://moonmind-controller:{controller.port}" in refresh
+    assert f"type=bind,source={repo},target={repo},readonly" in refresh
+    state = repo / "deploy/state/controller"
+    assert f"type=bind,source={state},target={state}" in refresh
+    assert len(controller.applied) == 1
+
+
+def test_explicit_host_controller_keeps_its_release_choice(installed, monkeypatch):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    assert update.main(["--controller-url", controller.url]) == 0
+
+    assert not any(command[1] == "run" for command in commands)
+    assert len(controller.applied) == 1
 
 
 def test_no_argument_host_command_submits_the_controller_operation(
@@ -143,8 +198,12 @@ def test_no_argument_host_command_submits_the_controller_operation(
     assert recorded["desired"]["sourceRevision"] == revision
     assert recorded["target"]["projectDir"] == str(repo)
     assert recorded["target"]["services"] == ["api"]
-    # No application-owned updater is launched from the target image.
-    assert not any(item[1] == "run" for item in commands)
+    # One-offs only export/bootstrap the standalone controller; none
+    # launches an application-owned deployment updater.
+    assert all(
+        update._CONTROLLER_SOURCE_EXPORT in item or "ensure" in item
+        for item in commands if item[1] == "run"
+    )
     # Resuming the same submission observes the same operation; nothing reapplies.
     assert update.main(["--resume", submission.stem]) == 0
     assert controller.applied == [operation_id]

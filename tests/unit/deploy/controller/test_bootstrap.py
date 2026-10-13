@@ -3,6 +3,152 @@ import pytest
 from conftest import load
 
 
+def test_controller_refresh_reuses_a_staged_immutable_image_without_registry_access(
+    controller_path, monkeypatch
+):
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    concrete = "sha256:" + "c" * 64
+
+    def run(command):
+        assert command[1] != "pull", "The immutable target is already staged"
+        output = concrete if command[1:3] == ["image", "inspect"] else ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    assert bootstrap._application_controller_image("installed", concrete) == concrete
+
+
+def test_ensure_refreshes_a_capable_controller_from_the_requested_release(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472)
+    compose = bootstrap.render_compose_file(state_dir=state, repo=tmp_path)
+    original_mounts = compose.read_text().split("    volumes:", 1)[1]
+    concrete = "sha256:" + "b" * 64
+    requested = "ghcr.io/org/app@sha256:" + "c" * 64
+    selected = []
+    recreations = []
+
+    def select(project, image):
+        selected.append(image)
+        return concrete
+
+    def recreate(state_dir, project, *args):
+        assert lock_mod.StackLock(state_dir, "moonmind").probe()
+        recreations.append(compose.read_text())
+        return 0
+
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: {"active-journal-transition"},
+    )
+    monkeypatch.setattr(bootstrap, "_application_controller_image", select)
+    monkeypatch.setattr(bootstrap, "_checked_capture", lambda _args: '""')
+    monkeypatch.setattr(bootstrap, "_compose", recreate)
+
+    assert (
+        bootstrap.main(
+            [
+                "ensure",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(tmp_path),
+                "--image",
+                requested,
+            ],
+            env={},
+        )
+        == 0
+    )
+    assert selected == [requested]
+    assert len(recreations) == 1
+    assert f"image: {concrete}" in recreations[0]
+    assert compose.read_text().split("    volumes:", 1)[1] == original_mounts
+
+
+def test_ensure_observes_a_capable_controller_with_active_work(
+    controller_path, tmp_path, monkeypatch
+):
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472)
+    bootstrap.render_compose_file(state_dir=state, repo=tmp_path)
+    store = load("record").OperationStore(state)
+    operation = store.begin(
+        stack="moonmind", desired_image="ghcr.io/org/app:next", source_revision=""
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: {"active-journal-transition"},
+    )
+    monkeypatch.setattr(
+        bootstrap, "_run_capture", lambda *args: pytest.fail("Docker touched")
+    )
+
+    assert (
+        bootstrap.main(
+            [
+                "ensure",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(tmp_path),
+            ],
+            env={},
+        )
+        == 0
+    )
+    assert store.load(operation["operationId"])["status"] == "pending"
+
+
+def test_controller_refresh_prefers_requested_release_over_capable_installed_source(
+    controller_path, monkeypatch
+):
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    target = "ghcr.io/org/app@sha256:" + "b" * 64
+    concrete = "sha256:" + "c" * 64
+    probes = []
+
+    def run(command):
+        output = ""
+        if command[1] == "ps":
+            output = "installed-api"
+        elif command[1] == "inspect":
+            output = json.dumps(
+                [
+                    {
+                        "Image": "sha256:installed",
+                        "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                    }
+                ]
+            )
+        elif command[1] == "image":
+            output = concrete
+        elif command[1] == "run":
+            probes.append(command)
+        else:
+            assert command == ["docker", "pull", target]
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    assert bootstrap._application_controller_image("installed", target) == concrete
+    assert len(probes) == 1
+    assert concrete in probes[0]
+
+
 @pytest.mark.parametrize("image_user", ["", "1200:1200"])
 def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     controller_path, tmp_path, monkeypatch, image_user
@@ -21,8 +167,10 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     compose = bootstrap.render_compose_file(state_dir=state, repo=repo)
     original_mounts = compose.read_text().split("    volumes:", 1)[1]
     source_image = "sha256:" + "a" * 64
+    target_image = "sha256:" + "b" * 64
     upgraded = False
     commands = []
+    recreations = []
 
     def run(command):
         commands.append(command)
@@ -43,10 +191,16 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
                 "",
             )
         if command[1] == "run":
-            assert source_image in command
             assert "--network=none" in command
+            code = 10 if target_image in command else 0
+            assert target_image in command or source_image in command
+            return subprocess.CompletedProcess(command, code, "", "")
+        if command[1] == "pull":
+            assert command[2] == "ghcr.io/org/moonmind:old"
             return subprocess.CompletedProcess(command, 0, "", "")
         if command[1:3] == ["image", "inspect"]:
+            if command[4] == "{{.Id}}":
+                return subprocess.CompletedProcess(command, 0, target_image, "")
             assert command[4] == "{{json .Config.User}}"
             return subprocess.CompletedProcess(command, 0, json.dumps(image_user), "")
         raise AssertionError(command)
@@ -55,6 +209,7 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
         nonlocal upgraded
         assert lock_mod.StackLock(state_dir, "moonmind").probe()
         assert "--pull" in args and "never" in args
+        recreations.append(compose.read_text())
         upgraded = True
         return 0
 
@@ -88,7 +243,6 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     assert f'    user: {json.dumps(image_user or "0:0")}' in text
     assert text.split("    volumes:", 1)[1] == original_mounts
     assert bootstrap.load_controller_image(state)["pinned"] == source_image
-    before = list(commands)
     assert (
         bootstrap.main(
             [
@@ -106,7 +260,10 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
         )
         == 0
     )
-    assert commands == before
+    # Reconciliation repeats safely; native Compose compares identical
+    # definitions instead of force-recreating the healthy controller.
+    assert len(recreations) == 2
+    assert recreations[0] == recreations[1]
 
 
 def test_ensure_never_replaces_controller_with_open_operation(
@@ -167,8 +324,8 @@ def test_controller_prerequisite_uses_staged_target_when_installed_source_is_old
     assert bootstrap._application_controller_image("installed", target) == concrete
     assert ["docker", "pull", target] in commands
     probes = [command for command in commands if command[1] == "run"]
-    assert "sha256:old" in probes[0]
-    assert concrete in probes[1]
+    assert len(probes) == 1
+    assert concrete in probes[0]
 
 
 def test_controller_prerequisite_can_retry_failed_recreation(

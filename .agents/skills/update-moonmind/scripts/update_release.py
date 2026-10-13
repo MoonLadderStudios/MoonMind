@@ -465,6 +465,10 @@ def _submit_release(
             _install_controller(record, repo)
             if not controller_url_explicit:
                 controller_url = _installed_controller_url(repo, controller_url)
+        else:
+            _ensure_controller_journal_transition(
+                record, repo, controller_url, secret, refresh=True
+            )
     return _submit_via_controller(
         record,
         repo,
@@ -747,12 +751,17 @@ def _materialized_controller(bundle):
         yield Path(directory) / "bootstrap.py"
 
 
-def _ensure_controller_journal_transition(record, repo, controller_url, secret):
+def _ensure_controller_journal_transition(
+    record, repo, controller_url, secret, *, refresh=False
+):
     """Use the existing host lifecycle before an old controller owns work.
 
     The portable script extracts only trusted, image-owned Python sources;
     it does not depend on a checked-out release or a healthy API/worker.
-    Installed source comes first so a rollback can use current repair code.
+    Default host updates refresh from the requested release even when the
+    installed controller supports journals. Rollbacks can use installed
+    repair code when the target predates this lifecycle. Explicit endpoints
+    keep their controller unless journal support is missing.
     """
     try:
         _, health = _controller_call(
@@ -760,7 +769,9 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
         )
     except ControllerUnreachableError:
         health = {}
-    if "active-journal-transition" in (health.get("capabilities") or ()):
+    if not refresh and "active-journal-transition" in (
+        health.get("capabilities") or ()
+    ):
         return
     ids = run(
         [
@@ -772,7 +783,7 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
         ],
         cwd=repo,
     ).split()
-    candidates = []
+    candidates = [record["image"]] if refresh else []
     if ids:
         for container in json.loads(run(["docker", "inspect", *ids], cwd=repo)):
             service = ((container.get("Config") or {}).get("Labels") or {}).get(
@@ -786,16 +797,52 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
                 image = container.get("Image")
                 if image and image not in candidates:
                     candidates.append(image)
-    candidates.append(record["image"])
+    if record["image"] not in candidates:
+        candidates.append(record["image"])
     for image in candidates:
         bundle = _controller_sources(image, repo)
         if not bundle:
             continue
         with _materialized_controller(bundle) as bootstrap:
+            command = [sys.executable, str(bootstrap)]
+            bootstrap_url = controller_url
+            if refresh:
+                # Controller-created records and locks belong to root. Run
+                # the same host-owned bootstrap with its existing authority,
+                # outside the controller it may replace, on the installed
+                # private network. No secret is passed in command arguments.
+                identity = _controller_identity(repo)
+                network = identity.get("targetNetwork") or (
+                    f"{record['project']}_deployment-controller-network"
+                )
+                bootstrap_url = (
+                    f"http://moonmind-controller:{identity.get('port', 8472)}"
+                )
+                state = repo / "deploy" / "state" / "controller"
+                command = [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--user",
+                    "0:0",
+                    "--network",
+                    network,
+                    "--mount",
+                    f"type=bind,source={repo},target={repo},readonly",
+                    "--mount",
+                    f"type=bind,source={state},target={state}",
+                    "--mount",
+                    f"type=bind,source={bootstrap.parent},target=/controller-bootstrap,readonly",
+                    "--mount",
+                    "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock",
+                    "--entrypoint",
+                    "python",
+                    image,
+                    "/controller-bootstrap/bootstrap.py",
+                ]
             run(
                 [
-                    sys.executable,
-                    str(bootstrap),
+                    *command,
                     "ensure",
                     "--state-dir",
                     str(repo / "deploy" / "state" / "controller"),
@@ -808,7 +855,7 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
                     "--image",
                     record["image"],
                     "--controller-url",
-                    controller_url,
+                    bootstrap_url,
                 ],
                 cwd=repo,
             )
