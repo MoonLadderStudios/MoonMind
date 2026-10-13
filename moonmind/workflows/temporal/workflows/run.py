@@ -28,8 +28,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        ExecutionBudget,
         OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
+        resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
         CLAUDE_STOCK_AGENT_NAME,
@@ -1102,6 +1104,11 @@ RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
 RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
     "run-omnigent-interrupted-step-workspace-v1"
 )
+# MoonMind#4627: an agent Step retried after an interruption keeps the hard
+# execution ceiling it was admitted with. Each successor receives only the
+# ceiling the interrupted attempts left, and an exhausted ceiling stops instead
+# of starting another attempt. Older histories keep a fresh budget per attempt.
+RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
 # GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
 # and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
 # candidate into doc reconciliation, then publish that reconciled archive (or
@@ -2978,6 +2985,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_execution_launch_block_key(logical_step_id, attempt)
             in self._fresh_source_step_execution_attempts
         )
+
+    @staticmethod
+    def _remaining_interrupted_step_timeout_policy(
+        timeout_policy: Mapping[str, Any] | None,
+        *,
+        budget: ExecutionBudget,
+        consumed_seconds: float,
+    ) -> dict[str, Any]:
+        """Return the successor policy bounded by the Step's remaining ceiling."""
+
+        remaining = max(1, int(budget.max_seconds - consumed_seconds))
+        base = min(budget.base_seconds, remaining)
+        return {
+            **dict(timeout_policy or {}),
+            **ExecutionBudget(
+                base_seconds=base,
+                max_seconds=remaining,
+                progress_stall_seconds=min(budget.progress_stall_seconds, base),
+                mode=budget.mode,
+            ).as_timeout_policy(),
+        }
 
     def _carry_interrupted_omnigent_step_workspace(
         self,
@@ -13203,6 +13231,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
 
                 system_retries = 0
+                # Interrupted attempts share the Step's admitted hard ceiling.
+                interrupted_step_budget: ExecutionBudget | None = None
+                interrupted_step_consumed_seconds = 0.0
+                agent_attempt_started_at: datetime | None = None
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
@@ -13700,6 +13732,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         ),
                                     )
                                 else:
+                                    if workflow.patched(
+                                        RUN_INTERRUPTED_STEP_DEADLINE_PATCH
+                                    ):
+                                        if interrupted_step_budget is None:
+                                            interrupted_step_budget = (
+                                                resolve_execution_budget(
+                                                    agent_kind=request.agent_kind,
+                                                    timeout_policy=request.timeout_policy,
+                                                )
+                                            )
+                                        elif interrupted_step_consumed_seconds > 0:
+                                            request = request.model_copy(
+                                                update={
+                                                    "timeout_policy": self._remaining_interrupted_step_timeout_policy(
+                                                        request.timeout_policy,
+                                                        budget=interrupted_step_budget,
+                                                        consumed_seconds=(
+                                                            interrupted_step_consumed_seconds
+                                                        ),
+                                                    )
+                                                }
+                                            )
+                                        agent_attempt_started_at = workflow.now()
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.AgentRun",
                                         self._with_issue_claim_work_started(request),
@@ -14056,6 +14111,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        if (
+                            retryable
+                            and system_retries < 3
+                            and interrupted_step_budget is not None
+                            and agent_attempt_started_at is not None
+                        ):
+                            interrupted_step_consumed_seconds += max(
+                                0.0,
+                                (
+                                    workflow.now() - agent_attempt_started_at
+                                ).total_seconds(),
+                            )
+                            agent_attempt_started_at = None
+                            if (
+                                interrupted_step_consumed_seconds
+                                >= interrupted_step_budget.max_seconds
+                            ):
+                                retryable = False
+                                step_failure_summary = (
+                                    f"{step_failure_summary}; the Step's execution "
+                                    "budget was exhausted across interrupted attempts"
+                                )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
