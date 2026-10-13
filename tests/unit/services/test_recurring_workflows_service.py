@@ -1139,6 +1139,56 @@ async def test_refresh_admits_a_stored_snapshot_only_omnigent_schedule(
         assert scheduled_parameters["omnigentExecutionPlan"] == admission.plan_binding
 
 
+@pytest.mark.parametrize("stored", [{}, "", []])
+async def test_refresh_rejects_a_present_but_empty_stored_snapshot(
+    stored: object,
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: a stored snapshot that is present but
+    empty is invalid authority, not an absent one. The deployment refresh
+    rejects it instead of replacing it with present-day defaults."""
+
+    import copy
+
+    admission = _mm3935_plan_admission(monkeypatch)
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await _mm3935_plan_less_schedule(session, service)
+        definition_id = definition.id
+        definition.target = {
+            **definition.target,
+            "initialParameters": {
+                **definition.target["initialParameters"],
+                "targetRuntime": "omnigent",
+                "agentProfileSnapshot": stored,
+            },
+        }
+        await session.commit()
+        stored_target = copy.deepcopy(definition.target)
+        mock_temporal_adapter.reset_mock()
+
+        outcome = await service.refresh_managed_bootstrap_schedules()
+
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, definition_id, populate_existing=True
+        )
+        assert outcome.refreshed == 0
+        [failure] = outcome.failures
+        assert str(definition_id) in failure
+        assert "snapshot without an execution plan" in failure
+        admission.default_resolver.assert_not_awaited()
+        admission.compile_plan.assert_not_awaited()
+        mock_temporal_adapter.update_schedule.assert_not_awaited()
+        assert reloaded.target == stored_target
+        assert reloaded.version == 1
+
+
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
     session = AsyncMock(spec=AsyncSession)
     session.execute.return_value = SimpleNamespace(all=lambda: [])
@@ -1831,23 +1881,26 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         consumer_id,
         user,
         replace_existing_usage,
+        persist_usage=True,
     ):
         refresh_calls.append(
             {
                 "consumerType": consumer_type,
                 "consumerId": consumer_id,
                 "replaceExistingUsage": replace_existing_usage,
+                "persistUsage": persist_usage,
             }
         )
-        # The real resolver replaces the schedule's durable usage row.
-        usage = await session.scalar(
-            select(OmnigentAgentProfileUsage).where(
-                OmnigentAgentProfileUsage.consumer_id == consumer_id
+        if persist_usage:
+            # The real resolver replaces the schedule's durable usage row.
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_id == consumer_id
+                )
             )
-        )
-        usage.version = new_snapshot["version"]
-        usage.digest = new_snapshot["digest"]
-        usage.effective_snapshot = new_snapshot
+            usage.version = new_snapshot["version"]
+            usage.digest = new_snapshot["digest"]
+            usage.effective_snapshot = new_snapshot
         return {
             **dict(parameters),
             "agentProfile": {
@@ -2003,6 +2056,35 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         binding.launch_policy_ref = "codex-on-demand@4"
         await session.commit()
 
+        async def usage_snapshot() -> dict[str, object]:
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage)
+                .where(OmnigentAgentProfileUsage.consumer_id == str(definition_id))
+                .execution_options(populate_existing=True)
+            )
+            return usage.effective_snapshot
+
+        # Artifact persistence commits the shared session before plan
+        # compilation can fail. The usage row must not advance ahead of the
+        # definition, or every later refresh would reject the schedule.
+        async def commit_then_fail(**_kwargs):
+            await session.commit()
+            raise RuntimeError("plan compilation unavailable")
+
+        admission.compile_plan.side_effect = commit_then_fail
+        failed = await service.refresh_managed_bootstrap_schedules()
+        assert failed.refreshed == 0
+        [failure] = failed.failures
+        assert "plan compilation unavailable" in failure
+        await session.refresh(definition)
+        assert definition.version == 1
+        assert definition.target["agentProfileSnapshot"] == old_snapshot
+        assert await usage_snapshot() == old_snapshot
+        mock_temporal_adapter.update_schedule.assert_not_called()
+
+        admission.compile_plan.side_effect = None
+        admission.compile_plan.reset_mock()
+        refresh_calls.clear()
         assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
 
         await session.refresh(definition)
@@ -2017,8 +2099,11 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 "consumerType": "schedule",
                 "consumerId": str(definition.id),
                 "replaceExistingUsage": True,
+                "persistUsage": False,
             }
         ]
+        # Usage advances with the admitted schedule revision.
+        assert await usage_snapshot() == new_snapshot
         # MoonLadderStudios/MoonMind#3935: the advanced snapshot-only
         # schedule is compiled onto the plan owner in the same revision.
         admission.compile_plan.assert_awaited_once()
