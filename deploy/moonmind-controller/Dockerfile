@@ -3,7 +3,7 @@
 # The controller is stdlib-only Python: it must run without the MoonMind
 # application image, its API, DB, Temporal, artifact service, provider
 # manager, Omnigent, or an LLM. Release configuration arrives as data.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # The production apply path shells out to `docker compose` subprocesses.
 # Mounting /var/run/docker.sock provides no Docker CLI or Compose plugin,
