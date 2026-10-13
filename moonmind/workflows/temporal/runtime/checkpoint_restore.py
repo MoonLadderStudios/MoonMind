@@ -642,26 +642,27 @@ class ManagedCheckpointRestoreService:
             try:
                 if self.repository_source_root is not None:
                     repo_url = str(self.repository_source_root)
-                    clone_env: Mapping[str, str] | None = None
                 else:
                     repo_url = f"https://github.com/{req.destination.repository}.git"
-                    # A private-repo checkpoint that the original run could clone must
-                    # also be cloneable here. Reuse the launcher's authenticated git
-                    # environment (in-memory credential helper, no token on disk or in
-                    # argv) so the cold restore does not fail before extraction.
-                    token = await resolve_github_token_for_launch()
-                    clone_env = (
-                        build_github_token_git_environment(
-                            token, base_env=dict(os.environ)
-                        )
-                        if token
-                        else None
-                    )
                 history = manifest.get("gitHistory")
                 if history and history.get("requiresSourceObjects") is False:
+                    # The bundle carries every object: no clone, so no
+                    # repository credential is looked up for this restore.
                     self._git(["init", str(staging)])
                     self._git(["remote", "add", "origin", repo_url], staging)
                 else:
+                    clone_env: Mapping[str, str] | None = None
+                    if self.repository_source_root is None:
+                        # A private-repo checkpoint that the original run could
+                        # clone must also be cloneable here. Reuse the launcher's
+                        # authenticated git environment (in-memory credential
+                        # helper, no token on disk or in argv) so the cold restore
+                        # does not fail before extraction.
+                        token = await resolve_github_token_for_launch()
+                        if token:
+                            clone_env = build_github_token_git_environment(
+                                token, base_env=dict(os.environ)
+                            )
                     self._git(
                         ["clone", "--no-checkout", repo_url, str(staging)],
                         code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
