@@ -82,6 +82,17 @@ interpretable after host removal or profile rotation: they reference evidence
 as observed at the cutoff, expose no current credentials, and never claim
 unresolved cleanup succeeded.
 
+Current availability (MoonMind#3930): the terminal execution service
+(`TemporalExecutionService._attach_terminal_governance_report`) finalizes the
+report without a store and keeps only a summary block (report id, status,
+generation status, evidence cutoff, and link) in the execution finish
+summary. Terminal evidence sections start as pending or unavailable, so
+reports are normally `partial`. The full report JSON is not persisted and no
+download is offered yet. Workflow Detail Overview shows the summary block's
+status and explanation and links to the run's Evidence tab, which does not
+render a report body. `reconcile_missing_reports` exists, but no schedule
+calls it yet.
+
 ## 7. Verified observation boundary and blind spots
 
 Observed: MoonMind-mediated egress decisions, bounded native outbound-scan
