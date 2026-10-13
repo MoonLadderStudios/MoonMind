@@ -14,10 +14,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.security import OutboundScanResult
-from tests.helpers.repository_connections import (  # noqa: F401
-    TemporalParentClient,
-    deployment_without_recorded_connections,
-)
+from tests.helpers.repository_connections import TemporalParentClient
 
 pytestmark = [pytest.mark.asyncio]
 

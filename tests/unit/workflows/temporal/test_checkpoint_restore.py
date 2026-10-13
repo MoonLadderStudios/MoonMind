@@ -469,12 +469,10 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
     await service.restore(request)
 
     restored = tmp_path / "authority" / "new-run" / "repo"
-    assert (
-        subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=restored, text=True
-        ).strip()
-        == head
-    )
+    restored_head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=restored, text=True
+    ).strip()
+    assert restored_head == head
     assert (restored / "candidate.txt").read_text() == "unpublished\n"
     assert (restored / "tracked.txt").read_text() == "unsaved edit\n"
 

@@ -15,9 +15,6 @@ import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import story_output_tools as tools
-from tests.helpers.repository_connections import (  # noqa: F401
-    deployment_without_recorded_connections,
-)
 from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 
 # GitHub operations without an explicit token use the default connection.

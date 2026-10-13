@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import pytest_asyncio
 
 from moonmind.workflows.executions.repository_contract import (
     RepositoryAssignment,
@@ -291,22 +290,6 @@ async def record_repository_connections(
     # ``db://`` references resolve against the same database.
     monkeypatch.setattr("moonmind.auth.resolvers.db_resolver.async_session_maker", sessions)
     return engine
-
-
-@pytest_asyncio.fixture
-async def deployment_without_recorded_connections(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    """A deployment that records no repository connection.
-
-    Its default connection derives from the deployment's GitHub declaration,
-    read through the production connection loader. A test may still record
-    connections into the same database.
-    """
-
-    engine = await record_repository_connections(monkeypatch, tmp_path)
-    yield
-    await engine.dispose()
 
 
 class TemporalParentClient:
