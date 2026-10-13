@@ -1918,6 +1918,10 @@ const RunSummaryArtifactSchema = z
     failure: z
       .object({
         failureCode: z.string().nullable().optional(),
+        category: z.string().nullable().optional(),
+        stepId: z.string().nullable().optional(),
+        stepTitle: z.string().nullable().optional(),
+        diagnosticsRef: z.string().nullable().optional(),
         queuedChildCount: z.number().int().nonnegative().optional(),
         queuedChildren: z
           .array(
@@ -2918,31 +2922,43 @@ function BridgeTerminalEvidence({ apiBase, envelope }: { apiBase: string; envelo
 // Per-run governance report (MoonMind#3969): presentation only. The report
 // JSON, status, and explanations are owned by
 // moonmind/governance/run_reports.py; this block maps the server-provided
-// finish-summary block to a safe evidence-surface link.
+// finish-summary block to a safe evidence-surface link. Only that summary
+// block is retained with the run (MoonMind#3930), so the copy must not imply
+// a stored report body.
 function GovernanceReportBlock({ workflowId, report }: { workflowId: string; report: unknown }) {
   if (!report || typeof report !== 'object') return null;
   const block = report as {
     report_id?: unknown;
     status?: unknown;
-    link?: { href?: unknown; explanation?: unknown } | null;
+    link?: { href?: unknown; status?: unknown; explanation?: unknown } | null;
+    generation_status?: { status?: unknown } | null;
   };
   const reportId = typeof block.report_id === 'string' && block.report_id.trim() ? block.report_id : null;
-  if (!reportId && !block.link) return null;
-  const status = normalizeGovernanceReportStatus(block.status);
+  const generationStatus =
+    block.generation_status && typeof block.generation_status === 'object'
+      ? block.generation_status.status
+      : undefined;
+  if (!reportId && !block.link && generationStatus === undefined) return null;
+  const status = normalizeGovernanceReportStatus(block.status ?? block.link?.status ?? generationStatus);
   const serverHref = block.link && typeof block.link.href === 'string' ? block.link.href : null;
   const href = serverHref || governanceReportHref(workflowId, reportId);
   const serverExplanation =
     block.link && typeof block.link.explanation === 'string' ? block.link.explanation : undefined;
   return (
-    <div className="td-summary-block" aria-label="Governance report">
+    <section className="td-summary-block" aria-label="Governance report">
       <h4>Governance report</h4>
+      <p className="small">Status: {formatStatusLabel(status)}</p>
       <p className="small">{governanceReportExplanation(status, serverExplanation)}</p>
+      <p className="small">
+        Only this summary is kept with the run; the full report body is not stored. Run artifacts
+        remain on the Evidence tab.
+      </p>
       <div className="button-group">
-        <a className="button secondary small" href={href} aria-label="Open governance report evidence">
-          {status === 'ready' ? 'Open report' : `Report: ${status}`}
+        <a className="button secondary small" href={href}>
+          Open run evidence
         </a>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -9343,6 +9359,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const displayedOutcomeReason = runSummary?.finishOutcome?.reason
     ? formatWorkflowSummary(runSummary.finishOutcome.reason, workflowDisplayStatus, execution?.objectiveOutcome, execution?.completionDisposition)
     : null;
+  const runSummaryDiagnosticsRef =
+    runSummary?.failure?.diagnosticsRef || runSummary?.lastStep?.diagnosticsRef || '';
+  const runSummaryDiagnosticsHref = runSummaryDiagnosticsRef
+    ? artifactRefHref(payload.apiBase, runSummaryDiagnosticsRef)
+    : null;
   const displayedLastStepSummary = runSummary?.lastStep?.summary
     ? formatWorkflowSummary(runSummary.lastStep.summary, workflowDisplayStatus, execution?.objectiveOutcome, execution?.completionDisposition)
     : null;
@@ -10380,7 +10401,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
           </div>
           <GovernanceReportBlock
             workflowId={workflowId}
-            report={(runSummary as { governanceReport?: unknown } | null)?.governanceReport}
+            report={
+              (runSummary as { governanceReport?: unknown } | null)?.governanceReport ??
+              (execution.finishSummary as { governanceReport?: unknown } | null | undefined)
+                ?.governanceReport
+            }
           />
 
           <MetricStrip
@@ -10748,6 +10773,12 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   </Fact>
                 </FlatFactGrid>
               ) : null}
+              {runSummary.failure?.stepTitle || runSummary.failure?.stepId || runSummary.failure?.category ? (
+                <FlatFactGrid>
+                  <Fact label="Failed Step">{runSummary.failure.stepTitle || runSummary.failure.stepId || '—'}</Fact>
+                  <Fact label="Failure Category">{formatStatusLabel(runSummary.failure.category)}</Fact>
+                </FlatFactGrid>
+              ) : null}
               {runSummary.failure?.queuedChildren?.length ? (
                 <FactGroup title="Queued Child Workflows">
                   {runSummary.failure.queuedChildren.map((child, index) => (
@@ -10838,7 +10869,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   <p className="whitespace-pre-wrap">{displayedLastStepSummary}</p>
                 </div>
               ) : null}
-              {runSummary.nextAction ? <p className="small">{runSummary.nextAction}</p> : null}
+              {runSummaryDiagnosticsHref ? (
+                <div className="button-group">
+                  <a className="button secondary small" href={runSummaryDiagnosticsHref} target="_blank" rel="noreferrer">
+                    {runSummary.failure ? 'Open failure diagnostics' : 'Open last step diagnostics'}
+                  </a>
+                </div>
+              ) : null}
+              {runSummary.nextAction ? <p className="small">Next action: {runSummary.nextAction}</p> : null}
             </section>
           ) : null}
 

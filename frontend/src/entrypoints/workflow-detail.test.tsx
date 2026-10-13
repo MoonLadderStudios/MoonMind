@@ -7771,6 +7771,168 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  // MoonLadderStudios/MoonMind#3930: a failed run's Overview answers what
+  // happened, what failed, where the output is, and which supported next
+  // action remains, from the existing summary fields and controls.
+  function mockFailedRunWithSummaryArtifact(
+    finishSummary: Record<string, unknown>,
+    summaryArtifact: Record<string, unknown>,
+  ) {
+    const execution = {
+      taskId: 'failed-3930',
+      workflowId: 'failed-3930',
+      namespace: 'default',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Failed journey run',
+      summary: 'Execution fallback summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      closeStatus: 'FAILED',
+      summaryArtifactRef: 'art-summary-3930',
+      createdAt: '2026-10-13T00:00:00Z',
+      updatedAt: '2026-10-13T00:00:04Z',
+      closedAt: '2026-10-13T00:00:04Z',
+      actions: { canRerun: true, canEditForRerun: true },
+      finishSummary,
+    };
+    window.history.pushState({}, 'Failed run', '/workflows/failed-3930/overview?source=temporal');
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts/art-summary-3930/download')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => JSON.stringify(summaryArtifact),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => execution } as Response);
+    });
+  }
+
+  it('answers what happened, what failed, where output is, and what to do next for a failed run', async () => {
+    const summaryArtifact = {
+      finishOutcome: { code: 'FAILED', stage: 'executing', reason: 'Unit tests failed in the verify step.' },
+      operatorSummary: 'Implemented the change; verification failed before publication.',
+      lastStep: {
+        id: 'verify',
+        summary: 'pytest exited with status 1',
+        diagnosticsRef: 'art-diagnostics-3930',
+        lastError: 'execution_error',
+      },
+      failure: {
+        category: 'execution_error',
+        message: 'pytest exited with status 1',
+        stepId: 'verify',
+        stepTitle: 'Run unit tests',
+        diagnosticsRef: 'art-diagnostics-3930',
+      },
+    };
+    mockFailedRunWithSummaryArtifact(summaryArtifact, summaryArtifact);
+    const recoveryPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { actionsEnabled: true, temporalTaskEditing: true } },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowDetailPage payload={recoveryPayload} />);
+
+    // What happened.
+    expect(
+      await screen.findByText('Implemented the change; verification failed before publication.'),
+    ).toBeTruthy();
+    // What failed.
+    expect(await screen.findByText('Run unit tests')).toBeTruthy();
+    expect(screen.getByText('execution error')).toBeTruthy();
+    expect(screen.getAllByText(/pytest exited with status 1/).length).toBeGreaterThan(0);
+    // Where the output is.
+    expect(
+      screen.getByRole('link', { name: 'Open failure diagnostics' }).getAttribute('href'),
+    ).toBe('/api/artifacts/art-diagnostics-3930/download');
+    expect(screen.getByRole('link', { name: /Evidence/ }).getAttribute('href')).toContain(
+      '/workflows/failed-3930/evidence',
+    );
+    // What supported next action remains.
+    const menu = await openWorkflowActionsMenu('Rerun');
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeTruthy();
+  });
+
+  it('shows the terminal governance report summary when the run-summary artifact omits it', async () => {
+    const summaryArtifact = {
+      finishOutcome: { code: 'FAILED', stage: 'executing' },
+      operatorSummary: 'Verification failed before publication.',
+    };
+    mockFailedRunWithSummaryArtifact(
+      {
+        ...summaryArtifact,
+        governanceReport: {
+          canonical_outcome: 'failed',
+          report_id: 'gov-3930',
+          status: 'partial',
+          link: {
+            href: '/workflows/failed-3930/evidence?report=gov-3930',
+            status: 'partial',
+            explanation:
+              'Governance report is partial: some evidence was unavailable and is shown as such.',
+          },
+        },
+      },
+      summaryArtifact,
+    );
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    const block = await screen.findByRole('region', { name: 'Governance report' });
+    expect(within(block).getByText(/Governance report is partial/)).toBeTruthy();
+    expect(within(block).getByText('Status: partial')).toBeTruthy();
+    expect(within(block).getByText(/full report body is not stored/)).toBeTruthy();
+    expect(
+      within(block).getByRole('link', { name: 'Open run evidence' }).getAttribute('href'),
+    ).toBe('/workflows/failed-3930/evidence?report=gov-3930');
+    expect(screen.getByText('Verification failed before publication.')).toBeTruthy();
+  });
+
+  it('keeps an auxiliary governance report failure visible without changing the run outcome', async () => {
+    const summaryArtifact = {
+      finishOutcome: { code: 'FAILED', stage: 'executing' },
+      operatorSummary: 'Verification failed before publication.',
+    };
+    mockFailedRunWithSummaryArtifact(
+      {
+        ...summaryArtifact,
+        governanceReport: {
+          canonical_outcome: 'failed',
+          generation_status: {
+            status: 'failed',
+            reason_code: 'REPORT_STORE_UNAVAILABLE',
+            recoverable: true,
+          },
+          link: null,
+        },
+      },
+      summaryArtifact,
+    );
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    const block = await screen.findByRole('region', { name: 'Governance report' });
+    expect(within(block).getByText('Status: failed')).toBeTruthy();
+    expect(
+      within(block).getByText(
+        'Report generation failed as an auxiliary step; task and publication state are unchanged.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Verification failed before publication.')).toBeTruthy();
+  });
+
   it('renders remediation trends, budgets, evidence, and exact stop dimension', async () => {
     window.history.pushState({}, 'Remediation Test', '/workflows/remediation/overview?source=temporal');
     const execution = {
