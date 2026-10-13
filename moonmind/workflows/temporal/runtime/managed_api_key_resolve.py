@@ -267,6 +267,7 @@ async def select_github_access_for_launch(
     connections_dir: Path | None = None,
     client_policy: Any | None = None,
     required_operations: Iterable[str] = (),
+    expected_connection_id: str | None = None,
 ) -> SelectedGitHubAccess:
     """Select a launch's Git connection and read only its credential, once.
 
@@ -274,6 +275,8 @@ async def select_github_access_for_launch(
     selected source that fails yields an unresolved credential carrying its
     correction, never another credential. Required operations are checked
     against the recorded connection and assignment before reading a secret.
+    ``expected_connection_id`` (a renewal of an earlier selection) rejects a
+    selection that now names another connection before reading its secret.
     """
 
     connection = await select_git_connection_for_launch(
@@ -282,6 +285,19 @@ async def select_github_access_for_launch(
         connections_dir=connections_dir,
         client_policy=client_policy,
     )
+    if expected_connection_id is not None and (
+        connection is None or str(connection.id) != expected_connection_id
+    ):
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_CONNECTION_MISMATCH,
+            RepositoryContractError,
+        )
+
+        raise RepositoryContractError(
+            REPOSITORY_CONNECTION_MISMATCH,
+            f"GitHub connection {expected_connection_id} is no longer the "
+            "selection; MoonMind does not switch accounts mid-run",
+        )
     return await _resolve_github_access_for_connection(
         connection, repository=repository, required_operations=required_operations
     )
