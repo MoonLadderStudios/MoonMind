@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+    RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
@@ -1917,6 +1918,171 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         assert successor_workspace["restartLimitation"] == (
             "no_verified_workspace_checkpoint"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interrupted_seconds", "expected_child_count"),
+    [(1800, 2), (7200, 1)],
+    ids=["successor-gets-remaining-budget", "exhausted-budget-starts-no-successor"],
+)
+async def test_run_execution_stage_preserves_step_deadline_across_interruptions(
+    monkeypatch: pytest.MonkeyPatch,
+    interrupted_seconds: int,
+    expected_child_count: int,
+) -> None:
+    """Repeated host replacement cannot reset the Step's hard ceiling."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    clock = {"now": datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)}
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                        "timeoutPolicy": {
+                            "timeout_seconds": 3600,
+                            "max_timeout_seconds": 7200,
+                        },
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        if len(child_requests) == 1:
+            clock["now"] += timedelta(seconds=interrupted_seconds)
+            return AgentRunResult(
+                summary="Omnigent session host was replaced.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+            )
+        return AgentRunResult(summary="Completed on the successor attempt.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    async def fake_record_step_execution_manifest(
+        _logical_step_id: str,
+        **_kwargs: Any,
+    ) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-omnigent-deadline",
+            "run_id": "run-omnigent-deadline",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+
+    def advancing_now() -> datetime:
+        clock["now"] += timedelta(microseconds=1)
+        return clock["now"]
+
+    monkeypatch.setattr(run_workflow_module.workflow, "now", advancing_now)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+
+    if expected_child_count == 2:
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"},
+            plan_ref="plan-ref",
+        )
+    else:
+        with pytest.raises(ValueError, match="execution budget"):
+            await workflow._run_execution_stage(
+                parameters={"publishMode": "none"},
+                plan_ref="plan-ref",
+            )
+
+    assert len(child_requests) == expected_child_count
+    assert child_requests[0].timeout_policy == {
+        "timeout_seconds": 3600,
+        "max_timeout_seconds": 7200,
+    }
+    if expected_child_count == 2:
+        successor_policy = child_requests[1].timeout_policy
+        # Interrupted wall-clock time is consumed, never refunded.
+        assert (
+            7200 - interrupted_seconds - 1
+            <= successor_policy["max_timeout_seconds"]
+            <= 7200 - interrupted_seconds
+        )
+        assert successor_policy["timeout_seconds"] == 3600
+        assert successor_policy["progress_stall_seconds"] <= 3600
 
 
 @pytest.mark.asyncio
