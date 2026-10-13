@@ -24,13 +24,24 @@ contributor from working the issue.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from moonmind.workflows.temporal import github_issue_finalization as finalization
 from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
-from moonmind.workflows.temporal.github_issue_attempts import AttemptHandoff, parse_attempt_comment, render_attempt_comment
-from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt, IssueClaimStore, publish_claim_comment, reconcile_claim_comment
+from moonmind.workflows.temporal.github_issue_attempts import (
+    AttemptHandoff,
+    parse_attempt_comment,
+    render_attempt_comment,
+)
+from moonmind.workflows.temporal.issue_claim_store import (
+    ClaimReceipt,
+    IssueClaimStore,
+    publish_claim_comment,
+    reconcile_claim_comment,
+)
 
 
 def _string(value: Any) -> str:
@@ -52,21 +63,30 @@ def _issue_label_names(issue_payload: Mapping[str, Any] | None) -> tuple[str, li
     return str(payload.get("state") or "open"), names
 
 
-def _scan_terminal_body(body: str) -> tuple[bool, str]:
-    """Scan a rendered terminal comment; returns ``(blocked, redacted_detail)``.
+def _scan_terminal_body(
+    body: str, attempt_handoff: Mapping[str, Any] | None = None
+) -> tuple[bool, str]:
+    """Scan raw terminal evidence; returns ``(blocked, redacted_detail)``.
 
-    Reuses the repository outbound scanner (``moonmind.security``) with the
-    same fail-closed posture as the canonical attempt-comment renderer:
-    secret-like handoff text blocks posting instead of being published.
+    Reuses the repository outbound scanner (``moonmind.security``) with a
+    fail-closed posture: secret-like handoff text blocks recording and
+    publication instead of being accepted after rendering redacts it.
     """
     from moonmind.security import OutboundBundleItem, scan_outbound_bundle
     from moonmind.utils.logging import redact_sensitive_text
 
     try:
-        result = scan_outbound_bundle(
-            [OutboundBundleItem(location="finalization.terminal_comment", content=body)],
-            high_security_mode=True,
-        )
+        items = [
+            OutboundBundleItem(location="finalization.terminal_comment", content=body)
+        ]
+        if attempt_handoff is not None:
+            items.append(
+                OutboundBundleItem(
+                    location="finalization.attempt_handoff",
+                    content=json.dumps(attempt_handoff),
+                )
+            )
+        result = scan_outbound_bundle(items, high_security_mode=True)
     except Exception as exc:  # noqa: BLE001 - scanner failure must fail closed
         return True, f"scanner unavailable ({exc.__class__.__name__})"
     if not result.allowed:
@@ -384,14 +404,24 @@ async def _apply_failed_attempt_finalization(
                 ),
             )
         )
+        pr_reference = _string(
+            preservation_evidence.get("prUrl") or preservation_evidence.get("pr_url")
+        ) or (retained.pr_url if compatible_candidate else "")
+        saved_reference = _string(
+            preservation_evidence.get("savedBranch")
+            or preservation_evidence.get("saved_branch")
+        ) or (retained.saved_branch if compatible_candidate else "")
         # A retained SHA proves only its recorded reference. A changed PR or
         # branch needs its own revision, even when the caller says "verified".
+        # A generic revision supplies a SHA only for references that exist.
         for camel, snake, value in (
             ("prUrl", "pr_url", retained.pr_url if compatible_candidate else ""),
             (
                 "prHeadSha",
                 "pr_head_sha",
-                revision or (retained.pr_head if compatible_candidate else ""),
+                (revision or (retained.pr_head if compatible_candidate else ""))
+                if pr_reference
+                else "",
             ),
             ("prBase", "pr_base", retained.pr_base if compatible_candidate else ""),
             (
@@ -402,7 +432,9 @@ async def _apply_failed_attempt_finalization(
             (
                 "savedSha",
                 "saved_sha",
-                revision or (retained.saved_sha if compatible_candidate else ""),
+                (revision or (retained.saved_sha if compatible_candidate else ""))
+                if saved_reference
+                else "",
             ),
         ):
             if value and not (
@@ -447,7 +479,7 @@ async def _apply_failed_attempt_finalization(
         # The attempt is not proven stopped, settled, and preserved. Ownership
         # is retained on purpose; only bookkeeping may lag behind ownership.
         return base
-    base["ownershipReleasable"] = True
+    raw_handoff = None
     if claim_receipt is not None:
         # Save the exact portable handoff alongside the label/comment plan.
         # A restart must not combine the committed candidate with new caller
@@ -477,10 +509,10 @@ async def _apply_failed_attempt_finalization(
             ):
                 for field, aliases in {
                     "prUrl": ("prUrl", "pr_url"),
-                    "prHead": ("prHeadSha", "pr_head_sha", "revision"),
+                    "prHead": ("prHeadSha", "pr_head_sha"),
                     "prBase": ("prBase", "pr_base"),
                     "savedBranch": ("savedBranch", "saved_branch"),
-                    "savedSha": ("savedSha", "saved_sha", "revision"),
+                    "savedSha": ("savedSha", "saved_sha"),
                 }.items():
                     value = next(
                         (
@@ -507,9 +539,30 @@ async def _apply_failed_attempt_finalization(
                 cooldownUntil=cooldown_until or parsed.handoff.cooldown_until,
                 verificationSummary=parsed.handoff.verification_summary or plan.summary,
             )
+            raw_handoff = payload
             plan = replace(
                 plan, attempt_handoff=AttemptHandoff.from_dict(payload).to_dict()
             )
+        elif plan.attempt_handoff is not None:
+            raw_handoff = plan.attempt_handoff
+        else:
+            retained = parse_attempt_comment(claim_receipt.comment_body).handoff
+            if retained is None:
+                raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
+            raw_handoff = retained.to_dict()
+    # Scan all raw handoff evidence before recording a plan, publishing any
+    # comment, mutating labels, or retiring ownership. Rendering redacts text
+    # and therefore cannot supply the fail-closed scan's authoritative input.
+    blocked, block_detail = _scan_terminal_body(plan.terminal_comment, raw_handoff)
+    if blocked:
+        base["reasonCode"] = "comment_blocked_by_scan"
+        base["summary"] = f"Terminal comment blocked by outbound scan: {block_detail}."
+        # The proposed transition can contain the same unredacted reason.
+        base["transition"] = None
+        return base
+    base["ownershipReleasable"] = True
+    if claim_receipt is not None:
+        if saved_plan is None:
             await claim_store.record_finalization(claim_receipt.owner, "plan", asdict(plan))
         if claim_receipt.released:
             base.update(
@@ -522,16 +575,9 @@ async def _apply_failed_attempt_finalization(
             )
             await claim_store.record_finalization(claim_receipt.owner, "result", base)
             return base
-    # Step 1: scan the proposed terminal comment through the repository
-    # outbound scanner before any GitHub write; secret-like handoff text
-    # blocks posting instead of being published.
+    # Step 1: render and publish the scanned terminal handoff.
     from moonmind.utils.logging import redact_sensitive_text
 
-    blocked, block_detail = _scan_terminal_body(plan.terminal_comment)
-    if blocked:
-        base["reasonCode"] = "comment_blocked_by_scan"
-        base["summary"] = f"Terminal comment blocked by outbound scan: {block_detail}."
-        return base
     proposed_body = redact_sensitive_text(plan.terminal_comment)
     # Prefer the canonical attempt comment when it already exists: appending
     # keeps one marker-bearing comment per attempt (with its machine-readable

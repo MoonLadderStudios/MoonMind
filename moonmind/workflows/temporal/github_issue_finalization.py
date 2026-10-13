@@ -395,8 +395,18 @@ def preserve_authoritative_output(evidence: Mapping[str, Any] | None) -> dict[st
             ),
             "workspaceRetained": True,
         }
-    revision = _string(data.get("revision") or data.get("savedSha") or data.get("saved_sha") or data.get("prHeadSha") or data.get("pr_head_sha"))
-    ref = _string(data.get("prUrl") or data.get("pr_url") or data.get("savedBranch") or data.get("saved_branch"))
+    # The declared save method owns its reference/revision pair. Another
+    # retained candidate cannot fill a missing half of the selected pair.
+    if method == "pr_head_verified":
+        ref = _string(data.get("prUrl") or data.get("pr_url"))
+        revision = _string(
+            data.get("revision") or data.get("prHeadSha") or data.get("pr_head_sha")
+        )
+    else:
+        ref = _string(data.get("savedBranch") or data.get("saved_branch"))
+        revision = _string(
+            data.get("revision") or data.get("savedSha") or data.get("saved_sha")
+        )
     if not ref or not revision:
         return {
             "preserved": False,

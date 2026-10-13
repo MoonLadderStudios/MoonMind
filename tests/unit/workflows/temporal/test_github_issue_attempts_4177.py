@@ -686,3 +686,212 @@ def test_sparse_transition_preserves_canonical_claim_evidence():
         pull_request_url="",
     )
     assert recovering.next_action == "verify"
+
+
+@pytest.mark.parametrize(
+    "source, candidate",
+    [
+        (source, candidate)
+        for source in (
+            "inputs",
+            "tool_previous",
+            "context_previous",
+            "unbound_previous",
+            "matching_previous",
+            "context_after_unbound",
+        )
+        for candidate in ("pr", "branch")
+    ]
+    + [("argument", "pr")],
+)
+@pytest.mark.parametrize("include_revision", [False, True])
+def test_sparse_transition_binds_revision_to_replacement_reference(
+    source, candidate, include_revision
+):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        pr_head="old-pr-sha", saved_branch="old-branch", saved_sha="old-saved-sha"
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    reference_key, revision_key = (
+        ("prUrl", "prHead") if candidate == "pr" else ("savedBranch", "savedSha")
+    )
+    new_reference = (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/99"
+        if candidate == "pr"
+        else "replacement-branch"
+    )
+    replacement = {reference_key: new_reference}
+    if include_revision:
+        replacement[revision_key] = "new-revision"
+    inputs = {}
+    context = {"issue_claim_receipt": receipt}
+    pull_request_url = ""
+    if source == "inputs":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = prior.to_dict()
+    elif source == "tool_previous":
+        inputs["previousOutputs"] = replacement
+        context["previousOutputs"] = prior.to_dict()
+    elif source == "context_previous":
+        context["previousOutputs"] = replacement
+    elif source == "unbound_previous":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = {revision_key: "old-unbound-revision"}
+    elif source == "matching_previous":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = {
+            reference_key: new_reference,
+            revision_key: "new-revision",
+        }
+    elif source == "context_after_unbound":
+        inputs["previousOutputs"] = {revision_key: "old-unbound-revision"}
+        context["previousOutputs"] = replacement
+    else:
+        pull_request_url = new_reference
+        if include_revision:
+            inputs[revision_key] = "new-revision"
+        inputs["previousOutputs"] = prior.to_dict()
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url=pull_request_url,
+    )
+    result_reference, result_revision = (
+        (result.pr_url, result.pr_head)
+        if candidate == "pr"
+        else (result.saved_branch, result.saved_sha)
+    )
+    assert result_reference == new_reference
+    assert result_revision == (
+        "new-revision" if include_revision or source == "matching_previous" else ""
+    )
+    if candidate == "pr":
+        assert result.saved_branch == prior.saved_branch
+        assert result.saved_sha == prior.saved_sha
+    else:
+        assert result.pr_url == prior.pr_url
+        assert result.pr_head == prior.pr_head
+    preservation = preserve_authoritative_output(
+        {
+            "saveMethod": (
+                "pr_head_verified" if candidate == "pr" else "saved_branch_verified"
+            ),
+            "prUrl": result.pr_url,
+            "prHeadSha": result.pr_head,
+            "savedBranch": result.saved_branch,
+            "savedSha": result.saved_sha,
+            "preservationVerified": True,
+        }
+    )
+    assert preservation["preserved"] is bool(result_revision)
+    if result_revision:
+        assert f"{result_reference}@{result_revision}" in preservation["summary"]
+    else:
+        assert preservation["reasonCode"] == "preservation_incomplete"
+        assert preservation["workspaceRetained"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requirements, expected",
+    [
+        ({}, None),
+        ({"remainingRequirements": None}, None),
+        ({"remaining_requirements": None}, None),
+        ({"remainingRequirements": []}, []),
+        ({"remaining_requirements": []}, []),
+        ({"remainingRequirements": ["unfinished"]}, ["unfinished"]),
+    ],
+)
+async def test_failed_attempt_adapter_preserves_omitted_remaining_requirements(
+    monkeypatch, requirements, expected
+):
+    from moonmind.workflows.temporal.activities import (
+        github_issue_finalization_activities,
+    )
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    observed = []
+
+    async def finalize(**kwargs):
+        observed.append(kwargs["remaining_requirements"])
+        return {
+            "released": False,
+            "reasonCode": "test_boundary",
+            "disposition": "",
+            "summary": "",
+            "transition": None,
+            "mutation": None,
+            "mutationOutcome": None,
+            "completionRoute": "",
+            "mergeAuthorized": False,
+            "workspaceRetained": True,
+            "pendingSync": None,
+            "commentId": None,
+        }
+
+    monkeypatch.setattr(
+        github_issue_finalization_activities, "finalize_failed_attempt", finalize
+    )
+    result = await TemporalIntegrationActivities.github_issue_finalize_failed_attempt(
+        None,
+        {
+            "repository": "o/r",
+            "issueNumber": 4177,
+            "executionEvent": "failed",
+            **requirements,
+        },
+    )
+    assert result["reasonCode"] == "test_boundary"
+    assert observed == [expected]
+
+
+@pytest.mark.parametrize(
+    "method, reference_key, revision_key",
+    [
+        ("pr_head_verified", "prUrl", "prHeadSha"),
+        ("pr_head_verified", "pr_url", "pr_head_sha"),
+        ("pr_head_verified", "pr_url", "revision"),
+        ("saved_branch_verified", "savedBranch", "savedSha"),
+        ("saved_branch_verified", "saved_branch", "saved_sha"),
+        ("saved_branch_verified", "saved_branch", "revision"),
+    ],
+)
+def test_preservation_pair_keeps_supported_aliases(
+    method, reference_key, revision_key
+):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+
+    result = preserve_authoritative_output(
+        {
+            "save_method": method,
+            reference_key: "candidate",
+            revision_key: "head-sha",
+            "preservation_verified": True,
+        }
+    )
+    assert result["preserved"] is True
+    assert "candidate@head-sha" in result["summary"]

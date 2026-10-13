@@ -8014,15 +8014,17 @@ def _github_attempt_handoff_for_transition(
     ):
         retained.pop(key, None)
 
+    evidence_sources = (
+        inputs,
+        _mapping(inputs.get("previousOutputs")),
+        previous,
+        retained,
+    )
+
     def _first(*keys: str, default: Any = "") -> Any:
         if admitted and keys[0] in identity_keys:
             return retained.get(keys[0], default)
-        for source in (
-            inputs,
-            _mapping(inputs.get("previousOutputs")),
-            previous,
-            retained,
-        ):
+        for source in evidence_sources:
             for key in keys:
                 value = source.get(key)
                 if isinstance(value, (bool, int, float, list, tuple)):
@@ -8030,6 +8032,31 @@ def _github_attempt_handoff_for_transition(
                 if _string(value):
                     return value
         return default
+
+    def _bound_field(
+        reference: str,
+        reference_keys: tuple[str, ...],
+        *keys: str,
+    ) -> str:
+        retained_reference = _first_string(
+            *(retained.get(key) for key in reference_keys)
+        )
+        for index, source in enumerate(evidence_sources):
+            source_reference = _first_string(
+                *(source.get(key) for key in reference_keys)
+            )
+            if source_reference:
+                if source_reference != reference:
+                    continue
+            elif index > 0 and reference != retained_reference:
+                # Historical evidence without a reference cannot prove a
+                # replacement candidate. Current inputs may supply a revision
+                # alone, but older evidence needs its own matching reference.
+                continue
+            value = _first_string(*(source.get(key) for key in keys))
+            if value:
+                return value
+        return ""
 
     explicit_attempt = _string(_first("attemptId", "attempt_id"))
     workflow_id = _string(_first("workflowId", "workflow_id", "workflowID"))
@@ -8054,10 +8081,35 @@ def _github_attempt_handoff_for_transition(
             deployment_id = get_or_create_installation_id()
         except Exception:
             deployment_id = "inst-unconfigured"
-    pr_head = _string(_first("prHead", "pr_head", "headSha", "head_sha"))
-    pr_base = _string(_first("prBase", "pr_base", "baseBranch", "base_branch", "base"))
-    saved_branch = _string(_first("savedBranch", "saved_branch", "branch"))
-    saved_sha = _string(_first("savedSha", "saved_sha", "headSha", "head_sha"))
+    pr_reference_keys = ("prUrl", "pr_url", "pullRequestUrl", "pull_request_url")
+    pr_url = pull_request_url or _string(_first(*pr_reference_keys))
+    pr_head = _bound_field(
+        pr_url,
+        pr_reference_keys,
+        "prHead",
+        "pr_head",
+        "headSha",
+        "head_sha",
+    )
+    pr_base = _bound_field(
+        pr_url,
+        pr_reference_keys,
+        "prBase",
+        "pr_base",
+        "baseBranch",
+        "base_branch",
+        "base",
+    )
+    branch_reference_keys = ("savedBranch", "saved_branch", "branch")
+    saved_branch = _string(_first(*branch_reference_keys))
+    saved_sha = _bound_field(
+        saved_branch,
+        branch_reference_keys,
+        "savedSha",
+        "saved_sha",
+        "headSha",
+        "head_sha",
+    )
     writers_stopped_raw = _first("writersStopped", "writers_stopped", default=False)
     writers_stopped = bool(
         writers_stopped_raw is True
@@ -8120,7 +8172,7 @@ def _github_attempt_handoff_for_transition(
         last_report=_string(_first("lastReport", "last_report", "reason", "transitionReason", "transition_reason")),
         writers_stopped=writers_stopped,
         pending_disposition=_string(_first("pendingDisposition", "pending_disposition")),
-        pr_url=pull_request_url or _string(_first("prUrl", "pr_url", "pullRequestUrl")),
+        pr_url=pr_url,
         pr_head=pr_head,
         pr_base=pr_base,
         saved_branch=saved_branch,
@@ -9635,6 +9687,9 @@ async def _finalize_github_issue_failed_attempt(
         receipt = await store.for_execution(claim_owner(_context))
         if receipt is None and await store.active_for_issue(repository, issue_number) is not None:
             raise ValueError("active_attempt_conflict: finalizer does not own this issue's durable claim")
+    remaining_requirements = inputs.get("remainingRequirements")
+    if remaining_requirements is None:
+        remaining_requirements = inputs.get("remaining_requirements")
     result = await _finalize_failed_attempt(
         repository=repository,
         issue_number=issue_number,
@@ -9649,8 +9704,8 @@ async def _finalize_github_issue_failed_attempt(
         primary_outcome=_first_string(inputs.get("primaryOutcome"), inputs.get("primary_outcome")) or execution_event,
         met_requirements=_list(inputs.get("metRequirements", inputs.get("met_requirements"))),
         remaining_requirements=(
-            _list(inputs.get("remainingRequirements", inputs.get("remaining_requirements")))
-            if "remainingRequirements" in inputs or "remaining_requirements" in inputs
+            _list(remaining_requirements)
+            if remaining_requirements is not None
             else None
         ),
         retry_history=_first_string(inputs.get("retryHistory"), inputs.get("retry_history")),
