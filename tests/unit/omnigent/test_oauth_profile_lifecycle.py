@@ -1004,6 +1004,53 @@ async def test_static_host_cleanup_removes_lease_owned_credential_validator() ->
     runtime.stop_static_host.assert_awaited_once_with(binding=_binding())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_replaced", [True, False], ids=["replaced", "same"])
+async def test_static_host_cleanup_stops_only_its_observed_container(
+    service_replaced: bool,
+) -> None:
+    """A late cleanup cannot stop a successor's recreated static host."""
+
+    launched = "a" * 64
+    successor = "b" * 64
+    # Compose recreation removed the launched container and started a successor
+    # for the same service; otherwise the launched container still runs.
+    running = {successor} if service_replaced else {launched}
+    commands: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str, **_kwargs: object) -> tuple[int, str, str]:
+        commands.append(args)
+        if args[:2] == ("docker", "stop"):
+            running.discard(args[-1])
+        return 0, "", ""
+
+    async def fake_container_exists(container: str) -> bool:
+        return container in running
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._container_present = AsyncMock(return_value=False)
+    runtime.container_exists = fake_container_exists
+    runtime._attestation_from_workload_evidence = MagicMock(return_value=None)
+    runtime._attest_launched_workload_egress = AsyncMock(return_value={})
+    runtime._run = fake_run
+    runtime.stop_static_host = AsyncMock()
+
+    result = await runtime.stop_host(
+        binding=_binding(),
+        host_lease=_host_lease(),
+        egress_evidence={"attachmentIdentity": launched},
+    )
+
+    assert result["cleanupResult"] == "drained_owned_static_host"
+    runtime.stop_static_host.assert_not_awaited()
+    assert successor in running or not service_replaced
+    stopped = [args for args in commands if args[:2] == ("docker", "stop")]
+    if service_replaced:
+        assert stopped == []
+    else:
+        assert stopped == [("docker", "stop", "--time", "20", launched)]
+
+
 def test_claude_profile_materializes_exact_oauth_home_without_secret_data() -> None:
     profile = SimpleNamespace(
         profile_id="claude-oauth",
@@ -6381,6 +6428,10 @@ async def _run_coordinator_failure_case(
 
         owner_mock.side_effect = fail_from_production_runtime
 
+    # The static service's launched container runs until cleanup stops that
+    # exact container; on-demand hosts are removed by their lease name.
+    static_running = {"container-1"}
+
     async def run_cleanup_command(*args, **_kwargs):
         if (
             args[:3] == ("docker", "inspect", "--format")
@@ -6388,8 +6439,16 @@ async def _run_coordinator_failure_case(
             and args[3].startswith("{{range .Mounts}}")
         ):
             return 0, "valid", ""
+        if args[:4] == ("docker", "inspect", "--format", "{{.State.Running}}"):
+            return 0, "true" if args[-1] in static_running else "false", ""
         command = tuple(args[:3])
-        if command[:2] == ("docker", "stop"):
+        if command[:2] == ("docker", "stop") and args[-1] == "container-1":
+            owners.calls.append("host_stop")
+            if fail_at == "host_stop":
+                raise error
+            static_running.discard("container-1")
+            actions.append("host_stopped")
+        elif command[:2] == ("docker", "stop"):
             owners.calls.append("host_remove")
             if fail_at == "host_remove":
                 raise error

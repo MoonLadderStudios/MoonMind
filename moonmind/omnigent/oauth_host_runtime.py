@@ -2513,7 +2513,17 @@ class OmnigentOAuthHostRuntime:
                     container_name=container_name, lease_id=host_lease.lease_id
                 )
                 await self._run("docker", "rm", "-f", container_name, check=False)
-            await self.stop_static_host(binding=binding)
+            if attachment_identity:
+                # Stop the immutable container this lease launched on, never
+                # the service by name: an update may have recreated the service
+                # for a successor. A launched container that is already gone is
+                # confirmed stopped by the presence check below.
+                if await self.container_exists(attachment_identity):
+                    await self._run(
+                        "docker", "stop", "--time", "20", attachment_identity
+                    )
+            else:
+                await self.stop_static_host(binding=binding)
             cleanup_result = "drained_owned_static_host"
             container_present = bool(
                 container_name and await self._container_present(container_name)

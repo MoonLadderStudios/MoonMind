@@ -14129,10 +14129,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 >= interrupted_step_budget.max_seconds
                             ):
                                 retryable = False
-                                step_failure_summary = (
-                                    f"{step_failure_summary}; the Step's execution "
-                                    "budget was exhausted across interrupted attempts"
+                                budget_note = (
+                                    "the Step's execution budget was exhausted "
+                                    "across interrupted attempts"
                                 )
+                                step_failure_summary = (
+                                    f"{step_failure_summary}; {budget_note}"
+                                )
+                                if provider_failure_summary:
+                                    provider_failure_summary = (
+                                        f"{provider_failure_summary}; {budget_note}"
+                                    )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
