@@ -203,7 +203,7 @@ def codex_plan_inputs() -> dict[str, object]:
 
 def _reclassify(monkeypatch: pytest.MonkeyPatch, **updates: object) -> None:
     record = get_retirement_record(PROFILE_BOUND_PATH_ID)
-    changed = record.model_copy(update=updates)
+    changed = record.model_validate({**record.model_dump(), **updates})
     monkeypatch.setitem(
         legacy_retirement._INVENTORY_BY_ID, PROFILE_BOUND_PATH_ID, changed
     )
@@ -301,7 +301,6 @@ def _reclassify_rollback_only(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch,
         retirement_class=RetirementClass.ROLLBACK_ONLY,
         new_admission_source="operator rollback generation",
-        rollback_dependency=True,
         rollback_generations=frozenset({"gen-rollback-1"}),
     )
 
@@ -420,9 +419,8 @@ def test_disabled_admission_does_not_change_recorded_plans(
     recorded = compile_execution_plan(**codex_plan_inputs)
     _reclassify(
         monkeypatch,
-        retirement_class=RetirementClass.TEMPORAL_REPLAY_ONLY,
+        retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
         new_admission_source="",
-        replay_dependency=True,
     )
     assert recorded.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
     # The realizer stays registered and resolvable for the recorded plan even

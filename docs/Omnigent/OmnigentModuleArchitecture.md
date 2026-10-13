@@ -24,8 +24,8 @@ This document describes the packages that exist today, who owns which decision,
 and which direction dependencies are allowed to point. It is enforced, not
 aspirational: `tests/unit/omnigent/test_module_architecture.py` parses the
 repository and fails when a rule below is violated, and
-`moonmind/omnigent/legacy_retirement.py` owns the exemptions and the #3712
-criteria that retire them.
+`moonmind/omnigent/legacy_retirement.py` owns the exemptions and the legacy
+admission table they are tied to.
 
 The target harness-platform semantics — catalog trust, Agent Profiles, Host
 Classes, capability negotiation, plan compilation — remain owned by
@@ -91,7 +91,7 @@ exists yet, so the parent's existing bounded step retry starts a fresh Step
 Execution instead of failing the workflow. Hermetic coverage
 lives in `test_mounted_tool_preflight.py` and the full handoff regression in
 `test_generic_platform_production_services.py`.
-| `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | #3712 retirement inventory, migration inventory, rollback authority | Governance |
+| `moonmind/omnigent/legacy_retirement.py`, `session_migration_inventory.py`, `session_supervisor_rollback.py` | Legacy admission table, migration inventory, rollback authority | Governance |
 
 ## 3. Allowed dependency direction
 
@@ -187,116 +187,100 @@ contract asserts they add no capability of their own.
 
 ## 5. Retained duplicate architecture and its retirement owners
 
-Every retained legacy component and every enforced-boundary exemption is owned in
-code by `moonmind/omnigent/legacy_retirement.py`. A document checklist is not
-sufficient: the inventory is the authority, and CI fails when the repository
-grows a legacy surface that no row classifies.
+Whether new work may still select a retained legacy path, and which legacy path
+each enforced-boundary exemption shelters, is owned in code by
+`moonmind/omnigent/legacy_retirement.py`. CI fails when the repository grows a
+legacy surface that no row classifies.
 
-- `RETIREMENT_INVENTORY` holds one row per retained component. Each row records
-  its owner, **retirement class**, last new-write/new-admission source, active
-  resource dependencies, replay and historical-read dependencies, rollback
-  dependency and exact permitted rollback generations, required evidence
-  (`applicable_criteria`), earliest removal stage, and removal guard test.
+- `RETIREMENT_INVENTORY` holds one row per retained legacy path that a
+  new-admission boundary can select or that an architecture exemption names.
+  Each row records its owner, **retirement class**, surfaces, the source that
+  still admits new work, and any exact permitted rollback generations.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
-  row whose criteria retire each one.
+  row each one shelters.
 - `moonmind/omnigent/retirement_surfaces.py` derives the legacy surfaces the
   repository actually contains — non-generic realizers, direct managed runtime
   strategies, provider-specific startup scripts, duplicate Compose services and
   profiles, and non-canonical image variables — from code and deployment
   configuration rather than a hand-maintained list.
-- `moonmind/omnigent/retirement_drain.py` aggregates active-owner probe
-  observations into fail-closed drain evidence.
 
 ### 5.1 Retirement classes
-
-Every retained component carries exactly one class. The order is the staged
-convergence order:
 
 | Class | Meaning |
 | --- | --- |
 | `active_product_path` | Still the supported path for new work. |
+| `rollback_only` | New work only under an exactly allowlisted rollback generation with a fresh, exactly scoped rollback exercise. |
 | `new_admission_disabled` | No new plan may select it; recorded work continues. |
-| `rollback_only` | New work only under an exactly allowlisted rollback generation. |
-| `active_execution_support` | Owns work that is already running. |
-| `cleanup_only` | Owns reclamation for work that has stopped. |
-| `temporal_replay_only` | A replay-visible wrapper for recorded histories. |
-| `historical_read_only` | Read model for recorded work. |
-| `migration_tool` | Moves records; never runs work. |
-| `eligible_for_removal` | Every dependency drained and every window closed. |
-| `removed` | The implementation is gone. |
 
-`active_product_path` and `rollback_only` are the only classes that admit new
-work. Plan compilation
-(`harness_platform/planner.py:compile_execution_plan`) and runtime selection
-(`cutover.py:select_runtime`) both consult the class before admitting, so a
-trusted planner default, an alternate API client's explicit selection, a
-schedule, and a preset are all held to the same code-owned state. Disabling new
-admission never affects execution, cancellation, cleanup, or reads for
-already-recorded plans.
+Plan compilation (`harness_platform/planner.py:compile_execution_plan`), runtime
+selection (`cutover.py:select_runtime` via `new_work_runtime.py`), and the
+embedded-transport bridge boundary (`omnigent_bridge.py`) consult the class
+before admitting, so a trusted planner default, an alternate API client's
+explicit selection, a schedule, and a preset are all held to the same
+code-owned state. Disabling new admission never affects execution,
+cancellation, cleanup, replay, or reads for already-recorded plans.
 
-### 5.2 Removal stages
+### 5.2 Removing a retained path
 
-`RemovalStage` is the ordered staging from product selectors (1) through
-historical readers (9). A `RemovalPlan` targets exactly one stage and cites the
-rows it removes; `evaluate_removal_plan` returns the eligible rows, the
-remaining blockers, and the guard tests the PR must show passing. A row may not
-be swept into a stage earlier than its `earliest_removal_stage`, so a historical
-reader can never be deleted alongside a product selector.
+Removal is an ordinary change sized to the component (#3932). Delete the code,
+its row, any exemption that names the row, and the tests that existed only for
+it; keep the behavior tests of the surviving owner. There is no removal stage,
+retirement-criterion ledger, or deployment-wide drain census. Protections stay
+with the owner of the affected behavior:
 
-Removal eligibility is fail-closed on every axis: a still-admitting class, an
-undrained active owner, an open replay/historical-read/rollback window, a
-missing rollback exercise, or an unmet retirement criterion all block.
+- replay of recorded histories — the Temporal replay tests
+  (`tests/unit/workflows/temporal/test_legacy_generation_replay.py` and the
+  retained workflow histories);
+- historical reads — the read-model tests of the component that serves them;
+- active work and cleanup — the existing drain and cleanup owners
+  (`codex_cutover_drain.py`, `embedded_drain.py`, the host janitors), used only
+  for components that actually have active or cleanup consumers;
+- credentials — the materializer and lease owners; unknown resource state is
+  never permission to delete or release a credential consumer.
+
+`assert_inventory_is_complete` also rejects a row whose surface is gone, so a
+deletion removes its row in the same change rather than leaving a stale entry.
 
 ### 5.3 Retained components
 
-| Shim / retained component | Owner record | Class today | Earliest removal stage |
-| --- | --- | --- | --- |
-| Direct Codex launch strategy | `omnigent.legacy.direct_codex_launch` | `active_product_path` | 1 product selectors |
-| Direct Codex session runtime | `omnigent.legacy.direct_codex_session_runtime` | `active_product_path` | 7 launch-only code |
-| Direct Codex session adapter | `omnigent.legacy.direct_codex_session_adapter` | `active_product_path` | 7 launch-only code |
-| Direct Codex bridge compatibility producer | `omnigent.legacy.direct_codex_bridge_compat` | `active_product_path` | 9 historical readers |
-| Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` | 1 product selectors |
-| `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `active_product_path` | 1 product selectors |
-| `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `active_product_path` | 7 launch-only code |
-| `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `active_product_path` | 6 OAuth-host orchestration |
-| Legacy OAuth host janitor | `omnigent.legacy.oauth_host_janitor` | `cleanup_only` | 6 OAuth-host orchestration |
-| OAuth session Activity registrations | `omnigent.legacy.oauth_session_activities` | `active_execution_support` | 3 composition-root registrations |
-| Provider Profile capacity/lease consumer | `omnigent.legacy.provider_profile_capacity_consumer` | `active_execution_support` | 3 composition-root registrations |
-| Codex static host scripts and Compose profile | `omnigent.legacy.codex_static_host_startup` | `active_product_path` | 4 startup and Compose |
-| Claude static host scripts and Compose profile | `omnigent.legacy.claude_static_host_startup` | `active_product_path` | 4 startup and Compose |
-| Pre-consolidation `omnigent-host` service and projection entrypoint | `omnigent.legacy.projection_host_startup` | `active_product_path` | 4 startup and Compose |
-| Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` | 5 image and environment aliases |
-| OpenCode shared-image variable / `omnigent-host-opencode` alias | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` | 5 image and environment aliases |
-| Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` | 5 image and environment aliases |
-| Persisted per-provider bootstrap image fields | `omnigent.legacy.persisted_bootstrap_image_fields` | `active_product_path` | 5 image and environment aliases |
-| `bridge_store.py` overloaded bridge session row | `omnigent.legacy.bridge_persistence` | `active_product_path` | 9 historical readers |
-| `execute.py` legacy session driver | `omnigent.legacy.bridge_execution` | `active_product_path` | 2 new-write API paths |
-| `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` | 9 historical readers |
-| `cutover.py` Codex-through-Omnigent selection | `omnigent.legacy.codex_cutover_selection` | `active_product_path` | 1 product selectors |
-| Managed-session replay patch branches | `omnigent.legacy.managed_session_replay_patches` | `temporal_replay_only` | 8 replay wrappers |
-| Session migration inventory | `omnigent.legacy.session_migration_inventory` | `migration_tool` | 9 historical readers |
-| `#3834` static-host startup runbook | `omnigent.legacy.static_host_startup_runbook` | `historical_read_only` | 4 startup and Compose |
+| Shim / retained component | Owner record | Class today |
+| --- | --- | --- |
+| Direct Codex launch strategy | `omnigent.legacy.direct_codex_launch` | `active_product_path` |
+| Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
+| `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `active_product_path` |
+| `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `active_product_path` |
+| `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `active_product_path` |
+| Codex static host scripts and Compose profile | `omnigent.legacy.codex_static_host_startup` | `active_product_path` |
+| Claude static host scripts and Compose profile | `omnigent.legacy.claude_static_host_startup` | `active_product_path` |
+| Pre-consolidation `omnigent-host` service and projection entrypoint | `omnigent.legacy.projection_host_startup` | `active_product_path` |
+| Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
+| OpenCode shared-image variable / `omnigent-host-opencode` alias | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
+| Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
+| `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
+| Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
-Two enforced-boundary exemptions are additionally owned by rows above:
+Three enforced-boundary exemptions are owned by rows above:
 `omnigent_catalog.py`'s in-handler readiness projection reading the materializer
-descriptor registry (`omnigent.legacy.native_ui_compat`), and
-`oauth_host_runtime.py`'s raw Docker/Compose argument vectors
-(`omnigent.legacy.oauth_host_runtime`) — moving the launch argument vector would
-change what in-flight histories were started with.
+descriptor registry (`omnigent.legacy.native_ui_compat`),
+`profile_bound_execution.py`'s default port selection
+(`omnigent.legacy.profile_bound_execution`), and `oauth_host_runtime.py`'s raw
+Docker/Compose argument vectors (`omnigent.legacy.oauth_host_runtime`) — moving
+the launch argument vector would change what in-flight histories were started
+with.
 
 Temporary supervisor rollout flags are listed in `TEMPORARY_ROLLOUT_FLAGS` with
-their retirement trigger, so a rollout flag cannot become a permanent alternate
+their exit condition, so a rollout flag cannot become a permanent alternate
 architecture.
 
 ### 5.4 Obsolete configuration
 
 `OBSOLETE_CONFIGURATION` names each legacy image/environment identity, its
 replacement, and its owning retirement row. `assert_obsolete_configuration` runs
-at API startup: during a variable's deprecation window a supplied value produces
-an actionable operator warning naming the replacement, and after removal startup
-is rejected outright. No obsolete value is ever silently ignored. Nothing is
-deprecated today — the aliases remain the supported way to pin a prior image
-while the rollback window is open.
+at API and worker startup: during a variable's deprecation window a supplied
+value produces an actionable operator warning naming the replacement, and after
+removal startup is rejected outright. No obsolete value is ever silently
+ignored. Nothing is deprecated today — the aliases remain the supported way to
+pin a prior image while the rollback window is open.
 
 ## 6. Adding an approved harness
 

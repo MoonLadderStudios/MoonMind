@@ -67,14 +67,12 @@ SHARED_HOST_IMAGE_TAG_ENV = "OMNIGENT_SHARED_HOST_IMAGE_TAG"
 # deployments, but the primary Claude destination is the on-demand generic
 # host. This disposition changes no admitted host mode: exact pack /
 # materializer selection is still enforced by
-# :func:`validate_static_combination`, and removal authority stays with the
-# code-owned retirement row
-# ``omnigent.legacy.claude_static_host_startup`` in
+# :func:`validate_static_combination`, and new admission follows the
+# code-owned retirement row ``omnigent.legacy.claude_static_host_startup`` in
 # ``moonmind.omnigent.legacy_retirement`` (still ``ACTIVE_PRODUCT_PATH`` while
-# retained). Removal happens only through that row's retirement policy at the
-# ``STARTUP_AND_COMPOSE`` stage, after the generic Claude static row passes
-# the exact-image and lifecycle gates recorded in
-# ``services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md``.
+# retained). Removing the profile deletes its scripts, Compose service, and
+# that row together once the generic Claude static row covers the existing
+# deployments (``services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md``).
 STATIC_CLAUDE_DISPOSITION = "retained"
 STATIC_CLAUDE_RETIREMENT_PATH_ID = "omnigent.legacy.claude_static_host_startup"
 STATIC_CLAUDE_PRIMARY_PATH = "on-demand generic Claude host"
@@ -298,12 +296,12 @@ def static_claude_disposition() -> dict[str, str]:
         "retirement_class": "active_product_path",
         "new_admission_source": "docker-compose.yaml:omnigent-host-claude",
         "primary_path": STATIC_CLAUDE_PRIMARY_PATH,
-        "removal_authority": (
+        "admission_authority": (
             "moonmind.omnigent.legacy_retirement:RETIREMENT_INVENTORY"
         ),
         "removal_conditions": (
-            "generic Claude static row passes exact-image and lifecycle "
-            "gates; removal at STARTUP_AND_COMPOSE stage under #3835"
+            "generic Claude static row serves the existing deployments; the "
+            "scripts, Compose service, and retirement row are deleted together"
         ),
     }
 
