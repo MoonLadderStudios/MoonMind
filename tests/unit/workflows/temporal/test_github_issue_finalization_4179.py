@@ -473,8 +473,9 @@ async def test_activity_available_no_work_releases_without_status_label(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_activity_writer_stop_failure_never_false_release() -> None:
+async def test_activity_writer_stop_failure_never_false_release(monkeypatch) -> None:
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await acts.finalize_failed_attempt(
         **_base_kwargs(writer_evidence={"writers_stopped": False}), service=service
     )
@@ -484,8 +485,9 @@ async def test_activity_writer_stop_failure_never_false_release() -> None:
 
 
 @pytest.mark.asyncio
-async def test_activity_unknown_mutation_and_preservation_block() -> None:
+async def test_activity_unknown_mutation_and_preservation_block(monkeypatch) -> None:
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     unknown_mut = await acts.finalize_failed_attempt(
         **_base_kwargs(mutation_evidence=_mutations(push_outcome="unknown")), service=service
     )
@@ -799,10 +801,11 @@ async def test_failed_path_tool_cancellation_holds_without_rerun(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_failed_path_tool_internal_event_retained_without_effects() -> None:
+async def test_failed_path_tool_internal_event_retained_without_effects(monkeypatch) -> None:
     from moonmind.workflows.temporal import story_output_tools as tools
 
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await tools.finalize_github_issue_failed_attempt(
         {
             "repository": "o/r",

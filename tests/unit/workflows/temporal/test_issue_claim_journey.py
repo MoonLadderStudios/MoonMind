@@ -921,7 +921,9 @@ async def test_finalization_does_not_verify_new_reference_with_retained_sha(
                 "merge_outcome_absent": True,
             },
             "preservationEvidence": {
-                "save_method": "pr_head_verified",
+                "save_method": (
+                    "saved_branch_verified" if "saved_branch" in new_ref else "pr_head_verified"
+                ),
                 "preservation_verified": True,
                 **new_ref,
                 **({"revision": new_revision} if new_revision else {}),
@@ -951,3 +953,165 @@ async def test_finalization_does_not_verify_new_reference_with_retained_sha(
         assert result.outputs["reasonCode"] == "preservation_incomplete"
         assert state["comments"][0]["body"] == before
         assert not (await store.get(context["execution_owner"])).released
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["pr_url", "saved_branch"])
+async def test_finalization_generic_revision_only_populates_matching_reference(
+    journey, reference
+):
+    from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-single-reference"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "executionEvent": "failed",
+            "writerEvidence": {
+                "writers_stopped": True,
+                "stop_method": "runtime_quiescence",
+                "stop_evidence": "fixture writer exited",
+            },
+            "mutationEvidence": {
+                "push_outcome_absent": True,
+                "pr_outcome_absent": True,
+                "merge_outcome_absent": True,
+            },
+            "preservationEvidence": {
+                "save_method": (
+                    "pr_head_verified"
+                    if reference == "pr_url"
+                    else "saved_branch_verified"
+                ),
+                "preservation_verified": True,
+                reference: (
+                    "https://github.com/example/repo/pull/42"
+                    if reference == "pr_url"
+                    else "saved-work"
+                ),
+                "revision": "candidate-a",
+            },
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+            "nextAction": "verify",
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    body = state["comments"][0]["body"]
+    handoff = parse_attempt_comment(body).handoff
+    assert handoff.pr_head == ("candidate-a" if reference == "pr_url" else "")
+    assert handoff.saved_sha == ("candidate-a" if reference == "saved_branch" else "")
+    assert "Saved: ?@" not in body
+    if reference == "saved_branch":
+        assert "Head/base:" not in body
+    receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+    planned = receipt.finalization_json["plan"]["attempt_handoff"]
+    assert planned["prHead"] == handoff.pr_head
+    assert planned["savedSha"] == handoff.saved_sha
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "secret_field", ["reason", "remainingRequirements", "scanner_unavailable"]
+)
+async def test_finalization_scans_raw_handoff_before_record_or_mutation(
+    journey, monkeypatch, secret_field
+):
+    from unittest.mock import AsyncMock
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-blocked-handoff"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    state["labels"] = ["status: in-progress"]
+    before_body = state["comments"][0]["body"]
+    before = await IssueClaimStore(sessions).get(context["execution_owner"])
+    calls = []
+    original_record = IssueClaimStore.record_finalization
+
+    async def record(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return await original_record(self, *args, **kwargs)
+
+    monkeypatch.setattr(IssueClaimStore, "record_finalization", record)
+    mutations = []
+    for name in (
+        "create_issue_comment",
+        "update_issue_comment",
+        "add_issue_labels",
+        "remove_issue_label",
+        "close_issue",
+    ):
+        spy = AsyncMock(wraps=getattr(service, name))
+        monkeypatch.setattr(service, name, spy)
+        mutations.append(spy)
+    if secret_field == "scanner_unavailable":
+        import moonmind.security
+
+        def unavailable(*args, **kwargs):
+            raise RuntimeError("fixture scanner outage")
+
+        monkeypatch.setattr(moonmind.security, "scan_outbound_bundle", unavailable)
+    # A synthetic fixture credential, never a real token.
+    unsafe = "Synthetic fixture credential ghp_" + "A" * 36
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "executionEvent": "failed",
+            "writerEvidence": {
+                "writers_stopped": True,
+                "stop_method": "runtime_quiescence",
+                "stop_evidence": "fixture writer exited",
+            },
+            "mutationEvidence": {
+                "push_outcome_absent": True,
+                "pr_outcome_absent": True,
+                "merge_outcome_absent": True,
+            },
+            "preservationEvidence": {
+                "save_method": "explicit_no_work",
+                "trustworthy_no_work": True,
+            },
+            "dispositionEvidence": {"no_work": True, "fresh_retry_safe": True},
+            "nextAction": "fresh_retry",
+            **(
+                {
+                    secret_field: [unsafe]
+                    if secret_field == "remainingRequirements"
+                    else unsafe
+                }
+                if secret_field != "scanner_unavailable"
+                else {"reason": "Fixture safe reason"}
+            ),
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED", result.outputs
+    assert result.outputs["reasonCode"] == "comment_blocked_by_scan"
+    assert result.outputs["released"] is False
+    assert result.outputs["workspaceRetained"] is True
+    assert calls == []
+    for mutation in mutations:
+        mutation.assert_not_awaited()
+    assert state["comments"][0]["body"] == before_body
+    assert state["posts"] == 1
+    assert state["labels"] == ["status: in-progress"]
+    assert state.get("state", "open") == "open"
+    after = await IssueClaimStore(sessions).get(context["execution_owner"])
+    assert after == before
+    assert unsafe not in json.dumps(result.outputs)
