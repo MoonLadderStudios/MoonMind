@@ -393,7 +393,7 @@ async def execute_checkpoint_branch_request(
             ledger._host_leases[key] = lease
             return lease
 
-        async def mark_host_lease_failed(self, _lease_id, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, _lease_id, **_kwargs):
             lease = ledger._host_leases[key].model_copy(update={"status": "failed"})
             ledger._host_leases[key] = lease
             return lease
