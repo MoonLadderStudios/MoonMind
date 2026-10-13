@@ -7647,6 +7647,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Publishcontract
+             * @description Publication constraints the submit path enforces for this Skill: selfManaged (Skill-owned Auto) and repositoryPublishDisabled (None only)
+             */
+            publishContract?: {
+                [key: string]: boolean;
+            };
+            /**
              * Markdown
              * @description Markdown content of the skill, if requested
              */

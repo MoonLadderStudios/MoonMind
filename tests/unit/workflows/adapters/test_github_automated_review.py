@@ -11,9 +11,6 @@ import httpx
 import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
-from tests.helpers.repository_connections import (  # noqa: F401
-    deployment_without_recorded_connections,
-)
 
 # GitHub operations without an explicit token use the default connection.
 pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")

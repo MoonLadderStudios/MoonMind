@@ -19,9 +19,6 @@ from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # no
 # The `journey` fixture is consumed by name in the test signatures below.
 assert journey is not None
 
-from tests.helpers.repository_connections import (  # noqa: F401
-    deployment_without_recorded_connections,
-)
 from tests.unit.workflows.temporal.test_issue_reservation_policy import (
     CUTOVER,
     ISSUE,

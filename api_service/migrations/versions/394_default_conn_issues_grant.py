@@ -13,11 +13,16 @@ This revision therefore adds ``issues`` to the active
 ``write``, ``branch_write`` and ``review_request``), and to each of its
 assignments that grants publishing. A default or assignment the operator kept
 read-only or otherwise narrower keeps its scope, and other connections are
-unchanged because issue collaboration uses only the default. Connection and
-assignment revisions are unchanged because no admitted snapshot relied on the
-missing operation, so in-flight runs do not go stale.
+unchanged because issue collaboration uses only the default. A GitHub App
+default keeps its scope too: its installation was enrolled for the operations
+it already admits, so issue writes need an explicit permission upgrade rather
+than an inferred grant. Connection and assignment revisions are unchanged
+because no admitted snapshot relied on the missing operation, so in-flight runs
+do not go stale.
 
-Downgrade keeps the grant: revision 391's credential already had this use.
+Downgrade removes ``issues`` from every connection and assignment, because the
+parent revision's application does not recognize that operation and could not
+load a record that kept it.
 
 Revision ID: 394_default_conn_issues_grant
 Revises: 393_default_conn_merge_grant
@@ -48,6 +53,7 @@ _records = sa.table(
     "repository_connection_records",
     sa.column("connection_id", sa.String),
     sa.column("allowed_operations", sa.JSON),
+    sa.column("credential_config", sa.JSON),
     sa.column("lifecycle", sa.String),
     sa.column("policy_revision", sa.Integer),
     sa.column("scope_type", sa.String),
@@ -74,8 +80,17 @@ _audit = sa.table(
 )
 
 
+def _json(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
 def _operations(value) -> list[str]:
-    return list(json.loads(value) if isinstance(value, str) else value or [])
+    return list(_json(value) or [])
+
+
+def _github_app(credential_config) -> bool:
+    config = _json(credential_config)
+    return isinstance(config, dict) and config.get("source") == "github_app"
 
 
 def _grants_publishing(operations: list[str]) -> bool:
@@ -88,7 +103,12 @@ def grant_default_connection_issues(bind) -> bool:
     stored = bind.execute(
         sa.select(_records).where(_records.c.connection_id == DEFAULT_CONNECTION_REF)
     ).first()
-    if stored is None or stored.tombstone or stored.lifecycle != "active":
+    if (
+        stored is None
+        or stored.tombstone
+        or stored.lifecycle != "active"
+        or _github_app(stored.credential_config)
+    ):
         return False
     operations = _operations(stored.allowed_operations)
     if not _grants_publishing(operations):
@@ -138,5 +158,22 @@ def upgrade() -> None:
     grant_default_connection_issues(op.get_bind())
 
 
+def revoke_issues_operation(bind) -> None:
+    """Remove ``issues``, which the parent revision cannot load, everywhere."""
+
+    for table, key, column in (
+        (_records, _records.c.connection_id, _records.c.allowed_operations),
+        (_assignments, _assignments.c.id, _assignments.c.operations),
+    ):
+        for row_key, value in bind.execute(sa.select(key, column)).all():
+            operations = _operations(value)
+            if _ISSUES in operations:
+                bind.execute(
+                    sa.update(table)
+                    .where(key == row_key)
+                    .values({column.name: [op for op in operations if op != _ISSUES]})
+                )
+
+
 def downgrade() -> None:
-    pass
+    revoke_issues_operation(op.get_bind())

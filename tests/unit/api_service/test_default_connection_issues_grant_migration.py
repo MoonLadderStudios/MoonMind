@@ -355,3 +355,48 @@ def test_settings_assignment_of_an_upgraded_default_admits_issues(
     [assignment] = response.json()["assignments"]
     assert "issues" in assignment["operations"]
     assert "issues" in _admit_issues(db_path).operations
+
+
+def test_github_app_default_keeps_its_enrolled_scope(engine, migration):
+    # The installation was enrolled without Issues write; widening the grant
+    # would request a permission the App does not hold.
+    _map_default(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text("UPDATE repository_connection_records SET credential_config = :c"),
+            {
+                "c": json.dumps(
+                    {
+                        "source": "github_app",
+                        "appRef": "github-app:123456",
+                        "installationRef": "installation:123",
+                    }
+                )
+            },
+        )
+    _assign(engine, PUBLISH_OPERATIONS)
+
+    _upgrade(engine, migration)
+
+    [record] = _rows(engine, "repository_connection_records")
+    [assignment] = _rows(engine, "repository_connection_assignments")
+    assert _json(record["allowed_operations"]) == MAPPED_OPERATIONS
+    assert _json(assignment["operations"]) == PUBLISH_OPERATIONS
+    assert not any(
+        row["request_id"] == migration.MIGRATION_REQUEST_ID
+        for row in _rows(engine, "repository_connection_audit_events")
+    )
+
+
+def test_downgrade_removes_the_operation_the_parent_cannot_load(engine, migration):
+    _map_default(engine)
+    _assign(engine, MAPPED_OPERATIONS)
+    _upgrade(engine, migration)
+
+    with engine.begin() as connection:
+        migration.revoke_issues_operation(connection)
+
+    [record] = _rows(engine, "repository_connection_records")
+    [assignment] = _rows(engine, "repository_connection_assignments")
+    assert _json(record["allowed_operations"]) == MAPPED_OPERATIONS
+    assert _json(assignment["operations"]) == MAPPED_OPERATIONS
