@@ -416,6 +416,17 @@ separately qualifies the current API/dashboard submission and observation
 boundary. Neither journey proves automatic bootstrap through a historical API
 binary that predates the prerequisite.
 
+The reliability shards run
+`tests/integration/reliability/test_interrupted_step_replacement_journey.py`
+on real Temporal and PostgreSQL. A three-step workflow completes two agent
+steps, then the update stops the agent worker mid-turn and removes the third
+step's actual host container. A fresh worker re-observes the accepted turn
+without starting another agent and confirms the stop. Only that step then runs
+again, on a new host that restores the workspace archive captured into
+artifact storage, and the workflow completes. Its hosts are inert containers
+driven by a controlled provider, so it does not qualify a real Omnigent host or
+admission on a newly installed image.
+
 ### 12.3 Verification failure rule
 
 Use existing result surfaces to distinguish `SUCCEEDED`, `FAILED`, and `PARTIALLY_VERIFIED` where supported. Do not invent another lifecycle solely for reporting. Missing mandatory evidence cannot become `SUCCEEDED`. Keep the failed check, original error, confirmed progress, and recovery entrypoint visible.
