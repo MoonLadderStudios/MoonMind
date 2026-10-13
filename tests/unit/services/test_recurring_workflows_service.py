@@ -1020,6 +1020,175 @@ async def test_refresh_leaves_a_managed_default_plan_less_schedule_alone(
     mock_temporal_adapter.update_schedule.assert_not_called()
     assert "omnigentExecutionPlan" not in definition.target["initialParameters"]
 
+
+@pytest.mark.parametrize("profile", ["operator", "bootstrap"])
+@pytest.mark.parametrize("verified", [True, False])
+async def test_refresh_admits_a_stored_snapshot_only_omnigent_schedule(
+    profile: str,
+    verified: bool,
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: a schedule stored with an Agent Profile
+    snapshot but no execution plan is compiled from its own verified frozen
+    authority by the deployment refresh, instead of starting new plan-less
+    supervisor work until an operator edits it. A copied snapshot without
+    matching durable usage stays rejected and is reported."""
+
+    import copy
+
+    admission = _mm3935_plan_admission(monkeypatch)
+    admission.default_resolver.side_effect = AssertionError("must not reselect defaults")
+    snapshot = dict(admission.snapshot)
+    if profile == "operator":
+        snapshot["profileId"] = "operator-profile"
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await _mm3935_plan_less_schedule(session, service)
+        definition_id = definition.id
+        definition.target = {
+            **definition.target,
+            "agentProfileSnapshot": snapshot,
+            "initialParameters": {
+                **definition.target["initialParameters"],
+                "targetRuntime": "omnigent",
+                "agentProfileSnapshot": snapshot,
+                "model": "retained-model",
+                "effort": "max",
+            },
+        }
+        if profile == "bootstrap":
+            session.add(
+                OmnigentAgentProfile(
+                    profile_id=snapshot["profileId"],
+                    display_name="Codex via Omnigent",
+                    visibility="workspace",
+                    state="active",
+                    active_version=snapshot["version"],
+                    default_for_runtime=True,
+                )
+            )
+            session.add(
+                OmnigentAgentProfileVersion(
+                    profile_id=snapshot["profileId"],
+                    version=snapshot["version"],
+                    digest=snapshot["digest"],
+                    document={},
+                    validation_result={"ready": True},
+                )
+            )
+        if verified:
+            session.add(
+                OmnigentAgentProfileUsage(
+                    consumer_type="schedule",
+                    consumer_id=str(definition_id),
+                    profile_id=snapshot["profileId"],
+                    version=snapshot["version"],
+                    digest=snapshot["digest"],
+                    effective_snapshot=snapshot,
+                )
+            )
+        await session.commit()
+        stored_target = copy.deepcopy(definition.target)
+        mock_temporal_adapter.reset_mock()
+        mock_temporal_adapter.describe_schedule.side_effect = ScheduleNotFoundError(
+            "missing"
+        )
+
+        outcome = await service.refresh_managed_bootstrap_schedules()
+
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, definition_id, populate_existing=True
+        )
+        if not verified:
+            assert outcome.refreshed == 0
+            [failure] = outcome.failures
+            assert str(definition_id) in failure
+            assert "snapshot without an execution plan" in failure
+            admission.compile_plan.assert_not_awaited()
+            mock_temporal_adapter.create_schedule.assert_not_awaited()
+            mock_temporal_adapter.update_schedule.assert_not_awaited()
+            assert reloaded.target == stored_target
+            assert reloaded.version == 1
+            return
+
+        assert outcome.failures == ()
+        assert outcome.refreshed == 1
+        admission.default_resolver.assert_not_awaited()
+        admission.compile_plan.assert_awaited_once()
+        compiled = admission.compile_plan.await_args.kwargs
+        assert compiled["workflow_id"] == f"mm-schedule:{definition_id}"
+        assert compiled["agent_profile_snapshot"] == snapshot
+        assert compiled["initial_parameters"]["model"] == "retained-model"
+        assert compiled["initial_parameters"]["effort"] == "max"
+        initial_parameters = reloaded.target["initialParameters"]
+        assert initial_parameters["omnigentExecutionPlan"] == admission.plan_binding
+        assert initial_parameters["agentProfileSnapshot"] == snapshot
+        assert initial_parameters["task"] == {
+            "instructions": "Recurring default-runtime check."
+        }
+        assert reloaded.version == 2
+        scheduled_parameters = mock_temporal_adapter.create_schedule.await_args.kwargs[
+            "workflow_input"
+        ]["initial_parameters"]
+        assert scheduled_parameters["omnigentExecutionPlan"] == admission.plan_binding
+
+
+@pytest.mark.parametrize("stored", [{}, "", []])
+async def test_refresh_rejects_a_present_but_empty_stored_snapshot(
+    stored: object,
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3935: a stored snapshot that is present but
+    empty is invalid authority, not an absent one. The deployment refresh
+    rejects it instead of replacing it with present-day defaults."""
+
+    import copy
+
+    admission = _mm3935_plan_admission(monkeypatch)
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
+        )
+        definition = await _mm3935_plan_less_schedule(session, service)
+        definition_id = definition.id
+        definition.target = {
+            **definition.target,
+            "initialParameters": {
+                **definition.target["initialParameters"],
+                "targetRuntime": "omnigent",
+                "agentProfileSnapshot": stored,
+            },
+        }
+        await session.commit()
+        stored_target = copy.deepcopy(definition.target)
+        mock_temporal_adapter.reset_mock()
+
+        outcome = await service.refresh_managed_bootstrap_schedules()
+
+        reloaded = await session.get(
+            RecurringWorkflowDefinition, definition_id, populate_existing=True
+        )
+        assert outcome.refreshed == 0
+        [failure] = outcome.failures
+        assert str(definition_id) in failure
+        assert "snapshot without an execution plan" in failure
+        admission.default_resolver.assert_not_awaited()
+        admission.compile_plan.assert_not_awaited()
+        mock_temporal_adapter.update_schedule.assert_not_awaited()
+        assert reloaded.target == stored_target
+        assert reloaded.version == 1
+
+
 async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
     session = AsyncMock(spec=AsyncSession)
     session.execute.return_value = SimpleNamespace(all=lambda: [])
@@ -1683,6 +1852,7 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    admission = _mm3935_plan_admission(monkeypatch)
     old_digest = "sha256:" + "3" * 64
     new_digest = "sha256:" + "4" * 64
     old_snapshot = {
@@ -1692,6 +1862,7 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         "providerProfileRef": "codex_openai_oauth",
         "executionProfileRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@3",
+        "agentId": "upstream-codex-agent",
         "document": {"model": {}, "capture": {}, "rag": {}, "publish": {}},
     }
     new_snapshot = {
@@ -1710,14 +1881,26 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         consumer_id,
         user,
         replace_existing_usage,
+        persist_usage=True,
     ):
         refresh_calls.append(
             {
                 "consumerType": consumer_type,
                 "consumerId": consumer_id,
                 "replaceExistingUsage": replace_existing_usage,
+                "persistUsage": persist_usage,
             }
         )
+        if persist_usage:
+            # The real resolver replaces the schedule's durable usage row.
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage).where(
+                    OmnigentAgentProfileUsage.consumer_id == consumer_id
+                )
+            )
+            usage.version = new_snapshot["version"]
+            usage.digest = new_snapshot["digest"]
+            usage.effective_snapshot = new_snapshot
         return {
             **dict(parameters),
             "agentProfile": {
@@ -1742,6 +1925,7 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         service = RecurringWorkflowsService(
             session,
             temporal_client_adapter=mock_temporal_adapter,
+            artifact_service=SimpleNamespace(),
         )
         # Seed a retained snapshot-only definition directly: current authoring
         # no longer admits this historical shape without an execution plan.
@@ -1784,6 +1968,23 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
             policy={},
         )
         session.add(definition)
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex_openai_oauth",
+                runtime_id="codex_cli",
+                provider_id="openai",
+            )
+        )
+        session.add(
+            OmnigentAgentProfileUsage(
+                consumer_type="schedule",
+                consumer_id=str(definition_id),
+                profile_id=old_snapshot["profileId"],
+                version=old_snapshot["version"],
+                digest=old_snapshot["digest"],
+                effective_snapshot=old_snapshot,
+            )
+        )
         session.add(
             OmnigentAgentProfile(
                 profile_id="omnigent-bootstrap-default",
@@ -1850,10 +2051,40 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 0
         mock_temporal_adapter.update_schedule.assert_not_called()
         assert refresh_calls == []
+        admission.compile_plan.assert_not_awaited()
 
         binding.launch_policy_ref = "codex-on-demand@4"
         await session.commit()
 
+        async def usage_snapshot() -> dict[str, object]:
+            usage = await session.scalar(
+                select(OmnigentAgentProfileUsage)
+                .where(OmnigentAgentProfileUsage.consumer_id == str(definition_id))
+                .execution_options(populate_existing=True)
+            )
+            return usage.effective_snapshot
+
+        # Artifact persistence commits the shared session before plan
+        # compilation can fail. The usage row must not advance ahead of the
+        # definition, or every later refresh would reject the schedule.
+        async def commit_then_fail(**_kwargs):
+            await session.commit()
+            raise RuntimeError("plan compilation unavailable")
+
+        admission.compile_plan.side_effect = commit_then_fail
+        failed = await service.refresh_managed_bootstrap_schedules()
+        assert failed.refreshed == 0
+        [failure] = failed.failures
+        assert "plan compilation unavailable" in failure
+        await session.refresh(definition)
+        assert definition.version == 1
+        assert definition.target["agentProfileSnapshot"] == old_snapshot
+        assert await usage_snapshot() == old_snapshot
+        mock_temporal_adapter.update_schedule.assert_not_called()
+
+        admission.compile_plan.side_effect = None
+        admission.compile_plan.reset_mock()
+        refresh_calls.clear()
         assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
 
         await session.refresh(definition)
@@ -1868,12 +2099,29 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 "consumerType": "schedule",
                 "consumerId": str(definition.id),
                 "replaceExistingUsage": True,
+                "persistUsage": False,
             }
         ]
+        # Usage advances with the admitted schedule revision.
+        assert await usage_snapshot() == new_snapshot
+        # MoonLadderStudios/MoonMind#3935: the advanced snapshot-only
+        # schedule is compiled onto the plan owner in the same revision.
+        admission.compile_plan.assert_awaited_once()
+        assert admission.compile_plan.await_args.kwargs[
+            "agent_profile_snapshot"
+        ] == new_snapshot
+        assert definition.target["agentProfileSnapshot"] == new_snapshot
+        assert definition.target["initialParameters"][
+            "omnigentExecutionPlan"
+        ] == admission.plan_binding
         update = mock_temporal_adapter.update_schedule.call_args.kwargs
-        assert update["workflow_input"]["initial_parameters"]["omnigent"][
-            "launchPolicyRef"
-        ] == "codex-on-demand@4"
+        scheduled_parameters = update["workflow_input"]["initial_parameters"]
+        assert scheduled_parameters["omnigent"]["launchPolicyRef"] == (
+            "codex-on-demand@4"
+        )
+        assert scheduled_parameters["omnigentExecutionPlan"] == (
+            admission.plan_binding
+        )
 
 
 async def test_managed_bootstrap_refresh_contains_individual_failures(
