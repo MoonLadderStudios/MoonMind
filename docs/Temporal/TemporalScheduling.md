@@ -150,7 +150,10 @@ cannot bypass admission; new authoring uses the normal Agent Profile selection
 or deployment defaults. The deployment schedule refresh pass compiles a stored
 snapshot-only definition the same way, after advancing a managed-bootstrap
 snapshot to the active launch policy; one whose snapshot does not match its
-durable usage is named in the refresh failures and is not changed.
+durable usage, or whose stored snapshot is present but empty or malformed, is
+named in the refresh failures and is not changed. The durable usage advances
+only with the admitted schedule revision, so a failed compilation or Temporal
+schedule update leaves both unchanged for the next pass to retry.
 
 For generic Omnigent schedules, every occurrence resolves the current promoted default —
 Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
