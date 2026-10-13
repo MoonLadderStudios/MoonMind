@@ -1115,3 +1115,109 @@ async def test_finalization_scans_raw_handoff_before_record_or_mutation(
     after = await IssueClaimStore(sessions).get(context["execution_owner"])
     assert after == before
     assert unsafe not in json.dumps(result.outputs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_plan", [False, True])
+@pytest.mark.parametrize("release_confirmed", [False, True])
+async def test_finalization_recovers_confirmed_release_without_rescanning(
+    journey, monkeypatch, legacy_plan, release_confirmed
+):
+    from unittest.mock import AsyncMock, Mock
+
+    import moonmind.security
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-release-result-crash"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    evidence = {
+        **inputs,
+        "executionEvent": "failed",
+        "writerEvidence": {
+            "writers_stopped": True,
+            "stop_method": "runtime_quiescence",
+            "stop_evidence": "fixture writer exited",
+        },
+        "mutationEvidence": {
+            "push_outcome_absent": True,
+            "pr_outcome_absent": True,
+            "merge_outcome_absent": True,
+        },
+        "preservationEvidence": {
+            "save_method": "explicit_no_work",
+            "trustworthy_no_work": True,
+        },
+        "dispositionEvidence": {"no_work": True, "fresh_retry_safe": True},
+        "nextAction": "fresh_retry",
+    }
+    original_record = IssueClaimStore.record_finalization
+
+    async def crash_before_result(self, owner, phase, payload):
+        if phase == "result":
+            raise RuntimeError("fixture crash before final result persistence")
+        return await original_record(self, owner, phase, payload)
+
+    state["lose_release_ack" if release_confirmed else "reject_release"] = True
+    with monkeypatch.context() as patch:
+        patch.setattr(IssueClaimStore, "record_finalization", crash_before_result)
+        if release_confirmed:
+            with pytest.raises(RuntimeError, match="fixture crash before final result"):
+                await tools.finalize_github_issue_failed_attempt(
+                    evidence, context, github_service_factory=lambda: service
+                )
+        else:
+            first = await tools.finalize_github_issue_failed_attempt(
+                evidence, context, github_service_factory=lambda: service
+            )
+            assert first.status == "FAILED", first.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    assert receipt.released is release_confirmed
+    assert "result" not in receipt.finalization_json
+    if legacy_plan:
+        async with store.locked(context["execution_owner"]) as row:
+            plan = dict(row.finalization_json["plan"])
+            plan.pop("attempt_handoff")
+            row.finalization_json = {"plan": plan}
+        receipt = await store.get(context["execution_owner"])
+    before_plan = receipt.finalization_json["plan"]
+    before_body = state["comments"][0]["body"]
+    before_labels = list(state["labels"])
+    writes = []
+    for name in (
+        "create_issue_comment",
+        "update_issue_comment",
+        "add_issue_labels",
+        "remove_issue_label",
+        "close_issue",
+    ):
+        spy = AsyncMock(wraps=getattr(service, name))
+        monkeypatch.setattr(service, name, spy)
+        writes.append(spy)
+    scanner = Mock(side_effect=RuntimeError("fixture scanner outage"))
+    monkeypatch.setattr(moonmind.security, "scan_outbound_bundle", scanner)
+    resumed = await tools.finalize_github_issue_failed_attempt(
+        evidence, context, github_service_factory=lambda: service
+    )
+    after = await store.get(context["execution_owner"])
+    if release_confirmed:
+        assert resumed.status == "COMPLETED", resumed.outputs
+        assert resumed.outputs["released"] is True
+        assert resumed.outputs["reasonCode"] == "released"
+        assert after.finalization_json["result"]["released"] is True
+        scanner.assert_not_called()
+    else:
+        assert resumed.status == "FAILED", resumed.outputs
+        assert resumed.outputs["reasonCode"] == "comment_blocked_by_scan"
+        assert after == receipt
+        scanner.assert_called_once()
+    assert after.finalization_json["plan"] == before_plan
+    assert state["comments"][0]["body"] == before_body
+    assert state["labels"] == before_labels
+    assert state["posts"] == 1
+    for write in writes:
+        write.assert_not_awaited()

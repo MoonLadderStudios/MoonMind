@@ -895,3 +895,210 @@ def test_preservation_pair_keeps_supported_aliases(
     )
     assert result["preserved"] is True
     assert "candidate@head-sha" in result["summary"]
+
+
+@pytest.fixture
+def transition_claim():
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        pr_head="old-pr-sha",
+        saved_branch="old-branch",
+        saved_sha="old-saved-sha",
+        predecessor_attempt_id="att-parent",
+        predecessor_comment_id="99",
+        retry_history=["att-older", "att-parent", "Older attempt failed"],
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    return prior, {"issue_claim_receipt": receipt}
+
+
+@pytest.mark.parametrize(
+    "reference_key, candidate, source",
+    [
+        (key, candidate, source)
+        for candidate, keys in (
+            ("pr", ("prUrl", "pr_url", "pullRequestUrl", "pull_request_url")),
+            ("branch", ("savedBranch", "saved_branch", "branch")),
+        )
+        for key in keys
+        for source in ("inputs", "tool_previous", "context_previous")
+    ],
+)
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+def test_generic_transition_revision_only_updates_its_supplied_reference(
+    transition_claim, reference_key, candidate, source, revision_key
+):
+    prior, context = transition_claim
+    reference = (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/99"
+        if candidate == "pr"
+        else "replacement-branch"
+    )
+    evidence = {revision_key: "new-sha"}
+    evidence[reference_key] = reference
+    inputs = evidence if source == "inputs" else {}
+    if source == "tool_previous":
+        inputs["previousOutputs"] = evidence
+    elif source == "context_previous":
+        context["previousOutputs"] = evidence
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url="",
+    )
+    if candidate == "pr":
+        assert (result.pr_url, result.pr_head) == (reference, "new-sha")
+        assert (result.saved_branch, result.saved_sha) == (
+            prior.saved_branch,
+            prior.saved_sha,
+        )
+    else:
+        assert (result.saved_branch, result.saved_sha) == (reference, "new-sha")
+        assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+
+
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+def test_generic_transition_revision_without_reference_keeps_both_candidates(
+    transition_claim, revision_key
+):
+    prior, context = transition_claim
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={revision_key: "unbound-sha"},
+        context=context,
+        pull_request_url="",
+    )
+    assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+    assert (result.saved_branch, result.saved_sha) == (
+        prior.saved_branch,
+        prior.saved_sha,
+    )
+
+
+@pytest.mark.parametrize(
+    "container", [None, "metadata", "publishContext", "publish_context"]
+)
+@pytest.mark.parametrize("source", ["tool_previous", "context_previous"])
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+@pytest.mark.parametrize("new_branch", [None, "replacement-branch"])
+def test_resolved_historical_pr_does_not_bind_current_generic_revision(
+    transition_claim, container, source, revision_key, new_branch
+):
+    prior, context = transition_claim
+    history = {"pullRequestUrl": prior.pr_url}
+    if container:
+        history = {container: history}
+    inputs = {revision_key: "current-sha"}
+    if new_branch:
+        inputs["savedBranch"] = new_branch
+    if source == "tool_previous":
+        inputs["previousOutputs"] = history
+    else:
+        context["previousOutputs"] = history
+    resolved_url = story_tools._github_status_pull_request_url(inputs, context)
+    assert resolved_url == prior.pr_url
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url=resolved_url,
+    )
+    assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+    assert (result.saved_branch, result.saved_sha) == (
+        (new_branch, "current-sha")
+        if new_branch
+        else (prior.saved_branch, prior.saved_sha)
+    )
+
+
+@pytest.mark.parametrize("candidate", ["pr", "branch"])
+def test_specific_transition_revision_can_update_unnamed_other_candidate(
+    transition_claim, candidate
+):
+    prior, context = transition_claim
+    inputs = (
+        {"pull_request_url": prior.pr_url, "saved_sha": "new-saved-sha"}
+        if candidate == "pr"
+        else {"branch": prior.saved_branch, "pr_head": "new-pr-sha"}
+    )
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={**inputs, "head_sha": "generic-sha"},
+        context=context,
+        pull_request_url="",
+    )
+    assert result.pr_head == ("generic-sha" if candidate == "pr" else "new-pr-sha")
+    assert result.saved_sha == ("new-saved-sha" if candidate == "pr" else "generic-sha")
+
+
+@pytest.mark.parametrize("history_key", ["retryHistory", "retry_history"])
+@pytest.mark.parametrize("source", ["inputs", "tool_previous", "context_previous"])
+@pytest.mark.parametrize(
+    "history", [["att-parent", "Current repair retried", "Current repair retried"], []]
+)
+def test_transition_accepts_updated_retry_history_without_changing_claim_identity(
+    transition_claim, history_key, source, history
+):
+    prior, context = transition_claim
+    evidence = {
+        history_key: history,
+        "internalRetryCount": 1,
+        "attempt_id": "wrong-attempt",
+        "workflow_id": "wrong-workflow",
+        "run_id": "wrong-run",
+        "deployment_id": "inst-wrong",
+        "predecessor_attempt_id": "wrong-parent",
+        "predecessor_comment_id": "999",
+    }
+    inputs = evidence if source == "inputs" else {}
+    if source == "tool_previous":
+        inputs["previousOutputs"] = evidence
+    elif source == "context_previous":
+        context["previousOutputs"] = evidence
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="in_progress",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url="",
+    )
+    assert result.retry_history == tuple(
+        dict.fromkeys((*prior.retry_history, *history))
+    )
+    assert result.internal_retry_count == 1
+    for field in (
+        "attempt_id",
+        "workflow_id",
+        "run_id",
+        "deployment_id",
+        "predecessor_attempt_id",
+        "predecessor_comment_id",
+    ):
+        assert getattr(result, field) == getattr(prior, field), field
+    predecessor = _handoff(attempt_id="att-parent", outcome="failed")
+    before = compute_effective_retry([predecessor, prior], max_attempts=3)
+    after = compute_effective_retry([predecessor, result], max_attempts=3)
+    assert after.remaining == before.remaining
+    assert after.charged_attempts == before.charged_attempts

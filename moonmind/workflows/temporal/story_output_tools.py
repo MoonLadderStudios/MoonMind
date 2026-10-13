@@ -8001,7 +8001,6 @@ def _github_attempt_handoff_for_transition(
         "deploymentId",
         "predecessorAttemptId",
         "predecessorCommentId",
-        "retryHistory",
     }
     # Activity/outcome and next action are transition decisions. Other omitted
     # evidence must survive sparse status updates of this same attempt.
@@ -8053,7 +8052,18 @@ def _github_attempt_handoff_for_transition(
                 # replacement candidate. Current inputs may supply a revision
                 # alone, but older evidence needs its own matching reference.
                 continue
-            value = _first_string(*(source.get(key) for key in keys))
+            # Shared head aliases belong only to a reference supplied alongside
+            # them, never to an unnamed retained PR or branch. Specific SHA
+            # fields can still update their own retained candidate directly.
+            # The resolved URL argument may come from historical metadata and
+            # therefore supplies no current-input revision provenance.
+            value = _first_string(
+                *(
+                    source.get(key)
+                    for key in keys
+                    if source_reference or key not in {"headSha", "head_sha"}
+                )
+            )
             if value:
                 return value
         return ""
@@ -8128,6 +8138,16 @@ def _github_attempt_handoff_for_transition(
     retry_history = _first("retryHistory", "retry_history", default=[])
     if isinstance(retry_history, str):
         retry_history = [retry_history]
+    if admitted:
+        # Admission records predecessor IDs here. New progress extends that
+        # evidence without erasing it or changing the controlling identity.
+        retry_history = list(
+            dict.fromkeys(
+                _string(item)
+                for item in (*admitted.retry_history, *_list(retry_history))
+                if _string(item)
+            )
+        )
     try:
         retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3))
     except (TypeError, ValueError):
