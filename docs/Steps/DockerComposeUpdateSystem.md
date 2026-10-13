@@ -315,16 +315,26 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
-The portable host command checks the controller's advertised journal-transition
-method before submission. When needed, it extracts the existing stdlib
-bootstrap from an observed installed application image or the staged target,
-without requiring a healthy API or worker or changing the host checkout.
+The default portable host command refreshes an idle controller from the selected
+release before submission, even when its journal-transition method is already
+advertised. Method support admits the interface; it does not keep an older
+implementation installed indefinitely. The command extracts the existing stdlib
+bootstrap from the staged target, falling back to an observed installed
+application image when a rollback target predates that lifecycle, without
+requiring a healthy API or worker or changing the host checkout.
 Bootstrap uses the application image's packaged `deploy/controller` source;
 it does not depend on a separately published controller image. The recorded
 Compose project, mounts, network and credentials remain in place. Replacement
-holds the controller's stack lock, refuses any open operation, and verifies
-the supported method before submission continues. A rollback prefers the
-installed source image so an old target need not contain newer repair code.
+holds the controller's stack lock and verifies the supported method before
+submission continues. A capable controller with open work retains ownership;
+the host observes that operation or receives its existing busy refusal. The
+host runs bootstrap in a temporary trusted image container with the existing
+Docker socket and writable controller state, on the installation's private
+controller network. This keeps root-owned records and locks readable to the
+lifecycle owner without requiring host privilege changes. Native Compose
+recreation leaves an unchanged controller running. An explicitly selected
+controller retains its release choice; missing journal support still requires
+the existing prerequisite.
 
 An already-installed old API/controller may reach the new target's
 `--omnigent-select` callback without running either updated submission client.
@@ -393,6 +403,15 @@ This qualifies the process/data transition; the existing controller journey
 separately qualifies the current API/dashboard submission and observation
 boundary. Neither journey proves automatic bootstrap through a historical API
 binary that predates the prerequisite.
+
+That job also runs `tests/integration/host_update/test_controller_refresh.py`
+against the candidate image. A disposable controller advertises journal
+support and writes root-owned operation records. The host's actual image
+export and temporary bootstrap container refresh it over its private network,
+preserving its identity, credential and original failure record. Repeating the
+refresh keeps the same controller container; an open operation prevents a
+different requested image from replacing its capable owner. This exercises
+the host refresh boundary independently of application service recreation.
 
 ### 12.3 Verification failure rule
 

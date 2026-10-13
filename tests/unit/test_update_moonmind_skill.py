@@ -12,6 +12,15 @@ SPEC = importlib.util.spec_from_file_location("update_release_skill", ROOT / ".a
 update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update)
 
+
+@pytest.fixture(autouse=True)
+def isolate_controller_lifecycle(monkeypatch):
+    """Release selection tests leave bootstrap to its handoff/lifecycle suites."""
+    monkeypatch.setattr(
+        update, "_ensure_controller_journal_transition", lambda *args, **kwargs: None
+    )
+
+
 @pytest.mark.parametrize("mismatch", [False, True])
 @pytest.mark.parametrize("operator_url", [None, "http://installed.example:7000"])
 def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypatch, mismatch, operator_url):
