@@ -260,8 +260,24 @@ advance the installed release when a suitable new image is available for a confi
 the selected digests in deployment-owned state under the same deployment lock as the main Compose pass, before that pass renders them, so it installs the selected server rather than one that refuses the current schema. After the fleet verifies, the migration finishes that selected revision without resolving the channels again, and refreshes the running
 consumers through the same Compose owner. This includes the server, API and
 agent runtime worker; already-running static host profiles follow a changed
-shared host image (recreated without draining, checkpointing, or deferring for active sessions -- drain or checkpoint active Codex/Claude work before updating), while inactive profiles remain inactive. A MoonMind update
+shared host image and are recreated without draining, checkpointing, or deferring for active sessions, while inactive profiles remain inactive. A MoonMind update
 with no suitable new Omnigent image for a configured channel leaves the installed release in place.
+
+Routine correctness does not require draining or a last-second checkpoint. An
+agent step interrupted by a replaced host fails with host loss. Its old host must
+be confirmed stopped before any successor runs; an unacknowledged stop is
+retried within bounds and otherwise stays fenced for the host janitor rather
+than running beside a new attempt. Only that step then receives a new Step
+Execution under the same workflow and logical step, within the execution
+ceiling its interrupted attempts left. The successor restores the step's latest
+verified saved workspace, or restarts from its admitted inputs and records that
+limitation. Work after the last durable save may be repeated; completed steps
+and confirmed publication effects are not. Cancellation starts no successor.
+A successor currently launches the server and host images its workflow's
+execution plan recorded. Consuming the newly installed images for fresh attempts
+belongs to installed-release selection and is not yet implemented, so a
+successor whose recorded images can no longer be launched or attested fails
+with that diagnostic instead of running on unverified images.
 An explicit operator digest pin persisted in the operator `.env` remains authoritative until changed. When a recorded candidate later fails startup or verification, the new desired state stays recorded with no automatic rollback; recovery is an explicit operator rerun or rollback.
 
 The standalone controller delegates selection and migration to the existing
@@ -286,7 +302,10 @@ to block cutover.
 
 Reconcile uncertain recreations before repeating them. Future launches follow
 the installed runtime while preserving explicit harness/provider choices and
-the actual image identity of attempts already in progress. A version-number
+the actual image identity of attempts already in progress. That identity is the
+attempt's recorded image, session, and history; it does not require the
+attempt's process to keep running. An update may stop it, and a distinct
+successor attempt then carries the step forward. A version-number
 difference by itself does not block an otherwise compatible release.
 
 Do not copy each image change into new policy/profile versions and re-admit every recurring schedule merely to keep digest strings equal. Remove those independent launch pins through their owning migration, preserving schedule identity, cadence, paused state, publication intent, and in-flight session evidence. Do not rewrite what historical attempts actually ran.
