@@ -66,6 +66,10 @@ _CLEANUP_NOT_OWNED = object()
 _PUBLICATION_RETRY_DELAYS_SECONDS = (1, 2)
 _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS = (60, 240)
 
+#: Waits before re-running an unacknowledged host stop that would otherwise
+#: license a successor Step Execution beside a possibly running predecessor.
+_PREDECESSOR_STOP_RETRY_DELAYS_SECONDS = (5, 15, 45)
+
 
 @dataclass(frozen=True)
 class _CapabilityRenewalSchedule:
@@ -112,6 +116,17 @@ def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
             if key.startswith("hostLogs")
         },
     }
+
+
+def _records_completed_compute(binding: StableRuntimeBinding) -> bool:
+    """Whether a binding durably holds its finished provider work."""
+
+    phases = binding.phaseResults or {}
+    return (
+        binding.terminalResult is not None
+        or "publication" in phases
+        or ("workspace" in phases and "compute" in phases)
+    )
 
 
 class GenericOmnigentHostRealizer:
@@ -750,6 +765,16 @@ class GenericOmnigentHostRealizer:
                 )
             except BaseException as exc:
                 cleanup_error = exc
+            if primary_error is None:
+                result, binding, cleanup_error = (
+                    await self._fence_successor_on_predecessor_stop(
+                        request=request,
+                        result=result,
+                        binding=binding,
+                        cleanup_error=cleanup_error,
+                        acquired=acquired,
+                    )
+                )
         elif acquired:
             try:
                 await self._provider_leases.release_all(acquired)
@@ -766,6 +791,19 @@ class GenericOmnigentHostRealizer:
                 binding=binding,
             )
 
+        if (
+            primary_error is not None
+            and cleanup_error is None
+            and binding is not None
+            and str(getattr(primary_error, "code", ""))
+            == HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE.value
+            and binding.state is RuntimeBindingState.cleaned
+            and _records_completed_compute(binding)
+        ):
+            # Re-admission would start a new binding and repeat a provider turn
+            # that already completed. Its durable receipts finish only the
+            # unfinished save, publication, or reporting without a provider.
+            return await self._reconcile_finalization(request, binding)
         if primary_error is not None and cleanup_error is None and binding is not None:
             recovery = await self._interrupted_admission_result(request, binding)
             if recovery is not None:
@@ -910,6 +948,107 @@ class GenericOmnigentHostRealizer:
             self._persisted_host_context(binding, host_lease),
         )
 
+    async def _predecessor_host_stopped(
+        self, binding: StableRuntimeBinding
+    ) -> tuple[StableRuntimeBinding, Any | None, bool]:
+        """Whether this attempt's host lease records a confirmed removal."""
+
+        current = await self._runtime_bindings.get(binding.bindingId) or binding
+        host_lease = (
+            await self._host_leases.get(current.hostLeaseRef)
+            if current.hostLeaseRef
+            else None
+        )
+        return (
+            current,
+            host_lease,
+            host_lease is None or (host_lease.status == "cleaned"),
+        )
+
+    async def _fence_successor_on_predecessor_stop(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult | None,
+        binding: StableRuntimeBinding,
+        cleanup_error: BaseException | None,
+        acquired: tuple[Any, ...],
+    ) -> tuple[AgentRunResult | None, StableRuntimeBinding, BaseException | None]:
+        """License a successor Step Execution only after this host is gone.
+
+        ``retry_step_execution`` starts a new attempt on another host. A lost
+        heartbeat or offline projection does not stop a process that may still
+        hold workspace, credential, or repository access, so an unacknowledged
+        stop is resumed here within bounds instead of running beside it. Other
+        cleanup trouble after a confirmed removal does not block the successor.
+        If the stop stays unconfirmed, the attempt reports that it could not
+        establish exclusive successor authority and the janitor keeps the
+        durable cleanup.
+        """
+
+        if (
+            cleanup_error is None
+            or result is None
+            or result.retry_recommendation != "retry_step_execution"
+        ):
+            return result, binding, cleanup_error
+        binding, host_lease, stopped = await self._predecessor_host_stopped(binding)
+        for delay in _PREDECESSOR_STOP_RETRY_DELAYS_SECONDS:
+            if stopped:
+                return result, binding, cleanup_error
+            await asyncio.sleep(delay)
+            try:
+                (
+                    credential_handles,
+                    host_lease,
+                    host_context,
+                ) = await self._bound_cleanup_resources(binding)
+                binding, host_lease = await self._cleanup(
+                    request=request,
+                    binding=binding,
+                    host_lease=host_lease,
+                    host_context=host_context,
+                    prepared=None,
+                    credential_handles=credential_handles,
+                    acquired=acquired,
+                )
+                cleanup_error = None
+            except Exception as exc:
+                cleanup_error = exc
+            binding, host_lease, stopped = await self._predecessor_host_stopped(binding)
+        if stopped:
+            return result, binding, cleanup_error
+        blocked = {
+            "reason": "predecessor_host_stop_unconfirmed",
+            "hostLeaseRef": getattr(host_lease, "leaseRef", None),
+            "errorCode": str(
+                getattr(cleanup_error, "code", "") or type(cleanup_error).__name__
+            ),
+        }
+        result = result.model_copy(
+            update={
+                "retry_recommendation": "do_not_retry",
+                "summary": (
+                    f"{result.summary} The interrupted host's stop was not "
+                    "confirmed, so no successor attempt was started beside it."
+                ),
+                "metadata": {**(result.metadata or {}), "successorBlocked": blocked},
+            }
+        )
+        try:
+            # The provider's terminal result stays immutable; this receipt
+            # records why it licensed no successor.
+            sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+            await sink.record_phase("successorBlocked", blocked)
+            binding = sink.binding
+        except Exception:
+            logger.warning(
+                "Could not record the blocked successor on binding %s",
+                binding.bindingId,
+                exc_info=True,
+            )
+        return result, binding, cleanup_error
+
     @staticmethod
     def _persisted_host_context(
         binding: StableRuntimeBinding,
@@ -1020,6 +1159,16 @@ class GenericOmnigentHostRealizer:
             # Cleanup authority remains durable for janitor retry. Preserve the
             # primary provider boundary result when one exists.
             cleanup_error = exc
+        if primary_error is None:
+            result, current, cleanup_error = (
+                await self._fence_successor_on_predecessor_stop(
+                    request=request,
+                    result=result,
+                    binding=current,
+                    cleanup_error=cleanup_error,
+                    acquired=acquired,
+                )
+            )
         self._record_cleanup_outcome(
             harness_id=plan.payload.harnessId,
             primary_error=primary_error,

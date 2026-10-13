@@ -3838,6 +3838,126 @@ async def test_short_session_does_not_renew_capabilities() -> None:
     assert harness.renewals == []
 
 
+async def _host_lost_with_flaky_cleanup(
+    monkeypatch, *, host_cleanup_failures: int, credential_cleanup_fails=False
+):
+    """Run one host-lost attempt whose own host stop is not acknowledged."""
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.generic_host."
+        "_PREDECESSOR_STOP_RETRY_DELAYS_SECONDS",
+        (0, 0, 0),
+    )
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    async def host_lost_driver(_request, *, session_authority_sink):
+        await session_authority_sink.session_created("session-1")
+        harness.events.append("host-lost")
+        return AgentRunResult(
+            summary="The Omnigent host was lost before the turn finished.",
+            failureClass="integration_error",
+            providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+            retryRecommendation="retry_step_execution",
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    stop_attempts: list[str] = []
+
+    async def flaky_host_cleanup(**kwargs):
+        stop_attempts.append(kwargs["host_lease_ref"])
+        if len(stop_attempts) <= host_cleanup_failures:
+            # A partitioned Docker engine never acknowledged the stop.
+            raise RuntimeError("docker daemon unavailable")
+        harness.events.append("host-cleaned")
+        return {"containerRemoved": True}
+
+    credentials = harness.realizer._credentials
+    original_credential_cleanup = credentials.cleanup_all
+
+    async def credential_cleanup(handles):
+        if credential_cleanup_fails:
+            raise RuntimeError("credential volume busy")
+        return await original_credential_cleanup(handles)
+
+    harness.realizer._session_driver = host_lost_driver
+    harness.realizer._host_runtime.cleanup = flaky_host_cleanup
+    credentials.cleanup_all = credential_cleanup
+    plan = _plan("opencode-go/model")
+    result = await harness.realizer.execute(harness.publish_request, plan)
+    binding = await harness.runtime_store.get(result.metadata["runtimeBindingRef"])
+    host_lease = await harness.host_leases.get(binding.hostLeaseRef)
+    return harness, result, stop_attempts, host_lease
+
+
+@pytest.mark.asyncio
+async def test_host_lost_successor_waits_for_confirmed_predecessor_stop(
+    monkeypatch,
+) -> None:
+    """A lost stop acknowledgement resumes cleanup, not parallel compute."""
+
+    harness, result, stop_attempts, host_lease = await _host_lost_with_flaky_cleanup(
+        monkeypatch, host_cleanup_failures=2
+    )
+
+    # The successor is licensed only after the old container is confirmed gone.
+    assert result.retry_recommendation == "retry_step_execution"
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert len(stop_attempts) == 3
+    assert len(set(stop_attempts)) == 1
+    assert host_lease.status == "cleaned"
+    # Dead capacity is released through its owner only after the stop.
+    assert harness.events.index("host-cleaned") < harness.events.index(
+        "provider-released"
+    )
+    assert harness.events.count("provider-released") == 1
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_predecessor_stop_starts_no_successor(
+    monkeypatch,
+) -> None:
+    """Exclusive successor authority is never assumed from a lost host."""
+
+    harness, result, stop_attempts, host_lease = await _host_lost_with_flaky_cleanup(
+        monkeypatch, host_cleanup_failures=99
+    )
+
+    assert len(stop_attempts) == 4
+    assert host_lease.status == "cleanup_pending"
+    assert "provider-released" not in harness.events
+    # The original provider error and the unfinished reconciliation both stay
+    # observable; the janitor owns the remaining stop.
+    assert result.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+    assert result.retry_recommendation == "do_not_retry"
+    assert result.metadata["successorBlocked"] == {
+        "reason": "predecessor_host_stop_unconfirmed",
+        "hostLeaseRef": host_lease.leaseRef,
+        "errorCode": "RuntimeError",
+    }
+    binding = await harness.runtime_store.get(result.metadata["runtimeBindingRef"])
+    assert (
+        binding.phaseResults["successorBlocked"] == result.metadata["successorBlocked"]
+    )
+    # The provider's own terminal result is never rewritten.
+    assert binding.terminalResult["retryRecommendation"] == "retry_step_execution"
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_cleanup_failure_after_confirmed_stop_keeps_successor(
+    monkeypatch,
+) -> None:
+    """Credential cleanup trouble is not a lost exclusive host authority."""
+
+    harness, result, stop_attempts, host_lease = await _host_lost_with_flaky_cleanup(
+        monkeypatch, host_cleanup_failures=0, credential_cleanup_fails=True
+    )
+
+    assert result.retry_recommendation == "retry_step_execution"
+    assert "successorBlocked" not in (result.metadata or {})
+    assert len(stop_attempts) == 1
+    assert host_lease.status == "cleaned"
+
+
 @pytest.mark.asyncio
 async def test_resumed_host_renews_capabilities_before_session_starts() -> None:
     """A retried activity cannot know how much of the old token remains."""
