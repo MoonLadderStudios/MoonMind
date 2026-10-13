@@ -38,14 +38,6 @@ from moonmind.omnigent.bridge_config import (
     parse_bridge_config,
     resolve_bridge_config,
 )
-from moonmind.omnigent.legacy_retirement import (
-    LegacyAdmissionRejected,
-    RemovalStage,
-    RetirementClass,
-    assert_new_admission_allowed,
-    evaluate_removal_eligibility,
-    get_retirement_record,
-)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -150,41 +142,6 @@ def test_startup_resolution_rejects_retired_selection(tmp_path: Path) -> None:
     assert (
         resolve_bridge_config(env={}).host_protocol_mode
         == HOST_PROTOCOL_MODE_PROXY
-    )
-
-
-def test_retirement_rows_disable_new_admission_but_keep_history() -> None:
-    """Both embedded rows refuse new work while keeping historical reads."""
-
-    selection = get_retirement_record("omnigent.embedded.transport_selection")
-    launch = get_retirement_record("omnigent.embedded.launch_and_host_routes")
-    assert selection.retirement_class is RetirementClass.NEW_ADMISSION_DISABLED
-    assert launch.retirement_class is RetirementClass.NEW_ADMISSION_DISABLED
-    assert selection.historical_read_dependency is True
-    assert launch.historical_read_dependency is True
-    # Selectors retire before launch-only code: never one unreviewable change.
-    assert selection.earliest_removal_stage is RemovalStage.PRODUCT_SELECTORS
-    assert launch.earliest_removal_stage is RemovalStage.LAUNCH_ONLY_CODE
-    assert selection.earliest_removal_stage < launch.earliest_removal_stage
-    for path_id in (
-        "omnigent.embedded.transport_selection",
-        "omnigent.embedded.launch_and_host_routes",
-    ):
-        with pytest.raises(LegacyAdmissionRejected) as exc_info:
-            assert_new_admission_allowed(path_id)
-        assert "no longer admits new work" in str(exc_info.value)
-
-
-def test_removal_waits_for_bounded_drain_before_launch_code() -> None:
-    """Launch-code removal stays blocked until every active owner drains."""
-
-    launch = get_retirement_record("omnigent.embedded.launch_and_host_routes")
-    decision = evaluate_removal_eligibility(
-        launch, stage=RemovalStage.LAUNCH_ONLY_CODE
-    )
-    assert decision.eligible is False
-    assert any(
-        blocker.startswith("active_owner:") for blocker in decision.blockers
     )
 
 

@@ -300,22 +300,6 @@ jobs:
               evidence_root=workflow_chat_path.parent,
               expected_commit=os.environ["GITHUB_SHA"],
           )
-          # #3712 retirement guards consume the acceptance report directly:
-          # the criterion is derived from the manifest, never asserted by hand.
-          from moonmind.omnigent.legacy_retirement import (
-              RetirementCriterion,
-              criteria_from_native_chat_acceptance,
-          )
-          native_chat_criteria = criteria_from_native_chat_acceptance(
-              workflow_chat,
-              evidence_root=workflow_chat_path.parent,
-              expected_commit=os.environ["GITHUB_SHA"],
-          )
-          if RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in native_chat_criteria:
-              raise SystemExit(
-                  "native Workflow Chat acceptance evidence does not satisfy its "
-                  "retirement criterion"
-              )
           # Execution admission consumes a distinct, protected exact-combination
           # projection. It is derived only after the credentialed matrix and its
           # complete evidence manifest validate; the API cannot manufacture this

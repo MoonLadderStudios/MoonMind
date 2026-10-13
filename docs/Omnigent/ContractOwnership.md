@@ -20,7 +20,7 @@ work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 | 1 | Pinned upstream transport, provider/service session facade, native Workflow Chat facade, bridge session store | `OmnigentBridge.md` |
 | 2 | Adapter launch modes, workspace/mount/network contract, readiness, session/stream/artifact contract | `OmnigentAdapter.md` |
 | 3 | Module packages, dependency direction, ports | `OmnigentModuleArchitecture.md` §§1–4, 6 |
-| 4 | Retained duplicate architecture and removal staging (code-owned inventory) | `OmnigentModuleArchitecture.md` §5 over `moonmind/omnigent/legacy_retirement.py` |
+| 4 | Retained duplicate architecture and legacy new-admission control (code-owned table) | `OmnigentModuleArchitecture.md` §5 over `moonmind/omnigent/legacy_retirement.py` |
 | 5 | Target harness-platform model (catalog, attestation, plans, bindings, capability negotiation) | `OmnigentHarnessPlatformDesign.md` (Status: Proposed) |
 | 6 | Product selection, defaults, migration stages, acceptance gates | `PrimaryRuntimeProviderStrategy.md` |
 | 7 | Shared image, runtime packs, Host Classes, credential ownership, realizer admission | `SharedHostImage.md` |
