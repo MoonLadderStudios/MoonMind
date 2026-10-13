@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import shutil
 import socket
 import sys
@@ -223,6 +224,27 @@ def render_git_credential_helper_script(*, socket_path: str) -> str:
         "if __name__ == '__main__':\n"
         "    raise SystemExit(main())\n"
     )
+
+
+def render_bash_env_script(*, bin_dir: str, previous_bash_env: str | None) -> str:
+    """Render a ``BASH_ENV`` file that puts the brokered wrappers first.
+
+    Nested ``bash -lc`` tool shells re-read a profile that resets PATH; bash
+    then sources ``BASH_ENV``, so ``bin_dir`` (the gh wrapper) leads PATH
+    again. A previously declared ``BASH_ENV`` is sourced first, not replaced.
+    """
+
+    quoted_bin_dir = shlex.quote(bin_dir)
+    lines = ["# moonmind-managed-bash-env\n"]
+    previous = str(previous_bash_env or "").strip()
+    if previous:
+        quoted_previous = shlex.quote(previous)
+        lines.append(f"[ -r {quoted_previous} ] && . {quoted_previous}\n")
+    lines.append(
+        f'case "$PATH" in {quoted_bin_dir}|{quoted_bin_dir}:*) ;; '
+        f'*) PATH={quoted_bin_dir}"${{PATH:+:$PATH}}"; export PATH ;; esac\n'
+    )
+    return "".join(lines)
 
 
 @dataclass(slots=True)

@@ -72,6 +72,7 @@ from moonmind.workflows.temporal.jira_tool_hints import (
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
+    render_bash_env_script,
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
@@ -1898,23 +1899,13 @@ class ManagedRuntimeLauncher:
                 f"{bin_dir}{os.pathsep}{existing_path}" if existing_path else str(bin_dir)
             )
             env.setdefault("GIT_TERMINAL_PROMPT", "0")
-            # Nested ``bash -lc`` tool shells re-read a profile that resets
-            # PATH; bash then sources BASH_ENV, which puts the brokered
-            # wrappers first again.
             bash_env_path = support_dir / "bash_env.sh"
-            quoted_bin_dir = shlex.quote(str(bin_dir))
-            bash_env_lines = ["# moonmind-managed-bash-env\n"]
-            previous_bash_env = str(env.get("BASH_ENV") or "").strip()
-            if previous_bash_env:
-                quoted_previous = shlex.quote(previous_bash_env)
-                bash_env_lines.append(
-                    f"[ -r {quoted_previous} ] && . {quoted_previous}\n"
-                )
-            bash_env_lines.append(
-                f'case "$PATH" in {quoted_bin_dir}|{quoted_bin_dir}:*) ;; '
-                f'*) PATH={quoted_bin_dir}"${{PATH:+:$PATH}}"; export PATH ;; esac\n'
+            atomic_write_text(
+                bash_env_path,
+                render_bash_env_script(
+                    bin_dir=str(bin_dir), previous_bash_env=env.get("BASH_ENV")
+                ),
             )
-            atomic_write_text(bash_env_path, "".join(bash_env_lines))
             cleanup_paths.append(str(bash_env_path))
             env["BASH_ENV"] = str(bash_env_path)
 

@@ -674,20 +674,6 @@ async def resolve_admitted_git_read(
     return admitted(endpoint, access.credential.token or None)
 
 
-async def resolve_selected_github_credential_for_launch(
-    connection_ref: str,
-    *,
-    repo: str | None = None,
-    connections_dir: Path | None = None,
-) -> Any:
-    """Resolve only the credential of the Git connection a launch selected."""
-
-    access = await select_github_access_for_launch(
-        connection_ref, repository=repo, connections_dir=connections_dir
-    )
-    return access.credential
-
-
 async def _default_github_connection_with_operations(
     *, repo: str | None, required_operations: tuple[str, ...]
 ) -> tuple[Any, Any]:
@@ -1437,7 +1423,6 @@ __all__ = [
     "resolve_ghcr_pull_credentials_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
-    "resolve_selected_github_credential_for_launch",
     "select_git_connection_for_launch",
     "select_github_access_for_launch",
     "validate_default_github_connection_operations",
