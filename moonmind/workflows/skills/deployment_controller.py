@@ -58,6 +58,8 @@ CONTROLLER_RECENT_LIMIT = 10
 # The independent repair route: it installs, refreshes, or restores the
 # controller from the host without a healthy API, worker, or Temporal.
 HOST_REPAIR_COMMAND = "./tools/update-moonmind.sh"
+# Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
+CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
@@ -445,10 +447,63 @@ def ensure_controller_journal_transition(
     """
     if controller_supports_journal_transition(endpoint):
         return
+    result = _run_controller_bootstrap(
+        endpoint, stack=stack, desired_image=desired_image
+    )
+    if result.returncode or not controller_supports_journal_transition(endpoint):
+        raise DeploymentOperationError(
+            "deployment_controller_prerequisite_failed",
+            "The deployment controller prerequisite could not finish. Its existing "
+            "operation and deployment state are preserved; retry from the host update command.",
+            status_code=503,
+        )
+
+
+def refresh_controller_to_requested(
+    endpoint: ControllerEndpoint,
+    *,
+    stack: str,
+    desired_image: str,
+) -> bool:
+    """Give the requested release's controller the attempt the installed one failed.
+
+    A capable installed controller can still carry a defect that the
+    requested release fixes. The installed controller always applies first,
+    so a rollback keeps current repair code; only after its operation failed
+    does the bootstrap lifecycle owner refresh the controller to the
+    requested release (never while an operation is open). Returns whether the
+    controller now runs different code; any refusal keeps the recorded
+    failure as the result.
+    """
+    try:
+        result = _run_controller_bootstrap(
+            endpoint, stack=stack, desired_image=desired_image, prefer_requested=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode:
+        return False
+    for line in reversed(str(result.stdout or "").splitlines()):
+        if line.startswith(CONTROLLER_REFRESH_PREFIX):
+            try:
+                receipt = json.loads(line[len(CONTROLLER_REFRESH_PREFIX) :])
+            except ValueError:
+                return False
+            return isinstance(receipt, dict) and receipt.get("refreshed") is True
+    return False
+
+
+def _run_controller_bootstrap(
+    endpoint: ControllerEndpoint,
+    *,
+    stack: str,
+    desired_image: str,
+    prefer_requested: bool = False,
+) -> subprocess.CompletedProcess[str]:
     bootstrap = (
         Path(__file__).resolve().parents[3] / "deploy" / "controller" / "bootstrap.py"
     )
-    result = subprocess.run(
+    return subprocess.run(
         [
             sys.executable,
             str(bootstrap),
@@ -464,19 +519,13 @@ def ensure_controller_journal_transition(
             desired_image,
             "--controller-url",
             endpoint.base_url,
+            *(("--prefer-requested",) if prefer_requested else ()),
         ],
         capture_output=True,
         text=True,
         check=False,
         timeout=300,
     )
-    if result.returncode or not controller_supports_journal_transition(endpoint):
-        raise DeploymentOperationError(
-            "deployment_controller_prerequisite_failed",
-            "The deployment controller prerequisite could not finish. Its existing "
-            "operation and deployment state are preserved; retry from the host update command.",
-            status_code=503,
-        )
 
 
 def retry_controller_operation(

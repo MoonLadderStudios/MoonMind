@@ -109,6 +109,103 @@ def test_ensure_refreshes_old_controller_from_installed_source_before_rollback(
     assert commands == before
 
 
+def test_ensure_prefer_requested_replaces_a_capable_controller_that_failed_the_release(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    """A controller fix ships in the release the installed controller failed.
+
+    Capability presence cannot prove the installed controller can apply that
+    release; the requested release's own controller gets the retry.
+    """
+    import json
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    lock_mod = load("lock")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    bootstrap.ensure_identity(state, tmp_path, 8472, target_project="installed")
+    compose = bootstrap.render_compose_file(
+        state_dir=state, repo=tmp_path, image="sha256:" + "a" * 64
+    )
+    original_mounts = compose.read_text().split("    volumes:", 1)[1]
+    requested = "ghcr.io/org/moonmind:latest"
+    concrete = "sha256:" + "c" * 64
+    commands = []
+    recreations = []
+
+    def run(command):
+        commands.append(command)
+        if command[:2] == ["docker", "pull"]:
+            assert command[2] == requested
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[1:3] == ["image", "inspect"]:
+            if command[4] == "{{.Id}}":
+                image = command[5]
+                identity = concrete if image in (requested, concrete) else image
+                return subprocess.CompletedProcess(command, 0, identity + "\n", "")
+            return subprocess.CompletedProcess(command, 0, '""', "")
+        if command[1] == "run":
+            assert concrete in command and "--network=none" in command
+            return subprocess.CompletedProcess(command, 0, "", "")
+        # The installed application images are never consulted.
+        raise AssertionError(command)
+
+    def compose_run(state_dir, project, *args):
+        assert lock_mod.StackLock(state_dir, "moonmind").probe()
+        recreations.append(args)
+        return 0
+
+    monkeypatch.setattr(bootstrap, "_run_capture", run)
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: {"active-journal-transition"},
+    )
+    monkeypatch.setattr(bootstrap, "_compose", compose_run)
+    arguments = [
+        "ensure",
+        "--state-dir",
+        str(state),
+        "--repo",
+        str(tmp_path),
+        "--image",
+        requested,
+        "--controller-url",
+        "http://controller:8472",
+        "--prefer-requested",
+    ]
+
+    assert bootstrap.main(arguments, env={}) == 0
+    assert len(recreations) == 1
+    text = compose.read_text()
+    assert f"image: {concrete}" in text
+    assert text.split("    volumes:", 1)[1] == original_mounts
+    assert bootstrap.load_controller_image(state)["pinned"] == concrete
+
+    def receipt():
+        lines = capsys.readouterr().out.splitlines()
+        prefix = bootstrap.REFRESH_RECEIPT_PREFIX
+        return json.loads(
+            next(line for line in lines if line.startswith(prefix))[len(prefix) :]
+        )
+
+    assert receipt() == {"refreshed": True, "image": concrete}
+
+    # The controller already runs the requested release: nothing to retry with.
+    assert bootstrap.main(arguments, env={}) == 0
+    assert len(recreations) == 1
+    assert receipt() == {"refreshed": False, "image": concrete}
+
+    load("record").OperationStore(state).begin(
+        stack="moonmind", desired_image=requested, source_revision=""
+    )
+    commands.clear()
+    with pytest.raises(bootstrap.ActiveOperationError):
+        bootstrap.main(arguments, env={})
+    assert commands == []
+
+
 def test_ensure_never_replaces_controller_with_open_operation(
     controller_path, tmp_path, monkeypatch
 ):

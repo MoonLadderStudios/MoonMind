@@ -28,7 +28,9 @@ from .deployment_controller import (
     controller_action_status,
     ensure_controller_journal_transition,
     observe_controller_operation,
+    refresh_controller_to_requested,
     resolve_controller_endpoint,
+    retry_controller_operation,
     submit_controller_update,
 )
 from .tool_plan_contracts import ToolFailure, ToolResult
@@ -3808,30 +3810,55 @@ async def _execute_through_controller(
             reason=parsed["reason"] or "",
         )
         observed_id = str(operation.get("operationId") or operation_id)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + CONTROLLER_OBSERVE_TIMEOUT_SECONDS
-        while controller_action_status(str(operation.get("status") or "")) in _CONTROLLER_OPEN_STATUSES:
-            if loop.time() > deadline:
-                raise ToolFailure(
-                    "DEPLOYMENT_CONTROLLER_OBSERVATION_TIMEOUT",
-                    f"Controller operation {observed_id} is still running; observe it in "
-                    "Settings Operations.",
-                    True,
-                    details={"operationId": observed_id, "failureClass": "deployment_controller"},
-                )
-            await asyncio.sleep(CONTROLLER_OBSERVE_INTERVAL_SECONDS)
-            try:
-                latest = await asyncio.to_thread(
-                    observe_controller_operation, endpoint, observed_id
-                )
-            except ControllerTransportError:
-                # An observer outage is not a failed update; keep observing.
-                continue
-            if latest is not None:
-                operation = latest
+        operation = await _observe_controller_operation(
+            endpoint, observed_id, operation
+        )
+        # The installed controller applied first. A capable controller can
+        # still carry a defect its requested release fixes, so its failure
+        # earns one attempt by the requested release's own controller.
+        failed = controller_action_status(str(operation.get("status") or "")) == "FAILED"
+        if failed and await asyncio.to_thread(
+            refresh_controller_to_requested,
+            endpoint,
+            stack=parsed["stack"],
+            desired_image=requested_image,
+        ):
+            operation = await asyncio.to_thread(
+                retry_controller_operation, endpoint, observed_id
+            )
+            operation = await _observe_controller_operation(
+                endpoint, observed_id, operation
+            )
     except DeploymentOperationError as exc:
         raise _controller_failure(exc) from None
     return _controller_tool_result(operation, requested_image)
+
+
+async def _observe_controller_operation(
+    endpoint: ControllerEndpoint, observed_id: str, operation: dict[str, Any]
+) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CONTROLLER_OBSERVE_TIMEOUT_SECONDS
+    while controller_action_status(str(operation.get("status") or "")) in _CONTROLLER_OPEN_STATUSES:
+        if loop.time() > deadline:
+            raise ToolFailure(
+                "DEPLOYMENT_CONTROLLER_OBSERVATION_TIMEOUT",
+                f"Controller operation {observed_id} is still running; observe it in "
+                "Settings Operations.",
+                True,
+                details={"operationId": observed_id, "failureClass": "deployment_controller"},
+            )
+        await asyncio.sleep(CONTROLLER_OBSERVE_INTERVAL_SECONDS)
+        try:
+            latest = await asyncio.to_thread(
+                observe_controller_operation, endpoint, observed_id
+            )
+        except ControllerTransportError:
+            # An observer outage is not a failed update; keep observing.
+            continue
+        if latest is not None:
+            operation = latest
+    return operation
 
 
 def build_deployment_update_handler(
