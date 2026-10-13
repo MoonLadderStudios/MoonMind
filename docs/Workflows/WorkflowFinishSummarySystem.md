@@ -34,6 +34,15 @@ perform non-repository side effects such as Jira issue transitions, comments,
 verification records, or artifact publication. The finish summary must describe
 repository publication separately from those side effects.
 
+A preserved incomplete MoonSpec draft can close its execution as completed and
+retain `PUBLISHED_PR` without satisfying the objective. New histories project
+`verification_blocked` for a blocked or undetermined owning gate, and `failed`
+for remaining implementation work. Their summaries identify incomplete
+verification instead of claiming successful acceptance. The draft URL and
+attention flag remain intact; failed and canceled lifecycle outcomes retain
+their own disposition. Retained histories without the versioned projection
+keep their recorded behavior.
+
 Explicit None is not dry run. A dry-run batch does not enqueue children; None
 can permit independently authorized tracker and dispatch operations but cannot
 permit repository publication by descendants. A non-publishing coordinator under

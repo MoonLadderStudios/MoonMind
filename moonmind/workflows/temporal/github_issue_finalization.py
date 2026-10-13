@@ -808,6 +808,7 @@ class FinalizationPlan:
     terminal_comment: str = ""
     pending_sync: dict[str, Any] | None = None
     workspace_retained: bool = True
+    attempt_handoff: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -820,6 +821,7 @@ class FinalizationPlan:
             "terminalComment": self.terminal_comment,
             "pendingSync": self.pending_sync,
             "workspaceRetained": self.workspace_retained,
+            "attemptHandoff": self.attempt_handoff,
         }
 
 
