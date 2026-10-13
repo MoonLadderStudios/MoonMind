@@ -272,7 +272,10 @@ Execution under the same workflow and logical step, within the execution
 ceiling its interrupted attempts left. The successor restores the step's latest
 verified saved workspace, or restarts from its admitted inputs and records that
 limitation. Work after the last durable save may be repeated; completed steps
-and confirmed publication effects are not. Cancellation starts no successor.
+and confirmed publication effects are not. Every attempt of a step publishes
+under that logical step's identity, so a successor reaches a branch its
+interrupted predecessor already pushed through the publisher's remote lease
+instead of pushing another. Cancellation starts no successor.
 A successor currently launches the server and host images its workflow's
 execution plan recorded. Consuming the newly installed images for fresh attempts
 belongs to installed-release selection and is not yet implemented, so a

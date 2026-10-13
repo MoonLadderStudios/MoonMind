@@ -151,6 +151,28 @@ def publication_failure_is_transient(message: str) -> bool:
     return bool(_TRANSIENT_REMOTE_FAILURE.search(message or ""))
 
 
+def logical_publication_identity(request: AgentExecutionRequest) -> str:
+    """Name a step's repository publication independently of its attempt.
+
+    Every Step Execution of one logical step publishes the same candidate. A
+    successor after an interrupted attempt therefore reaches the predecessor's
+    pushed branch through the publisher's remote lease instead of pushing
+    another one. Requests keyed by anything other than their Step Execution's
+    agent operation (for example a checkpoint branch turn) keep that key.
+    """
+
+    launch = request.step_execution
+    if (
+        launch is not None
+        and request.idempotency_key == f"{launch.step_execution_id}:agent_execute"
+    ):
+        return (
+            f"{launch.workflow_id}:{launch.run_id}:"
+            f"{launch.logical_step_id}:publication"
+        )
+    return request.idempotency_key
+
+
 def _owned_candidate_authored_base(
     accepted_published_head: Mapping[str, Any] | None,
     *,
@@ -1073,7 +1095,7 @@ class OmnigentWorkspacePublicationService:
                     workspace_locator=workspace_locator,
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
-                    publication_identity=request.idempotency_key,
+                    publication_identity=logical_publication_identity(request),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -1088,7 +1110,7 @@ class OmnigentWorkspacePublicationService:
                 workspace_locator=workspace_locator,
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
-                publication_identity=request.idempotency_key,
+                publication_identity=logical_publication_identity(request),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,
@@ -1105,5 +1127,6 @@ __all__ = [
     "OmnigentWorkspacePublicationService",
     "branch_publish_mode_for_destination",
     "compile_branch_publish_mode",
+    "logical_publication_identity",
     "publication_failure_is_transient",
 ]

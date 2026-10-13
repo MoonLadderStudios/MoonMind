@@ -3959,6 +3959,78 @@ async def test_auxiliary_cleanup_failure_after_confirmed_stop_keeps_successor(
 
 
 @pytest.mark.asyncio
+async def test_late_predecessor_delivery_leaves_successor_authority_intact(
+    monkeypatch,
+) -> None:
+    """A late old-owner result or janitor pass cannot reach the successor."""
+
+    harness, lost, stop_attempts, predecessor_lease = (
+        await _host_lost_with_flaky_cleanup(monkeypatch, host_cleanup_failures=0)
+    )
+    assert lost.retry_recommendation == "retry_step_execution"
+    assert predecessor_lease.status == "cleaned"
+    plan = _plan("opencode-go/model")
+    predecessor = await harness.runtime_store.get(lost.metadata["runtimeBindingRef"])
+
+    live = asyncio.Event()
+    finish = asyncio.Event()
+    successor_bindings = []
+
+    async def successor_driver(request, *, session_authority_sink):
+        await session_authority_sink.session_created("session-1")
+        successor_bindings.append(session_authority_sink.binding)
+        live.set()
+        await finish.wait()
+        harness.events.append("message-completed")
+        return AgentRunResult(
+            summary="done", metadata={"omnigentSessionId": "session-1"}
+        )
+
+    harness.realizer._session_driver = successor_driver
+    successor_request = harness.publish_request.model_copy(
+        update={"idempotency_key": "idem-successor"}
+    )
+    successor = asyncio.create_task(harness.realizer.execute(successor_request, plan))
+    try:
+        await asyncio.wait_for(live.wait(), 5)
+        admitted = successor_bindings[0]
+        assert admitted.bindingId != predecessor.bindingId
+        assert admitted.hostLeaseRef != predecessor.hostLeaseRef
+        successor_lease = await harness.host_leases.get(admitted.hostLeaseRef)
+        events_before = list(harness.events)
+
+        # The replaced worker's delivery of the old attempt arrives late, and
+        # the janitor revisits the old binding while the successor is live.
+        late = await harness.realizer.execute(harness.publish_request, plan)
+        await harness.realizer.reconcile(plan.planRef, predecessor.bindingId)
+
+        assert late.retry_recommendation == "retry_step_execution"
+        assert late.provider_error_code == "OMNIGENT_SESSION_HOST_LOST"
+        assert harness.events == events_before
+        assert len(stop_attempts) == 1
+        current = await harness.runtime_store.get(admitted.bindingId)
+        assert current.state is RuntimeBindingState.session_active
+        assert current.hostLeaseRef == admitted.hostLeaseRef
+        assert current.terminalResult is None
+        current_lease = await harness.host_leases.get(admitted.hostLeaseRef)
+        assert current_lease.status == successor_lease.status != "cleaned"
+        assert current_lease.generation == successor_lease.generation
+        assert (
+            await harness.runtime_store.get(predecessor.bindingId)
+        ).revision == predecessor.revision
+    finally:
+        finish.set()
+    result = await successor
+
+    assert result.summary == "done"
+    assert harness.events.count("message-completed") == 1
+    assert harness.events.count("host-ready") == 2
+    assert harness.events.count("host-cleaned") == 2
+    assert harness.events.count("provider-released") == 2
+    assert stop_attempts == [predecessor_lease.leaseRef, admitted.hostLeaseRef]
+
+
+@pytest.mark.asyncio
 async def test_resumed_host_renews_capabilities_before_session_starts() -> None:
     """A retried activity cannot know how much of the old token remains."""
 

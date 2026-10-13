@@ -393,9 +393,12 @@ async def execute_checkpoint_branch_request(
             ledger._host_leases[key] = lease
             return lease
 
-        async def record_unconfirmed_host_cleanup(self, _lease_id, **_kwargs):
-            lease = ledger._host_leases[key].model_copy(update={"status": "failed"})
-            ledger._host_leases[key] = lease
+        async def record_unconfirmed_host_cleanup(self, _lease_id, *, code, summary):
+            # Like the repository, an unconfirmed stop stays draining so the
+            # Provider Profile's exclusive host index remains held.
+            assert code and summary
+            lease = ledger._host_leases[key]
+            assert lease.status == "draining"
             return lease
 
     class Runtime:
