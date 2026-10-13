@@ -217,6 +217,18 @@ class CheckpointBranchRuntimeLedger:
 
         self._boundary_release.set()
 
+    def confirm_unconfirmed_host_stops(self) -> None:
+        """Act as the host janitor: finish stops whose acknowledgment was lost.
+
+        An unconfirmed stop keeps its host lease draining, so a retry waits
+        for this confirmation instead of starting beside the old host.
+        """
+
+        for key, lease in list(self._host_leases.items()):
+            if lease.status == "draining":
+                self.own("cleanup", f"cleanup:{key}")
+                self._host_leases[key] = lease.model_copy(update={"status": "stopped"})
+
     async def artifact_ref(self, kind: str, key: str, body: bytes) -> str:
         if self.artifact_writer is not None:
             return await self.artifact_writer(kind, key, body)
