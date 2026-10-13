@@ -7767,6 +7767,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Publishcontract
+             * @description Publication constraints the submit path enforces for this Skill: selfManaged (Skill-owned Auto) and repositoryPublishDisabled (None only)
+             */
+            publishContract?: {
+                [key: string]: boolean;
+            };
+            /**
              * Markdown
              * @description Markdown content of the skill, if requested
              */
@@ -10939,6 +10946,13 @@ export interface components {
              * @default draft
              */
             releaseStatus: string;
+            /**
+             * Workflowpublish
+             * @description Workflow publication the preset declares, when it declares one
+             */
+            workflowPublish?: {
+                [key: string]: unknown;
+            } | null;
             /** Steps */
             steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Annotations */
@@ -11136,6 +11150,13 @@ export interface components {
              * @default draft
              */
             releaseStatus: string;
+            /**
+             * Workflowpublish
+             * @description Workflow publication the preset declares, when it declares one
+             */
+            workflowPublish?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * PresignDownloadResponse

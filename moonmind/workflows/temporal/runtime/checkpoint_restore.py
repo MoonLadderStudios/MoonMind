@@ -26,7 +26,7 @@ from moonmind.schemas.checkpoint_restore_models import (
 from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
 
 from .git_auth import build_github_token_git_environment
-from .managed_api_key_resolve import resolve_github_token_for_launch
+from .managed_api_key_resolve import AdmittedGitRead, resolve_admitted_git_read
 
 
 # Checkpoint archive/manifest artifacts are written by the capture path under the
@@ -391,6 +391,19 @@ class ManagedCheckpointRestoreService:
             if str(relative) not in expected and not self._excluded_from_capture(relative.as_posix(), manifest):
                 self._clear_existing(path)
 
+    async def _admitted_git_read(self, req) -> AdmittedGitRead:
+        try:
+            return await resolve_admitted_git_read(
+                req.source.workflow_id, repository=req.destination.repository
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise CheckpointRestoreError(
+                "CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                f"source run's admitted repository access is unavailable: {exc}"[:300],
+            ) from exc
+
     def _git(
         self,
         args: list[str],
@@ -653,15 +666,18 @@ class ManagedCheckpointRestoreService:
                 else:
                     clone_env: Mapping[str, str] | None = None
                     if self.repository_source_root is None:
-                        # A private-repo checkpoint that the original run could
-                        # clone must also be cloneable here. Reuse the launcher's
-                        # authenticated git environment (in-memory credential
-                        # helper, no token on disk or in argv) so the cold restore
-                        # does not fail before extraction.
-                        token = await resolve_github_token_for_launch()
-                        if token:
+                        # Origin objects come through the repository access the
+                        # source run admitted (its selected connection or explicit
+                        # anonymous intent), never another connection or an
+                        # ambient token. The credential reaches Git only through
+                        # an in-memory helper, not disk or argv.
+                        admitted = await self._admitted_git_read(req)
+                        repo_url = admitted.remote
+                        if admitted.token:
                             clone_env = build_github_token_git_environment(
-                                token, base_env=dict(os.environ)
+                                admitted.token,
+                                base_env=dict(os.environ),
+                                host=admitted.host,
                             )
                     self._git(
                         ["clone", "--no-checkout", repo_url, str(staging)],

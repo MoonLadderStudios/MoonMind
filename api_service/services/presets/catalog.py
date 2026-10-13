@@ -1804,6 +1804,11 @@ def _serialize_template(
             recent_applied_at.astimezone(UTC).isoformat() if recent_applied_at else None
         ),
     }
+    # The declared workflow publication is the preset's contract, so authoring
+    # can show it on selection instead of guessing from the slug.
+    workflow_publish = (template.annotations or {}).get("workflowPublish")
+    if isinstance(workflow_publish, dict) and workflow_publish:
+        serialized["workflowPublish"] = dict(workflow_publish)
     if include_detail:
         serialized.update(
             {
