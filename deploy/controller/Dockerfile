@@ -1,7 +1,7 @@
 # Standalone MoonMind deployment controller image (issue #4500).
 # Stdlib-only: no MoonMind application modules, API, DB, Temporal, artifact
 # service, provider manager, Omnigent, or LLM is required at runtime.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # The controller invokes `docker ps` and `docker compose` against the mounted
 # Docker socket; the socket alone does not provide the executables.
