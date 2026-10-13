@@ -26,7 +26,11 @@ interface Notice {
 export const SOURCE_CONTROL_QUERY_KEY = ['repository-connections'] as const;
 const API = '/api/v1/repository-connections';
 const PENDING_APP_KEY = 'moonmind.sourceControl.pendingApp';
-const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
+// Publishing pushes branches, opens pull requests and updates the issues a
+// workflow works on (issue collaboration uses the default connection).
+const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request', 'issues'];
+// Grants recorded before publishing included issues still publish.
+const REQUIRED_PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
 const READ_OPERATIONS = ['read'];
 
 export interface SourceControlConnectionsProps {
@@ -135,7 +139,7 @@ function assignmentSummary(connection: Connection): string {
 }
 
 function canPublish(operations: readonly string[]): boolean {
-  return PUBLISH_OPERATIONS.every((operation) => operations.includes(operation));
+  return REQUIRED_PUBLISH_OPERATIONS.every((operation) => operations.includes(operation));
 }
 
 const inputClass =
@@ -472,7 +476,7 @@ function PatCreateForm({
       </div>
       <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
         <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} />
-        Allow publishing (push branches and open pull requests)
+        Allow publishing (push branches, open pull requests and update issues)
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
@@ -931,7 +935,7 @@ function ConnectionDetail({
         </label>
         <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
           <input type="checkbox" checked={publish} disabled={saving} onChange={(e) => setPublish(e.target.checked)} />
-          Allow publishing (push branches and open pull requests)
+          Allow publishing (push branches, open pull requests and update issues)
         </label>
         {isPat ? (
           <label className="flex flex-col gap-1 text-sm">

@@ -372,8 +372,11 @@ named repository only, and a PAT connection reads only its own SecretRef.
 Only an unrecorded default derives from the deployment declaration. A denied
 operation, unreadable credential or other host reports the operation
 unavailable without sending a request; no ambient token of another account is
-substituted. Revision 394 grants `issues` to the default that revision 391
-mapped from the deployment credential while the operator has not edited it.
+substituted. Source Control publishing grants `issues` with the other
+publishing operations on a connection and its assignments. Revision 394 grants
+`issues` to an active default, and to each of its assignments, that already
+granted publishing, whether revision 391 mapped it or the operator edited or
+scoped it; read-only or narrower choices keep their scope.
 An explicit token stays explicit. Content and comparison reads made by the
 same helpers request `read`.
 
