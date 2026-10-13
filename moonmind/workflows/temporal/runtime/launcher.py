@@ -1812,7 +1812,8 @@ class ManagedRuntimeLauncher:
 
         Some runtime shell-tool execution can bypass the workspace-local ``gh``
         wrapper during nested shell execution, so direct ``GITHUB_TOKEN`` env
-        remains necessary for reliable GitHub CLI auth.
+        remains necessary for reliable GitHub CLI auth. An expiring token is
+        never exported this way; see ``_persist_gh_config``'s ``BASH_ENV``.
         """
 
         return (runtime_id or "").strip() in {"claude_code", "codex_cli"}
@@ -1897,6 +1898,25 @@ class ManagedRuntimeLauncher:
                 f"{bin_dir}{os.pathsep}{existing_path}" if existing_path else str(bin_dir)
             )
             env.setdefault("GIT_TERMINAL_PROMPT", "0")
+            # Nested ``bash -lc`` tool shells re-read a profile that resets
+            # PATH; bash then sources BASH_ENV, which puts the brokered
+            # wrappers first again.
+            bash_env_path = support_dir / "bash_env.sh"
+            quoted_bin_dir = shlex.quote(str(bin_dir))
+            bash_env_lines = ["# moonmind-managed-bash-env\n"]
+            previous_bash_env = str(env.get("BASH_ENV") or "").strip()
+            if previous_bash_env:
+                quoted_previous = shlex.quote(previous_bash_env)
+                bash_env_lines.append(
+                    f"[ -r {quoted_previous} ] && . {quoted_previous}\n"
+                )
+            bash_env_lines.append(
+                f'case "$PATH" in {quoted_bin_dir}|{quoted_bin_dir}:*) ;; '
+                f'*) PATH={quoted_bin_dir}"${{PATH:+:$PATH}}"; export PATH ;; esac\n'
+            )
+            atomic_write_text(bash_env_path, "".join(bash_env_lines))
+            cleanup_paths.append(str(bash_env_path))
+            env["BASH_ENV"] = str(bash_env_path)
 
         git_config_lines = [
             "# moonmind-managed-git-config\n",
@@ -2716,17 +2736,16 @@ class ManagedRuntimeLauncher:
                     run_id=run_id,
                     support_root=str(run_root),
                 )
+                github_token_renewal = (
+                    {}
+                    if explicit_github_token
+                    else self._github_token_renewal(request, selected_github_access)
+                )
                 await self._github_auth_brokers.start(
                     run_id=run_id,
                     token=github_token,
                     socket_path=github_socket_path,
-                    **(
-                        {}
-                        if explicit_github_token
-                        else self._github_token_renewal(
-                            request, selected_github_access
-                        )
-                    ),
+                    **github_token_renewal,
                 )
                 if _needs_priv_drop:
                     await self._make_github_broker_accessible_to_app(
@@ -2734,7 +2753,12 @@ class ManagedRuntimeLauncher:
                     )
                 deferred_cleanup_paths.append(github_socket_path)
                 deferred_cleanup_paths.append(str(Path(github_socket_path).parent))
-                if self._runtime_requires_direct_github_env(profile.runtime_id):
+                # An expiring token would lapse in a static env value; those
+                # runs reach GitHub only through the renewing broker (#4011).
+                if (
+                    self._runtime_requires_direct_github_env(profile.runtime_id)
+                    and not github_token_renewal
+                ):
                     env_overrides["GITHUB_TOKEN"] = github_token
                     env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")
                 else:
