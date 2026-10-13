@@ -36,6 +36,10 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
+from tests.helpers.repository_connections import (
+    github_app_provider_edge as _app_provider_edge,
+    serve_repository_connections as _record_connections,
+)
 
 
 @pytest.fixture
@@ -5524,21 +5528,6 @@ def _recorded_connection(
     )
 
 
-def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection]):
-    loaded: list[str] = []
-
-    async def _load(connection_ref: str, **_kwargs):
-        loaded.append(connection_ref)
-        return connections.get(connection_ref)
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "load_repository_connection_for_launch",
-        _load,
-    )
-    return loaded
-
-
 async def _request_github_token(
     launcher: ManagedRuntimeLauncher, request: AgentExecutionRequest
 ) -> str | None:
@@ -5783,62 +5772,6 @@ async def test_explicit_recorded_connection_is_selected_among_several(
     assert resolved.connection_ref == "repository-connection:team-b"
     assert token == "team-b-token"
     assert set(loaded) == {"repository-connection:team-b"}
-
-
-def _app_provider_edge(
-    monkeypatch, token: str | list[str]
-) -> list[dict[str, object]]:
-    """Synthetic GitHub App provider at the production acquirer seam (#4022).
-
-    A list issues its tokens in order, one per installation-token request.
-    """
-
-    from datetime import datetime, timedelta, timezone
-
-    from moonmind.auth import github_app_wiring as wiring
-
-    issued: list[dict[str, object]] = []
-    tokens = [token] if isinstance(token, str) else list(token)
-
-    async def _post(*, jwt: str, payload: dict):
-        assert jwt == "launcher-test-jwt"
-        issued.append(dict(payload))
-        return {
-            "token": tokens[0] if len(tokens) == 1 else tokens.pop(0),
-            "expires_at": (
-                datetime.now(timezone.utc) + timedelta(minutes=55)
-            ).isoformat(),
-            "permissions": dict(payload["permissions"]),
-            "repositories": list(payload["repositories"]),
-        }
-
-    async def _get_installation(*, jwt: str):
-        assert jwt == "launcher-test-jwt"
-        return {
-            "app_ref": "github-app:moonmind-test",
-            "installation_ref": "installation:123",
-            "account": "MoonLadderStudios",
-            "repositories": ["MoonLadderStudios/MoonMind"],
-            "suspended": False,
-        }
-
-    real_factory = wiring.build_bound_acquirer_for_connection
-
-    def _factory(connection, **kwargs):
-        edge = {
-            "resolve_secret": lambda _ref: b"fake-app-private-key",
-            "make_jwt": lambda _key: "launcher-test-jwt",
-            "http_post": _post,
-            "get_installation": _get_installation,
-            "app_id": "123456",
-            "installation_id": "123",
-            "expected_account": "MoonLadderStudios",
-        }
-        edge.update({k: v for k, v in kwargs.items() if v not in (None, "", (), [])})
-        return real_factory(connection, **edge)
-
-    monkeypatch.setattr(wiring, "build_bound_acquirer_for_connection", _factory)
-    return issued
 
 
 @pytest.mark.asyncio
