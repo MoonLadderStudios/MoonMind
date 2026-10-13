@@ -550,16 +550,24 @@ async def _apply_failed_attempt_finalization(
             if retained is None:
                 raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
             raw_handoff = retained.to_dict()
-    # Scan all raw handoff evidence before recording a plan, publishing any
-    # comment, mutating labels, or retiring ownership. Rendering redacts text
-    # and therefore cannot supply the fail-closed scan's authoritative input.
-    blocked, block_detail = _scan_terminal_body(plan.terminal_comment, raw_handoff)
-    if blocked:
-        base["reasonCode"] = "comment_blocked_by_scan"
-        base["summary"] = f"Terminal comment blocked by outbound scan: {block_detail}."
-        # The proposed transition can contain the same unredacted reason.
-        base["transition"] = None
-        return base
+    # A reconciled release with its immutable plan needs only the missing
+    # result receipt. Its already-confirmed publication must not depend on a
+    # fresh outbound scan. New plans and unconfirmed effects still fail closed.
+    confirmed_release = (
+        saved_plan is not None
+        and claim_receipt is not None
+        and claim_receipt.released
+    )
+    if not confirmed_release:
+        # Scan raw handoff evidence before recording a plan or permitting any
+        # external effect. Rendering redacts text and cannot supply this input.
+        blocked, block_detail = _scan_terminal_body(plan.terminal_comment, raw_handoff)
+        if blocked:
+            base["reasonCode"] = "comment_blocked_by_scan"
+            base["summary"] = f"Terminal comment blocked by outbound scan: {block_detail}."
+            # The proposed transition can contain the same unredacted reason.
+            base["transition"] = None
+            return base
     base["ownershipReleasable"] = True
     if claim_receipt is not None:
         if saved_plan is None:
