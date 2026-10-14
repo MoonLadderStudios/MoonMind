@@ -12,7 +12,10 @@ from uuid import uuid4
 import pytest
 
 from moonmind.publish.service import PublishService
-from moonmind.publish.submodules import SubmodulePublicationError
+from moonmind.publish.submodules import (
+    SubmodulePublicationError,
+    verify_submodule_publication,
+)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     classify_git_push_failure,
@@ -101,6 +104,47 @@ async def _command(command, *, cwd, check=True, env=None, **_kwargs):
     return SimpleNamespace(
         stdout=stdout.decode(), stderr=stderr.decode(), returncode=proc.returncode
     )
+
+
+@pytest.mark.asyncio
+async def test_verification_uses_trusted_source_without_local_clone(
+    dependency_candidate,
+):
+    candidate = dependency_candidate
+    _git(candidate.parent / "dependency", "push", "origin", "HEAD:main")
+    if getattr(os, "geteuid", lambda: -1)() == 0:
+        # The Linux test image can reproduce the actual restored-sandbox
+        # ownership boundary using only this disposable fixture.
+        os.chown(candidate.parent / ".git", 1000, -1)
+
+    async def run_git(*args, cwd, network=False):
+        # The admitted Git runner already trusts the exact source workspace.
+        # Git's test hook reproduces its different-owner sandbox without
+        # changing filesystem ownership or persistent Git configuration.
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if cwd == candidate.parent:
+            env["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+        return subprocess.run(
+            ["git", "-c", f"safe.directory={cwd.resolve()}", *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    await verify_submodule_publication(
+        repo_dir=candidate.parent,
+        candidate_ref=candidate.head,
+        base_ref=candidate.base,
+        remote_url=str(candidate.remote),
+        run_git=run_git,
+    )
+
+    assert (
+        await run_git("rev-parse", "HEAD", cwd=candidate.parent)
+    ).stdout.strip() == candidate.head
+    assert not _git(candidate.remote, "for-each-ref", "refs/heads/feature/rescue").stdout
 
 
 async def _publish(candidate, route: str):
