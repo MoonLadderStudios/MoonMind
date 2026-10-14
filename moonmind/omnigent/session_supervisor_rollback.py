@@ -326,18 +326,19 @@ class RollbackExerciseDecision(BaseModel):
 def legacy_rollback_generation_from_settings(feature_flags: object) -> str | None:
     """The explicit rollback generation permitted to re-admit legacy new work.
 
-    Legacy re-admission is not a separate switch: it is the existing supervisor
-    generation, and only while the operator has explicitly selected the
+    Legacy re-admission is not a separate switch: it is the frozen supervisor
+    feature generation, and only while the operator has explicitly selected the
     ``revert_default_to_legacy`` control. Any other mode yields ``None``, so a
     ``rollback_only`` retirement class stays closed to new work.
     """
 
     if rollback_mode_from_settings(feature_flags) != "revert_default_to_legacy":
         return None
-    generation = str(
-        getattr(feature_flags, "omnigent_session_supervisor_generation", "") or ""
-    ).strip()
-    return generation or None
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    return OMNIGENT_SESSION_FEATURE_GENERATION
 
 
 def evaluate_rollback_exercise(

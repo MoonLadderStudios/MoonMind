@@ -266,10 +266,6 @@ Docker/Compose argument vectors (`omnigent.legacy.oauth_host_runtime`) — movin
 the launch argument vector would change what in-flight histories were started
 with.
 
-Temporary supervisor rollout flags are listed in `TEMPORARY_ROLLOUT_FLAGS` with
-their exit condition, so a rollout flag cannot become a permanent alternate
-architecture.
-
 ### 5.4 Obsolete configuration
 
 `OBSOLETE_CONFIGURATION` names each legacy image/environment identity, its
