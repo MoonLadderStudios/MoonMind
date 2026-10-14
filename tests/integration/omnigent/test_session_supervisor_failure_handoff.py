@@ -17,6 +17,7 @@ from moonmind.omnigent.control_plane import (
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.omnigent_session_models import OmnigentSessionTerminalResult
 from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    _read_json_artifact,
     _write_json_artifact,
     omnigent_evaluate_session_admission_activity,
     omnigent_load_failure_authority_activity,
@@ -336,21 +337,36 @@ async def test_delivery_unknown_command_remains_parked_with_terminal_evidence(
 async def test_post_terminal_integration_failure_preserves_primary_evidence(
     production_store,
 ) -> None:
+    """A reporting failure after confirmed work keeps that work and its one turn.
+
+    The exhausted publication is recorded twice, as a retried activity would,
+    yet the completed primary evidence stays byte-identical and readable and
+    the session gains no turn attempt or command that could start another
+    agent run.
+    """
+
     session = await _seed_session(production_store, "post-terminal-failure")
     session, primary_ref = await _attach_primary_success(production_store, session)
-    response = await omnigent_persist_failure_activity(
-        {
-            "sessionId": session.session_id,
-            "compiledExecutionIntentRef": session.intent_ref,
-            "compiledExecutionIntentDigest": session.intent_digest,
-            "expectedRevision": session.revision,
-            "fencingGeneration": session.fencing_generation,
-            "decisionId": "post-terminal-failure:decision",
-            "status": "integration_unavailable",
-            "failedActivity": "omnigent.publish_workspace",
-            "reasonCode": "bounded_activity_exhausted",
-        }
-    )
+    primary_before = await _read_json_artifact(primary_ref)
+    async with production_store.transaction() as repos:
+        turns_before = await repos.turn_attempts.list_for_session(session.session_id)
+        commands_before = await repos.commands.list_for_session(session.session_id)
+    assert len(turns_before) == 1
+
+    payload = {
+        "sessionId": session.session_id,
+        "compiledExecutionIntentRef": session.intent_ref,
+        "compiledExecutionIntentDigest": session.intent_digest,
+        "expectedRevision": session.revision,
+        "fencingGeneration": session.fencing_generation,
+        "decisionId": "post-terminal-failure:decision",
+        "status": "integration_unavailable",
+        "failedActivity": "omnigent.publish_workspace",
+        "reasonCode": "bounded_activity_exhausted",
+    }
+    response = await omnigent_persist_failure_activity(payload)
+    retried = await omnigent_persist_failure_activity(payload)
+    assert retried["terminalResultRef"] == response["terminalResultRef"]
 
     terminal = OmnigentSessionTerminalResult.model_validate(response["terminalResult"])
     assert terminal.status == "integration_unavailable"
@@ -365,6 +381,16 @@ async def test_post_terminal_integration_failure_preserves_primary_evidence(
     assert persisted.metadata["workflowFailureEvidenceRef"] == (
         response["terminalResultRef"]
     )
+    assert await _read_json_artifact(primary_ref) == primary_before
+    async with production_store.transaction() as repos:
+        turns_after = await repos.turn_attempts.list_for_session(session.session_id)
+        commands_after = await repos.commands.list_for_session(session.session_id)
+    assert [turn.turn_attempt_id for turn in turns_after] == [
+        turn.turn_attempt_id for turn in turns_before
+    ]
+    assert [command.command_id for command in commands_after] == [
+        command.command_id for command in commands_before
+    ]
 
 
 async def test_cleanup_exhaustion_preserves_primary_and_records_claimable_handoff(

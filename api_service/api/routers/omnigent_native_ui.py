@@ -20,8 +20,8 @@ binding-scoped bootstrap injected, and never lets the browser connect directly
 to the upstream Omnigent server.
 
 Every request (embedded or full-page) independently authenticates the MoonMind
-caller, resolves and authorizes the durable ``chatBindingId`` binding, gates on a
-known-compatible native UI/server version, strips MoonMind credentials before
+caller, resolves and authorizes the durable ``chatBindingId`` binding, gates on
+the native-UI enable controls, strips MoonMind credentials before
 forwarding upstream, injects only the server-side upstream credential, and
 applies the embedded vs full-page security-header policy. The runtime-neutral
 mechanics live in :mod:`moonmind.omnigent.native_ui`.
@@ -55,10 +55,10 @@ from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
     build_chat_bootstrap,
-    evaluate_native_ui_compatibility,
     is_document_request,
     is_valid_chat_binding_id,
     native_ui_security_headers,
+    native_ui_unavailable_reason,
     presentation_mode_from_query,
     render_native_ui_document,
     scoped_ui_base,
@@ -67,7 +67,6 @@ from moonmind.omnigent.native_ui import (
 from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_native_ui_serving_enabled,
-    resolved_native_ui_version,
     resolved_server_url,
 )
 from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError, is_read_only
@@ -373,18 +372,13 @@ async def _serve_native_ui(
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # 2. Gate on native-UI serving being enabled and a known-compatible version.
-    serving_enabled = resolved_native_ui_serving_enabled()
-    compatibility = evaluate_native_ui_compatibility(
-        resolved_native_ui_version(),
-        enabled=bool(config.enabled) and serving_enabled,
+    # 2. Gate on the explicit enable controls. Compatibility is enforced by the
+    # scoped route map and bootstrap contract, not by the server build identity.
+    reason = native_ui_unavailable_reason(
+        omnigent_enabled=bool(config.enabled),
+        serving_enabled=resolved_native_ui_serving_enabled(),
     )
-    if not compatibility.ready:
-        reason = (
-            "native_ui_serving_disabled"
-            if config.enabled and not serving_enabled
-            else compatibility.reason or "native_ui_unavailable"
-        )
+    if reason is not None:
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=reason
         )

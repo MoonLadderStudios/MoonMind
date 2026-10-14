@@ -1,7 +1,7 @@
 """Unit tests for native Omnigent UI serving primitives.
 
 MoonLadderStudios/MoonMind#3638. Covers the browser-safe bootstrap contract, the
-native UI/server version compatibility gate, the embedded vs full-page security
+native UI serving gate, the embedded vs full-page security
 header policy, SPA-document vs hashed-asset classification, and bootstrap
 injection / scoped asset-URL rewriting.
 """
@@ -13,16 +13,15 @@ import re
 import shutil
 import subprocess
 
-from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
     _head_insert_position,
     build_chat_bootstrap,
-    evaluate_native_ui_compatibility,
     is_document_request,
     is_valid_chat_binding_id,
     native_ui_security_headers,
+    native_ui_unavailable_reason,
     presentation_mode_from_query,
     render_native_ui_document,
     rewrite_asset_urls,
@@ -57,37 +56,28 @@ def test_scoped_bases_are_binding_scoped_and_server_owned() -> None:
     )
 
 
-# --- compatibility gate -------------------------------------------------------
+# --- serving gate ---------------------------------------------------------------
 
 
-def test_pinned_version_is_compatible_by_default() -> None:
-    result = evaluate_native_ui_compatibility(PINNED_OMNIGENT_COMMIT)
-
-    assert result.ready is True
-    assert result.reason is None
-    assert result.reported_version == PINNED_OMNIGENT_COMMIT
-
-
-def test_unknown_version_fails_closed() -> None:
-    result = evaluate_native_ui_compatibility(None)
-
-    assert result.ready is False
-    assert result.reason == "native_ui_version_unknown"
+def test_enabled_serving_is_ready_without_any_build_identity() -> None:
+    assert (
+        native_ui_unavailable_reason(omnigent_enabled=True, serving_enabled=True)
+        is None
+    )
 
 
-def test_unsupported_version_fails_closed() -> None:
-    result = evaluate_native_ui_compatibility("deadbeef-not-supported")
+def test_disabled_omnigent_gates_serving() -> None:
+    assert (
+        native_ui_unavailable_reason(omnigent_enabled=False, serving_enabled=True)
+        == "omnigent_disabled"
+    )
 
-    assert result.ready is False
-    assert result.reason == "native_ui_version_unsupported"
-    assert result.reported_version == "deadbeef-not-supported"
 
-
-def test_disabled_bridge_gates_serving() -> None:
-    result = evaluate_native_ui_compatibility(PINNED_OMNIGENT_COMMIT, enabled=False)
-
-    assert result.ready is False
-    assert result.reason == "omnigent_disabled"
+def test_disabled_native_ui_serving_gates_serving() -> None:
+    assert (
+        native_ui_unavailable_reason(omnigent_enabled=True, serving_enabled=False)
+        == "native_ui_serving_disabled"
+    )
 
 
 # --- bootstrap contract -------------------------------------------------------

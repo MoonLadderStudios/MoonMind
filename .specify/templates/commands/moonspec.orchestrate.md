@@ -21,7 +21,6 @@ Coordinate the MoonSpec lifecycle for one independently testable story:
 5. Align artifacts with `moonspec-align`.
 6. Implement through `moonspec-implement`.
 7. Verify with `moonspec-verify`.
-8. Reconcile canonical docs with `moonspec-doc-reconcile` when verification passes and a canonical source document exists.
 
 Do not split broad designs in this command. If the input contains multiple independent stories, stop and route it to `moonspec-breakdown` before orchestration.
 

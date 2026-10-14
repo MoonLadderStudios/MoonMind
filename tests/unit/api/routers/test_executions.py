@@ -19752,24 +19752,23 @@ def _install_fake_store(monkeypatch, resolution=None, error=None):
     )
 
 
-def _declare_verified_immutable_server_image(monkeypatch) -> None:
-    """Serve as a deployment with verified immutable image evidence.
+def _use_default_latest_server_image(monkeypatch) -> None:
+    """Serve as the default Compose deployment: a mutable ``latest`` image.
 
-    MoonLadderStudios/MoonMind#3685: the chat-binding projection only publishes
-    scoped navigation targets when the native-UI compatibility gate is ready,
-    and that version derives from the deployment's declared immutable Omnigent
-    server image. A mutable tag reports unknown and drops ``chatUrl``.
+    The chat-binding projection publishes scoped navigation targets whenever
+    native-UI serving is enabled; the server image identity is not a
+    compatibility input, so no version pin or image digest is declared.
     """
 
     monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_ENABLED", raising=False)
     monkeypatch.setenv(
-        "OMNIGENT_IMAGE_REF",
-        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "d" * 64,
+        "OMNIGENT_IMAGE_REF", "ghcr.io/omnigent-ai/omnigent-server:latest"
     )
 
 
 def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
-    _declare_verified_immutable_server_image(monkeypatch)
+    _use_default_latest_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="available",
         read_only=False,
@@ -19802,7 +19801,7 @@ def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
 
 
 def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
-    _declare_verified_immutable_server_image(monkeypatch)
+    _use_default_latest_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="ended",
         read_only=True,
@@ -19887,6 +19886,43 @@ def test_chat_binding_serving_disabled_falls_back(monkeypatch) -> None:
     assert body["chatUrl"] == ""
     # The binding id itself is still returned; only the live surface is withheld.
     assert body["chatBindingId"] == "chatb_opaque123"
+
+
+def test_chat_binding_bridge_disabled_falls_back(monkeypatch) -> None:
+    # A bridge disabled in OMNIGENT_BRIDGE_CONFIG_PATH 404s the scoped route
+    # before serving, so the projection must not advertise a live chatUrl.
+    from api_service.api.routers import omnigent_bridge
+
+    _use_default_latest_server_image(monkeypatch)
+    monkeypatch.setattr(
+        omnigent_bridge,
+        "_BRIDGE_CONFIG",
+        omnigent_bridge.get_bridge_config().model_copy(update={"enabled": False}),
+    )
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=False,
+        chat_binding_id="chatb_opaque123",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={"viewTranscript": True, "sendMessage": True},
+        unavailable_reason=None,
+    )
+    app, _service = _chat_binding_app()
+    _override_user_dependencies(app, is_superuser=True)
+    _install_fake_store(monkeypatch, resolution=resolution)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions/mm:wf-1/chat-binding")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "unavailable"
+    assert body["unavailableReason"] == "omnigent_disabled"
+    assert body["chatUrl"] == ""
+    assert body["apiBase"] == ""
 
 
 def test_chat_binding_ambiguous_returns_409(monkeypatch) -> None:
