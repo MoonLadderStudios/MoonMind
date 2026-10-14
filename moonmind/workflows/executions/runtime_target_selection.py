@@ -101,6 +101,8 @@ class SelectionSource(StrEnum):
     """Where the resolved target came from."""
 
     authored = "authored"
+    #: No runtime was authored; the selected Provider Profile's route chose it.
+    profile = "profile"
     rollout_default = "rollout_default"
     recorded = "recorded"
     configured_default = "configured_default"
@@ -294,6 +296,7 @@ def resolve_runtime_target_selection(
     surface: AuthoringSurface | str,
     requested_runtime: object = None,
     requested_target_id: str | None = None,
+    profile_runtime: str | None = None,
     recorded_target_id: str | None = None,
     recorded_runtime_id: str | None = None,
     upgrade_to_qualified_target: bool = False,
@@ -309,6 +312,10 @@ def resolve_runtime_target_selection(
     a currently qualified target, so editing or rerunning historical work never
     silently replaces its harness, profile, policy, Host Class, runtime pack,
     materializer, or realizer.
+
+    ``profile_runtime`` is the route the selected Provider Profile implies when
+    no runtime is authored. It resolves like an authored runtime but is
+    recorded as Profile-derived provenance.
     """
 
     active_surface = AuthoringSurface(str(surface))
@@ -432,7 +439,12 @@ def resolve_runtime_target_selection(
 
     # 3. An authored runtime id (product intention) resolves to the most
     #    promoted registered target for that runtime.
+    #    A Profile-implied route resolves the same way with its own provenance.
     authored_runtime = str(requested_runtime or "").strip()
+    intended_source = SelectionSource.authored
+    if not authored_runtime and str(profile_runtime or "").strip():
+        authored_runtime = str(profile_runtime).strip()
+        intended_source = SelectionSource.profile
     if authored_runtime:
         runtime_id = normalize_runtime_id(authored_runtime)
         candidates = _views_for_runtime(views, runtime_id)
@@ -445,7 +457,7 @@ def resolve_runtime_target_selection(
             return _selection(
                 runtime_id=runtime_id,
                 view=None,
-                source=SelectionSource.authored,
+                source=intended_source,
                 available=True,
                 reason=RolloutReason.combination_not_registered,
             )
@@ -453,7 +465,7 @@ def resolve_runtime_target_selection(
             return _selection(
                 runtime_id=runtime_id,
                 view=candidates[0],
-                source=SelectionSource.authored,
+                source=intended_source,
                 available=False,
                 replacement_required=True,
                 reason=RolloutReason.rollout_disabled,
@@ -461,7 +473,7 @@ def resolve_runtime_target_selection(
         return _selection(
             runtime_id=runtime_id,
             view=selectable[0],
-            source=SelectionSource.authored,
+            source=intended_source,
             available=True,
         )
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import time
 import logging
@@ -1529,12 +1528,10 @@ def build_runtime_config(
         and default_runtime_override.strip()
         else ""
     )
-    configured_runtime = normalize_runtime_id(
-        str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower() or None
-    ) if os.environ.get("MOONMIND_WORKER_RUNTIME", "").strip() else ""
     # The versioned runtime-provider rollout policy owns the promoted default
-    # (MoonLadderStudios/MoonMind#3833). Per-request user/workspace overrides and
-    # the worker runtime pin remain explicit authored intentions above it.
+    # (MoonLadderStudios/MoonMind#3833), so the form preselects what an omitted
+    # CLI/API submission selects. A saved workspace Default Runtime remains an
+    # explicit choice above it; a worker process's runtime env is not one.
     runtime_target_catalog = runtime_target_catalog_payload()
     rollout_selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.dashboard_config,
@@ -1542,8 +1539,6 @@ def build_runtime_config(
     )
     if runtime_override in supported_runtimes:
         default_runtime = runtime_override
-    elif configured_runtime in supported_runtimes:
-        default_runtime = configured_runtime
     elif rollout_selection.runtime_id in supported_runtimes:
         default_runtime = rollout_selection.runtime_id
     else:
@@ -1667,7 +1662,6 @@ def build_runtime_config(
             "defaultModelByRuntime": default_model_by_runtime,
             "defaultEffortByRuntime": default_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
-            "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedRuntimes": supported_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
             "runtimeCommandPreview": build_runtime_command_preview_config(),

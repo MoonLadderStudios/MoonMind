@@ -324,7 +324,12 @@ def workflow_run(
         help="Backend-admitted source (owner/repo or https URL). Local paths are rejected.",
     ),
     agent_profile: str | None = typer.Option(
-        None, "--agent-profile", help="Agent Profile selector (not a provider profile)."
+        None,
+        "--agent-profile",
+        help=(
+            "Agent Profile selector (not a provider profile). Pair it with "
+            "--provider-profile, the account the Agent Profile runs on."
+        ),
     ),
     provider_profile: str | None = typer.Option(
         None, "--provider-profile", help="Provider Profile selector (not an agent profile)."
