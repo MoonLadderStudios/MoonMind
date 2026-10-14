@@ -16,8 +16,9 @@ selected strict certification retains the evidence requirements in
 [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 New-work selection uses the shared rollout boundary without the retired Codex
 phase inputs (#3931), as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration).
-The v1 cutover evidence and phase examples below remain historical interpretation,
-not ordinary startup instructions. Where a detail is owned elsewhere, that owner
+The v1 cutover evidence and phase examples below describe the retained diagnostic
+projection and historical interpretation, not ordinary startup instructions.
+Where a detail is owned elsewhere, that owner
 governs it and this reconciliation must stay current.
 
 ## 1. Universal product identity
@@ -87,9 +88,11 @@ Provider Profile capacity is acquired before
 any workspace side effect — matching the owning Create-to-host sequence in
 [CodexCreateToHostContract.md §5](./CodexCreateToHostContract.md#5-journey-and-ownership),
 so no workspace materialization runs for a request that cannot acquire capacity.
-Provider Profile capacity and credentials are released only after their consumers
-stop under the existing owner. Unrelated reporting, publication, or non-sensitive
-retention does not require keeping that capacity occupied.
+Repository publication or a durable saved-work handoff precedes cleanup that
+releases the authoritative workspace. Provider Profile capacity and credentials
+are released only after owned cleanup and confirmed consumer shutdown under the
+existing owner. Reporting or non-sensitive retention already independent of that
+workspace does not require keeping capacity occupied.
 
 | # | Stage | Trusted owner | Immutable refs / snapshots | Retry / idempotency boundary | Failure behavior | Evidence | Prohibited caller authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -103,7 +106,7 @@ retention does not require keeping that capacity occupied.
 | 8 | Live + replayable event / resource / artifact projection | Omnigent Bridge | Durable event journal, cursor/page/SSE projection, resource refs | Replay from the durable journal is deterministic; cursors are idempotent | Projection continues from the journal; gaps are reported, never silently filled | Event journal + resource refs | No second-source runtime dashboard; no caller-authored event stream |
 | 9 | Repository candidate, publication, or terminal saved-work handling | Workspace / publication owner | `WorkspaceLocator`, `githubAuthorityRef`, bounded publish mode, publication result ref | Publication is idempotent within the bounded mutation scope; failed publication preserves saved work | `OMNIGENT_REPOSITORY_PUBLICATION_FAILED`; confirmed saves remain recoverable | Publication result + saved-work refs | No broad mutation authority beyond the authored bounded scope |
 | 10 | Terminal harvest, cleanup / janitor reconciliation, Provider Profile release | Artifact owner + Host owner + Provider Profile Manager | Terminal envelope, capture manifest ref, cleanup evidence, lease release status | Harvest and cleanup are idempotent; janitor reconciles only lease-owned resources | `OMNIGENT_CLEANUP_FAILED` / `OMNIGENT_EVIDENCE_PUBLICATION_FAILED` retryable; auxiliary failure never overwrites `primaryStatus` | Terminal envelope + cleanup/janitor evidence | No reconciliation of resources the lease does not own; no release before cleanup |
-| 11 | Optional observations, explicit strict certification, and historical v1 cutover evidence | Existing evidence resolver + conformance/cutover readers | Actual report subject/digests; retained v1 phase fields keep their recorded meaning | Ordinary admission can record an uncertified tier; explicit strict certification validates its required evidence | Invalid required strict evidence fails closed; unavailable optional observations do not veto ordinary admission | Provenance-bound evidence for the scope actually observed | No caller-driven certification downgrade or fabricated support claim |
+| 11 | Optional observations, explicit strict certification, and retained v1 cutover diagnostics/evidence | Existing evidence resolver + conformance/cutover readers | Actual report subject/digests; phase fields still feed the catalog's `cutover` projection and retain historical meaning | Ordinary admission can record an uncertified tier; explicit strict certification validates its required evidence | Invalid required strict evidence fails closed; unavailable optional observations do not veto ordinary admission | Provenance-bound evidence for the scope actually observed | No caller-driven certification downgrade or fabricated support claim |
 
 Owners: Create owns intent; the API compiler owns immutable input and
 workspace-intent construction while the Temporal workflow compiles the
@@ -112,7 +115,7 @@ Provider Profile Manager owns eligibility,
 credentials, and capacity; the Host owner owns policy realization, readiness, and
 cleanup; the Bridge owns authorization, session, first-message idempotency, and
 events; the artifact owner owns evidence; the conformance/evidence owners own
-certification and historical phase interpretation; Temporal owns ordering and retries. This
+certification and retained phase diagnostics; Temporal owns ordering and retries. This
 reconciles the ownership prose in
 [CodexCreateToHostContract.md §5](./CodexCreateToHostContract.md#5-journey-and-ownership)
 and the cutover authority in
@@ -195,12 +198,14 @@ semantics remain with the strict/historical readers.
 }
 ```
 
-The example above is the historical v1 cutover shape emitted by retained
-`cutover.py` helpers. It is not the current catalog-readiness response or a
-configuration requirement. The existing `/api/omnigent/codex-catalog-readiness`
-projection reports actual readiness; new-work selection and remaining controls
-are owned by [Runtime Provider Rollout](RuntimeProviderRollout.md). Do not rewrite
-old phase observations to imply certification or a deployed cutover that did not occur.
+The example above illustrates the retained v1 phase projection. The existing
+`/api/omnigent/codex-catalog-readiness` handler still calls `effective_phase()` and
+exposes its result under `cutover`; the complete response also reports current
+readiness. Its configured/deployed phase inputs and evidence validation remain
+owned by [Codex Support and Cutover](CodexSupportAndCutover.md#versioned-rollout).
+They do not select current Create/schedule defaults; that boundary belongs to
+[Runtime Provider Rollout](RuntimeProviderRollout.md). Do not rewrite old phase
+observations to imply certification or a deployed cutover that did not occur.
 
 ## 5. Complete failure and evidence matrix
 
@@ -270,8 +275,8 @@ their real consumers; see [Runtime Provider Rollout](RuntimeProviderRollout.md).
 
 Omitted, blank, or `MOONMIND_OMNIGENT_EVIDENCE_POLICY=either` is ordinary admission
 and may record an uncertified tier. Explicit `protected` or `deployment` retains
-strict validation. The historical `opt_in` phase and phase-advancement examples
-are not current setup steps. Actual protected-live evidence remains necessary
+strict validation. The retained `opt_in` diagnostic phase and phase-advancement examples
+are not ordinary setup steps. Actual protected-live evidence remains necessary
 for the live certification it claims; this documentation change neither certifies
 a deployment nor closes separately owned live-evidence work.
 
@@ -287,8 +292,9 @@ a deployment nor closes separately owned live-evidence work.
   document refers to this canonical identity and never invents a competing one.
 - No caller authors host, daemon, session, path, or credential authority.
 - Explicit Omnigent selection is fail-closed with no silent fallback.
-- Provider Profile capacity is released after credential consumers stop through
-  the existing owner; auxiliary cleanup/publication failure never overwrites `primaryStatus`.
+- Publication or durable saved-work handoff precedes authoritative workspace
+  cleanup. Provider Profile capacity is released after owned cleanup and confirmed
+  credential-consumer shutdown; auxiliary failure never overwrites `primaryStatus`.
 - Support language is evidence-qualified; no row is promoted to **supported**
   without the protected evidence its row requires.
 - Explicit strict certification retains its evidence validation and integrity

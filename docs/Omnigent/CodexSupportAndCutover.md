@@ -50,7 +50,13 @@ owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 
 ## Versioned rollout
 
-The persisted rollout value is the numbered phase, not an inferred default:
+The retained v1 cutover evidence and diagnostic projection use the numbered
+phase vocabulary below. These original meanings decode existing observations;
+they no longer select current Create or schedule defaults. New-work selection
+uses the shared rollout boundary without these phase fields (#3931), and
+ordinary admission is certificate independent (#4560); see
+[Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration) and
+[Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 
 1. `opt_in`: Omnigent is normally available for explicit selection; direct Codex remains the preselected default.
 2. `create_default`: new Create defaults to Omnigent; explicit direct remains.
@@ -75,14 +81,16 @@ evidence blocks promotion. Rollback to an earlier phase is always allowed and
 does not mutate immutable per-run runtime/profile/policy snapshots. A denied or
 failed explicit Omnigent selection is an error; it never invokes direct Codex.
 
-The API reads `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) as a
-desired phase and `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` (default `opt_in`)
-as the durable, operator-controlled current phase. Promotion is valid only to
-the immediate successor of that deployed phase; the evidence document must
-name both values. After deployment succeeds, operators advance the deployed
-value. A denied promotion preserves the deployed phase, while an explicit
-lower desired value performs a rollback for future defaults. For every
-promotion it also reads the JSON document at the
+`GET /api/omnigent/codex-catalog-readiness` still calls `effective_phase()` and
+returns its result under `cutover`. That live diagnostic/evidence consumer reads
+`MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` (default `opt_in`) as the desired phase
+and `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` (default `opt_in`) as the recorded,
+operator-controlled deployed phase. Its promotion calculation accepts only the
+immediate successor with evidence naming both values. A denied promotion retains
+the deployed diagnostic phase; a lower desired value reports the earlier phase.
+Neither result changes current new-work defaults, and these fields are absent
+from the shipped Compose/template configuration. For a diagnostic promotion,
+the reader also loads the JSON document at the
 local path or `file://` URI in
 `MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF`. Remote and opaque artifact
 references are evidence links, not launch authority. The mounted document must
