@@ -1103,6 +1103,7 @@ def _attempt_request(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("successor_second", [0, 1])
+@pytest.mark.parametrize("deployment_identity_changed", [False, True])
 @pytest.mark.parametrize(
     "remote_change", [None, "descendant", "foreign_author", "foreign_committer"]
 )
@@ -1111,6 +1112,7 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     monkeypatch: pytest.MonkeyPatch,
     successor_second: int,
     remote_change: str | None,
+    deployment_identity_changed: bool,
 ) -> None:
     """A successor Step Execution republishes the same logical candidate."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -1141,13 +1143,20 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     git("remote", "add", "origin", str(origin), cwd=source)
     git("push", "origin", "main", cwd=source)
 
+    admitted_identity = {
+        "name": settings.workflow.git_user_name or "MoonMind Worker",
+        "email": settings.workflow.git_user_email
+        or "moonmind-worker@users.noreply.github.com",
+    }
     first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    first.parameters["_publicationGitIdentity"] = dict(admitted_identity)
     first_workspace.parent.mkdir(parents=True)
     git("clone", str(origin), str(first_workspace), cwd=tmp_path)
     (first_workspace / "work.txt").write_text("completed work\n")
     # The verified after_execution save precedes publication, so the successor
     # restores the agent's uncommitted result rather than the publisher commit.
     second, second_workspace = _attempt_request(tmp_path, ordinal=2)
+    second.parameters["_publicationGitIdentity"] = dict(admitted_identity)
     second_workspace.parent.mkdir(parents=True)
     shutil.copytree(first_workspace, second_workspace, symlinks=True)
 
@@ -1175,6 +1184,11 @@ async def test_successor_attempt_reconciles_predecessor_publication(
             f"GIT_{prefix}_DATE",
             f"2026-01-01T00:01:{successor_second:02d}+00:00",
         )
+    if deployment_identity_changed:
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed default")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "changed@example.invalid"
+        )
     if remote_change == "descendant":
         # Even identical bytes do not authorize replacing another actor's
         # later commit. Its distinct parent must remain on the remote branch.
@@ -1188,6 +1202,21 @@ async def test_successor_attempt_reconciles_predecessor_publication(
         # Simulate a rewrite only in this test-owned bare origin. Everything
         # except the original author's or committer's identity is preserved.
         with monkeypatch.context() as foreign:
+            for prefix, formats in (
+                ("AUTHOR", ("%an", "%ae")),
+                ("COMMITTER", ("%cn", "%ce")),
+            ):
+                for field, fmt in zip(("NAME", "EMAIL"), formats):
+                    foreign.setenv(
+                        f"GIT_{prefix}_{field}",
+                        git(
+                            "show",
+                            "--no-patch",
+                            f"--format={fmt}",
+                            lost["push_head_sha"],
+                            cwd=origin,
+                        ),
+                    )
             prefix = "AUTHOR" if remote_change == "foreign_author" else "COMMITTER"
             foreign.setenv(f"GIT_{prefix}_NAME", "Other actor")
             foreign.setenv(f"GIT_{prefix}_EMAIL", "other@example.invalid")

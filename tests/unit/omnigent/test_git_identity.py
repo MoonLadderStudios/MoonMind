@@ -12,8 +12,23 @@ from moonmind.omnigent.git_identity import (
     DEFAULT_GIT_USER_EMAIL,
     DEFAULT_GIT_USER_NAME,
     ensure_workspace_git_identity,
+    resolve_execution_git_identity,
     resolve_git_identity,
 )
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        "forged",
+        {},
+        {"name": "operator", "email": ""},
+        {"name": "operator\n[user]", "email": "operator@example.test"},
+    ],
+)
+def test_invalid_admitted_git_identity_fails_closed(snapshot):
+    with pytest.raises(ValueError, match="admitted publication Git identity"):
+        resolve_execution_git_identity({"_publicationGitIdentity": snapshot})
 
 
 def test_resolve_git_identity_prefers_configured_workflow_identity(
@@ -79,7 +94,9 @@ def test_repo_local_resolved_identity_commits_without_global_configuration(
     (repo / "file.txt").write_text("content\n", encoding="utf-8")
     assert _git(repo, "add", "file.txt", env=env).returncode == 0
 
-    uncommittable = _git(repo, "commit", "-m", "no identity", env=env)
+    uncommittable = _git(
+        repo, "-c", "user.useConfigOnly=true", "commit", "-m", "no identity", env=env
+    )
     assert uncommittable.returncode != 0, "git must refuse an unidentified commit"
 
     assert _git(repo, "config", "--local", "user.name", name, env=env).returncode == 0

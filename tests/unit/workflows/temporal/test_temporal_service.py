@@ -593,7 +593,11 @@ async def test_create_execution_rejects_user_workflow_without_plan_source_before
 
 
 @pytest.mark.asyncio
-async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path):
+async def test_create_execution_initializes_lifecycle_search_attributes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Admitted operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "admitted@example.invalid")
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         owner_id = uuid4()
@@ -606,7 +610,13 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={"foo": "bar"},
+            initial_parameters={
+                "foo": "bar",
+                "_publicationGitIdentity": {
+                    "name": "forged",
+                    "email": "forged@example.invalid",
+                },
+            },
             idempotency_key="create-1",
         )
 
@@ -629,6 +639,26 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         source = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
         assert source is not None
         assert source.run_id == record.run_id
+        assert source.parameters["_publicationGitIdentity"] == {
+            "name": "Admitted operator",
+            "email": "admitted@example.invalid",
+        }
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed default")
+        redelivery = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="My run",
+            input_artifact_ref="artifact://input/1",
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"foo": "bar"},
+            idempotency_key="create-1",
+        )
+        assert (
+            redelivery.parameters["_publicationGitIdentity"]
+            == source.parameters["_publicationGitIdentity"]
+        )
 
 
 @pytest.mark.asyncio
@@ -3333,7 +3363,7 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.parameters == {}
+        assert set(source.parameters) == {"_publicationGitIdentity"}
 
 @pytest.mark.asyncio
 async def test_validate_dependencies_rejects_self_dependency(tmp_path):
@@ -5454,8 +5484,10 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
 
 @pytest.mark.asyncio
 async def test_selected_step_recovery_starts_from_preserved_step(
-    tmp_path, mock_client_adapter
+    tmp_path, mock_client_adapter, monkeypatch
 ):
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Original operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "original@example.test")
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -5506,6 +5538,8 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             "title": "Implement",
         }
 
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed deployment")
+        monkeypatch.setattr(settings.workflow, "git_user_email", "changed@example.test")
         result = await service.create_failed_step_recovery_execution(
             created,
             recovery_checkpoint_ref=None,
@@ -5521,6 +5555,10 @@ async def test_selected_step_recovery_starts_from_preserved_step(
 
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["relationship"] == "Recovered from selected step"
+        assert resumed.parameters["_publicationGitIdentity"] == {
+            "name": "Original operator",
+            "email": "original@example.test",
+        }
         assert resumed.parameters["recoverySource"]["recoveryMode"] == "selected_step"
         assert resumed.parameters["recoverySource"]["failedStepId"] == "design"
         assert resumed.parameters["recoverySource"]["selectedStartStepId"] == "design"

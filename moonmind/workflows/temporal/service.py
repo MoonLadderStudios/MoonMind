@@ -2158,6 +2158,7 @@ class TemporalExecutionService:
         _workflow_id: str | None = None,
         _run_id: str | None = None,
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
+        _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2306,6 +2307,23 @@ class TemporalExecutionService:
             )
 
         params = dict(initial_parameters or {})
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            from moonmind.omnigent.git_identity import (
+                resolve_execution_git_identity,
+                resolve_git_identity,
+            )
+
+            git_name, git_email = (
+                resolve_execution_git_identity(
+                    _publication_identity_source.parameters or {}
+                )
+                if _publication_identity_source is not None
+                else resolve_git_identity()
+            )
+            # This server-resolved choice belongs to the admitted workflow,
+            # including successors of an interrupted logical step. New workflows
+            # use current defaults; idempotent redelivery returned above.
+            params["_publicationGitIdentity"] = {"name": git_name, "email": git_email}
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
         task_params = dict(_workflow_payload(params))
@@ -5247,6 +5265,7 @@ class TemporalExecutionService:
             ),
             _workflow_id=target.destination.workflow_id,
             _run_id=destination_run_id,
+            _publication_identity_source=record,
         )
         destination = await self._session.get(
             TemporalExecutionCanonicalRecord, created.workflow_id
@@ -5769,6 +5788,7 @@ class TemporalExecutionService:
                 else f"Recovered from failed step of {record.workflow_id}."
             ),
             _recovery_artifact_source=record,
+            _publication_identity_source=record,
         )
         return {
             "accepted": True,
