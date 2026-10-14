@@ -9,6 +9,7 @@ project (deploy/controller), which owns image staging, changed-service
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -250,7 +251,9 @@ def main(argv=None):
     parser.add_argument("--branch", default="main")
     parser.add_argument("--compose-project")
     parser.add_argument(
-        "--operator-url", action="append", default=[],
+        "--operator-url",
+        action="append",
+        default=[],
         help="Existing operator origin to verify without changing API authentication configuration; repeat for multiple origins",
     )
     parser.add_argument(
@@ -260,18 +263,21 @@ def main(argv=None):
         "--resume", help="Resume the printed submission ID using its original inputs"
     )
     parser.add_argument(
-        "--controller-url", default=_DEFAULT_CONTROLLER_URL,
+        "--controller-url",
+        default=_DEFAULT_CONTROLLER_URL,
         help="Standalone controller endpoint (default %(default)s)",
     )
     parser.add_argument(
-        "--controller-secret-file", default=None,
+        "--controller-secret-file",
+        default=None,
         help="Deployment-owned controller bearer secret file "
         "(default <repo>/deploy/state/controller/secrets/controller-bearer "
         "or $MOONMIND_CONTROLLER_SECRET_FILE)",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
-        "--local-build", action="store_true",
+        "--local-build",
+        action="store_true",
         help="Development-only working-tree overlay update (bind-mounts live "
         "source via docker-compose.development.yaml). Never an immutable "
         "release: no image is pulled, published, or digest-pinned and no "
@@ -281,11 +287,19 @@ def main(argv=None):
     requested_args = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(requested_args)
     if args.resume and args.operator_url:
-        raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
+        raise ValueError(
+            "Resume preserves the original operator URLs; omit --operator-url"
+        )
     if args.local_build and args.resume:
-        raise ValueError("Resume replays a recorded release submission; omit --local-build")
-    if args.local_build and args.image_repository != parser.get_default("image_repository"):
-        raise ValueError("A local working-tree update uses no registry image; omit --image-repository")
+        raise ValueError(
+            "Resume replays a recorded release submission; omit --local-build"
+        )
+    if args.local_build and args.image_repository != parser.get_default(
+        "image_repository"
+    ):
+        raise ValueError(
+            "A local working-tree update uses no registry image; omit --image-repository"
+        )
     repo = args.repo.resolve(strict=True)
     if args.local_build:
         return _local_build_update(args, repo)
@@ -384,7 +398,9 @@ def main(argv=None):
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
                 "operator_role": "operator",
-                **({"deployment_operator_urls": operator_urls} if operator_urls else {}),
+                **(
+                    {"deployment_operator_urls": operator_urls} if operator_urls else {}
+                ),
             },
         }
         submissions.mkdir(parents=True, exist_ok=True)
@@ -435,6 +451,8 @@ def _submit_release(
         or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
         or controller_url_explicit
     )
+    if not explicit_controller:
+        _recover_controller_identity(record, repo)
     if not controller_url_explicit:
         controller_url = _installed_controller_url(repo, controller_url)
     if not explicit_controller:
@@ -450,7 +468,9 @@ def _submit_release(
         else:
             secret = default_secret.read_text(encoding="utf-8").strip()
             try:
-                _controller_call(controller_url, secret, "GET", "/v1/healthz", timeout=5)
+                _controller_call(
+                    controller_url, secret, "GET", "/v1/healthz", timeout=5
+                )
             except ControllerUnreachableError:
                 # Bootstrap may have written a secret and Compose file before
                 # its controller could start. Install only if it never
@@ -467,11 +487,16 @@ def _submit_release(
             _install_controller(record, repo)
             if not controller_url_explicit:
                 controller_url = _installed_controller_url(repo, controller_url)
+        else:
+            _ensure_controller_journal_transition(
+                record, repo, controller_url, secret, refresh=True
+            )
     return _submit_via_controller(
         record,
         repo,
         controller_url=controller_url,
         secret_file=secret_file,
+        refresh_controller_on_failure=not explicit_controller,
     )
 
 
@@ -583,7 +608,9 @@ def _controller_call(controller_url, secret, method, path, payload=None, timeout
         with _open_controller(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
-        detail = _redact_diagnostics(exc.read().decode("utf-8", errors="replace")[-2000:])
+        detail = _redact_diagnostics(
+            exc.read().decode("utf-8", errors="replace")[-2000:]
+        )
         raise ControllerHTTPError(
             f"Controller {method} {path} failed with HTTP {exc.code}: {detail}",
             exc.code,
@@ -706,11 +733,15 @@ _CONTROLLER_SOURCE_EXPORT = (
     "sys.exit(0) if not present else None; import bootstrap,server; "
     "supported=callable(getattr(bootstrap,'cmd_ensure',None)) and "
     "'active-journal-transition' in getattr(server,'CONTROLLER_CAPABILITIES',()); "
+    "methods={'identity-recovery':'cmd_recover_identity',"
+    "'bind-discovery':'cmd_describe_installation'}; "
+    "supported=supported and all(callable(getattr(bootstrap,methods[arg],None)) "
+    "for arg in sys.argv[1:]); "
     "print(json.dumps({f.name:f.read_text() for f in p.glob('*.py')} if supported else {}))"
 )
 
 
-def _controller_sources(image, repo):
+def _controller_sources(image, repo, *, identity_recovery=False, bind_discovery=False):
     """Export the controller's trusted, image-owned Python sources.
 
     The export runs without network access and returns ``{}`` when the image
@@ -728,6 +759,8 @@ def _controller_sources(image, repo):
                 image,
                 "-c",
                 _CONTROLLER_SOURCE_EXPORT,
+                *(["identity-recovery"] if identity_recovery else []),
+                *(["bind-discovery"] if bind_discovery else []),
             ],
             cwd=repo,
         )
@@ -737,20 +770,24 @@ def _controller_sources(image, repo):
 @contextmanager
 def _materialized_controller(bundle):
     """Write an exported source bundle to a private directory; yield bootstrap.py."""
-    with tempfile.TemporaryDirectory(prefix="moonmind-controller-bootstrap-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="moonmind-controller-bootstrap-"
+    ) as directory:
         for name, source in bundle.items():
             if (
                 Path(name).name != name
                 or not name.endswith(".py")
                 or not isinstance(source, str)
             ):
-                raise RuntimeError("Controller image returned an invalid source bundle.")
+                raise RuntimeError(
+                    "Controller image returned an invalid source bundle."
+                )
             (Path(directory) / name).write_text(source, encoding="utf-8")
         yield Path(directory) / "bootstrap.py"
 
 
-def _controller_source_candidates(record, repo):
-    """Installed application images first, then the requested release."""
+def _controller_source_images(record, repo, *, refresh):
+    """Select trusted lifecycle sources from the requested and installed images."""
     ids = run(
         [
             "docker",
@@ -761,7 +798,7 @@ def _controller_source_candidates(record, repo):
         ],
         cwd=repo,
     ).split()
-    candidates = []
+    candidates = [record["image"]] if refresh else []
     if ids:
         for container in json.loads(run(["docker", "inspect", *ids], cwd=repo)):
             service = ((container.get("Config") or {}).get("Labels") or {}).get(
@@ -780,32 +817,151 @@ def _controller_source_candidates(record, repo):
     return candidates
 
 
-def _controller_bootstrap_command(bootstrap, record, repo, controller_url):
+def _controller_bootstrap_container(bootstrap, repo, image, *, network):
+    """Preserve installed bind authority and use Linux container paths."""
+    spec = importlib.util.spec_from_file_location(
+        "moonmind_controller_bootstrap_mounts", bootstrap.with_name("mounts.py")
+    )
+    mounts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mounts)
+    state = repo / "deploy" / "state" / "controller"
+    installation = json.loads(
+        run(
+            [
+                sys.executable,
+                str(bootstrap),
+                "describe-installation",
+                "--state-dir",
+                str(state),
+                "--repo",
+                str(repo),
+            ],
+            cwd=repo,
+        )
+    )
+    sources = installation["bindSources"]
+    # Compose's existing repo/state bindings belong to this installation.
+    # Only the newly materialized bootstrap needs host-path adaptation; a
+    # Docker Desktop bind spelling depends on the client that created it.
+    temporary_source = mounts.resolve_bind_source(str(bootstrap.parent))
     return [
-        sys.executable,
-        str(bootstrap),
+        "docker",
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--network",
+        network,
+        "--mount",
+        f"type=bind,source={sources['repo']},target=/deployment,readonly",
+        "--mount",
+        f"type=bind,source={sources['state']},target=/var/lib/moonmind-controller",
+        "--mount",
+        f"type=bind,source={temporary_source},target=/controller-bootstrap,readonly",
+        "--mount",
+        "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock",
+        "--entrypoint",
+        "python",
+        image,
+        "/controller-bootstrap/bootstrap.py",
+    ]
+
+
+def _recover_controller_identity(record, repo):
+    """Recover only lost metadata before deriving the installed endpoint."""
+    if _controller_identity(repo):
+        return
+    state = repo / "deploy" / "state" / "controller"
+    if not (state / "controller-compose.yaml").is_file():
+        return
+    for image in _controller_source_images(record, repo, refresh=True):
+        bundle = _controller_sources(
+            image, repo, identity_recovery=True, bind_discovery=True
+        )
+        if not bundle:
+            continue
+        with _materialized_controller(bundle) as bootstrap:
+            run(
+                [
+                    *_controller_bootstrap_container(
+                        bootstrap, repo, image, network="none"
+                    ),
+                    "recover-identity",
+                    "--state-dir",
+                    "/var/lib/moonmind-controller",
+                    "--repo",
+                    "/deployment",
+                ],
+                cwd=repo,
+            )
+        if not _controller_identity(repo):
+            raise RuntimeError(
+                "Controller lifecycle did not restore its installed identity."
+            )
+        return
+    raise RuntimeError(
+        "Neither installed source nor requested image supplies controller identity recovery."
+    )
+
+
+def _controller_bootstrap_command(
+    bootstrap,
+    record,
+    repo,
+    controller_url,
+    *,
+    source_image=None,
+    privileged=False,
+    prefer_requested=False,
+):
+    """Use one bootstrap invocation for prerequisites, refresh and failed updates."""
+    command = [sys.executable, str(bootstrap)]
+    state_dir = str(repo / "deploy" / "state" / "controller")
+    target_repo = str(repo)
+    if privileged:
+        identity = _controller_identity(repo)
+        if not identity:
+            _recover_controller_identity(record, repo)
+            identity = _controller_identity(repo)
+        network = identity.get("targetNetwork") or (
+            f"{record['project']}_deployment-controller-network"
+        )
+        controller_url = f"http://moonmind-controller:{identity.get('port', 8472)}"
+        command = _controller_bootstrap_container(
+            bootstrap, repo, source_image, network=network
+        )
+        state_dir = "/var/lib/moonmind-controller"
+        target_repo = "/deployment"
+    return [
+        *command,
         "ensure",
         "--state-dir",
-        str(repo / "deploy" / "state" / "controller"),
+        state_dir,
         "--repo",
-        str(repo),
+        target_repo,
         "--stack",
         "moonmind",
         "--target-project",
         record["project"],
         "--image",
-        record["image"],
+        record["image"] if prefer_requested or not privileged else source_image,
         "--controller-url",
         controller_url,
+        *(["--prefer-requested"] if prefer_requested else []),
     ]
 
 
-def _ensure_controller_journal_transition(record, repo, controller_url, secret):
+def _ensure_controller_journal_transition(
+    record, repo, controller_url, secret, *, refresh=False
+):
     """Use the existing host lifecycle before an old controller owns work.
 
     The portable script extracts only trusted, image-owned Python sources;
     it does not depend on a checked-out release or a healthy API/worker.
-    Installed source comes first so a rollback can use current repair code.
+    Default host updates refresh from the requested release even when the
+    installed controller supports journals. Rollbacks can use installed
+    repair code when the target predates this lifecycle. Explicit endpoints
+    keep their controller unless journal support is missing.
     """
     try:
         _, health = _controller_call(
@@ -813,15 +969,26 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
         )
     except ControllerUnreachableError:
         health = {}
-    if "active-journal-transition" in (health.get("capabilities") or ()):
+    if not refresh and "active-journal-transition" in (
+        health.get("capabilities") or ()
+    ):
         return
-    for image in _controller_source_candidates(record, repo):
-        bundle = _controller_sources(image, repo)
+    if refresh:
+        _recover_controller_identity(record, repo)
+    for image in _controller_source_images(record, repo, refresh=refresh):
+        bundle = _controller_sources(image, repo, bind_discovery=refresh)
         if not bundle:
             continue
         with _materialized_controller(bundle) as bootstrap:
             run(
-                _controller_bootstrap_command(bootstrap, record, repo, controller_url),
+                _controller_bootstrap_command(
+                    bootstrap,
+                    record,
+                    repo,
+                    controller_url,
+                    source_image=image,
+                    privileged=refresh,
+                ),
                 cwd=repo,
             )
         _, health = _controller_call(
@@ -841,27 +1008,30 @@ def _refresh_controller_to_requested(record, repo, controller_url):
     """Give the requested release's controller the attempt the installed one failed.
 
     A capable installed controller can still carry a defect that the
-    requested release fixes. The installed controller always applies first,
-    so a rollback keeps current repair code; only after it fails does the
+    requested release fixes. The prepared controller applies first, so a
+    rollback keeps current repair code; only after it fails does the
     bootstrap lifecycle owner refresh the controller to the requested release
     (never while an operation is open). Returns whether the controller now
     runs different code, the only case where a retry can change the outcome,
     and why it does not otherwise.
     """
     detail = "no controller source supports refreshing to the requested release"
-    for image in _controller_source_candidates(record, repo):
-        bundle = _controller_sources(image, repo)
+    for image in _controller_source_images(record, repo, refresh=False):
+        bundle = _controller_sources(image, repo, bind_discovery=True)
         if not bundle:
             continue
         with _materialized_controller(bundle) as bootstrap:
             try:
                 output = run(
-                    [
-                        *_controller_bootstrap_command(
-                            bootstrap, record, repo, controller_url
-                        ),
-                        "--prefer-requested",
-                    ],
+                    _controller_bootstrap_command(
+                        bootstrap,
+                        record,
+                        repo,
+                        controller_url,
+                        source_image=image,
+                        privileged=True,
+                        prefer_requested=True,
+                    ),
                     cwd=repo,
                 )
             except RuntimeError as exc:
@@ -881,14 +1051,23 @@ def _refresh_controller_to_requested(record, repo, controller_url):
     return False, detail
 
 
-def _submit_via_controller(record, repo, *, controller_url, secret_file):
+def _submit_via_controller(
+    record,
+    repo,
+    *,
+    controller_url,
+    secret_file,
+    refresh_controller_on_failure=None,
+):
     """Execute the recorded submission through the standalone controller.
 
     The controller owns image staging, changed-service `up`, local state, and
     recovery. Its Docker transport and endpoint survive target-project
     shutdown, so this path works while MoonMind itself is unhealthy.
     """
-    secret_path = Path(secret_file) if secret_file else _default_controller_secret_file(repo)
+    secret_path = (
+        Path(secret_file) if secret_file else _default_controller_secret_file(repo)
+    )
     if not secret_path.exists():
         raise RuntimeError(
             f"Controller secret is missing at {secret_path}; the selected "
@@ -897,6 +1076,14 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             "`python3 deploy/controller/bootstrap.py restore`."
         )
     secret = secret_path.read_text(encoding="utf-8").strip()
+    if refresh_controller_on_failure is None:
+        refresh_controller_on_failure = (
+            not secret_file
+            and not os.environ.get("MOONMIND_CONTROLLER_URL")
+            and not os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+            and controller_url
+            == _installed_controller_url(repo, _DEFAULT_CONTROLLER_URL)
+        )
     _ensure_controller_journal_transition(record, repo, controller_url, secret)
     rendered = json.loads(
         run(["docker", "compose", "config", "--format", "json"], cwd=repo)
@@ -979,7 +1166,7 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
                 f"Controller operation {operation_id} failed: "
                 f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}."
             )
-            if not requested_controller_tried:
+            if refresh_controller_on_failure and not requested_controller_tried:
                 requested_controller_tried = True
                 refreshed, refresh_detail = _refresh_controller_to_requested(
                     record, repo, controller_url
@@ -1033,6 +1220,7 @@ def _retry_controller_operation(
     retry started; an unchanged failed record is retried within the budget.
     A duplicate that does arrive is refused by the controller, never applied.
     """
+
     def started():
         try:
             _, observed = _controller_call(
@@ -1195,7 +1383,9 @@ def _local_build_update(args, repo):
         "--wait-timeout",
         "600",
     ]
-    result = subprocess.run(command, cwd=repo, capture_output=True, text=True, timeout=900)
+    result = subprocess.run(
+        command, cwd=repo, capture_output=True, text=True, timeout=900
+    )
     if result.returncode:
         raise RuntimeError(
             f"docker compose up failed (exit {result.returncode}); deployment remains on its previous containers"

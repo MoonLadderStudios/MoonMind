@@ -5,6 +5,7 @@ controller never replaces itself: this CLI refuses to run inside the
 controller container, and controller updates are serialized against active
 deployment mutation. Stdlib-only.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,6 +16,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -22,7 +24,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import lock as lock_mod
 import mounts as mounts_mod
 import record as record_mod
 
@@ -72,8 +73,12 @@ def controller_capabilities(url: str, secret: str) -> set[str]:
     return set(body.get("capabilities") or ())
 
 
-def _checked_capture(command: list[str]) -> str:
-    result = _run_capture(command)
+def _checked_capture(command: list[str], *, environment=None) -> str:
+    result = (
+        _run_capture(command)
+        if environment is None
+        else _run_capture(command, environment=environment)
+    )
     if result.returncode:
         raise RuntimeError(
             f"Controller prerequisite {command[1]} failed (exit {result.returncode})."
@@ -82,7 +87,7 @@ def _checked_capture(command: list[str]) -> str:
 
 
 def _application_controller_image(target_project: str, requested: str) -> str:
-    """Use an observed installed source on rollback, else the staged target.
+    """Use the requested release, falling back to installed source on rollback.
 
     The application already publishes these immutable image contents. No
     separate controller publication or release-version equality is needed.
@@ -128,19 +133,23 @@ def _first_capable_controller_image(candidates: list[str], requested: str) -> st
         f"sys.exit(0 if {JOURNAL_TRANSITION_CAPABILITY!r} in "
         "getattr(server,'CONTROLLER_CAPABILITIES',()) else 10)"
     )
-    for image in [*candidates, None]:
+    for image in [None, *candidates]:
         if image is None:
-            _checked_capture(["docker", "pull", requested])
-            image = _checked_capture(
-                [
-                    "docker",
-                    "image",
-                    "inspect",
-                    "--format",
-                    "{{.Id}}",
-                    requested,
-                ]
-            ).strip()
+            inspection = [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                requested,
+            ]
+            immutable = requested.startswith("sha256:") or "@sha256:" in requested
+            staged = _run_capture(inspection) if immutable else None
+            if staged is not None and staged.returncode == 0:
+                image = staged.stdout.strip()
+            else:
+                _checked_capture(["docker", "pull", requested])
+                image = _checked_capture(inspection).strip()
         result = _run_capture(
             [
                 "docker",
@@ -206,10 +215,12 @@ def cmd_ensure(args, env) -> int:
     a capable controller to the requested release unless it already runs it,
     and prints a receipt saying whether the controller changed.
     """
+    import lock as lock_mod
+
     prefer_requested = bool(getattr(args, "prefer_requested", False))
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
-    identity = load_identity(state_dir)
+    identity = recover_identity(state_dir)
     compose_file = state_dir / "controller-compose.yaml"
     if not identity or not compose_file.is_file():
         raise RuntimeError(
@@ -229,9 +240,12 @@ def cmd_ensure(args, env) -> int:
             # whether host-owned repair may proceed; never create a writer.
             return False
 
-    if not prefer_requested and supported():
-        return 0
+    ready = supported()
     if _open_operations(state_dir, args.stack):
+        if ready and not prefer_requested:
+            # A capable owner keeps its active work. The submitter will
+            # observe it or receive the existing busy refusal.
+            return 0
         raise ActiveOperationError(
             "Controller prerequisite waits for the current deployment operation to finish."
         )
@@ -239,11 +253,11 @@ def cmd_ensure(args, env) -> int:
         # Recheck after exclusion: another submission can record intent while
         # bootstrap waits for the same lock. Never replace its live owner.
         if _open_operations(state_dir, args.stack):
+            if supported() and not prefer_requested:
+                return 0
             raise ActiveOperationError(
                 "Controller prerequisite waits for the current deployment operation to finish."
             )
-        if not prefer_requested and supported():
-            return 0
         image = (
             _requested_controller_image(args.image)
             if prefer_requested
@@ -276,12 +290,22 @@ def cmd_ensure(args, env) -> int:
             # defaults to app. Preserve the installed process identity rather
             # than losing secret/socket access or expanding a custom identity.
             previous_image = lines[index].partition(":")[2].strip().strip("\"'")
-            previous_user = json.loads(_checked_capture([
-                "docker", "image", "inspect", "--format", "{{json .Config.User}}",
-                previous_image,
-            ]))
+            previous_user = json.loads(
+                _checked_capture(
+                    [
+                        "docker",
+                        "image",
+                        "inspect",
+                        "--format",
+                        "{{json .Config.User}}",
+                        previous_image,
+                    ]
+                )
+            )
             if not isinstance(previous_user, str):
-                raise RuntimeError("Installed controller process identity is unavailable")
+                raise RuntimeError(
+                    "Installed controller process identity is unavailable"
+                )
             replacement.append(f"    user: {json.dumps(previous_user or '0:0')}")
         lines[index : index + 1] = replacement
         temporary = compose_file.with_suffix(".tmp")
@@ -384,6 +408,123 @@ def load_identity(state_dir: Path) -> dict | None:
     return identity
 
 
+def describe_installation(state_dir: Path) -> dict:
+    """Read installed identity and bind authority through one Compose inspection."""
+    compose_file = state_dir / "controller-compose.yaml"
+    if not compose_file.is_file():
+        raise RuntimeError(
+            "Controller identity recovery requires its existing Compose installation."
+        )
+    # The rendered controller project is independent of the application's
+    # ambient Compose project and .env; its file records resolved settings.
+    compose_environment = dict(os.environ)
+    compose_environment.pop("COMPOSE_PROJECT_NAME", None)
+    config = json.loads(
+        _checked_capture(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                os.devnull,
+                "-f",
+                str(compose_file),
+                "config",
+                "--format",
+                "json",
+            ],
+            environment=compose_environment,
+        )
+    )
+    controller = (config.get("services") or {}).get(CONTROLLER_SERVICE) or {}
+    environment = controller.get("environment") or {}
+    project = config.get("name")
+    repo = environment.get("MOONMIND_CONTROLLER_TARGET_REPO")
+    try:
+        port = int(environment.get("MOONMIND_CONTROLLER_PORT"))
+    except (TypeError, ValueError):
+        port = 0
+    if not project or not repo or not 0 < port < 65536:
+        raise RuntimeError(
+            "The installed Compose project does not identify its controller endpoint."
+        )
+    identity = {
+        "project": str(project),
+        "port": port,
+        "repo": str(repo),
+        "recordedAt": int(time.time()),
+    }
+    links = []
+    for name, membership in (controller.get("networks") or {}).items():
+        if CONTROLLER_ALIAS in ((membership or {}).get("aliases") or ()):
+            network = (config.get("networks") or {}).get(name) or {}
+            if network.get("name"):
+                links.append(str(network["name"]))
+    if len(links) > 1:
+        raise RuntimeError(
+            "The installed controller has more than one API link network."
+        )
+    if links:
+        identity["targetNetwork"] = links[0]
+    target = environment.get("MOONMIND_CONTROLLER_TARGET_PROJECT")
+    if target:
+        identity["targetProject"] = str(target)
+
+    sources = {}
+    for kind, target in (("repo", repo), ("state", "/var/lib/moonmind-controller")):
+        bindings = [
+            volume.get("source")
+            for volume in controller.get("volumes") or ()
+            if volume.get("type") == "bind" and volume.get("target") == target
+        ]
+        if len(bindings) != 1 or not isinstance(bindings[0], str) or not bindings[0]:
+            raise RuntimeError(
+                f"The installed controller has no unique {kind} bind source."
+            )
+        sources[kind] = bindings[0]
+    return {"identity": identity, "bindSources": sources}
+
+
+def recover_identity(state_dir: Path) -> dict:
+    """Restore lost metadata without recreating the controller or touching work."""
+    existing = load_identity(state_dir)
+    if existing:
+        return existing
+    identity = describe_installation(state_dir)["identity"]
+    # This metadata contains no credential. Host callers must be able to read
+    # it after recovery runs with the controller's root-owned state authority.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=state_dir, delete=False
+        ) as stream:
+            temporary = Path(stream.name)
+            json.dump(identity, stream, sort_keys=True, indent=2)
+            stream.write("\n")
+            os.fchmod(stream.fileno(), 0o644)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, _identity_path(state_dir))
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+    return identity
+
+
+def cmd_recover_identity(args, env) -> int:
+    _ensure_outside_controller(env)
+    recover_identity(Path(args.state_dir).resolve())
+    print(
+        "Controller identity recovered from its existing Compose installation.",
+        flush=True,
+    )
+    return 0
+
+
+def cmd_describe_installation(args, env) -> int:
+    print(json.dumps(describe_installation(Path(args.state_dir).resolve())), flush=True)
+    return 0
+
+
 def _repo_env_value(repo: Path, key: str) -> str:
     """Read one setting from the deployment-owned ``.env`` (no interpolation)."""
     try:
@@ -413,9 +554,9 @@ def target_network_for_repo(repo: Path, env=None, project: str | None = None) ->
 
 def target_project_for_repo(repo: Path, env=None) -> str:
     """Resolve the MoonMind Compose project name the way Compose derives it."""
-    explicit = str((env or {}).get("COMPOSE_PROJECT_NAME") or "").strip() or _repo_env_value(
-        repo, "COMPOSE_PROJECT_NAME"
-    )
+    explicit = str(
+        (env or {}).get("COMPOSE_PROJECT_NAME") or ""
+    ).strip() or _repo_env_value(repo, "COMPOSE_PROJECT_NAME")
     name = explicit or repo.name
     normalized = "".join(
         char for char in name.lower() if char.isalnum() or char in "-_"
@@ -477,7 +618,11 @@ def ensure_identity(
     state_dir.mkdir(parents=True, exist_ok=True)
     existing = load_identity(state_dir)
     project = (existing or {}).get("project") or project_for_repo(repo)
-    resolved_port = port if port is not None else (existing or {}).get("port") or port_for_repo(repo)
+    resolved_port = (
+        port
+        if port is not None
+        else (existing or {}).get("port") or port_for_repo(repo)
+    )
     identity = {
         "project": project,
         "port": int(resolved_port),
@@ -527,8 +672,10 @@ def split_image_reference(image: str) -> tuple[str, str | None, str | None]:
     return text, tag, digest
 
 
-def _run_capture(args: list) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=120, check=False)
+def _run_capture(args: list, *, environment=None) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args, capture_output=True, text=True, timeout=120, check=False, env=environment
+    )
 
 
 def resolve_image_digest(image: str) -> str:
@@ -544,7 +691,9 @@ def resolve_image_digest(image: str) -> str:
     if pinned:
         digest = pinned if pinned.startswith("sha256:") else f"sha256:{pinned}"
         hexpart = digest.partition(":")[2]
-        if len(hexpart) != 64 or any(c not in "0123456789abcdefABCDEF" for c in hexpart):
+        if len(hexpart) != 64 or any(
+            c not in "0123456789abcdefABCDEF" for c in hexpart
+        ):
             raise ImageResolutionError(f"Refusing malformed pinned digest: {image!r}")
         return digest.lower()
     try:
@@ -573,7 +722,9 @@ def _image_record_path(state_dir: Path) -> Path:
     return state_dir / "controller-image.json"
 
 
-def record_controller_image(state_dir: Path, *, requested: str, pinned: str | None) -> dict:
+def record_controller_image(
+    state_dir: Path, *, requested: str, pinned: str | None
+) -> dict:
     """Persist the resolved privileged image before the controller starts."""
     record = {
         "requested": requested,
@@ -820,8 +971,7 @@ def cmd_install(args, env) -> int:
     print(f"Controller project rendered: {compose_file}", flush=True)
     print(f"Deployment-owned secret: {_secret_path(state_dir)}", flush=True)
     print(
-        "Start with: "
-        f"python3 {Path(__file__).name} start --state-dir {state_dir}",
+        "Start with: " f"python3 {Path(__file__).name} start --state-dir {state_dir}",
         flush=True,
     )
     return 0
@@ -853,6 +1003,8 @@ def _open_operations(state_dir: Path, stack: str) -> list:
 
 
 def cmd_update(args, env) -> int:
+    import lock as lock_mod
+
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     stack = args.stack
@@ -925,7 +1077,9 @@ def cmd_restore(args, env) -> int:
         target_project=identity.get("targetProject"),
     )
     _ensure_identity_network(identity)
-    code = _compose(state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE)
+    code = _compose(
+        state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE
+    )
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
     print("Controller restored independently of MoonMind health.", flush=True)
@@ -936,8 +1090,14 @@ def cmd_status(args, env) -> int:
     state_dir = Path(args.state_dir).resolve()
     compose_file = state_dir / "controller-compose.yaml"
     secret_file = _secret_path(state_dir)
-    print(f"compose file: {compose_file} {'present' if compose_file.exists() else 'missing'}", flush=True)
-    print(f"secret: {secret_file} {'present' if secret_file.exists() else 'missing'}", flush=True)
+    print(
+        f"compose file: {compose_file} {'present' if compose_file.exists() else 'missing'}",
+        flush=True,
+    )
+    print(
+        f"secret: {secret_file} {'present' if secret_file.exists() else 'missing'}",
+        flush=True,
+    )
     store = record_mod.OperationStore(state_dir)
     open_operations = store.list_open()
     print(f"open operations: {len(open_operations)}", flush=True)
@@ -952,11 +1112,24 @@ def cmd_status(args, env) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-dir", required=False, help="Controller state directory.")
+    parser.add_argument(
+        "--state-dir", required=False, help="Controller state directory."
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--state-dir", required=False, help="Controller state directory.")
-    for name in ("install", "start", "update", "restore", "status", "ensure"):
+    common.add_argument(
+        "--state-dir", required=False, help="Controller state directory."
+    )
+    for name in (
+        "install",
+        "start",
+        "update",
+        "restore",
+        "status",
+        "ensure",
+        "recover-identity",
+        "describe-installation",
+    ):
         child = sub.add_parser(name, parents=[common])
         child.add_argument("--repo", default=None, help="Target MoonMind checkout.")
         child.add_argument("--stack", default="moonmind", help="Target stack.")
@@ -1021,7 +1194,11 @@ def main(argv=None, env=None) -> int:
             repo, environment, project=args.target_project
         )
     # Only the managed marker is consulted; the rest of the host env is used.
-    marker = {"MOONMIND_CONTROLLER_MANAGED": environment.get("MOONMIND_CONTROLLER_MANAGED", "")}
+    marker = {
+        "MOONMIND_CONTROLLER_MANAGED": environment.get(
+            "MOONMIND_CONTROLLER_MANAGED", ""
+        )
+    }
     commands = {
         "install": cmd_install,
         "start": cmd_start,
@@ -1029,6 +1206,8 @@ def main(argv=None, env=None) -> int:
         "restore": cmd_restore,
         "status": cmd_status,
         "ensure": cmd_ensure,
+        "recover-identity": cmd_recover_identity,
+        "describe-installation": cmd_describe_installation,
     }
     return commands[args.command](args, marker)
 
