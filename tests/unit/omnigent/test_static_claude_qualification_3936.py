@@ -73,7 +73,6 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.omnigent.legacy_retirement import (
     RETIREMENT_INVENTORY,
-    RemovalStage,
     RetirementClass,
 )
 
@@ -512,17 +511,6 @@ def test_startup_readiness_waits_are_bounded_with_distinct_outcomes() -> None:
 def test_static_claude_lifecycle_and_drain_have_a_durable_owner() -> None:
     row = _claude_retirement_row()
     assert row.owner == "omnigent-deployment"
-    assert row.earliest_removal_stage is RemovalStage.STARTUP_AND_COMPOSE
-    assert "static_or_on_demand_host" in {
-        dependency.value for dependency in row.active_resource_dependencies
-    }
-    assert "host_binding_or_lease" in {
-        dependency.value for dependency in row.active_resource_dependencies
-    }
-    # The consolidation inventory defers removal authority to this row.
-    inventory = (SCRIPTS / "STATIC_HOST_STARTUP_INVENTORY.md").read_text()
-    assert "omnigent.legacy.claude_static_host_startup" in inventory
-    assert "RETIREMENT_INVENTORY" in inventory
     # The static Claude row still resolves through the shared digest-pinned
     # host-class authority used by every execution owner.
     templates = {

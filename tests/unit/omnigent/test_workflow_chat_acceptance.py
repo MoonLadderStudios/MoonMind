@@ -1612,61 +1612,16 @@ def test_native_chat_evidence_is_secret_scanned(tmp_path: Path) -> None:
         )
 
 
-def test_retirement_guard_consumes_the_manifest_without_interpretation(
-    tmp_path: Path,
-) -> None:
-    from moonmind.omnigent.legacy_retirement import (
-        RETIREMENT_INVENTORY,
-        RetirementCriterion,
-        criteria_from_native_chat_acceptance,
-        evaluate_retirement,
-    )
-
+def test_expired_manifest_fails_validation(tmp_path: Path) -> None:
     manifest = build_workflow_chat_acceptance_manifest(
         _matrix(tmp_path), evidence_root=tmp_path
     )
+    manifest["expiresAt"] = (NOW - timedelta(days=1)).isoformat()
 
-    passed = criteria_from_native_chat_acceptance(
-        manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
-    )
-
-    assert passed == frozenset({RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED})
-    native_chat_path = next(
-        path
-        for path in RETIREMENT_INVENTORY
-        if path.path_id == "omnigent.legacy.native_ui_compat"
-    )
-    decision = evaluate_retirement(native_chat_path, passed)
-    assert RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in (
-        decision.unmet_criteria
-    )
-
-
-@pytest.mark.parametrize("failure", ["missing", "expired", "incomplete"])
-def test_retirement_guard_gets_no_criterion_from_unusable_evidence(
-    failure: str, tmp_path: Path
-) -> None:
-    from moonmind.omnigent.legacy_retirement import (
-        criteria_from_native_chat_acceptance,
-    )
-
-    if failure == "missing":
-        manifest = None
-    else:
-        manifest = build_workflow_chat_acceptance_manifest(
-            _matrix(tmp_path), evidence_root=tmp_path
-        )
-        if failure == "expired":
-            manifest["expiresAt"] = (NOW - timedelta(days=1)).isoformat()
-        else:
-            manifest["combinations"].pop(PRIMARY_COMBINATION)
-
-    assert (
-        criteria_from_native_chat_acceptance(
+    with pytest.raises(ConformanceContractError):
+        validate_workflow_chat_acceptance_manifest(
             manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
         )
-        == frozenset()
-    )
 
 
 def test_cleanup_outcome_must_match_the_typed_cleanup_receipt(tmp_path: Path) -> None:

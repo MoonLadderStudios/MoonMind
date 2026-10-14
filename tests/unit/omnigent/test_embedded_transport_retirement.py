@@ -33,16 +33,11 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.legacy_retirement import (
     LegacyAdmissionRejected,
-    RemovalStage,
     RetirementClass,
-    assert_inventory_is_complete,
     assert_new_admission_allowed,
-    assert_retirement_guard,
     evaluate_new_admission,
-    evaluate_removal_eligibility,
     get_retirement_record,
 )
-from moonmind.omnigent.retirement_surfaces import surface_exists
 
 
 def _embedded_config():
@@ -82,37 +77,6 @@ def test_retirement_row_disables_new_admission() -> None:
     with pytest.raises(LegacyAdmissionRejected) as exc_info:
         assert_new_admission_allowed(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
     assert exc_info.value.path_id == EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID
-
-
-def test_retirement_row_surfaces_still_resolve() -> None:
-    record = get_retirement_record(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
-
-    assert record.surfaces
-    for ref in record.surfaces:
-        assert surface_exists(ref), ref
-
-
-def test_retirement_guard_and_inventory_hold_for_new_row() -> None:
-    assert_retirement_guard()
-    assert_inventory_is_complete()
-
-
-def test_removal_stays_blocked_until_drain_and_evidence() -> None:
-    record = get_retirement_record(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
-
-    eligibility = evaluate_removal_eligibility(
-        record, stage=RemovalStage.PRODUCT_SELECTORS
-    )
-
-    assert eligibility.eligible is False
-    # Active owners must drain first; retention windows stay open by default.
-    assert any(
-        blocker.startswith("active_owner:") for blocker in eligibility.blockers
-    )
-    assert "historical_read_window_open" in eligibility.blockers
-    assert any(
-        blocker.startswith("unmet_criterion:") for blocker in eligibility.blockers
-    )
 
 
 # ------------------------------------------------- parse vs admission boundary

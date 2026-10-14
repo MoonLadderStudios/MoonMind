@@ -34,13 +34,6 @@ from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
-with workflow.unsafe.imports_passed_through():
-    from moonmind.omnigent.legacy_retirement import (
-        RETIREMENT_INVENTORY,
-        RetirementClass,
-        RuntimeGeneration,
-    )
-
 # The patch that gates the retirement-era branch. Versioned so every legacy
 # branch stays registered for the supported history window.
 LEGACY_GENERATION_RETIREMENT_PATCH = "omnigent-legacy-generation-retirement-v1"
@@ -214,24 +207,16 @@ def test_retirement_patch_is_versioned_and_snapshotted() -> None:
     assert source.index("workflow.patched(") < source.index("command = dict(")
 
 
-def test_every_replay_dependent_generation_has_a_representative_history() -> None:
-    """A row that declares a replay dependency must be covered by this corpus."""
+def test_every_legacy_generation_has_a_representative_history() -> None:
+    """Every recorded legacy generation is covered by this replay corpus."""
 
     covered = {command["generation"] for command in GENERATION_COMMANDS.values()}
-    for path in RETIREMENT_INVENTORY:
-        if not path.replay_dependency:
-            continue
-        assert path.generation.value in covered, (
-            f"{path.path_id} declares a replay dependency but generation "
-            f"{path.generation.value} has no representative history"
-        )
-    # Every generation the issue names is represented, including the ones with
-    # no direct-launch code of their own.
+    # Including the generations with no direct-launch code of their own.
     assert {
-        RuntimeGeneration.DIRECT_CODEX.value,
-        RuntimeGeneration.DIRECT_CLAUDE.value,
-        RuntimeGeneration.CODEX_PROFILE_BOUND.value,
-        RuntimeGeneration.SHARED_LEGACY_SUBSTRATE.value,
+        "direct_codex",
+        "direct_claude",
+        "codex_profile_bound",
+        "shared_legacy_substrate",
     } <= covered
 
 
@@ -242,12 +227,3 @@ def test_recorded_histories_are_never_relabeled_as_generic() -> None:
         assert command["provenance"] != "generic-omnigent-host@1", key
         if command["executionRealizerRef"] is not None:
             assert command["executionRealizerRef"] != "generic-omnigent-host@1", key
-
-
-def test_replay_only_rows_never_admit_new_work() -> None:
-    """A replay wrapper must be closed to new admission, not a parallel default."""
-
-    for path in RETIREMENT_INVENTORY:
-        if path.retirement_class is RetirementClass.TEMPORAL_REPLAY_ONLY:
-            assert path.admits_new_work is False, path.path_id
-            assert path.replay_dependency is True, path.path_id

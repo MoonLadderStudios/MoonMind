@@ -359,15 +359,20 @@ async def test_turn_heartbeat_refreshes_before_expiry_and_survives_failures(
 
     coordinator._hosts = SimpleNamespace(heartbeat_host_lease=heartbeat_host_lease)
     refreshes = []
+    replacement_issued = asyncio.Event()
 
     async def refresh():
         refreshes.append(datetime.now(UTC))
         if len(refreshes) == 1:
             raise RuntimeError("provider unavailable")
+        replacement_issued.set()
         return datetime.now(UTC) + timedelta(hours=1)
 
     async def turn():
-        await asyncio.sleep(0.2)
+        # End the turn only after the retry, so a stalled runner cannot let
+        # the turn finish before the next interval elapses.
+        await asyncio.wait_for(replacement_issued.wait(), timeout=10)
+        await asyncio.sleep(0.1)
         return "turn-complete"
 
     result = await coordinator._execute_with_host_lease_heartbeat(
