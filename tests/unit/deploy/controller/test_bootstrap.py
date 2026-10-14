@@ -1,6 +1,194 @@
 """Host-owned controller lifecycle: install/update/restore, never self-replace."""
+
 import pytest
 from conftest import load
+
+
+def test_installation_inspection_does_not_require_a_host_kernel_lock(
+    controller_path, tmp_path, monkeypatch, capsys
+):
+    import json
+    import subprocess
+    import sys
+
+    # The read-only preflight also runs under native Windows Python. Linux
+    # exclusion belongs to the privileged helper, after path discovery.
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    monkeypatch.delitem(sys.modules, "lock", raising=False)
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "controller-compose.yaml").write_text("# installed project\n")
+    config = {
+        "name": "controller-installed",
+        "services": {
+            "controller": {
+                "environment": {
+                    "MOONMIND_CONTROLLER_PORT": "8519",
+                    "MOONMIND_CONTROLLER_TARGET_REPO": "C:\\MoonMind",
+                },
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/run/desktop/mnt/host/c/MoonMind",
+                        "target": "C:\\MoonMind",
+                    },
+                    {
+                        "type": "bind",
+                        "source": "/run/desktop/mnt/host/c/state",
+                        "target": "/var/lib/moonmind-controller",
+                    },
+                ],
+            }
+        },
+    }
+    monkeypatch.setattr(
+        bootstrap,
+        "_run_capture",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 0, json.dumps(config), ""
+        ),
+    )
+    assert (
+        bootstrap.main(["describe-installation", "--state-dir", str(state)], env={})
+        == 0
+    )
+    description = json.loads(capsys.readouterr().out)
+    assert description["bindSources"] == {
+        "repo": "/run/desktop/mnt/host/c/MoonMind",
+        "state": "/run/desktop/mnt/host/c/state",
+    }
+    assert not (state / "controller-identity.json").exists()
+
+
+@pytest.mark.parametrize(
+    "command,active", [("recover-identity", False), ("ensure", False), ("ensure", True)]
+)
+def test_missing_identity_is_recovered_from_installed_compose_without_losing_work(
+    controller_path, tmp_path, monkeypatch, command, active
+):
+    import json
+    import os
+    import subprocess
+
+    bootstrap = load("bootstrap")
+    state = tmp_path / "state"
+    bootstrap.ensure_secret(state)
+    identity = bootstrap.ensure_identity(
+        state,
+        tmp_path,
+        8519,
+        target_network="operator-link",
+        target_project="operator-app",
+    )
+    identity["project"] = "operator-controller"
+    compose = bootstrap.render_compose_file(
+        state_dir=state,
+        repo=tmp_path,
+        port=8519,
+        project=identity["project"],
+        target_network=identity["targetNetwork"],
+        target_project=identity["targetProject"],
+    )
+    original_compose = compose.read_bytes()
+    (state / "controller-identity.json").unlink()
+    store = load("record").OperationStore(state)
+    operation = store.begin(
+        stack="moonmind", desired_image="ghcr.io/org/app:next", source_revision="saved"
+    )
+    if not active:
+        for _ in range(bootstrap.record_mod.MAX_AUTO_ATTEMPTS):
+            store.record_attempt_error(operation["operationId"], error="original error")
+    operation_file = state / "operations" / f"{operation['operationId']}.json"
+    original_record = operation_file.read_bytes()
+    commands = []
+    recreated = []
+    config = {
+        "name": identity["project"],
+        "services": {
+            "controller": {
+                "environment": {
+                    "MOONMIND_CONTROLLER_PORT": "8519",
+                    "MOONMIND_CONTROLLER_TARGET_REPO": str(tmp_path),
+                    "MOONMIND_CONTROLLER_TARGET_PROJECT": "operator-app",
+                },
+                "networks": {"moonmind": {"aliases": ["moonmind-controller"]}},
+                "ports": [
+                    {"host_ip": "127.0.0.1", "published": "8519", "target": 8519}
+                ],
+                "volumes": [
+                    {"type": "bind", "source": str(tmp_path), "target": str(tmp_path)},
+                    {
+                        "type": "bind",
+                        "source": str(state),
+                        "target": "/var/lib/moonmind-controller",
+                    },
+                ],
+            }
+        },
+        "networks": {"moonmind": {"name": "operator-link", "external": True}},
+    }
+
+    def capture(args, **kwargs):
+        commands.append(args)
+        assert args == [
+            "docker",
+            "compose",
+            "--env-file",
+            os.devnull,
+            "-f",
+            str(compose),
+            "config",
+            "--format",
+            "json",
+        ]
+        return subprocess.CompletedProcess(args, 0, json.dumps(config), "")
+
+    monkeypatch.setattr(bootstrap, "_run_capture", capture)
+    monkeypatch.setattr(
+        bootstrap,
+        "controller_capabilities",
+        lambda *args: {"active-journal-transition"},
+    )
+
+    def image(project, target):
+        assert project == "operator-app"
+        return "sha256:" + "c" * 64
+
+    monkeypatch.setattr(bootstrap, "_application_controller_image", image)
+    monkeypatch.setattr(bootstrap, "_checked_capture", lambda _args: '""')
+    # Recovery's real config reader must still execute before image-user inspection.
+    original_capture = bootstrap._checked_capture
+
+    def checked(args, **kwargs):
+        if args[1] == "compose":
+            return capture(args, **kwargs).stdout
+        return original_capture(args)
+
+    monkeypatch.setattr(bootstrap, "_checked_capture", checked)
+    monkeypatch.setattr(
+        bootstrap, "_compose", lambda *args: recreated.append(args) or 0
+    )
+    previous_umask = os.umask(0o077)
+    try:
+        assert (
+            bootstrap.main(
+                [command, "--state-dir", str(state), "--repo", str(tmp_path)], env={}
+            )
+            == 0
+        )
+    finally:
+        os.umask(previous_umask)
+    recovered = bootstrap.load_identity(state)
+    assert {key: value for key, value in recovered.items() if key != "recordedAt"} == {
+        key: value for key, value in identity.items() if key != "recordedAt"
+    }
+    assert (state / "controller-identity.json").stat().st_mode & 0o044 == 0o044
+    assert operation_file.read_bytes() == original_record
+    assert len(recreated) == (1 if command == "ensure" and not active else 0)
+    if command == "recover-identity" or active:
+        assert compose.read_bytes() == original_compose
+    assert len(commands) == 1
 
 
 def test_controller_refresh_reuses_a_staged_immutable_image_without_registry_access(
@@ -350,7 +538,9 @@ def test_controller_prerequisite_can_retry_failed_recreation(
 
     def capabilities(*args):
         if attempts and not upgraded:
-            raise ConnectionRefusedError("old controller stopped before recreation failed")
+            raise ConnectionRefusedError(
+                "old controller stopped before recreation failed"
+            )
         return {"active-journal-transition"} if upgraded else set()
 
     monkeypatch.setattr(
@@ -384,13 +574,9 @@ def test_bootstrap_refuses_to_run_inside_the_controller(controller_path, tmp_pat
         )
 
 
-def test_bootstrap_install_writes_compose_project_and_secret(
-    controller_path, tmp_path
-):
+def test_bootstrap_install_writes_compose_project_and_secret(controller_path, tmp_path):
     bootstrap = load("bootstrap")
-    assert (
-        bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
-    )
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
     rendered = (tmp_path / "controller-compose.yaml").read_text()
     assert "moonmind-controller" in rendered
     assert "/var/run/docker.sock" in rendered
@@ -400,9 +586,7 @@ def test_bootstrap_install_writes_compose_project_and_secret(
     assert len(secret_file.read_text().strip()) >= 32
 
 
-def test_bootstrap_update_serializes_against_active_mutation(
-    controller_path, tmp_path
-):
+def test_bootstrap_update_serializes_against_active_mutation(controller_path, tmp_path):
     bootstrap = load("bootstrap")
     assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
     record = load("record")
@@ -454,9 +638,7 @@ def test_bootstrap_render_resolves_daemon_visible_bind_sources(
     assert "/run/desktop/mnt/host/c/moonmind" in content
 
 
-def test_bootstrap_derives_stable_per_deployment_identity(
-    controller_path, tmp_path
-):
+def test_bootstrap_derives_stable_per_deployment_identity(controller_path, tmp_path):
     import hashlib
 
     bootstrap = load("bootstrap")
@@ -531,9 +713,7 @@ def test_bootstrap_offline_install_records_unverified_and_start_refuses(
         raise OSError("no docker here")
 
     monkeypatch.setattr(bootstrap, "_run_capture", missing_docker)
-    assert (
-        bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
-    )
+    assert bootstrap.main(["install", "--state-dir", str(tmp_path)], env={}) == 0
     record = bootstrap.load_controller_image(tmp_path)
     assert record is not None and record["verified"] is False
     with pytest.raises(bootstrap.ImageResolutionError):
@@ -596,15 +776,23 @@ def test_bootstrap_start_creates_a_missing_api_network_before_up(
     monkeypatch.setattr(
         bootstrap, "require_verified_image", lambda state_dir, requested: "img@sha256:x"
     )
-    assert bootstrap.main(
-        ["install", "--state-dir", str(state), "--repo", str(repo)], env={}
-    ) == 0
+    assert (
+        bootstrap.main(
+            ["install", "--state-dir", str(state), "--repo", str(repo)], env={}
+        )
+        == 0
+    )
     calls.clear()
-    assert bootstrap.main(
-        ["start", "--state-dir", str(state), "--repo", str(repo)], env={}
-    ) == 0
+    assert (
+        bootstrap.main(
+            ["start", "--state-dir", str(state), "--repo", str(repo)], env={}
+        )
+        == 0
+    )
     create = [
-        args for kind, args in calls if kind == "run" and args[:3] == ("docker", "network", "create")
+        args
+        for kind, args in calls
+        if kind == "run" and args[:3] == ("docker", "network", "create")
     ]
     assert create == [
         (
@@ -752,7 +940,9 @@ def _compose_mounts(service):
                 raw.get("read_only") is True,
             )
             continue
-        spec = re.sub(r"\$\{[A-Z0-9_]+(?::-([^}]*))?\}", lambda m: m.group(1) or "", raw)
+        spec = re.sub(
+            r"\$\{[A-Z0-9_]+(?::-([^}]*))?\}", lambda m: m.group(1) or "", raw
+        )
         source, target, *mode = spec.split(":")
         kind = "bind" if source.startswith((".", "/")) else "volume"
         yield kind, source, target, "ro" in (mode[0].split(",") if mode else [])
@@ -785,7 +975,8 @@ def test_no_service_outside_the_controller_link_can_see_controller_state(
     for name, service in compose["services"].items():
         mounts = list(_compose_mounts(service))
         shadows = {
-            target for kind, _, target, read_only in mounts
+            target
+            for kind, _, target, read_only in mounts
             if kind == "tmpfs" and read_only
         }
         for kind, source, target, read_only in mounts:
@@ -828,7 +1019,9 @@ def test_install_from_the_application_image_runs_its_shipped_controller(
     )
     rendered = (tmp_path / "controller-compose.yaml").read_text()
     assert f"    image: {image}\n" in rendered
-    assert '    entrypoint: ["python", "/app/deploy/controller/server.py"]\n' in rendered
+    assert (
+        '    entrypoint: ["python", "/app/deploy/controller/server.py"]\n' in rendered
+    )
     # The same Docker-socket authority as the root standalone image.
     assert '    user: "0:0"\n' in rendered
     # Already digest-pinned: verified without a registry round trip.
