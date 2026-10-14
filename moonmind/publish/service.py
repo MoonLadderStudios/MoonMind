@@ -448,9 +448,69 @@ class PublishService:
                     check=False,
                 )
                 if getattr(ancestry, "returncode", 1) != 0:
-                    raise RuntimeError(
-                        "publication branch is not a fast-forward of the remote head"
-                    )
+                    reconciled = False
+                    if (
+                        commit_created
+                        and publication_branch_name is None
+                        and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha)
+                    ):
+                        # A restored pre-publication save can recreate the same
+                        # generated candidate with a different commit timestamp.
+                        # Reuse the observed original, never replace its history.
+                        await run_command(
+                            [
+                                self._git_binary,
+                                "fetch",
+                                "--no-tags",
+                                "origin",
+                                f"refs/heads/{branch_name}",
+                            ],
+                            cwd=repo_dir,
+                            env=push_env,
+                            redaction_values=(token,) if token else (),
+                        )
+                        fetched = await run_command(
+                            [self._git_binary, "rev-parse", "FETCH_HEAD"],
+                            cwd=repo_dir,
+                        )
+                        if str(fetched.stdout or "").strip() == remote_sha:
+                            candidate = await run_command(
+                                [
+                                    self._git_binary,
+                                    "show",
+                                    "--no-patch",
+                                    "--format=%T%n%P%n%B",
+                                    "HEAD",
+                                ],
+                                cwd=repo_dir,
+                            )
+                            original = await run_command(
+                                [
+                                    self._git_binary,
+                                    "show",
+                                    "--no-patch",
+                                    "--format=%T%n%P%n%B",
+                                    remote_sha,
+                                ],
+                                cwd=repo_dir,
+                            )
+                            candidate_identity = str(candidate.stdout or "").strip()
+                            original_identity = str(original.stdout or "").strip()
+                            if (
+                                candidate_identity
+                                and candidate_identity == original_identity
+                            ):
+                                # Tree, parents and publication message agree.
+                                # A concurrent same-tree descendant still fails.
+                                await run_command(
+                                    [self._git_binary, "reset", "--soft", remote_sha],
+                                    cwd=repo_dir,
+                                )
+                                reconciled = True
+                    if not reconciled:
+                        raise RuntimeError(
+                            "publication branch is not a fast-forward of the remote head"
+                        )
 
         async def run_dependency_git(
             *args: str, cwd: Path = repo_dir, network: bool = False
