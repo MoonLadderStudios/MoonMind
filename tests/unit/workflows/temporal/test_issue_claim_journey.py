@@ -478,6 +478,47 @@ async def test_failed_finalization_releases_durable_claim_after_remote_confirmat
 
 
 @pytest.mark.asyncio
+async def test_blocked_assessment_records_intent_without_unverified_release(journey):
+    state, service, sessions = journey
+    context = {"execution_owner": "default/blocked-assessment-run"}
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED"
+    inputs = {
+        "repository": "example/repo",
+        "issueNumber": 3970,
+        "attemptId": brief.outputs["attemptId"],
+        "executionEvent": "blocked",
+        "terminalIntent": True,
+        "assessmentArtifactRef": "art_assessment_3970",
+        "remainingRequirements": ["Run packaged GPU proof"],
+        "reason": "Managed render image pull was denied before proof ran.",
+    }
+
+    result = await tools.finalize_github_issue_failed_attempt(
+        inputs, context, github_service_factory=lambda: service
+    )
+    receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+    assert result.status == "FAILED"
+    assert result.outputs["released"] is False
+    assert result.outputs["ownershipEnded"] is False
+    assert receipt.released is False and receipt.ownership_ended is False
+    assert receipt.finalization_json["intent"] == {
+        "executionEvent": "blocked",
+        "assessmentArtifactRef": "art_assessment_3970",
+        "remainingRequirements": ["Run packaged GPU proof"],
+        "reason": "Managed render image pull was denied before proof ran.",
+    }
+    assert state["labels"] == ["status: in-progress"]
+    assert (await tools.finalize_github_issue_failed_attempt(
+        inputs, context, github_service_factory=lambda: service
+    )).status == "FAILED"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("post_authorized", [False, True])
 async def test_reselection_requires_proof_no_announcement_was_authorized(
     journey, post_authorized

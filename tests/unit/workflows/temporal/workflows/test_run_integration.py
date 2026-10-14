@@ -228,6 +228,7 @@ async def _finalize_and_capture_summary(
     parameters: dict[str, Any],
     status: str = "success",
     error: str | None = None,
+    captured_activities: list[tuple[str, Any]] | None = None,
 ) -> dict[str, Any]:
     async def noop_terminate_sessions(*_args: Any, **_kwargs: Any) -> None:
         return None
@@ -237,6 +238,15 @@ async def _finalize_and_capture_summary(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "github_issue.finalize_failed_attempt":
+            if captured_activities is not None:
+                captured_activities.append((activity_type, payload))
+            return {
+                "status": "failed",
+                "released": False,
+                "ownershipEnded": False,
+                "reasonCode": "writers_running",
+            }
         if activity_type == "artifact.create":
             return ({"artifact_id": "artifact://summary"}, {"upload_url": "unused"})
         raise AssertionError(f"unexpected activity: {activity_type}")
@@ -268,6 +278,11 @@ async def _finalize_and_capture_summary(
         noop_terminate_sessions,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime(2026, 10, 14, 1, 20, tzinfo=timezone.utc),
+    )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -287,6 +302,113 @@ async def _finalize_and_capture_summary(
     )
 
     return workflow._finish_summary
+
+
+@pytest.mark.asyncio
+async def test_blocked_assessment_terminal_routes_claim_to_durable_finalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The #2741 blocker boundary must not leave an unrecorded active claim."""
+    subject = MoonMindRunWorkflow()
+    subject._trusted_issue_context = subject._trusted_previous_outputs_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issueRef": "MoonLadderStudios/Tactics#2741",
+            "issue": {"repository": "MoonLadderStudios/Tactics", "number": 2741},
+            "issueClaimLease": {
+                "owner": "default/wf-auto-publish",
+                "attemptId": "att-a5dff863c1b5-9dd5",
+                "repository": "moonladderstudios/tactics",
+                "issueNumber": 2741,
+            },
+        }
+    )
+    subject._assessment_context = {
+        "assessmentVerdict": "NOT_IMPLEMENTED",
+        "assessmentArtifactRef": "art_stale",
+    }
+    subject._failure_diagnostic = {
+        "stepTitle": "github.check_issue_blockers",
+        "message": "Required packaged GPU proof is unavailable: image_pull_auth_failed.",
+    }
+    subject._record_early_issue_blocker_result(
+        {
+            "assessmentVerdict": "BLOCKED",
+            "assessmentArtifactRef": "art_01M4VZXGFPWHV6Y8QZP0T72CFE",
+            "remainingRequirements": [
+                "R-2: Run packaged GPU proof.",
+                "R-3: Publish nine worlds.",
+            ],
+        }
+    )
+    calls: list[tuple[str, Any]] = []
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        subject,
+        parameters={"publishMode": "none", "runtime": {"mode": "auto"}},
+        status="failed",
+        error="Assessment blocked before implementation.",
+        captured_activities=calls,
+    )
+
+    finalizers = [payload for activity, payload in calls if activity == "github_issue.finalize_failed_attempt"]
+    assert len(finalizers) == 1
+    assert finalizers[0]["repository"] == "MoonLadderStudios/Tactics"
+    assert finalizers[0]["issueNumber"] == 2741
+    assert finalizers[0]["attemptId"] == "att-a5dff863c1b5-9dd5"
+    assert finalizers[0]["assessmentArtifactRef"] == "art_01M4VZXGFPWHV6Y8QZP0T72CFE"
+    assert finalizers[0]["remainingRequirements"] == [
+        "R-2: Run packaged GPU proof.",
+        "R-3: Publish nine worlds.",
+    ]
+    assert finalizers[0].get("writerEvidence", {}).get("writersStopped") is not True
+    assert summary["publishContext"]["objectiveOutcome"] == "verification_blocked"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_assessment_records_original_blocker_before_fail_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = MoonMindRunWorkflow()
+    subject._trusted_issue_context = subject._trusted_previous_outputs_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issue": {"repository": "MoonLadderStudios/Tactics", "number": 2741},
+            "issueClaimLease": {
+                "owner": "default/wf-auto-publish",
+                "attemptId": "att-a5dff863c1b5-9dd5",
+                "repository": "moonladderstudios/tactics",
+                "issueNumber": 2741,
+            },
+        }
+    )
+    subject._failure_diagnostic = {
+        "stepTitle": "github.check_issue_blockers",
+        "message": "The assessment could not be read.",
+    }
+    subject._record_early_issue_blocker_result(
+        {
+            "decision": "blocked",
+            "assessmentArtifactRef": "art_unavailable",
+            "summary": "Required assessment art_unavailable was unavailable; rerun assessment.",
+        }
+    )
+    calls: list[tuple[str, Any]] = []
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        subject,
+        parameters={"publishMode": "none", "runtime": {"mode": "auto"}},
+        status="failed",
+        error="Assessment unavailable before implementation.",
+        captured_activities=calls,
+    )
+
+    finalizers = [payload for activity, payload in calls if activity == "github_issue.finalize_failed_attempt"]
+    assert len(finalizers) == 1
+    assert finalizers[0]["executionEvent"] == "blocked"
+    assert finalizers[0]["assessmentArtifactRef"] == "art_unavailable"
+    assert "rerun assessment" in finalizers[0]["reason"]
+    assert summary["publishContext"]["objectiveOutcome"] == "failed"
 
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],

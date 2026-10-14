@@ -1005,6 +1005,23 @@ async def test_preread_successor_abandons_before_effects(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_successor_does_not_retire_unverified_writer(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: recovery-needed"])
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts._apply_failed_attempt_finalization(
+        **_base_kwargs(
+            writer_evidence={},
+            mutation_evidence={},
+            preservation_evidence={},
+        ),
+        service=service,
+    )
+    assert result["reasonCode"] == "successor_observed"
+    assert result["ownershipReleasable"] is False
+    assert result["released"] is False
+
+
+@pytest.mark.asyncio
 async def test_preread_closed_issue_abandons(monkeypatch) -> None:
     service = _FakeService(issue_labels=["status: in-progress"], issue_state="closed")
     monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))

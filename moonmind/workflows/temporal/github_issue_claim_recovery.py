@@ -820,11 +820,50 @@ async def reconcile_local_claims(
                         remaining = min(
                             handoff.retry_remaining, lineage.retry_remaining + 1
                         )
+                    intent = (receipt.finalization_json or {}).get("intent")
+                    if not isinstance(intent, dict):
+                        intent = {}
+                    blocked_intent = str(intent.get("executionEvent") or "").strip() == "blocked"
+                    intent_reason = str(intent.get("reason") or "").strip()
+                    assessment_ref = str(intent.get("assessmentArtifactRef") or "").strip()
+                    if intent_reason and assessment_ref and assessment_ref not in intent_reason:
+                        intent_reason += f" Assessment ref: {assessment_ref}."
+                    retained_requirements = intent.get("remainingRequirements")
+                    if not isinstance(retained_requirements, list):
+                        retained_requirements = None
+                    recovery_reason = intent_reason or (
+                        (
+                            "Automatic recovery: controlling run completed without recording this attempt's outcome and left no unpublished repository work; saved checkpoints: "
+                            if completed
+                            else "Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
+                        )
+                        + (", ".join(checkpoints) or "no agent runtime started")
+                    )
+                    disposition_evidence = recovery_disposition_evidence(
+                        agent_started=runtime_started,
+                        remaining=remaining,
+                        runtime_unavailable=runtime_unavailable,
+                    )
+                    if blocked_intent:
+                        disposition_evidence.update(
+                            blockedPrerequisite=True,
+                            freshRetryAllowed=False,
+                            blockingReason=recovery_reason,
+                        )
+                    next_action = (
+                        "obtain_attention"
+                        if blocked_intent or not (remaining or runtime_unavailable)
+                        else "fresh_retry"
+                    )
                     result.update(
                         await finalize_failed_attempt(
                             repository=receipt.repository,
                             issue_number=receipt.issue_number,
-                            execution_event="completed" if completed else "failed",
+                            execution_event=(
+                                str(intent.get("executionEvent") or "").strip()
+                                or ("completed" if completed else "failed")
+                            ),
+                            primary_outcome=str(intent.get("executionEvent") or "").strip(),
                             from_settled="in_progress",
                             writer_evidence={
                                 "writersStopped": True,
@@ -840,20 +879,10 @@ async def reconcile_local_claims(
                                 "saveMethod": "explicit_no_work",
                                 "trustworthyNoWork": True,
                             },
-                            disposition_evidence=recovery_disposition_evidence(
-                                agent_started=runtime_started,
-                                remaining=remaining,
-                                runtime_unavailable=runtime_unavailable,
-                            ),
-                            reason=(
-                                "Automatic recovery: controlling run completed without recording this attempt's outcome and left no unpublished repository work; saved checkpoints: "
-                                if completed
-                                else "Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
-                            )
-                            + (", ".join(checkpoints) or "no agent runtime started"),
-                            next_action="fresh_retry"
-                            if remaining or runtime_unavailable
-                            else "obtain_attention",
+                            disposition_evidence=disposition_evidence,
+                            remaining_requirements=retained_requirements,
+                            reason=recovery_reason,
+                            next_action=next_action,
                             service=service,
                             claim_store=store,
                             claim_receipt=receipt,

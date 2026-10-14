@@ -98,6 +98,70 @@ async def test_scheduled_recovery_releases_failed_claim_and_next_search_selects_
 
 
 @pytest.mark.asyncio
+async def test_reconciler_carries_blocked_assessment_intent_after_safe_cleanup(
+    journey, monkeypatch
+):
+    state, service, sessions = journey
+    owner = "default/blocked-assessment-run"
+    brief = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    assert brief.status == "COMPLETED"
+    intent = await tools.finalize_github_issue_failed_attempt(
+        {
+            "repository": "example/repo",
+            "issueNumber": 3970,
+            "attemptId": brief.outputs["attemptId"],
+            "executionEvent": "blocked",
+            "terminalIntent": True,
+            "assessmentArtifactRef": "art_assessment_3970",
+            "remainingRequirements": ["Run packaged GPU proof"],
+            "reason": "Managed render image pull denied before proof ran.",
+        },
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    assert intent.outputs["released"] is False
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=WorkflowExecutionStatus.FAILED,
+                close_time=datetime.now(UTC) - timedelta(minutes=6),
+                workflow_type="MoonMind.UserWorkflow",
+                run_id="blocked-run-id",
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([]),
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+    store = IssueClaimStore(sessions)
+    result = await recovery.reconcile_local_claims(
+        state={},
+        store=store,
+        service=service,
+        client_factory=AsyncMock(return_value=client),
+    )
+    assert result["released"] == 1, result
+    receipt = await store.get(owner)
+    handoff = parse_attempt_comment(receipt.comment_body).handoff
+    assert handoff.remaining_requirements == ("Run packaged GPU proof",)
+    assert handoff.retry_remaining > 0
+    assert handoff.next_action == "obtain_attention"
+    assert "status: needs-attention" in state["labels"]
+    assert "Managed render image pull denied before proof ran." in receipt.comment_body
+    assert "art_assessment_3970" in receipt.comment_body
+    next_run = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": "default/blocked-next"},
+        github_service_factory=lambda: service,
+    )
+    assert next_run.completion_disposition == "idle"
+    assert await store.get("default/blocked-next") is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,minutes,reason",
     [
