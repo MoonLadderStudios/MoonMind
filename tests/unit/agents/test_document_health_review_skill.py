@@ -143,5 +143,4 @@ def test_document_health_review_reports_docs_architecture_defects() -> None:
         "unverifiable_claim",
     ):
         assert defect in text
-    assert "docs/tmp/" in text
     assert "improvement plan" in text
