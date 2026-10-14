@@ -23,9 +23,8 @@ from moonmind.omnigent.bridge_proxy import (
 )
 from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 from moonmind.omnigent.native_ui import (
-    SUPPORTED_NATIVE_UI_VERSIONS,
-    evaluate_native_ui_compatibility,
     is_valid_chat_binding_id,
+    native_ui_unavailable_reason,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -137,13 +136,15 @@ def test_upstream_drift_is_rejected() -> None:
     assert exc_info.value.code == "omnigent_audit_upstream_drift"
 
 
-def test_native_ui_version_gate_rejects_drift() -> None:
-    pinned = sorted(SUPPORTED_NATIVE_UI_VERSIONS)[0]
-    assert evaluate_native_ui_compatibility(pinned).ready is True
+def test_native_ui_gate_follows_enable_controls_not_build_identity() -> None:
     assert (
-        evaluate_native_ui_compatibility("unverified-next-build").ready is False
+        native_ui_unavailable_reason(omnigent_enabled=True, serving_enabled=True)
+        is None
     )
-    assert evaluate_native_ui_compatibility("").reason == "native_ui_version_unknown"
+    assert (
+        native_ui_unavailable_reason(omnigent_enabled=True, serving_enabled=False)
+        == "native_ui_serving_disabled"
+    )
     assert is_valid_chat_binding_id("chatb_abc123") is True
     assert is_valid_chat_binding_id("not-a-binding") is False
 

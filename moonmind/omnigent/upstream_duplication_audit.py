@@ -259,7 +259,7 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
         ),
         state_decision_owned=(
             "Binding-scoped browser boundary: opaque chatBindingId, scoped "
-            "API/SSE facade allowlist, bootstrap contract, version gate, "
+            "API/SSE facade allowlist, bootstrap contract, enable controls, "
             "security headers; native UI supplied by upstream"
         ),
         persisted_consumers=(
@@ -267,14 +267,14 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
             "compatibility evidence; Workflow Chat acceptance manifest",
         ),
         upstream_api_at_pinned_commit=(
-            "Native UI verified only against the implementation pin via "
-            "SUPPORTED_NATIVE_UI_VERSIONS; unknown/blank/unsupported versions "
+            "Native UI served through the versioned scoped route map and "
+            "bootstrap contract, not build identity; unsupported operations "
             "fail closed, never proxied directly"
         ),
         surviving_owner="MoonMind binding-scoped facade (upstream owns rendering/interaction semantics)",
         evidence_test=(
             "tests/unit/omnigent/test_upstream_duplication_audit_3954.py::"
-            "test_native_ui_version_gate_rejects_drift"
+            "test_native_ui_gate_follows_enable_controls_not_build_identity"
         ),
         disposition="preserve",
         removal_criteria=(

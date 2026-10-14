@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -24,12 +23,6 @@ OMNIGENT_GENERIC_CODEX_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIE
 OMNIGENT_GENERIC_CLAUDE_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED"
 MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV = "MOONMIND_OMNIGENT_EVIDENCE_POLICY"
 _DEPLOYMENT_EVIDENCE_POLICY_VALUES = {"deployment", "protected", "either"}
-
-# An Omnigent server image is immutable launch authority only when it names a
-# sha256 digest. Mirrors the launch-policy rule in
-# ``moonmind/omnigent/execution_profiles.py`` so the native-UI gate and the
-# execution catalog agree on one definition of immutable image evidence.
-_IMMUTABLE_IMAGE_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,42 +392,6 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
-def resolved_native_ui_version(*, env: Mapping[str, Any] | None = None) -> str:
-    """Return the asserted native Omnigent UI/server version for the deployment.
-
-    MoonLadderStudios/MoonMind#3638, MoonLadderStudios/MoonMind#3685: serving the
-    native UI is gated on a known-compatible version, and a mutable image tag
-    must never be reported as verified.
-
-    The version comes from one authority, in precedence order:
-
-    1. an explicit ``OMNIGENT_NATIVE_UI_VERSION`` pin, which an operator sets
-       after a new upstream build passes conformance; otherwise
-    2. verified immutable image evidence — when the deployment's declared
-       Omnigent server image (``OMNIGENT_IMAGE_REF``) names a sha256 digest, the
-       deployment runs the immutable build MoonMind's launch authority is pinned
-       to, so the single upstream source pin (``PINNED_OMNIGENT_COMMIT``) is the
-       reported version.
-
-    A mutable image reference such as ``ghcr.io/...:latest`` yields no version,
-    so :func:`evaluate_native_ui_compatibility` returns
-    ``native_ui_version_unknown`` and serving fails closed (AC11/AC12).
-    Deriving from the same immutable image reference the execution catalog and
-    launch policies already require means any deployment that can launch
-    Omnigent also serves native Workflow Chat, with no separate override.
-    """
-
-    from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
-
-    source = env if env is not None else os.environ
-    explicit = _clean(source.get("OMNIGENT_NATIVE_UI_VERSION"))
-    if explicit:
-        return explicit
-    if _IMMUTABLE_IMAGE_REF.fullmatch(_clean(source.get("OMNIGENT_IMAGE_REF"))):
-        return PINNED_OMNIGENT_COMMIT
-    return ""
-
-
 def resolved_native_ui_serving_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether MoonMind serves the native Omnigent UI through its origin.
 
@@ -599,7 +556,6 @@ __all__ = [
     "resolved_default_agent_name",
     "resolved_host_runner_token",
     "resolved_native_ui_serving_enabled",
-    "resolved_native_ui_version",
     "resolved_opencode_api_key",
     "resolved_proxy_forward_headers",
     "resolved_server_url",
