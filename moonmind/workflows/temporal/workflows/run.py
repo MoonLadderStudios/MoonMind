@@ -25175,6 +25175,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         result = {
             "assessmentVerdict": str(outputs.get("assessmentVerdict") or "").upper(),
             "assessmentArtifactRef": str(outputs.get("assessmentArtifactRef") or "").strip(),
+            "assessmentArtifactName": str(outputs.get("assessmentArtifactName") or "").strip(),
+            "decision": str(outputs.get("decision") or "").lower(),
+            "summary": str(outputs.get("summary") or "").strip(),
         }
         remaining = outputs.get("remainingRequirements")
         if isinstance(remaining, list):
@@ -25221,11 +25224,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         assessment = self._early_issue_blocker_assessment or self._assessment_context
         verdict = str(assessment.get("assessmentVerdict") or "").upper()
-        if verdict != "BLOCKED":
-            return
-        self._publish_context["objectiveOutcome"] = "verification_blocked"
         assessment_ref = str(assessment.get("assessmentArtifactRef") or "").strip()
-        reason = self._sanitize_operator_summary(str(diagnostic.get("message") or ""))
+        unavailable_assessment = (
+            not verdict
+            and assessment.get("decision") == "blocked"
+            and (assessment_ref or assessment.get("assessmentArtifactName"))
+        )
+        if verdict != "BLOCKED" and not unavailable_assessment:
+            return
+        self._publish_context["objectiveOutcome"] = (
+            "verification_blocked" if verdict == "BLOCKED" else "failed"
+        )
+        reason = self._sanitize_operator_summary(
+            str(assessment.get("summary") or diagnostic.get("message") or "")
+        )
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "github_issue.finalize_failed_attempt"
         )

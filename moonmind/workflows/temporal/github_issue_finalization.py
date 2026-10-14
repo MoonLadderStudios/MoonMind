@@ -446,6 +446,7 @@ def choose_disposition(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
 
     Precedence (first match wins):
     intentional cancellation/hold -> needs_attention (hold, never auto-rerun);
+    recorded blocked prerequisite -> needs_attention until repaired and reassessed;
     runtime unavailable -> available (a deployment fault is not the issue's);
     unsafe recovery / exhausted budget / unresolved decision -> needs_attention;
     verified objective satisfaction -> closed;
@@ -461,6 +462,13 @@ def choose_disposition(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
             "disposition": DISPOSITION_NEEDS_ATTENTION,
             "reasonCode": "cancellation_hold",
             "summary": "Intentional cancellation/hold: explicit hold with no automatic replacement work.",
+            "schedulesReplacement": False,
+        }
+    if _truthy(data.get("blockedPrerequisite", data.get("blocked_prerequisite"))):
+        return {
+            "disposition": DISPOSITION_NEEDS_ATTENTION,
+            "reasonCode": "blocked_prerequisite",
+            "summary": "The recorded blocker must be repaired and reassessed before another attempt.",
             "schedulesReplacement": False,
         }
     if _truthy(data.get("runtimeUnavailable", data.get("runtime_unavailable"))):

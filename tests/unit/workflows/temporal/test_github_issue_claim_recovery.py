@@ -144,8 +144,18 @@ async def test_reconciler_carries_blocked_assessment_intent_after_safe_cleanup(
     receipt = await store.get(owner)
     handoff = parse_attempt_comment(receipt.comment_body).handoff
     assert handoff.remaining_requirements == ("Run packaged GPU proof",)
+    assert handoff.retry_remaining > 0
+    assert handoff.next_action == "obtain_attention"
+    assert "status: needs-attention" in state["labels"]
     assert "Managed render image pull denied before proof ran." in receipt.comment_body
     assert "art_assessment_3970" in receipt.comment_body
+    next_run = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": "default/blocked-next"},
+        github_service_factory=lambda: service,
+    )
+    assert next_run.completion_disposition == "idle"
+    assert await store.get("default/blocked-next") is None
 
 
 @pytest.mark.asyncio
