@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -54,10 +55,14 @@ CONTROLLER_HOST_ALIAS = "moonmind-controller"
 CONTROLLER_SUBMIT_TIMEOUT_SECONDS: float = 20
 CONTROLLER_STATUS_TIMEOUT_SECONDS: float = 10
 CONTROLLER_SUBMIT_ATTEMPTS = 2
+# Pause before asking an unconfirmed Retry again (e.g. a just-recreated controller).
+CONTROLLER_RETRY_PAUSE_SECONDS: float = 2
 CONTROLLER_RECENT_LIMIT = 10
 # The independent repair route: it installs, refreshes, or restores the
 # controller from the host without a healthy API, worker, or Temporal.
 HOST_REPAIR_COMMAND = "./tools/update-moonmind.sh"
+# Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
+CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_CONTROLLER_TEXT_CHARS = 2000
 
@@ -445,10 +450,81 @@ def ensure_controller_journal_transition(
     """
     if controller_supports_journal_transition(endpoint):
         return
+    result = _run_controller_bootstrap(
+        endpoint, stack=stack, desired_image=desired_image
+    )
+    if result.returncode or not controller_supports_journal_transition(endpoint):
+        raise DeploymentOperationError(
+            "deployment_controller_prerequisite_failed",
+            "The deployment controller prerequisite could not finish. Its existing "
+            "operation and deployment state are preserved; retry from the host update command.",
+            status_code=503,
+        )
+
+
+@dataclass(frozen=True)
+class ControllerRefresh:
+    """Whether the controller now runs the requested release, and why not."""
+
+    refreshed: bool
+    detail: str = ""
+
+
+def refresh_controller_to_requested(
+    endpoint: ControllerEndpoint,
+    *,
+    stack: str,
+    desired_image: str,
+) -> ControllerRefresh:
+    """Give the requested release's controller the attempt the installed one failed.
+
+    A capable installed controller can still carry a defect that the
+    requested release fixes. The installed controller always applies first,
+    so a rollback keeps current repair code; only after its operation failed
+    does the bootstrap lifecycle owner refresh the controller to the
+    requested release (never while an operation is open). Only a refreshed
+    controller earns a retry; otherwise the recorded failure stands and
+    ``detail`` says why recovery was not attempted.
+    """
+    try:
+        result = _run_controller_bootstrap(
+            endpoint, stack=stack, desired_image=desired_image, prefer_requested=True
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ControllerRefresh(False, f"controller refresh did not run: {exc}")
+    output = str(result.stdout or "")
+    if result.returncode:
+        diagnostic = f"{output}\n{result.stderr or ''}".strip()
+        return ControllerRefresh(
+            False,
+            f"controller refresh failed (exit {result.returncode}): "
+            f"{diagnostic[-_MAX_CONTROLLER_TEXT_CHARS:] or 'no output'}",
+        )
+    for line in reversed(output.splitlines()):
+        if line.startswith(CONTROLLER_REFRESH_PREFIX):
+            try:
+                receipt = json.loads(line[len(CONTROLLER_REFRESH_PREFIX) :])
+            except ValueError:
+                break
+            if isinstance(receipt, dict) and receipt.get("refreshed") is True:
+                return ControllerRefresh(True)
+            image = receipt.get("image") if isinstance(receipt, dict) else None
+            detail = "the controller already runs the requested release"
+            return ControllerRefresh(False, f"{detail} {image}" if image else detail)
+    return ControllerRefresh(False, "controller refresh printed no receipt")
+
+
+def _run_controller_bootstrap(
+    endpoint: ControllerEndpoint,
+    *,
+    stack: str,
+    desired_image: str,
+    prefer_requested: bool = False,
+) -> subprocess.CompletedProcess[str]:
     bootstrap = (
         Path(__file__).resolve().parents[3] / "deploy" / "controller" / "bootstrap.py"
     )
-    result = subprocess.run(
+    return subprocess.run(
         [
             sys.executable,
             str(bootstrap),
@@ -464,56 +540,75 @@ def ensure_controller_journal_transition(
             desired_image,
             "--controller-url",
             endpoint.base_url,
+            *(("--prefer-requested",) if prefer_requested else ()),
         ],
         capture_output=True,
         text=True,
         check=False,
         timeout=300,
     )
-    if result.returncode or not controller_supports_journal_transition(endpoint):
-        raise DeploymentOperationError(
-            "deployment_controller_prerequisite_failed",
-            "The deployment controller prerequisite could not finish. Its existing "
-            "operation and deployment state are preserved; retry from the host update command.",
-            status_code=503,
-        )
 
 
 def retry_controller_operation(
     endpoint: ControllerEndpoint, operation_id: str
 ) -> dict[str, Any]:
-    """Request the controller's fresh bounded attempt for one operation."""
+    """Request the controller's fresh bounded attempt for one operation.
+
+    A transport error may be a lost answer or a request that never arrived,
+    for example at a just-recreated controller. Observation decides: a new
+    attempt group means the retry started, and an unchanged record is asked
+    again within the bounded budget. A repeated request that does arrive is
+    refused by the controller, never applied twice.
+    """
     _require_controller_secret(endpoint)
     _check_operation_id(operation_id)
-    try:
-        before = observe_controller_operation(endpoint, operation_id)
-    except ControllerTransportError as exc:
-        raise unavailable_controller_error(str(exc)) from None
-    if before is None:
-        raise DeploymentOperationError(
-            "deployment_operation_not_found",
-            "The deployment controller has no such operation.",
-            status_code=404,
-        )
-    group = before.get("attemptGroup", 1)
-    try:
-        status, parsed = _controller_request(
-            endpoint,
-            method="POST",
-            path=f"/v1/operations/{operation_id}/retry",
-            timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
-        )
-    except ControllerTransportError as exc:
+    group = None
+    last_error = "no answer"
+    for attempt in range(CONTROLLER_SUBMIT_ATTEMPTS):
+        if attempt:
+            time.sleep(CONTROLLER_RETRY_PAUSE_SECONDS)
         try:
             observed = observe_controller_operation(endpoint, operation_id)
-        except ControllerTransportError:
-            observed = None
-        if observed is not None and observed.get("attemptGroup", 1) != group:
+        except ControllerTransportError as exc:
+            last_error = str(exc)
+            continue
+        if observed is None:
+            raise DeploymentOperationError(
+                "deployment_operation_not_found",
+                "The deployment controller has no such operation.",
+                status_code=404,
+            )
+        if group is None:
+            group = observed.get("attemptGroup", 1)
+        elif observed.get("attemptGroup", 1) != group:
             return observed
-        raise unavailable_controller_error(str(exc)) from None
-    if status == 202 and parsed.get("operationId"):
-        return parsed
-    raise _controller_refusal(status, parsed, operation_id=operation_id)
+        try:
+            status, parsed = _controller_request(
+                endpoint,
+                method="POST",
+                path=f"/v1/operations/{operation_id}/retry",
+                timeout=CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+            )
+        except ControllerTransportError as exc:
+            last_error = str(exc)
+            continue
+        if status == 202 and parsed.get("operationId"):
+            return parsed
+        if not attempt:
+            raise _controller_refusal(status, parsed, operation_id=operation_id)
+        # A refusal of a repeated request can mean the first one arrived.
+        last_error = f"HTTP {status}: {_controller_error_text(parsed)}"
+    try:
+        observed = observe_controller_operation(endpoint, operation_id)
+    except ControllerTransportError:
+        observed = None
+    if (
+        observed is not None
+        and group is not None
+        and observed.get("attemptGroup", 1) != group
+    ):
+        return observed
+    raise unavailable_controller_error(last_error)
 
 
 def list_controller_operations(
