@@ -55,6 +55,24 @@ initial inspection verdicts, not objective acceptance or landing evidence. The
 verifier must check/reuse objective evidence before publication or completion.
 Do not overwrite this artifact with a later verifier verdict.
 
+## Verification map and feasibility
+
+Before expensive work, emit the existing `verificationMap` with stable IDs,
+original source reference/digest/locator, mandatory/optional/separate-release
+classification, required behavior, executable checks, allowed proof methods,
+and existing owner. Preserve source-declared target/profile/topology/sampling
+constraints; free-form suggestions stay advisory. Follow the shared policy's
+exact field contract. Match mandatory IDs to the independently captured source
+scope, not a prior report or inherited epic checklist.
+
+Use cheap actual owner probes for capability/prerequisite readiness. Preserve
+independent ready rows while routing busy or unavailable rows to their existing
+owners. Run `acceptance.py admission` before a repeated setup/implementation
+attempt. An unchanged unavailable capability is not new implementation work;
+missing local tools, a different report ID, or a refreshed timestamp do not
+justify repeating the same setup. Never turn missing optional browser proof or
+a separately owned physical event into mandatory child acceptance.
+
 ## Source-matrix assessment
 
 After `moonspec-specify`, resolve the active feature directory and identifier from

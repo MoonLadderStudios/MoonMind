@@ -131,6 +131,7 @@ from moonmind.workflows.executions.prepared_context import (
     select_step_prepared_context,
 )
 from moonmind.workflows.temporal.agent_result_payloads import (
+    build_acceptance_projection,
     compact_agent_run_result_payload_for_workflow_history,
     compact_moonspec_verify_metadata,
     compact_published_agent_run_result_payload,
@@ -1093,6 +1094,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
     "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
     # General-purpose repo operations (provider-agnostic)
+    "github_issue.collect_evidence": ("integrations", "github_issue_collect_evidence"),
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.merge_pr": ("integrations", "repo_merge_pr"),
     "publication_recovery.observe": ("integrations", "publication_recovery_observe"),
@@ -4585,6 +4587,57 @@ class TemporalIntegrationActivities:
             else JulesAgentAdapter(client_factory=self._client_factory)
         )
 
+    async def github_issue_collect_evidence(self, payload, /, **kwargs):
+        from moonmind.workflows.temporal.activities.github_issue_evidence import (
+            collect_github_issue_evidence,
+        )
+        from moonmind.workflows.adapters.github_service import GitHubService
+        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+        if not isinstance(payload, Mapping):
+            raise ValueError("Issue evidence request must be an object")
+        request = dict(payload)
+        request["admittedWorkflowId"] = _admitted_activity_workflow_id()
+        request["workflowId"] = _admitted_activity_workflow_id()
+        if temporal_activity.in_activity():
+            request["runId"] = temporal_activity.info().workflow_run_id
+            request["namespace"] = temporal_activity.info().workflow_namespace
+        service = GitHubService()
+        if request.get("action") != "mark_ready":
+            return await collect_github_issue_evidence(
+                request, artifact_service=self._artifact_service, service=service,
+            )
+        # This mutation is reachable only after the existing publication owner
+        # persisted a source-bound acceptance decision for its own draft.
+        if request.get("automationOwnedDraft") is not True or request.get("userHold"):
+            return {"status": "held", "headSha": request.get("headSha")}
+        _gate_artifact, gate_bytes = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(str(request.get("gateResultRef") or "")).removeprefix("artifact://"),
+            principal="service:issue_evidence",
+            admitted_principal=f"workflow:{request['workflowId']}",
+        )
+        gate = json.loads(gate_bytes.decode("utf-8"))
+        binding = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
+        expected_digest = request.get("reportDigest")
+        actual_digest = "sha256:" + hashlib.sha256(gate_bytes).hexdigest()
+        strict_report = isinstance(gate, Mapping) and gate.get("acceptanceScopeContract") == "source-bound/v1"
+        if (not binding or gate.get("verdict") != "FULLY_IMPLEMENTED"
+                or (strict_report and not expected_digest)
+                or (expected_digest is not None and expected_digest != actual_digest)
+                or gate.get("recommendedNextAction") != "advance"
+                or gate.get("invalid") or gate.get("degraded")
+                or step_gate_contract_violations(gate, require_acceptance=True)
+                or not binding.is_current(datetime.now(UTC))
+                or binding.subject.repository != request.get("repository")
+                or binding.subject.revision != request.get("headSha")
+                or not request.get("evidenceSetDigest")
+                or binding.evidence_set_digest != request.get("evidenceSetDigest")):
+            return {"status": "blocked", "headSha": request.get("headSha"),
+                    "gaps": ["Current exact-head source acceptance is required before ready-for-review"]}
+        return await service.mark_automation_draft_ready(
+            repository=request["repository"], pr_number=request["prNumber"],
+            head_sha=request["headSha"], admitted_workflow_id=request["admittedWorkflowId"],
+        )
+
     async def publication_recovery_observe(self, payload, /, **kwargs):
         """Read branch and PR identity from GitHub before any mutation."""
         from moonmind.workflows.adapters.github_service import GitHubService
@@ -5368,6 +5421,28 @@ class TemporalIntegrationActivities:
 
             gate = candidate_context["acceptanceGate"]
             gate = gate if isinstance(gate, Mapping) else {}
+            refs = gate.get("validatedRefs")
+            projection = refs.get("acceptanceProjection") if isinstance(refs, Mapping) else None
+            if isinstance(projection, Mapping):
+                from moonmind.workflows.temporal.story_output_tools import (
+                    _read_json_artifact_by_ref,
+                )
+                # The current Activity owner authorizes the artifact read;
+                # an inline candidateContext cannot grant itself source access.
+                gate = await _read_json_artifact_by_ref(
+                    str(projection.get("reportRef") or ""),
+                    {
+                        "temporal_artifact_service": self._artifact_service,
+                        "admittedWorkflowId": _admitted_activity_workflow_id(),
+                    },
+                    acceptance_projection=gate,
+                )
+                if gate is None:
+                    return {
+                        "status": "blocked", "required": True,
+                        "reason": "Read and validate the immutable acceptance report before Jira completion",
+                        "issueResolution": {"status": "invalid", "candidates": []},
+                    }
             binding = acceptance_evidence(gate)
             # The gate reads with the parent run's admitted repository authority.
             admitted = str(payload.get("parentWorkflowId") or "").strip()
@@ -9169,6 +9244,19 @@ class TemporalAgentRuntimeActivities:
                 )
                 return {}
             gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
+            # Only this publisher may mint a descriptor after full validation
+            # and an immutable write; a verifier cannot submit its own shortcut.
+            gate_refs = gate_payload.get("validatedRefs")
+            if isinstance(gate_refs, Mapping):
+                gate_payload["validatedRefs"] = {
+                    key: value for key, value in gate_refs.items()
+                    if key != "acceptanceProjection"
+                }
+            source_bound = _metadata_text("acceptanceScopeContract") == "source-bound/v1"
+            if source_bound:
+                gate_payload["acceptanceScopeContract"] = "source-bound/v1"
+            else:
+                gate_payload.pop("acceptanceScopeContract", None)
             declared_verdict = _first_non_empty_text(
                 gate_payload,
                 "verdict",
@@ -9219,27 +9307,78 @@ class TemporalAgentRuntimeActivities:
                 require_acceptance=_metadata_text("acceptanceContract") == "acceptance/v1",
             )
             assessment_ref = _metadata_text("assessmentArtifactRef")
-            if assessment_ref and _metadata_text("acceptanceContract") == "acceptance/v1":
+            brief_ref = _metadata_text("briefArtifactRef")
+            if _metadata_text("acceptanceScopeContract") == "source-bound/v1":
+                raw_refs = gate_payload.get("validatedRefs")
+                raw_binding = raw_refs.get("acceptance") if isinstance(raw_refs, Mapping) else None
+                if not isinstance(raw_binding, Mapping) or not raw_binding.get("verificationMap"):
+                    contract_violations.append("Source-bound verification requires its current source map; legacy downgrade is unavailable")
+                if not brief_ref:
+                    contract_violations.append("Source-bound verification requires the original issue brief artifact")
+            if _metadata_text("acceptanceContract") == "acceptance/v1" and (assessment_ref or brief_ref):
                 from moonmind.workflows.skills.acceptance_contract import (
-                    assessment_scope_violations,
+                    assessment_scope_violations, source_scope_from_artifact,
                 )
-
-                try:
-                    assessment = await _read_json_artifact(
-                        self._artifact_service,
-                        artifact_ref=assessment_ref,
-                        principal="system:agent_runtime",
-                    )
-                except (OSError, ValueError, TypeError):
-                    assessment = None
-                if isinstance(assessment, Mapping):
-                    contract_violations.extend(
-                        assessment_scope_violations(gate_payload, assessment)
-                    )
-                else:
-                    contract_violations.append(
-                        "Original assessment evidence is unreadable; retry its artifact read"
-                    )
+                assessment = {}
+                assessment_unreadable = False
+                if assessment_ref:
+                    try:
+                        assessment = await _read_json_artifact(
+                            self._artifact_service, artifact_ref=assessment_ref.removeprefix("artifact://"),
+                            principal="system:agent_runtime",
+                        )
+                    except (OSError, ValueError, TypeError, ArtifactStoreError, TemporalArtifactError):
+                        assessment_unreadable = True
+                    if not isinstance(assessment, Mapping):
+                        assessment, assessment_unreadable = {}, True
+                source_scope = None
+                if brief_ref and _metadata_text("acceptanceScopeContract") == "source-bound/v1":
+                    try:
+                        _brief_artifact, brief_bytes = await self._artifact_service.read(
+                            artifact_id=_artifact_id_from_ref(brief_ref).removeprefix("artifact://"),
+                            principal="system:agent_runtime", allow_restricted_raw=True,
+                        )
+                        brief = json.loads(brief_bytes.decode("utf-8"))
+                        if isinstance(brief, Mapping):
+                            if isinstance(brief.get("scope"), Mapping):
+                                source_scope = brief["scope"]
+                            reconciled_scope, source_violations = source_scope_from_artifact(
+                                gate_payload, source_bytes=brief_bytes,
+                                source_ref=str(brief.get("issue_ref") or "").strip(),
+                                source_artifact_ref=brief_ref, assessment=assessment,
+                                require_source_bound=True,
+                            )
+                            contract_violations.extend(source_violations)
+                            if reconciled_scope is not None:
+                                source_scope = reconciled_scope
+                        else:
+                            contract_violations.append("Original source brief is malformed")
+                    except (OSError, ValueError, TypeError, ArtifactStoreError, TemporalArtifactError):
+                        contract_violations.append("Original source evidence is unreadable; retry its artifact read")
+                if assessment_unreadable and source_scope is None:
+                    contract_violations.append("Original assessment evidence is unreadable; retry its artifact read")
+                contract_violations.extend(assessment_scope_violations(
+                    gate_payload, assessment, source_scope=source_scope,
+                ))
+            if _metadata_text("acceptanceScopeContract") == "source-bound/v1" and metadata.get("evidenceSetDigest"):
+                refs = gate_payload.get("validatedRefs")
+                declared = refs.get("acceptance") if isinstance(refs, Mapping) else None
+                declared = declared if isinstance(declared, Mapping) else gate_payload
+                if declared.get("subject") != metadata.get("acceptanceSubject"):
+                    contract_violations.append("Verification does not bind the current published candidate")
+                if declared.get("evidenceSetDigest") != metadata.get("evidenceSetDigest"):
+                    contract_violations.append("Verification did not inspect the current downloaded evidence set")
+                inventory, rows = metadata.get("evidenceSet"), declared.get("evidence", [])
+                if not isinstance(rows, list):
+                    contract_violations.append("Verification evidence rows are malformed")
+                elif isinstance(inventory, Mapping):
+                    for row in rows:
+                        evidence_refs = row.get("evidenceRefs") if isinstance(row, Mapping) else None
+                        if not isinstance(evidence_refs, list) or any(
+                            not isinstance(ref, str) or ref not in inventory for ref in evidence_refs
+                        ):
+                            contract_violations.append("Verification references unresolved current evidence")
+                            break
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
                 # enters MoonMind so the workflow gate can request a bounded
@@ -9291,11 +9430,19 @@ class TemporalAgentRuntimeActivities:
                     remediation_verify_artifact_ref
                 )
                 authoritative_ref = remediation_verify_artifact_ref
+            acceptance_projection = None
+            if source_bound and not contract_violations:
+                acceptance_projection = build_acceptance_projection(
+                    gate_payload,
+                    report_ref=verify_ref.artifact_id,
+                    report_digest="sha256:" + verify_ref.sha256,
+                )
             compact_gate_payload = compact_moonspec_verify_metadata({
                 **gate_payload,
                 "gateResultRef": authoritative_ref,
+                "sourceMoonSpecVerifyArtifactRef": verify_ref.artifact_id,
                 "contractViolations": list(contract_violations),
-            })
+            }, acceptance_projection=acceptance_projection)
             result_refs = {
                 "moonSpecVerify": compact_gate_payload,
                 "gateResultRef": authoritative_ref,
