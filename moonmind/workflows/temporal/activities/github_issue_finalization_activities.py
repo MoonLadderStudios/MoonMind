@@ -283,6 +283,7 @@ async def _apply_failed_attempt_finalization(
 
         service = GitHubService()
     saved_plan = None
+    receipts = {}
     if claim_receipt is not None:
         if claim_store is None or (claim_receipt.repository, claim_receipt.issue_number) != (repository.casefold(), issue_number):
             raise ValueError("substitution_denied: finalization must use the controlling claim")
@@ -295,6 +296,12 @@ async def _apply_failed_attempt_finalization(
         )
         if "plan" in receipts:
             saved_plan = finalization.FinalizationPlan(**receipts["plan"])
+            # Retained plans without this evidence cannot grant new merge
+            # authority from a later caller's default or changed arguments.
+            completion = saved_plan.completion or {
+                "route": "needs_decision",
+                "mergeAuthorized": False,
+            }
     # Step 0: read current issue state before planning any label mutation.
     # Caller-supplied labels win when present; otherwise the pre-mutation
     # read supplies them. A delayed finalizer that observes a successor
@@ -382,9 +389,39 @@ async def _apply_failed_attempt_finalization(
         if remaining_requirements is None:
             remaining_requirements = retained.remaining_requirements
         reason = reason or retained.last_report
-        next_action = next_action or retained.next_action
+        _, release_action, _ = terminal_attempt_outcome(
+            disposition=finalization.choose_disposition(disposition_evidence)[
+                "disposition"
+            ],
+            disposition_evidence=disposition_evidence,
+            attempt_ended_at=retained.lease_expires_at,
+        )
+        next_action = release_action or next_action or retained.next_action
+        supplied_history = (
+            [retry_history]
+            if isinstance(retry_history, str)
+            else list(retry_history)
+            if isinstance(retry_history, (list, tuple))
+            else []
+        )
+        retry_history = list(
+            dict.fromkeys(
+                _string(item)
+                for item in (*retained.retry_history, *supplied_history)
+                if _string(item)
+            )
+        )
         preservation_evidence = dict(preservation_evidence or {})
         revision = _string(preservation_evidence.get("revision"))
+        save_method = (
+            _string(
+                preservation_evidence.get("saveMethod")
+                or preservation_evidence.get("save_method")
+            )
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
         compatible_candidate = all(
             not supplied or supplied == recorded
             for supplied, recorded in (
@@ -413,13 +450,17 @@ async def _apply_failed_attempt_finalization(
         ) or (retained.saved_branch if compatible_candidate else "")
         # A retained SHA proves only its recorded reference. A changed PR or
         # branch needs its own revision, even when the caller says "verified".
-        # A generic revision supplies a SHA only for references that exist.
+        # A generic revision belongs only to the declared save method's
+        # reference, never to a different retained PR or saved branch.
         for camel, snake, value in (
             ("prUrl", "pr_url", retained.pr_url if compatible_candidate else ""),
             (
                 "prHeadSha",
                 "pr_head_sha",
-                (revision or (retained.pr_head if compatible_candidate else ""))
+                (
+                    (revision if save_method == "pr_head_verified" else "")
+                    or (retained.pr_head if compatible_candidate else "")
+                )
                 if pr_reference
                 else "",
             ),
@@ -432,7 +473,10 @@ async def _apply_failed_attempt_finalization(
             (
                 "savedSha",
                 "saved_sha",
-                (revision or (retained.saved_sha if compatible_candidate else ""))
+                (
+                    (revision if save_method == "saved_branch_verified" else "")
+                    or (retained.saved_sha if compatible_candidate else "")
+                )
                 if saved_reference
                 else "",
             ),
@@ -461,6 +505,14 @@ async def _apply_failed_attempt_finalization(
         cancellation_hold=cancellation_hold,
         review_owner_ended=review_owner_ended,
     )
+    if saved_plan is None:
+        plan = replace(
+            plan,
+            completion={
+                "route": completion["route"],
+                "mergeAuthorized": completion["mergeAuthorized"],
+            },
+        )
     base: dict[str, Any] = {
         "released": False,
         "reasonCode": plan.reason_code,
@@ -529,6 +581,7 @@ async def _apply_failed_attempt_finalization(
                 payload["remainingRequirements"] = list(remaining_requirements)
             if _string(reason):
                 payload["lastReport"] = _string(reason)
+            payload["retryHistory"] = retry_history
             payload.update(
                 activity="releasing",
                 writersStopped=True,
@@ -576,10 +629,11 @@ async def _apply_failed_attempt_finalization(
             base.update(
                 released=True,
                 reasonCode="released",
-                summary=plan.summary,
+                summary=f"Failed-attempt finalization released to {plan.disposition}; label outcome observed and terminal comment published.",
                 workspaceRetained=bool(plan.workspace_retained),
                 pendingSync=None,
                 commentId=claim_receipt.comment_id,
+                mutationOutcome=(receipts.get("observation") or {}).get("mutationOutcome"),
             )
             await claim_store.record_finalization(claim_receipt.owner, "result", base)
             return base
@@ -765,6 +819,15 @@ async def _apply_failed_attempt_finalization(
         base["reasonCode"] = "mutation_incomplete"
         base["summary"] = f"Destination not observed on read-back: {outcome.detail} Pending state remains repairable."
         return base
+    if claim_receipt is not None:
+        observation = receipts.get("observation")
+        if observation is None:
+            observation = {"mutationOutcome": base["mutationOutcome"]}
+            await claim_store.record_finalization(
+                claim_receipt.owner, "observation", observation
+            )
+        # Preserve the first confirmed outcome across re-observation/retries.
+        base["mutationOutcome"] = observation["mutationOutcome"]
     # Step 4: finalize the terminal comment as released. Every unsuccessful
     # update stays pending and unreleased: a denied or failed update must
     # never authorize cleanup while the attempt comment may still report

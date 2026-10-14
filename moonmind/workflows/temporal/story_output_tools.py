@@ -9710,6 +9710,9 @@ async def _finalize_github_issue_failed_attempt(
     remaining_requirements = inputs.get("remainingRequirements")
     if remaining_requirements is None:
         remaining_requirements = inputs.get("remaining_requirements")
+    retry_history = inputs.get("retryHistory")
+    if retry_history is None:
+        retry_history = inputs.get("retry_history", [])
     result = await _finalize_failed_attempt(
         repository=repository,
         issue_number=issue_number,
@@ -9728,7 +9731,7 @@ async def _finalize_github_issue_failed_attempt(
             if remaining_requirements is not None
             else None
         ),
-        retry_history=_first_string(inputs.get("retryHistory"), inputs.get("retry_history")),
+        retry_history=retry_history,
         next_action=_first_string(inputs.get("nextAction"), inputs.get("next_action")),
         reason=_first_string(inputs.get("reason")),
         completion_mode=_first_string(inputs.get("completionMode"), inputs.get("completion_mode")) or "pr_only_handoff",
