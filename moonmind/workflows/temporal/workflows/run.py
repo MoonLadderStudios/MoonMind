@@ -1027,6 +1027,12 @@ RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = "run-remediation-loop-continue-as-n
 RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
     "run-remediation-loop-artifact-ref-normalization-v1"
 )
+# A failed assessment stops the plan before its success-ordered issue-status
+# node. Record the controlling terminal with the existing durable finalizer;
+# retained histories keep their original terminal command sequence.
+RUN_EARLY_ISSUE_BLOCKER_FINALIZATION_PATCH = (
+    "run-early-issue-blocker-finalization-v1"
+)
 # Verifier bundles author the structured remaining-work semantics, while the
 # runtime publishes their JSON as durable evidence. Preserve that artifact as
 # remainingWorkRef when an older verifier payload omits a separate ref, and do
@@ -1875,6 +1881,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # keeps the reservation instead of taking the no-work backoff.
         self._issue_claim_work_started_attempt: str | None = None
         self._assessment_context: dict[str, Any] = {}
+        self._early_issue_blocker_remaining_requirements: list[str] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -14213,6 +14220,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
                         diagnostics_ref = None
                         outputs = self._get_from_result(execution_result, "outputs")
+                        if (
+                            tool_name == "github.check_issue_blockers"
+                            and isinstance(outputs, Mapping)
+                            and isinstance(outputs.get("remainingRequirements"), list)
+                        ):
+                            self._early_issue_blocker_remaining_requirements = [
+                                item
+                                for item in outputs["remainingRequirements"]
+                                if isinstance(item, str) and item.strip()
+                            ]
                         if isinstance(outputs, Mapping) and workflow.patched(
                             RUN_FAILED_RESULT_BLOCKER_PATCH
                         ):
@@ -25155,6 +25172,85 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._incident_reconstruction_summary = summary
         return summary, manifest_ref
 
+    async def _finalize_early_issue_blocker(self, *, status: str) -> None:
+        if status != "failed" or not workflow.patched(
+            RUN_EARLY_ISSUE_BLOCKER_FINALIZATION_PATCH
+        ):
+            return
+        diagnostic = self._failure_diagnostic or {}
+        if diagnostic.get("stepTitle") != "github.check_issue_blockers":
+            return
+        context = self._trusted_issue_context or {}
+        lease = context.get("issueClaimLease")
+        if (
+            context.get("trustedSource") != "moonmind.github.get_issue"
+            or not isinstance(lease, Mapping)
+        ):
+            return
+        info = workflow.info()
+        if lease.get("owner") != f"{info.namespace}/{info.workflow_id}":
+            return
+        repository = str(lease.get("repository") or "").strip()
+        attempt_id = str(lease.get("attemptId") or "").strip()
+        try:
+            issue_number = int(lease.get("issueNumber") or 0)
+        except (TypeError, ValueError):
+            return
+        if not repository or issue_number <= 0 or not attempt_id:
+            return
+        if (
+            str(context.get("repository") or "").casefold() != repository.casefold()
+            or context.get("issueNumber") != issue_number
+        ):
+            return
+        verdict = str(self._assessment_context.get("assessmentVerdict") or "").upper()
+        if verdict != "BLOCKED":
+            return
+        self._publish_context["objectiveOutcome"] = "verification_blocked"
+        assessment_ref = str(
+            self._assessment_context.get("assessmentArtifactRef") or ""
+        ).strip()
+        reason = self._sanitize_operator_summary(str(diagnostic.get("message") or ""))
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "github_issue.finalize_failed_attempt"
+        )
+        payload = {
+            "repository": str(context["repository"]),
+            "issueNumber": issue_number,
+            "attemptId": attempt_id,
+            "executionEvent": "blocked",
+            "terminalIntent": True,
+            "assessmentArtifactRef": assessment_ref,
+            "reason": reason or "Issue assessment blocked before implementation.",
+        }
+        if self._early_issue_blocker_remaining_requirements is not None:
+            payload["remainingRequirements"] = list(
+                self._early_issue_blocker_remaining_requirements
+            )
+        try:
+            result = await workflow.execute_activity(
+                "github_issue.finalize_failed_attempt",
+                payload,
+                **self._execute_kwargs_for_route(route),
+            )
+            self._publish_context["issueFinalization"] = {
+                "released": result.get("released") is True,
+                "ownershipEnded": result.get("ownershipEnded") is True,
+                "reasonCode": result.get("reasonCode"),
+                "assessmentArtifactRef": assessment_ref or None,
+            }
+        except Exception as exc:
+            # Reporting cannot mask the original blocker or claim safe release.
+            self._publish_context["issueFinalization"] = {
+                "released": False,
+                "ownershipEnded": False,
+                "reasonCode": "finalization_pending",
+                "assessmentArtifactRef": assessment_ref or None,
+            }
+            self._get_logger().warning(
+                "Early issue blocker finalization remains pending: %s", exc
+            )
+
     async def _run_finalizing_stage(
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
@@ -25173,6 +25269,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._get_logger().warning(
                 "Failed to terminate workflow-scoped agent sessions: %s", exc
             )
+        await self._finalize_early_issue_blocker(status=status)
         try:
             self._get_logger().info("Generating finish summary.")
 

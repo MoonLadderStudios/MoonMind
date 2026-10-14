@@ -6027,6 +6027,28 @@ def _github_assessment_failure(
             and normalize_assessment_payload(payload)[0] == "BLOCKED"
         ):
             reason = redact_comment_body(_string(payload.get("summary")).strip())[:2000]
+            requirements = payload.get("requirements")
+            if isinstance(requirements, list):
+                remaining: list[str] = []
+                for row in requirements:
+                    if not isinstance(row, Mapping) or str(
+                        row.get("status") or ""
+                    ).lower() not in {
+                        "partially_met", "not_met", "unverifiable",
+                        "partial", "missing", "conflict", "unverified",
+                    }:
+                        continue
+                    description = _string(row.get("description")).strip()
+                    if not description:
+                        continue
+                    requirement_id = _string(row.get("id")).strip()
+                    remaining.append(
+                        redact_comment_body(
+                            f"{requirement_id}: {description}"
+                            if requirement_id else description
+                        )
+                    )
+                outputs["remainingRequirements"] = remaining
         outputs["summary"] = (
             f"GitHub issue {issue_ref} is blocked by its assessment. "
             + (reason or "The assessment did not provide a readable blocker summary.")
@@ -9713,6 +9735,31 @@ async def _finalize_github_issue_failed_attempt(
     retry_history = inputs.get("retryHistory")
     if retry_history is None:
         retry_history = inputs.get("retry_history", [])
+    if _truthy(inputs.get("terminalIntent")):
+        if receipt is None:
+            raise ValueError("claim_missing: terminal intent requires its controlling claim")
+        if (
+            (receipt.repository, receipt.issue_number)
+            != (repository.casefold(), issue_number)
+            or _first_string(inputs.get("attemptId"), inputs.get("attempt_id"))
+            != receipt.attempt_id
+        ):
+            raise ValueError("substitution_denied: terminal intent must match its claim")
+        requirements = _list(remaining_requirements) if remaining_requirements is not None else None
+        if requirements is not None and not all(
+            isinstance(item, str) and item.strip() for item in requirements
+        ):
+            raise ValueError("invalid_terminal_intent: remaining requirements must be text")
+        intent = {
+            "executionEvent": execution_event,
+            "assessmentArtifactRef": _first_string(
+                inputs.get("assessmentArtifactRef"), inputs.get("assessment_artifact_ref")
+            )[:400],
+            "reason": redact_comment_body(_first_string(inputs.get("reason")))[:2000],
+        }
+        if requirements is not None:
+            intent["remainingRequirements"] = requirements
+        await store.record_finalization(receipt.owner, "intent", intent)
     result = await _finalize_failed_attempt(
         repository=repository,
         issue_number=issue_number,
@@ -9747,6 +9794,7 @@ async def _finalize_github_issue_failed_attempt(
         "mappingAction": mapped["action"],
         "mappingSummary": mapped["summary"],
         "released": result["released"],
+        "ownershipEnded": bool(result.get("ownershipEnded")),
         "reasonCode": result["reasonCode"],
         "disposition": result["disposition"],
         "summary": result["summary"],
