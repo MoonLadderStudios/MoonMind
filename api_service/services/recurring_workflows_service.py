@@ -746,6 +746,10 @@ class RecurringWorkflowsService:
             and admitted_identity
             == (expected_identity.get("name"), expected_identity.get("email"))
         )
+        if has_identity_admission and expected_task_queue is not None:
+            from moonmind.workflows.temporal.activity_catalog import publication_task_queue
+
+            expected_task_queue = publication_task_queue(expected_task_queue)
         return (
             not has_profile_projection
             or not has_identity_admission
