@@ -400,12 +400,12 @@ def preserve_authoritative_output(evidence: Mapping[str, Any] | None) -> dict[st
     if method == "pr_head_verified":
         ref = _string(data.get("prUrl") or data.get("pr_url"))
         revision = _string(
-            data.get("revision") or data.get("prHeadSha") or data.get("pr_head_sha")
+            data.get("prHeadSha") or data.get("pr_head_sha") or data.get("revision")
         )
     else:
         ref = _string(data.get("savedBranch") or data.get("saved_branch"))
         revision = _string(
-            data.get("revision") or data.get("savedSha") or data.get("saved_sha")
+            data.get("savedSha") or data.get("saved_sha") or data.get("revision")
         )
     if not ref or not revision:
         return {
@@ -579,7 +579,20 @@ def render_terminal_comment(
     remaining = [_string(item) for item in (remaining_requirements or []) if _string(item)][:MAX_COMMENT_REQUIREMENTS]
     lines.append("Accepted requirements: " + ("; ".join(met) + "." if met else "none recorded."))
     lines.append("Remaining requirements: " + ("; ".join(remaining) + "." if remaining else "none recorded."))
+    omitted_history = 0
+    if isinstance(retry_history, (list, tuple)):
+        from moonmind.workflows.temporal.github_issue_attempts import _truncate_list
+
+        # Use the canonical handoff's existing bounds without displacing
+        # admitted lineage. Omitted additions must not appear to be recorded.
+        raw_history = [item for item in retry_history if _string(item)]
+        bounded_history = _truncate_list(raw_history)
+        omitted_history = len(raw_history) - len(bounded_history)
+        retry_history = "; ".join(bounded_history)
     lines.append(f"Retry history: {_string(retry_history) or 'none recorded'}.")
+    if omitted_history:
+        noun = "entry" if omitted_history == 1 else "entries"
+        lines.append(f"{omitted_history} additional retry history {noun} omitted from the bounded handoff; existing lineage retained.")
     lines.append(f"Next action: **{_string(next_action) or 'undecided'}**.")
     lines.append("")
     lines.append("Incomplete delivery remains durable and visible for reconciliation.")
@@ -819,6 +832,7 @@ class FinalizationPlan:
     pending_sync: dict[str, Any] | None = None
     workspace_retained: bool = True
     attempt_handoff: dict[str, Any] | None = None
+    completion: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -832,6 +846,7 @@ class FinalizationPlan:
             "pendingSync": self.pending_sync,
             "workspaceRetained": self.workspace_retained,
             "attemptHandoff": self.attempt_handoff,
+            "completion": self.completion,
         }
 
 

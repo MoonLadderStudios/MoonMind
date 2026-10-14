@@ -1205,3 +1205,29 @@ async def test_activity_code_review_recovery_releases(monkeypatch) -> None:
     assert result["released"] is True
     assert result["disposition"] == "to_recovery_needed"
     assert "status: recovery-needed" in service.labels
+
+
+@pytest.mark.parametrize(
+    "method,reference,sha",
+    [
+        ("pr_head_verified", "pr_url", "pr_head_sha"),
+        ("saved_branch_verified", "saved_branch", "saved_sha"),
+    ],
+)
+def test_preservation_specific_sha_wins_over_generic_revision(method, reference, sha):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+
+    result = preserve_authoritative_output(
+        {
+            "save_method": method,
+            "preservation_verified": True,
+            reference: "candidate-reference",
+            sha: "specific-sha",
+            "revision": "generic-other-sha",
+        }
+    )
+    assert result["preserved"] is True
+    assert "candidate-reference@specific-sha" in result["summary"]
+    assert "generic-other-sha" not in result["summary"]
