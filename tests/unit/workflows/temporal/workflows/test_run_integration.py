@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+    RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
@@ -1728,13 +1729,25 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "saved_archive",
-    [True, False],
-    ids=["restores-saved-archive", "restarts-from-admitted-inputs"],
+    ("saved_archive", "interruptions", "prior_restore"),
+    [
+        (True, 1, False),
+        (False, 1, False),
+        (True, 1, True),
+        (True, 2, False),
+    ],
+    ids=[
+        "restores-saved-archive",
+        "restarts-from-admitted-inputs",
+        "prefers-interrupted-save-over-prior-restore",
+        "keeps-inherited-save-across-second-interruption",
+    ],
 )
 async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_successor(
     monkeypatch: pytest.MonkeyPatch,
     saved_archive: bool,
+    interruptions: int,
+    prior_restore: bool,
 ) -> None:
     """A host-loss successor resumes the verified save or restarts honestly."""
 
@@ -1745,6 +1758,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
     child_requests: list[AgentExecutionRequest] = []
     start_workspaces: dict[int, dict[str, Any]] = {}
     archive_ref = "artifact://checkpoints/interrupted-step-archive"
+    prior_restore_ref = "artifact://checkpoints/prior-verified-head"
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1777,7 +1791,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
             attempt=attempt,
             source_execution_ordinal=None,
         )
-        if len(child_requests) == 1:
+        if len(child_requests) <= interruptions:
             return AgentRunResult(
                 summary="Omnigent session host was replaced.",
                 failureClass="integration_error",
@@ -1790,6 +1804,11 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         request: AgentExecutionRequest,
     ) -> AgentExecutionRequest:
         return request
+
+    def fake_publication_checkpoint_restore_ref(**_kwargs: Any) -> str | None:
+        # An earlier trusted restore (for example a remediation or publication
+        # head) that predates the interrupted attempt's own verified save.
+        return prior_restore_ref if prior_restore else None
 
     async def fake_record_canonical_step_checkpoint(
         logical_step_id: str,
@@ -1828,6 +1847,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
         RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
         RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+        RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     }
     workflow_info = type(
         "WorkflowInfo",
@@ -1892,19 +1912,27 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         "_record_step_execution_manifest",
         fake_record_step_execution_manifest,
     )
+    monkeypatch.setattr(
+        workflow,
+        "_omnigent_publication_checkpoint_restore_ref",
+        fake_publication_checkpoint_restore_ref,
+    )
 
     await workflow._run_execution_stage(
         parameters={"publishMode": "none"},
         plan_ref="plan-ref",
     )
 
-    assert len(child_requests) == 2
-    predecessor, successor = child_requests
+    assert len(child_requests) == interruptions + 1
+    predecessor, successor = child_requests[0], child_requests[-1]
     assert successor.step_execution is not None
-    assert successor.step_execution.execution_ordinal == 2
+    assert successor.step_execution.execution_ordinal == interruptions + 1
     assert successor.step_execution.reason == "runtime_recovered"
-    assert "workspaceCheckpointRestoreRef" not in (predecessor.workspace_spec or {})
-    successor_workspace = start_workspaces[2]
+    expected_predecessor_ref = prior_restore_ref if prior_restore else None
+    assert (predecessor.workspace_spec or {}).get(
+        "workspaceCheckpointRestoreRef"
+    ) == expected_predecessor_ref
+    successor_workspace = start_workspaces[interruptions + 1]
     assert successor_workspace["evidenceAccepted"] is True
     if saved_archive:
         assert (successor.workspace_spec or {}).get(
