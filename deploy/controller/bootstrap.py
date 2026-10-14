@@ -44,6 +44,9 @@ TARGET_NETWORK_SETTING = "MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK"
 TARGET_NETWORK_KEY = "deployment-controller-network"
 CONTROLLER_ALIAS = "moonmind-controller"
 JOURNAL_TRANSITION_CAPABILITY = "active-journal-transition"
+# `ensure --prefer-requested` reports whether the controller now runs a
+# different release, so a submitter retries only when the code changed.
+REFRESH_RECEIPT_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 
 
 # The standalone controller image repository. Any other image is the MoonMind
@@ -109,6 +112,15 @@ def _application_controller_image(target_project: str, requested: str) -> str:
                 image = container.get("Image")
                 if image and image not in candidates:
                     candidates.append(image)
+    return _first_capable_controller_image(candidates, requested)
+
+
+def _requested_controller_image(requested: str) -> str:
+    """The requested release alone, after the installed controller failed it."""
+    return _first_capable_controller_image([], requested)
+
+
+def _first_capable_controller_image(candidates: list[str], requested: str) -> str:
     probe = (
         "import pathlib,sys; p=pathlib.Path('/app/deploy/controller'); "
         "sys.exit(10) if not (p/'server.py').is_file() else None; "
@@ -153,6 +165,34 @@ def _application_controller_image(target_project: str, requested: str) -> str:
     )
 
 
+def _running_controller_image(project: str) -> str | None:
+    """The image the live controller container runs; ``None`` when none runs.
+
+    The Compose file is not proof: an interrupted refresh can name the
+    requested image there while the old or a stopped controller remains.
+    """
+    listed = _run_capture(
+        [
+            "docker",
+            "ps",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+        ]
+    )
+    identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
+    if len(identifiers) != 1:
+        return None
+    inspected = _run_capture(
+        ["docker", "inspect", "--format", "{{.Image}}", identifiers[0]]
+    )
+    if inspected.returncode:
+        return None
+    return (inspected.stdout or "").strip() or None
+
+
 def cmd_ensure(args, env) -> int:
     """Refresh an old controller before submission, outside its operation.
 
@@ -161,7 +201,14 @@ def cmd_ensure(args, env) -> int:
     paths, networks, identity and authority never change in an app container;
     only the spelling of a bind source changes, for a client that resolves
     the same host directory under its WSL drive mount.
+
+    ``--prefer-requested`` runs after the installed controller failed the
+    requested release. A capability cannot show that the installed code can
+    apply a release whose own controller carries the fix, so this refreshes
+    a capable controller to the requested release unless it already runs it,
+    and prints a receipt saying whether the controller changed.
     """
+    prefer_requested = bool(getattr(args, "prefer_requested", False))
     _ensure_outside_controller(env)
     state_dir = Path(args.state_dir).resolve()
     identity = load_identity(state_dir)
@@ -184,7 +231,7 @@ def cmd_ensure(args, env) -> int:
             # whether host-owned repair may proceed; never create a writer.
             return False
 
-    if supported():
+    if not prefer_requested and supported():
         return 0
     if _open_operations(state_dir, args.stack):
         raise ActiveOperationError(
@@ -197,11 +244,15 @@ def cmd_ensure(args, env) -> int:
             raise ActiveOperationError(
                 "Controller prerequisite waits for the current deployment operation to finish."
             )
-        if supported():
+        if not prefer_requested and supported():
             return 0
-        image = _application_controller_image(
-            str(identity.get("targetProject") or args.target_project),
-            args.image,
+        image = (
+            _requested_controller_image(args.image)
+            if prefer_requested
+            else _application_controller_image(
+                str(identity.get("targetProject") or args.target_project),
+                args.image,
+            )
         )
         lines = _client_bind_lines(
             compose_file.read_text(encoding="utf-8").splitlines()
@@ -213,6 +264,9 @@ def cmd_ensure(args, env) -> int:
             raise RuntimeError(
                 "Controller Compose project has no unique controller image."
             )
+        if prefer_requested and _running_controller_image(identity["project"]) == image:
+            _print_refresh_receipt(refreshed=False, image=image)
+            return 0
         lines = [line for line in lines if not line.startswith("    entrypoint:")]
         index = next(
             index for index, line in enumerate(lines) if line.startswith("    image:")
@@ -250,6 +304,8 @@ def cmd_ensure(args, env) -> int:
                 if JOURNAL_TRANSITION_CAPABILITY in controller_capabilities(
                     url, secret
                 ):
+                    if prefer_requested:
+                        _print_refresh_receipt(refreshed=True, image=image)
                     return 0
             except OSError:
                 # The recreated controller may not accept connections yet;
@@ -260,6 +316,11 @@ def cmd_ensure(args, env) -> int:
                     "Controller prerequisite did not expose journal transition support."
                 )
             time.sleep(1)
+
+
+def _print_refresh_receipt(*, refreshed: bool, image: str) -> None:
+    receipt = json.dumps({"refreshed": refreshed, "image": image}, sort_keys=True)
+    print(f"{REFRESH_RECEIPT_PREFIX}{receipt}", flush=True)
 
 
 class InsideControllerError(RuntimeError):
@@ -946,6 +1007,16 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="MoonMind Compose project that owns the API link network.",
         )
+        if name == "ensure":
+            child.add_argument(
+                "--prefer-requested",
+                action="store_true",
+                help=(
+                    "After the installed controller failed the requested "
+                    "release, refresh to that release's controller unless it "
+                    "already runs it."
+                ),
+            )
     return parser
 
 

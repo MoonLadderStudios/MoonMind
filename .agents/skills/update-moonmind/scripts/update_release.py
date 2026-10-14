@@ -35,6 +35,8 @@ _CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
 # wait the entrypoint observes its own operation identity instead.
 _CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
 _CONTROLLER_SUBMIT_ATTEMPTS = 2
+# Receipt line printed by the controller's `bootstrap.py ensure --prefer-requested`.
+_CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 
 
 _MAX_DIAGNOSTIC_CHARS = 4000
@@ -747,22 +749,8 @@ def _materialized_controller(bundle):
         yield Path(directory) / "bootstrap.py"
 
 
-def _ensure_controller_journal_transition(record, repo, controller_url, secret):
-    """Use the existing host lifecycle before an old controller owns work.
-
-    The portable script extracts only trusted, image-owned Python sources;
-    it does not depend on a checked-out release or a healthy API/worker.
-    Installed source comes first so a rollback can use current repair code;
-    when its repair fails, the requested release's newer repair code runs.
-    """
-    try:
-        _, health = _controller_call(
-            controller_url, secret, "GET", "/v1/healthz", timeout=5
-        )
-    except ControllerUnreachableError:
-        health = {}
-    if "active-journal-transition" in (health.get("capabilities") or ()):
-        return
+def _controller_source_candidates(record, repo):
+    """Installed application images first, then the requested release."""
     ids = run(
         [
             "docker",
@@ -787,32 +775,58 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
                 image = container.get("Image")
                 if image and image not in candidates:
                     candidates.append(image)
-    candidates.append(record["image"])
+    if record["image"] not in candidates:
+        candidates.append(record["image"])
+    return candidates
+
+
+def _controller_bootstrap_command(bootstrap, record, repo, controller_url):
+    return [
+        sys.executable,
+        str(bootstrap),
+        "ensure",
+        "--state-dir",
+        str(repo / "deploy" / "state" / "controller"),
+        "--repo",
+        str(repo),
+        "--stack",
+        "moonmind",
+        "--target-project",
+        record["project"],
+        "--image",
+        record["image"],
+        "--controller-url",
+        controller_url,
+    ]
+
+
+def _ensure_controller_journal_transition(record, repo, controller_url, secret):
+    """Use the existing host lifecycle before an old controller owns work.
+
+    The portable script extracts only trusted, image-owned Python sources;
+    it does not depend on a checked-out release or a healthy API/worker.
+    Installed source comes first so a rollback can use current repair code;
+    when its repair fails, the requested release's newer repair code runs.
+    """
+    try:
+        _, health = _controller_call(
+            controller_url, secret, "GET", "/v1/healthz", timeout=5
+        )
+    except ControllerUnreachableError:
+        health = {}
+    if "active-journal-transition" in (health.get("capabilities") or ()):
+        return
     failure = None
-    for image in candidates:
+    for image in _controller_source_candidates(record, repo):
         bundle = _controller_sources(image, repo)
         if not bundle:
             continue
         try:
             with _materialized_controller(bundle) as bootstrap:
                 run(
-                    [
-                        sys.executable,
-                        str(bootstrap),
-                        "ensure",
-                        "--state-dir",
-                        str(repo / "deploy" / "state" / "controller"),
-                        "--repo",
-                        str(repo),
-                        "--stack",
-                        "moonmind",
-                        "--target-project",
-                        record["project"],
-                        "--image",
-                        record["image"],
-                        "--controller-url",
-                        controller_url,
-                    ],
+                    _controller_bootstrap_command(
+                        bootstrap, record, repo, controller_url
+                    ),
                     cwd=repo,
                 )
         except RuntimeError as exc:
@@ -839,6 +853,50 @@ def _ensure_controller_journal_transition(record, repo, controller_url, secret):
     raise RuntimeError(
         "Neither installed source nor requested image supplies the controller prerequisite."
     )
+
+
+def _refresh_controller_to_requested(record, repo, controller_url):
+    """Give the requested release's controller the attempt the installed one failed.
+
+    A capable installed controller can still carry a defect that the
+    requested release fixes. The installed controller always applies first,
+    so a rollback keeps current repair code; only after it fails does the
+    bootstrap lifecycle owner refresh the controller to the requested release
+    (never while an operation is open). Returns whether the controller now
+    runs different code, the only case where a retry can change the outcome,
+    and why it does not otherwise.
+    """
+    detail = "no controller source supports refreshing to the requested release"
+    for image in _controller_source_candidates(record, repo):
+        bundle = _controller_sources(image, repo)
+        if not bundle:
+            continue
+        with _materialized_controller(bundle) as bootstrap:
+            try:
+                output = run(
+                    [
+                        *_controller_bootstrap_command(
+                            bootstrap, record, repo, controller_url
+                        ),
+                        "--prefer-requested",
+                    ],
+                    cwd=repo,
+                )
+            except RuntimeError as exc:
+                # A source predating --prefer-requested refuses the flag.
+                detail = f"controller source {image} could not refresh: {exc}"
+                print(detail[:1].upper() + detail[1:], flush=True)
+                continue
+        for line in reversed(output.splitlines()):
+            if line.startswith(_CONTROLLER_REFRESH_PREFIX):
+                receipt = json.loads(line[len(_CONTROLLER_REFRESH_PREFIX) :])
+                if receipt.get("refreshed"):
+                    return True, ""
+                return False, (
+                    "the controller already runs the requested release "
+                    f"{receipt.get('image', '')}".rstrip()
+                )
+    return False, detail
 
 
 def _submit_via_controller(record, repo, *, controller_url, secret_file):
@@ -908,6 +966,7 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
     deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
     last_status = None
     submission_id = str(context.get("idempotency_key", "")).removeprefix("host-update:")
+    requested_controller_tried = False
     while True:
         try:
             _, operation = _controller_call(
@@ -934,11 +993,37 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             )
             return 2
         if status == "failed":
-            raise RuntimeError(
+            failure = (
                 f"Controller operation {operation_id} failed: "
-                f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}. "
-                "Retry it from Settings Operations or rerun this command for a "
-                "new attempt; the original error stays in its record."
+                f"{_redact_diagnostics(operation.get('errorSummary', 'unknown error'))}."
+            )
+            if not requested_controller_tried:
+                requested_controller_tried = True
+                refreshed, refresh_detail = _refresh_controller_to_requested(
+                    record, repo, controller_url
+                )
+                if refreshed:
+                    print(
+                        f"{failure} Retrying with the requested release's controller.",
+                        flush=True,
+                    )
+                    _retry_controller_operation(
+                        controller_url,
+                        secret,
+                        operation_id,
+                        operation.get("attemptGroup", 1),
+                        failure,
+                    )
+                    last_status = None
+                    deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
+                    continue
+                failure += (
+                    " The requested release's controller was not tried: "
+                    f"{_redact_diagnostics(refresh_detail)}."
+                )
+            raise RuntimeError(
+                f"{failure} Retry it from Settings Operations or rerun this "
+                "command for a new attempt; the original error stays in its record."
             )
         if status == "superseded":
             raise RuntimeError(
@@ -953,6 +1038,58 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
                 "controller operation directly."
             )
         _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
+
+
+def _retry_controller_operation(
+    controller_url, secret, operation_id, attempt_group, failure
+):
+    """Start the controller's fresh attempt group for the same operation.
+
+    The controller applies inside the request, so a transport error may be a
+    lost answer or a request that never arrived (a just-recreated controller
+    refusing connections). Observation decides: a new attempt group means the
+    retry started; an unchanged failed record is retried within the budget.
+    A duplicate that does arrive is refused by the controller, never applied.
+    """
+    def started():
+        try:
+            _, observed = _controller_call(
+                controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+            )
+        except ControllerUnreachableError:
+            return False
+        return (
+            observed.get("status") != "failed"
+            or observed.get("attemptGroup", 1) != attempt_group
+        )
+
+    last_error = None
+    for attempt in range(_CONTROLLER_SUBMIT_ATTEMPTS):
+        if attempt:
+            _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
+        try:
+            _controller_call(
+                controller_url,
+                secret,
+                "POST",
+                f"/v1/operations/{operation_id}/retry",
+                timeout=_CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+            )
+            return
+        except ControllerHTTPError as exc:
+            # A refusal of a repeated request can mean the first one arrived.
+            if attempt and started():
+                return
+            raise RuntimeError(
+                f"{failure} The controller refused its retry: {exc}"
+            ) from None
+        except ControllerUnreachableError as exc:
+            last_error = exc
+        if started():
+            return
+    raise RuntimeError(
+        f"{failure} The refreshed controller did not accept its retry: {last_error}"
+    )
 
 
 def _compose_ps_state(*, repo, project):

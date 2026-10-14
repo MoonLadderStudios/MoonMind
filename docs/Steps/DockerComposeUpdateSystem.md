@@ -326,6 +326,21 @@ holds the controller's stack lock, refuses any open operation, and verifies
 the supported method before submission continues. A rollback prefers the
 installed source image so an old target need not contain newer repair code.
 
+An advertised method does not prove the installed controller can apply a
+newer release: a controller defect fixed in the requested release would
+otherwise block that fix's own installation. The installed controller always
+applies first. When its operation fails, the host entrypoint and the
+deployment-control submitter give the requested release's controller one
+attempt: `bootstrap.py ensure --prefer-requested` refreshes the controller to
+the requested image under the same lock and open-operation refusal, and
+reports `refreshed: false` only when the live controller container already
+runs that image (an interrupted refresh that rewrote only its Compose file is
+reconciled). Only a refreshed controller earns a Retry of the same operation,
+confirmed by its new attempt group before the submitter asks again;
+otherwise the original failure stands beside the refresh diagnostic. The API cannot run the bootstrap owner, so a
+Settings Operations submission that fails this way recovers through the host
+update command or a workflow-submitted update.
+
 An already-installed old API/controller may reach the new target's
 `--omnigent-select` callback without running either updated submission client.
 The callback requires the owning controller's `active-journal-transition`
