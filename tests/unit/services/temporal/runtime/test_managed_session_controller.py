@@ -2150,9 +2150,11 @@ async def test_controller_launch_reuses_existing_workspace_and_checks_out_target
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    admitted: bool,
 ) -> None:
     """A retried pr-resolver session must be able to commit its fixes.
 
@@ -2171,6 +2173,13 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
 
     monkeypatch.setattr(settings.workflow, "git_user_name", None)
     monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    identity = {"name": "Admitted", "email": "admitted@example.invalid"}
+    recorded_publication_identity(monkeypatch, identity if admitted else None)
+    if admitted:
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed")
+        monkeypatch.setattr(settings.workflow, "git_user_email", "changed@example.invalid")
     workspace_root = tmp_path / "agent_jobs"
     workspace_path = workspace_root / "mm:task-1" / "repo"
     workspace_path.mkdir(parents=True, exist_ok=True)
@@ -2184,12 +2193,23 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
         artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
         codexHomePath="/home/app/.codex",
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={"GIT_AUTHOR_NAME": "Spoofed"} if admitted else {},
         workspaceSpec={
             "repository": "MoonLadderStudios/Tactics",
             "startingBranch": "moonmind-job-47d25995",
         },
     )
     chowned: list[tuple[Path, int, int]] = []
+
+    def chown_path(path, dir_fd):
+        if dir_fd is None:
+            return Path(path)
+        parent_stat = os.fstat(dir_fd)
+        for candidate in [tmp_path, *tmp_path.rglob("*")]:
+            stat = candidate.stat()
+            if (stat.st_dev, stat.st_ino) == (parent_stat.st_dev, parent_stat.st_ino):
+                return candidate / str(path)
+        raise AssertionError("ownership callback's directory is outside the test workspace")
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
         lambda: 0,
@@ -2198,11 +2218,7 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
         "moonmind.workflows.temporal.runtime.managed_session_controller.os.chown",
         lambda path, uid, gid, *, follow_symlinks=True, dir_fd=None: chowned.append(
             (
-                (
-                    (Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path))
-                    if dir_fd is not None
-                    else Path(path)
-                ),
+                chown_path(path, dir_fd),
                 uid,
                 gid,
             )
@@ -2212,16 +2228,14 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
         "moonmind.omnigent.git_identity.os.chown",
         lambda path, uid, gid, *, follow_symlinks=True, dir_fd=None: chowned.append(
             (
-                (
-                    (Path(f"/proc/self/fd/{dir_fd}").resolve() / str(path))
-                    if dir_fd is not None
-                    else Path(path)
-                ),
+                chown_path(path, dir_fd),
                 uid,
                 gid,
             )
         ),
     )
+
+    session_environments = []
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -2240,6 +2254,7 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
         if "launch_session" in command:
+            session_environments.append(json.loads(input_text)["environment"])
             payload = {
                 "sessionState": {
                     "sessionId": request.session_id,
@@ -2281,7 +2296,16 @@ async def test_controller_launch_gives_a_reused_checkout_a_commit_identity(
         text=True,
     )
     assert ident.returncode == 0, ident.stderr
-    assert ident.stdout.startswith(f"{DEFAULT_GIT_USER_NAME} <{DEFAULT_GIT_USER_EMAIL}>")
+    name = identity["name"] if admitted else DEFAULT_GIT_USER_NAME
+    email = identity["email"] if admitted else DEFAULT_GIT_USER_EMAIL
+    assert ident.stdout.startswith(f"{name} <{email}>")
+    if admitted:
+        assert session_environments
+        for env in session_environments:
+            assert env["GIT_AUTHOR_NAME"] == name
+            assert env["GIT_COMMITTER_NAME"] == name
+            assert env["GIT_AUTHOR_EMAIL"] == email
+            assert env["GIT_COMMITTER_EMAIL"] == email
     # The config stays writable by the session's runtime user.
     assert (workspace_path / ".git" / "config", 1000, 1000) in chowned
 
@@ -4444,9 +4468,11 @@ async def test_controller_duplicate_launch_reuses_existing_live_record(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_controller_reused_live_session_checkout_gets_a_commit_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    admitted: bool,
 ) -> None:
     """A session that survived the upgrade is reused, not relaunched.
 
@@ -4456,9 +4482,16 @@ async def test_controller_reused_live_session_checkout_gets_a_commit_identity(
     """
     from moonmind.config.settings import settings
     from moonmind.omnigent.git_identity import DEFAULT_GIT_USER_NAME
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    identity = {"name": "Admitted", "email": "admitted@example.invalid"}
+    recorded_publication_identity(monkeypatch, identity if admitted else None)
 
     monkeypatch.setattr(settings.workflow, "git_user_name", None)
     monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    if admitted:
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed")
+        monkeypatch.setattr(settings.workflow, "git_user_email", "changed@example.invalid")
     monkeypatch.setattr(
         "moonmind.omnigent.git_identity.os.chown",
         lambda *_args, **_kwargs: None,
@@ -4527,7 +4560,7 @@ async def test_controller_reused_live_session_checkout_gets_a_commit_identity(
         capture_output=True,
         text=True,
     )
-    assert configured.stdout.strip() == DEFAULT_GIT_USER_NAME
+    assert configured.stdout.strip() == (identity["name"] if admitted else DEFAULT_GIT_USER_NAME)
 
 
 @pytest.mark.asyncio
