@@ -1,14 +1,20 @@
 """The portable updater selects one source/image without editing live source."""
+
 from __future__ import annotations
+
 import importlib.util
 import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("update_release_skill", ROOT / ".agents/skills/update-moonmind/scripts/update_release.py")
+SPEC = importlib.util.spec_from_file_location(
+    "update_release_skill",
+    ROOT / ".agents/skills/update-moonmind/scripts/update_release.py",
+)
 update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update)
 
@@ -23,11 +29,17 @@ def isolate_controller_lifecycle(monkeypatch):
 
 @pytest.mark.parametrize("mismatch", [False, True])
 @pytest.mark.parametrize("operator_url", [None, "http://installed.example:7000"])
-def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypatch, mismatch, operator_url):
+def test_portable_release_pins_source_and_preserves_checkout(
+    tmp_path, monkeypatch, mismatch, operator_url
+):
     repo = tmp_path / "installed"
     repo.mkdir()
+
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True
+        ).strip()
+
     git("init", "-b", "main")
     git("config", "user.email", "qualification@example.invalid")
     git("config", "user.name", "Qualification")
@@ -37,7 +49,9 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
     revision = git("rev-parse", "HEAD")
     git("remote", "add", "origin", str(repo))
     (repo / "source.txt").write_text("operator edits")
-    (repo / ".env").write_text("AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n")
+    (repo / ".env").write_text(
+        "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n"
+    )
     original_run = subprocess.run
     commands = []
     digest = "sha256:" + "a" * 64
@@ -62,7 +76,9 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
         url = request.full_url
         if request.method == "GET" and url.endswith("/v1/healthz"):
             assert request.get_header("Authorization") == "Bearer test-secret"
-            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
+            return FakeResponse(
+                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+            )
         if request.method == "POST" and url.endswith("/v1/operations"):
             payload = json.loads(request.data.decode("utf-8"))
             assert payload["stack"] == "moonmind"
@@ -82,7 +98,11 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
         assert request.get_header("Authorization") == "Bearer test-secret"
         return FakeResponse(
             200,
-            {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}},
+            {
+                "operationId": "op-1",
+                "status": "succeeded",
+                "installed": {"image": image},
+            },
         )
 
     def command(args, **kwargs):
@@ -90,20 +110,43 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
             return original_run(args, **kwargs)
         commands.append(args)
         if args[1:3] == ["image", "inspect"]:
-            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": "different" if mismatch else revision}}}])
+            output = json.dumps(
+                [
+                    {
+                        "RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"],
+                        "Config": {
+                            "Labels": {
+                                "org.opencontainers.image.revision": (
+                                    "different" if mismatch else revision
+                                )
+                            }
+                        },
+                    }
+                ]
+            )
         elif args[1:3] == ["compose", "config"]:
-            output = json.dumps({"name": "existing-project", "services": {"api": {}, "worker": {}, "docker-proxy": {}}})
+            output = json.dumps(
+                {
+                    "name": "existing-project",
+                    "services": {"api": {}, "worker": {}, "docker-proxy": {}},
+                }
+            )
         else:
             assert args[1] == "pull"
             assert args[2].endswith(":sha-" + revision)
             output = ""
         return SimpleNamespace(returncode=0, stdout=output)
+
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_open_controller", fake_urlopen)
-    secret_file = repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+    secret_file = (
+        repo / "deploy" / "state" / "controller" / "secrets" / "controller-bearer"
+    )
     secret_file.parent.mkdir(parents=True, exist_ok=True)
     secret_file.write_text("test-secret\n")
-    args = ["--repo", str(repo)] + (["--operator-url", operator_url] if operator_url else [])
+    args = ["--repo", str(repo)] + (
+        ["--operator-url", operator_url] if operator_url else []
+    )
     if mismatch:
         with pytest.raises(ValueError, match="source revision"):
             update.main(args)
@@ -117,12 +160,24 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
         submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
         assert update.main(["--repo", str(repo), "--resume", submission.stem]) == 0
         with pytest.raises(ValueError, match="original operator URLs"):
-            update.main(["--repo", str(repo), "--resume", submission.stem,
-                         "--operator-url", "http://different.example:7000"])
+            update.main(
+                [
+                    "--repo",
+                    str(repo),
+                    "--resume",
+                    submission.stem,
+                    "--operator-url",
+                    "http://different.example:7000",
+                ]
+            )
         assert len([item for item in commands if item[1] == "pull"]) == 1
-        assert len(list((repo / "deploy/state/release-submissions").glob("*.json"))) == 1
+        assert (
+            len(list((repo / "deploy/state/release-submissions").glob("*.json"))) == 1
+        )
     assert (repo / "source.txt").read_text() == "operator edits"
-    assert (repo / ".env").read_text() == "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n"
+    assert (
+        repo / ".env"
+    ).read_text() == "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n"
     assert git("rev-parse", "HEAD") == revision
 
 
@@ -195,11 +250,26 @@ def test_bare_invocation_without_running_controller_installs_it_from_the_release
         if args[0] != "docker":
             return original_run(args, **kwargs)
         if args[1:3] == ["image", "inspect"]:
-            output = json.dumps([{"RepoDigests": [image], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+            output = json.dumps(
+                [
+                    {
+                        "RepoDigests": [image],
+                        "Config": {
+                            "Labels": {"org.opencontainers.image.revision": revision}
+                        },
+                    }
+                ]
+            )
         elif args[1] == "compose" and "config" in args:
-            output = json.dumps({"name": "existing-project", "services": {
-                "api": {}, "docker-proxy": {},
-            }})
+            output = json.dumps(
+                {
+                    "name": "existing-project",
+                    "services": {
+                        "api": {},
+                        "docker-proxy": {},
+                    },
+                }
+            )
         elif args[1] == "run":
             docker_runs.append(args)
             assert image in args
@@ -233,9 +303,16 @@ def test_bare_invocation_without_running_controller_installs_it_from_the_release
             )
         if request.method == "POST":
             posted.append(json.loads(request.data.decode("utf-8")))
-            return _FakeControllerResponse(202, {"operationId": "op-1", "status": "pending"})
+            return _FakeControllerResponse(
+                202, {"operationId": "op-1", "status": "pending"}
+            )
         return _FakeControllerResponse(
-            200, {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}}
+            200,
+            {
+                "operationId": "op-1",
+                "status": "succeeded",
+                "installed": {"image": image},
+            },
         )
 
     monkeypatch.setattr(update.subprocess, "run", command)
@@ -274,8 +351,15 @@ def test_legacy_direct_option_no_longer_exists(tmp_path):
 
 def test_explicit_controller_secret_file_must_exist(tmp_path, monkeypatch):
     """An explicitly selected controller is never silently bypassed."""
-    record = {"project": "existing-project", "image": "img", "inputs": {}, "context": {}}
-    monkeypatch.setattr(update, "_install_controller", lambda *a, **k: pytest.fail("install"))
+    record = {
+        "project": "existing-project",
+        "image": "img",
+        "inputs": {},
+        "context": {},
+    }
+    monkeypatch.setattr(
+        update, "_install_controller", lambda *a, **k: pytest.fail("install")
+    )
     with pytest.raises(RuntimeError, match="Controller secret is missing"):
         update._submit_release(
             record,
@@ -318,7 +402,9 @@ def test_unreachable_controller_with_owned_state_keeps_recovery_authority(
         update, "_install_controller", lambda *a, **k: pytest.fail("install")
     )
     monkeypatch.setattr(
-        update, "run", lambda *a, **k: "container-id" if owned_state == "container" else ""
+        update,
+        "run",
+        lambda *a, **k: "container-id" if owned_state == "container" else "",
     )
     with pytest.raises(update.ControllerUnreachableError):
         update._submit_release(
@@ -347,7 +433,10 @@ def test_never_started_controller_is_installed_before_the_same_submission(
     def install(record, _repo):
         steps.append(("install", record["image"]))
 
-    def submit(record, _repo, *, controller_url, secret_file):
+    def submit(
+        record, _repo, *, controller_url, secret_file, refresh_controller_on_failure
+    ):
+        assert refresh_controller_on_failure is True
         steps.append(("submit", record["context"]["idempotency_key"]))
         return 0
 
@@ -378,7 +467,10 @@ def test_explicit_controller_url_never_falls_back(tmp_path, monkeypatch):
     )
     submitted_urls = []
 
-    def submit(_record, _repo, *, controller_url, secret_file):
+    def submit(
+        _record, _repo, *, controller_url, secret_file, refresh_controller_on_failure
+    ):
+        assert refresh_controller_on_failure is False
         submitted_urls.append(controller_url)
         return 42
 
@@ -386,13 +478,16 @@ def test_explicit_controller_url_never_falls_back(tmp_path, monkeypatch):
         update, "_install_controller", lambda *a, **k: pytest.fail("install")
     )
     monkeypatch.setattr(update, "_submit_via_controller", submit)
-    assert update._submit_release(
-        {"project": "moonmind", "image": "image"},
-        tmp_path,
-        controller_url="http://127.0.0.1:9",
-        secret_file=None,
-        controller_url_explicit=True,
-    ) == 42
+    assert (
+        update._submit_release(
+            {"project": "moonmind", "image": "image"},
+            tmp_path,
+            controller_url="http://127.0.0.1:9",
+            secret_file=None,
+            controller_url_explicit=True,
+        )
+        == 42
+    )
     assert submitted_urls == ["http://127.0.0.1:9"]
 
 
@@ -410,18 +505,24 @@ def test_bare_update_uses_installed_controller_port(tmp_path, monkeypatch):
         observed_urls.append(url)
         return 200, {"status": "ok"}
 
-    def submit(_record, _repo, *, controller_url, secret_file):
+    def submit(
+        _record, _repo, *, controller_url, secret_file, refresh_controller_on_failure
+    ):
+        assert refresh_controller_on_failure is True
         observed_urls.append(controller_url)
         return 0
 
     monkeypatch.setattr(update, "_controller_call", health)
     monkeypatch.setattr(update, "_submit_via_controller", submit)
-    assert update._submit_release(
-        {"project": "moonmind", "image": "image"},
-        repo,
-        controller_url="http://127.0.0.1:8472",
-        secret_file=None,
-    ) == 0
+    assert (
+        update._submit_release(
+            {"project": "moonmind", "image": "image"},
+            repo,
+            controller_url="http://127.0.0.1:8472",
+            secret_file=None,
+        )
+        == 0
+    )
     assert observed_urls == ["http://127.0.0.1:8533"] * 2
 
 
@@ -452,13 +553,19 @@ def _stub_controller_success(monkeypatch, image):
 
     def fake_urlopen(request, timeout=None):
         if request.full_url.endswith("/v1/healthz"):
-            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
+            return FakeResponse(
+                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+            )
         if request.method == "POST":
             posted.append(json.loads(request.data.decode("utf-8")))
             return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
         return FakeResponse(
             200,
-            {"operationId": "op-1", "status": "succeeded", "installed": {"image": image}},
+            {
+                "operationId": "op-1",
+                "status": "succeeded",
+                "installed": {"image": image},
+            },
         )
 
     monkeypatch.setattr(update, "_open_controller", fake_urlopen)
@@ -467,9 +574,11 @@ def _stub_controller_success(monkeypatch, image):
 
 def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
     calls = []
+
     def inspect(args, **kwargs):
         calls.append(args)
         return ""
+
     monkeypatch.setattr(update, "run", inspect)
     assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
     assert calls == [["git", "check-ref-format", "--branch", "main"]]
@@ -478,11 +587,51 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "rendered",
     [
-        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
-        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}}},
-        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "::", "published": "7000", "target": 8000}]}}},
-        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "192.0.2.4", "published": "7000", "target": 8000}]}}},
-        {"name": "existing-project", "services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}, "ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+        {
+            "name": "existing-project",
+            "services": {
+                "api": {
+                    "ports": [
+                        {"host_ip": "0.0.0.0", "published": "7000", "target": 8000}
+                    ]
+                }
+            },
+        },
+        {
+            "name": "existing-project",
+            "services": {
+                "api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}
+            },
+        },
+        {
+            "name": "existing-project",
+            "services": {
+                "api": {
+                    "ports": [{"host_ip": "::", "published": "7000", "target": 8000}]
+                }
+            },
+        },
+        {
+            "name": "existing-project",
+            "services": {
+                "api": {
+                    "ports": [
+                        {"host_ip": "192.0.2.4", "published": "7000", "target": 8000}
+                    ]
+                }
+            },
+        },
+        {
+            "name": "existing-project",
+            "services": {
+                "api": {
+                    "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"},
+                    "ports": [
+                        {"host_ip": "0.0.0.0", "published": "7000", "target": 8000}
+                    ],
+                }
+            },
+        },
     ],
 )
 def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rendered):
@@ -491,8 +640,12 @@ def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rend
     probes validate the actual operator route instead of loopback."""
     repo = tmp_path / "installed"
     repo.mkdir()
+
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True
+        ).strip()
+
     git("init", "-b", "main")
     git("config", "user.email", "qualification@example.invalid")
     git("config", "user.name", "Qualification")
@@ -503,11 +656,21 @@ def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rend
     git("remote", "add", "origin", str(repo))
     original_run = subprocess.run
     digest = "sha256:" + "b" * 64
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
         if args[1:3] == ["image", "inspect"]:
-            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+            output = json.dumps(
+                [
+                    {
+                        "RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"],
+                        "Config": {
+                            "Labels": {"org.opencontainers.image.revision": revision}
+                        },
+                    }
+                ]
+            )
         elif args[1:3] == ["compose", "config"]:
             output = json.dumps(rendered)
         elif args[1] == "run":
@@ -518,16 +681,24 @@ def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rend
             assert args[1] == "pull"
             output = ""
         return SimpleNamespace(returncode=0, stdout=output)
+
     monkeypatch.setattr(update.subprocess, "run", command)
     _install_controller_secret(repo)
-    _stub_controller_success(monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}")
+    _stub_controller_success(
+        monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    )
     assert update.main(["--repo", str(repo)]) == 0
     submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
     payload = json.loads(submission.read_text())
     assert "deployment_operator_urls" not in payload["context"]
+
+
 def _init_repo(path):
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(path), *args], text=True
+        ).strip()
+
     git("init", "-b", "main")
     git("config", "user.email", "qualification@example.invalid")
     git("config", "user.name", "Qualification")
@@ -542,9 +713,11 @@ def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, cap
     repo.mkdir()
     _init_repo(repo)
     calls = []
+
     def inspect(args, **kwargs):
         calls.append(args)
         return ""
+
     monkeypatch.setattr(update, "run", inspect)
     assert update.main(["--repo", str(repo), "--local-build", "--dry-run"]) == 0
     assert calls, "local dry-run must inspect the working tree"
@@ -552,7 +725,13 @@ def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, cap
     assert "local_source_overlay_update" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("extra", [["--resume", "00000000-0000-0000-0000-000000000000"], ["--image-repository", "example.invalid/custom"]])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--resume", "00000000-0000-0000-0000-000000000000"],
+        ["--image-repository", "example.invalid/custom"],
+    ],
+)
 def test_local_build_rejects_release_inputs(tmp_path, extra):
     with pytest.raises(ValueError):
         update.main(["--repo", str(tmp_path), "--local-build", *extra])
@@ -583,12 +762,18 @@ def test_local_build_rejects_release_inputs(tmp_path, extra):
         ),
     ],
 )
-def test_run_reports_actionable_docker_pull_diagnostics(tmp_path, monkeypatch, daemon_output, hint):
+def test_run_reports_actionable_docker_pull_diagnostics(
+    tmp_path, monkeypatch, daemon_output, hint
+):
     def failing(args, **kwargs):
         return SimpleNamespace(returncode=1, stdout="", stderr=daemon_output)
+
     monkeypatch.setattr(update.subprocess, "run", failing)
     with pytest.raises(RuntimeError) as excinfo:
-        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+        update.run(
+            ["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"],
+            cwd=tmp_path,
+        )
     message = str(excinfo.value)
     assert "docker pull failed (exit 1)" in message
     assert "ghcr.io/moonladderstudios/moonmind:sha-abc123" in message
@@ -603,9 +788,13 @@ def test_run_redacts_credentials_in_diagnostics(tmp_path, monkeypatch):
             stdout="",
             stderr="Head https://user:s3cr3t-token@ghcr.io/v2/x: unauthorized token=abcdef123456",
         )
+
     monkeypatch.setattr(update.subprocess, "run", failing)
     with pytest.raises(RuntimeError) as excinfo:
-        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+        update.run(
+            ["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"],
+            cwd=tmp_path,
+        )
     message = str(excinfo.value)
     assert "s3cr3t-token" not in message
     assert "***@" in message
@@ -619,11 +808,13 @@ def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch
     revision = git("rev-parse", "HEAD")
     git("remote", "add", "origin", str(repo))
     original_run = subprocess.run
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
         assert args[1] == "pull"
         return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: None)
     monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
@@ -641,7 +832,10 @@ def _pull_failure(stderr):
 
 def _init_two_commit_repo(repo):
     def git(*args):
-        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True
+        ).strip()
+
     git("init", "-b", "main")
     git("config", "user.email", "qualification@example.invalid")
     git("config", "user.name", "Qualification")
@@ -677,29 +871,40 @@ def _init_two_commit_repo(repo):
         ("Error: something entirely unexpected", "unknown"),
     ],
 )
-def test_run_marks_docker_pull_failure_category(tmp_path, monkeypatch, daemon_output, category):
+def test_run_marks_docker_pull_failure_category(
+    tmp_path, monkeypatch, daemon_output, category
+):
     monkeypatch.setattr(
         update.subprocess, "run", lambda *args, **kwargs: _pull_failure(daemon_output)
     )
     with pytest.raises(update.DockerPullError) as excinfo:
-        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc"], cwd=tmp_path)
+        update.run(
+            ["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc"],
+            cwd=tmp_path,
+        )
     assert excinfo.value.category == category
 
 
-def test_select_waits_for_inflight_tip_publish_before_any_fallback(tmp_path, monkeypatch, capsys):
+def test_select_waits_for_inflight_tip_publish_before_any_fallback(
+    tmp_path, monkeypatch, capsys
+):
     """A late tip publish is waited out, so no ancestor is substituted."""
     repo = tmp_path / "installed"
     repo.mkdir()
     parent, tip = _init_two_commit_repo(repo)
     original_run = subprocess.run
     pulls = []
-    responses = iter([_pull_failure("manifest unknown"), SimpleNamespace(returncode=0, stdout="")])
+    responses = iter(
+        [_pull_failure("manifest unknown"), SimpleNamespace(returncode=0, stdout="")]
+    )
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
         assert args[1] == "pull"
         pulls.append(args[2])
         return next(responses)
+
     sleeps = []
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
@@ -724,6 +929,7 @@ def test_select_falls_back_to_ancestor_only_after_the_tip_wait(tmp_path, monkeyp
     parent, tip = _init_two_commit_repo(repo)
     original_run = subprocess.run
     pulls = []
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
@@ -731,6 +937,7 @@ def test_select_falls_back_to_ancestor_only_after_the_tip_wait(tmp_path, monkeyp
         if args[2].endswith(tip):
             return _pull_failure("manifest unknown")
         return SimpleNamespace(returncode=0, stdout="pulled")
+
     sleeps = []
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
@@ -756,10 +963,12 @@ def test_select_exhaustion_keeps_branch_and_tip_context(tmp_path, monkeypatch):
     repo.mkdir()
     parent, tip = _init_two_commit_repo(repo)
     original_run = subprocess.run
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
         return _pull_failure("Error response from daemon: manifest unknown")
+
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: None)
     monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
@@ -782,8 +991,14 @@ def test_select_exhaustion_keeps_branch_and_tip_context(tmp_path, monkeypatch):
     ("diagnostic", "hint"),
     [
         ("unauthorized: authentication required", "docker login"),
-        ("write /var/lib/desktop-containerd/meta.db: read-only file system", "Docker storage is not writable"),
-        ("failed to register layer: no space left on device", "Docker storage is not writable"),
+        (
+            "write /var/lib/desktop-containerd/meta.db: read-only file system",
+            "Docker storage is not writable",
+        ),
+        (
+            "failed to register layer: no space left on device",
+            "Docker storage is not writable",
+        ),
     ],
 )
 def test_select_non_publish_failure_fails_fast_without_wait_or_fallback(
@@ -794,11 +1009,13 @@ def test_select_non_publish_failure_fails_fast_without_wait_or_fallback(
     _parent, tip = _init_two_commit_repo(repo)
     original_run = subprocess.run
     pulls = []
+
     def command(args, **kwargs):
         if args[0] != "docker":
             return original_run(args, **kwargs)
         pulls.append(args[2])
         return _pull_failure(diagnostic)
+
     sleeps = []
     monkeypatch.setattr(update.subprocess, "run", command)
     monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
@@ -829,7 +1046,9 @@ def test_main_records_the_published_ancestor_and_requested_tip(tmp_path, monkeyp
         if args[1] == "pull":
             pulls.append(args[2])
             if args[2].endswith(tip):
-                return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="manifest unknown"
+                )
             assert args[2].endswith(parent)
             return SimpleNamespace(returncode=0, stdout="pulled")
         if args[1:3] == ["image", "inspect"]:
@@ -837,13 +1056,17 @@ def test_main_records_the_published_ancestor_and_requested_tip(tmp_path, monkeyp
                 [
                     {
                         "RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"],
-                        "Config": {"Labels": {"org.opencontainers.image.revision": parent}},
+                        "Config": {
+                            "Labels": {"org.opencontainers.image.revision": parent}
+                        },
                     }
                 ]
             )
             return SimpleNamespace(returncode=0, stdout=output)
         if args[1:3] == ["compose", "config"]:
-            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project","services":{"api":{}}}')
+            return SimpleNamespace(
+                returncode=0, stdout='{"name":"existing-project","services":{"api":{}}}'
+            )
         if args[1] == "run":
             return SimpleNamespace(returncode=0, stdout="services: {}")
         raise AssertionError(f"unexpected docker command: {args}")
@@ -852,7 +1075,9 @@ def test_main_records_the_published_ancestor_and_requested_tip(tmp_path, monkeyp
     monkeypatch.setattr(update, "_sleep", lambda seconds: None)
     monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
     _install_controller_secret(repo)
-    posted = _stub_controller_success(monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}")
+    posted = _stub_controller_success(
+        monkeypatch, f"ghcr.io/moonladderstudios/moonmind@{digest}"
+    )
     assert update.main(["--repo", str(repo)]) == 0
     assert posted[0]["sourceRevision"] == parent
     assert posted[0]["reason"] == "Update to selected branch snapshot"
@@ -955,7 +1180,12 @@ def test_submit_via_controller_passes_resolved_file_set_and_idempotency(
 
 def test_install_notice_does_not_log_secret_path(tmp_path, monkeypatch, capsys):
     """CodeQL clear-text logging: the install notice must not log secrets."""
-    record = {"project": "existing-project", "image": "img", "inputs": {}, "context": {}}
+    record = {
+        "project": "existing-project",
+        "image": "img",
+        "inputs": {},
+        "context": {},
+    }
     monkeypatch.delenv("MOONMIND_CONTROLLER_SECRET_FILE", raising=False)
     monkeypatch.setattr(update, "_install_controller", lambda *args, **kwargs: None)
     monkeypatch.setattr(update, "_submit_via_controller", lambda *args, **kwargs: 0)
@@ -974,9 +1204,7 @@ def test_install_notice_does_not_log_secret_path(tmp_path, monkeypatch, capsys):
     assert "secret" not in out.lower()
 
 
-def test_resume_without_controller_installs_it_and_reattaches(
-    tmp_path, monkeypatch
-):
+def test_resume_without_controller_installs_it_and_reattaches(tmp_path, monkeypatch):
     """A resumed submission installs the controller and keeps its identity.
 
     No application-owned updater exists to fork. The resumed record keeps
@@ -1003,7 +1231,10 @@ def test_resume_without_controller_installs_it_and_reattaches(
         update, "_install_controller", lambda record, _repo: steps.append("install")
     )
 
-    def submit(record, _repo, *, controller_url, secret_file):
+    def submit(
+        record, _repo, *, controller_url, secret_file, refresh_controller_on_failure
+    ):
+        assert refresh_controller_on_failure is True
         steps.append(update._controller_operation_id(record["context"]))
         return 0
 
@@ -1035,7 +1266,9 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
 
     def fake_urlopen(request, timeout=None):
         if request.full_url.endswith("/v1/healthz"):
-            return FakeResponse(200, {"status": "ok", "capabilities": ["active-journal-transition"]})
+            return FakeResponse(
+                200, {"status": "ok", "capabilities": ["active-journal-transition"]}
+            )
         if request.method == "POST":
             return FakeResponse(202, {"operationId": "op-1", "status": "pending"})
         outcome = statuses[min(len(gets), len(statuses) - 1)]
@@ -1043,7 +1276,8 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
         if outcome == "unreachable":
             raise urllib.error.URLError("connection refused")
         return FakeResponse(
-            200, {"operationId": "op-1", "status": outcome, "installed": {"image": "img"}}
+            200,
+            {"operationId": "op-1", "status": outcome, "installed": {"image": "img"}},
         )
 
     monkeypatch.setattr(update, "_open_controller", fake_urlopen)
@@ -1051,7 +1285,9 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
     monkeypatch.setattr(
         update,
         "run",
-        lambda args, **kwargs: json.dumps({"name": "moonmind", "services": {"api": {}}}),
+        lambda args, **kwargs: json.dumps(
+            {"name": "moonmind", "services": {"api": {}}}
+        ),
     )
     record = {
         "project": "moonmind",
@@ -1078,9 +1314,7 @@ def test_controller_status_read_outage_does_not_fail_confirmed_update(
     assert gets == ["unreachable", "succeeded"]
 
 
-def test_controller_poll_timeout_names_the_resumable_submission(
-    tmp_path, monkeypatch
-):
+def test_controller_poll_timeout_names_the_resumable_submission(tmp_path, monkeypatch):
     record, _gets = _controller_poll_fixture(tmp_path, monkeypatch, ["applying"])
     monkeypatch.setattr(update, "_CONTROLLER_POLL_TIMEOUT_SECONDS", -1)
 

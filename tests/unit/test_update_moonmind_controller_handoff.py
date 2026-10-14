@@ -20,6 +20,7 @@ import pytest
 
 from tests.support.deployment_controller import (
     InProcessController,
+    failing_until,
     forget_controller_modules,
     install_controller_state,
     load_controller_modules,
@@ -375,6 +376,43 @@ def test_explicit_host_controller_keeps_its_release_choice(installed, monkeypatc
     assert len(controller.applied) == 1
 
 
+@pytest.mark.parametrize("selection", ["endpoint", "secret"])
+def test_explicit_host_controller_keeps_its_release_after_a_failed_operation(
+    installed, monkeypatch, selection
+):
+    repo, controller = installed(failing_until(lambda: False))
+    monkeypatch.setattr(
+        update, "run", lambda *args, **kwargs: json.dumps({"services": {"api": {}}})
+    )
+    monkeypatch.setattr(
+        update,
+        "_refresh_controller_to_requested",
+        lambda *args: pytest.fail("Explicit controller release was replaced"),
+    )
+    record = {
+        "project": "moonmind",
+        "image": IMAGE,
+        "inputs": {},
+        "context": {"idempotency_key": "host-update:explicit-failed"},
+    }
+    with pytest.raises(RuntimeError, match="Expecting value"):
+        update._submit_release(
+            record,
+            repo,
+            controller_url=controller.url,
+            controller_url_explicit=selection == "endpoint",
+            secret_file=(
+                str(update._default_controller_secret_file(repo))
+                if selection == "secret"
+                else None
+            ),
+        )
+    recorded = controller.store.load("host-explicit-failed")
+    assert recorded["attemptGroup"] == 1
+    assert recorded["desired"]["image"] == IMAGE
+    assert set(controller.applied) == {"host-explicit-failed"}
+
+
 def test_no_argument_host_command_submits_the_controller_operation(
     installed: Callable[..., tuple[Path, InProcessController]],
     monkeypatch: pytest.MonkeyPatch,
@@ -475,6 +513,105 @@ def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
     )
     assert bootstrapped
     assert len(controller.applied) == 1
+
+
+@pytest.mark.parametrize(
+    ("controller_changed", "first_retry_arrives"),
+    [(True, True), (True, False), (False, True)],
+)
+def test_host_retries_with_the_requested_release_controller_after_installed_one_fails(
+    installed, monkeypatch, controller_changed, first_retry_arrives
+):
+    """A capable installed controller can still carry the bug its release fixes."""
+    refreshed = False
+    repo, controller = installed(failing_until(lambda: refreshed))
+    monkeypatch.setattr(update, "_sleep", lambda _seconds: None)
+    ensures = []
+    retry_posts = []
+    request = update._controller_call
+
+    def recreated_controller(url, secret, method, path, *args, **kwargs):
+        if path.endswith("/retry"):
+            retry_posts.append(path)
+            if not first_retry_arrives and len(retry_posts) == 1:
+                # The just-recreated controller refused the connection.
+                raise update.ControllerUnreachableError("connection refused")
+        return request(url, secret, method, path, *args, **kwargs)
+
+    monkeypatch.setattr(update, "_controller_call", recreated_controller)
+
+    def run(command, **kwargs):
+        nonlocal refreshed
+        if "describe-installation" in command:
+            return json.dumps(
+                {
+                    "bindSources": {
+                        "repo": str(repo),
+                        "state": str(repo / "deploy/state/controller"),
+                    },
+                }
+            )
+        if command[:3] == ["docker", "compose", "config"]:
+            return json.dumps({"services": {"api": {}}})
+        if command[:2] == ["docker", "ps"]:
+            return "installed-api"
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Image": "sha256:installed",
+                        "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                    }
+                ]
+            )
+        if update._CONTROLLER_SOURCE_EXPORT in command:
+            return json.dumps(
+                {
+                    "bootstrap.py": "# shipped host lifecycle source",
+                    "mounts.py": (ROOT / "deploy/controller/mounts.py").read_text(),
+                }
+            )
+        assert command[:2] == ["docker", "run"]
+        assert "ensure" in command and "--user" in command and "0:0" in command
+        assert (
+            command[command.index("--state-dir") + 1] == "/var/lib/moonmind-controller"
+        )
+        assert command[command.index("--repo") + 1] == "/deployment"
+        assert f"http://moonmind-controller:{controller.port}" in command
+        assert command[command.index("--image") + 1] == IMAGE
+        assert "--prefer-requested" in command
+        # Only a terminal failure is handed to the requested release.
+        assert controller.store.load("host-refresh-test")["status"] == "failed"
+        ensures.append(command)
+        refreshed = controller_changed
+        receipt = {"refreshed": controller_changed, "image": "sha256:requested"}
+        return f"Controller ready.\nMOONMIND_CONTROLLER_REFRESH={json.dumps(receipt)}\n"
+
+    monkeypatch.setattr(update, "run", run)
+    record = {
+        "project": "moonmind",
+        "image": IMAGE,
+        "inputs": {},
+        "context": {"idempotency_key": "host-update:refresh-test"},
+    }
+    submit = lambda: update._submit_via_controller(  # noqa: E731
+        record, repo, controller_url=controller.url, secret_file=None
+    )
+    if not controller_changed:
+        with pytest.raises(RuntimeError, match="Expecting value") as failure:
+            submit()
+        assert "already runs the requested release" in str(failure.value)
+        assert len(ensures) == 1
+        assert retry_posts == []
+        assert controller.store.load("host-refresh-test")["attemptGroup"] == 1
+        return
+    assert submit() == 0
+    assert len(ensures) == 1
+    assert len(retry_posts) == (1 if first_retry_arrives else 2)
+    recorded = controller.store.load("host-refresh-test")
+    assert (recorded["status"], recorded["attemptGroup"]) == ("succeeded", 2)
+    # The original failure stays in the operation record.
+    assert "Expecting value" in recorded["attempts"][0]["error"]
 
 
 def test_host_lost_acknowledgment_observes_instead_of_resubmitting(

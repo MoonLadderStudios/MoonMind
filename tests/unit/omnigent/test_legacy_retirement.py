@@ -1194,6 +1194,20 @@ def test_temporary_flags_cover_supervisor_settings_fields() -> None:
         assert flag in model_fields
 
 
+def test_every_retained_supervisor_flag_declares_its_retirement() -> None:
+    # MoonLadderStudios/MoonMind#3935: a retained-lane flag that is not
+    # registered here has no exit condition and can outlive the lane.
+    from moonmind.config.settings import FeatureFlagsSettings
+
+    supervisor_flags = {
+        field
+        for field in FeatureFlagsSettings.model_fields
+        if field.startswith("omnigent_session_supervisor_")
+    }
+    assert supervisor_flags
+    assert supervisor_flags <= set(TEMPORARY_ROLLOUT_FLAGS)
+
+
 # --------------------------------------------------------- staged removal PRs
 
 

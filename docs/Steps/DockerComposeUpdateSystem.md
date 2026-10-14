@@ -345,6 +345,24 @@ recreation leaves an unchanged controller running. An explicitly selected
 controller retains its release choice; missing journal support still requires
 the existing prerequisite.
 
+The controller prepared by that prerequisite or default refresh owns the first
+application attempt. An advertised method cannot prove it will apply a release
+whose controller fixes a defect. After a failed operation, a default local host
+selection or deployment-control submission gives the requested release's
+controller one attempt: `bootstrap.py ensure --prefer-requested` refreshes to
+the requested image under the same lock and open-operation refusal. The default
+host uses the same privileged helper and installed bind authority for this
+repair. An explicitly selected host endpoint or secret keeps its controller
+release after failure as well.
+
+The refresh reports `refreshed: false` only when the live controller container
+already runs that image; an interrupted refresh that rewrote only its Compose
+file is reconciled. Only a confirmed change earns a Retry of the same operation,
+whose new attempt group is observed before an uncertain retry is resubmitted.
+Otherwise the original failure stands beside the refresh diagnostic. The API
+cannot run bootstrap, so a failed Settings Operations submission recovers
+through the host command or a workflow-submitted update.
+
 An already-installed old API/controller may reach the new target's
 `--omnigent-select` callback without running either updated submission client.
 The callback requires the owning controller's `active-journal-transition`

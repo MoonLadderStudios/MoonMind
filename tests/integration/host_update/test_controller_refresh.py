@@ -250,6 +250,36 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(
         )
         assert saved_digest("preserved-failure") == failed_digest
 
+        # Failed-operation recovery uses the same privileged bootstrap path.
+        # An unchanged live image cannot earn another application attempt.
+        changed, detail = update._refresh_controller_to_requested(record, repo, url)
+        assert changed is False and "already runs the requested release" in detail
+        assert container() == after
+        changed, detail = update._refresh_controller_to_requested(
+            {"project": project, "image": previous_id}, repo, url
+        )
+        assert changed is True and detail == ""
+        repaired = container()
+        assert repaired != after
+        assert (
+            command(["docker", "inspect", "--format", "{{.Image}}", repaired])
+            == previous_id
+        )
+        changed, detail = update._refresh_controller_to_requested(
+            {"project": project, "image": previous_id}, repo, url
+        )
+        assert changed is False and "already runs the requested release" in detail
+        assert container() == repaired
+        assert saved_digest("preserved-failure") == failed_digest
+        update._ensure_controller_journal_transition(
+            record, repo, url, secret, refresh=True
+        )
+        after = container()
+        assert (
+            command(["docker", "inspect", "--format", "{{.Image}}", after])
+            == candidate_id
+        )
+
         # An open record belongs to the capable controller, even when a
         # later caller asks bootstrap for a different release.
         seed("active-work", failed=False)

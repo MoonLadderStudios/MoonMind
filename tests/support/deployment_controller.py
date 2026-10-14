@@ -101,6 +101,31 @@ def slow_applier(
     return apply
 
 
+def failing_until(
+    refreshed: Callable[[], bool],
+) -> Callable[[InProcessController, dict], None]:
+    """An applier whose controller fails every attempt until its code changes.
+
+    It stands in for a controller-resident defect that the requested release
+    fixes: the installed controller exhausts its bounded attempts, and only a
+    controller refreshed to the requested release can apply it.
+    """
+
+    def apply(controller: InProcessController, operation: dict) -> None:
+        if refreshed():
+            controller.store.confirm_installed(
+                operation["operationId"], image=operation["desired"]["image"]
+            )
+            return
+        controller.store.record_attempt_error(
+            operation["operationId"],
+            error="apply failed: journal-prepare failed (exit 1) Expecting value",
+        )
+        raise controller.engine.ApplyError("journal-prepare", 1, "Expecting value")
+
+    return apply
+
+
 def load_controller_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     """Import the stdlib controller modules from ``deploy/controller``."""
     monkeypatch.syspath_prepend(str(CONTROLLER_DIR))
