@@ -479,7 +479,7 @@ class PublishService:
                                     self._git_binary,
                                     "show",
                                     "--no-patch",
-                                    "--format=%T%n%P%n%B",
+                                    "--format=%T%n%P%n%an%n%ae%n%cn%n%ce%n%B",
                                     "HEAD",
                                 ],
                                 cwd=repo_dir,
@@ -489,7 +489,7 @@ class PublishService:
                                     self._git_binary,
                                     "show",
                                     "--no-patch",
-                                    "--format=%T%n%P%n%B",
+                                    "--format=%T%n%P%n%an%n%ae%n%cn%n%ce%n%B",
                                     remote_sha,
                                 ],
                                 cwd=repo_dir,
@@ -500,7 +500,8 @@ class PublishService:
                                 candidate_identity
                                 and candidate_identity == original_identity
                             ):
-                                # Tree, parents and publication message agree.
+                                # Tree, parents, author/committer identities and
+                                # publication message agree; dates may vary.
                                 # A concurrent same-tree descendant still fails.
                                 await run_command(
                                     [self._git_binary, "reset", "--soft", remote_sha],
