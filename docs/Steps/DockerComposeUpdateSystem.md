@@ -333,9 +333,11 @@ applies first. When its operation fails, the host entrypoint and the
 deployment-control submitter give the requested release's controller one
 attempt: `bootstrap.py ensure --prefer-requested` refreshes the controller to
 the requested image under the same lock and open-operation refusal, and
-reports `refreshed: false` when the controller already runs that image. Only
-a refreshed controller earns a Retry of the same operation; otherwise the
-original failure stands. The API cannot run the bootstrap owner, so a
+reports `refreshed: false` only when the live controller container already
+runs that image (an interrupted refresh that rewrote only its Compose file is
+reconciled). Only a refreshed controller earns a Retry of the same operation,
+confirmed by its new attempt group before the submitter asks again;
+otherwise the original failure stands beside the refresh diagnostic. The API cannot run the bootstrap owner, so a
 Settings Operations submission that fails this way recovers through the host
 update command or a workflow-submitted update.
 
