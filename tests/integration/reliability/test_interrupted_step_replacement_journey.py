@@ -590,6 +590,31 @@ class _NoCapabilities:
         return {}
 
 
+class _RuntimeOwnedWorkspaces:
+    """Hand each materialized workspace to the exact host's runtime identity.
+
+    A deployed worker runs as the same unprivileged identity as the exact
+    host image, so every workspace it creates is already writable there. The
+    recovery row's driver runs as root for the Docker socket, so its scratch
+    workspaces need the ownership the production worker would have given them.
+    """
+
+    def __init__(self, materializer) -> None:
+        self._materializer = materializer
+
+    async def materialize(self, request, **kwargs):
+        workspace = await self._materializer.materialize(request, **kwargs)
+        uid, gid = kwargs["runtime_uid"], kwargs["runtime_gid"]
+        if os.geteuid() == 0 and workspace.get("kind") == "bind":
+            root = Path(workspace["sourceRef"])
+            for path in (root, *root.rglob("*")):
+                os.chown(path, uid, gid, follow_symlinks=False)
+        return workspace
+
+    def __getattr__(self, name):
+        return getattr(self._materializer, name)
+
+
 class _ObservedLaunches:
     """Record each registered exact host with the image Docker actually ran.
 
@@ -676,7 +701,7 @@ class _ExactFleet:
                 server_url=_host_server_url(),
                 host_api_token=resolved_host_runner_token(),
             ),
-            workspace_service=materializer,
+            workspace_service=_RuntimeOwnedWorkspaces(materializer),
             skill_service=_NoSkills(self._skills),
             tool_service=_NoTools(),
             github_credential_service=OmnigentGithubCredentialService(None),
