@@ -1,4 +1,4 @@
-"""Staged retirement of the experimental embedded host transport (#3955).
+"""Retirement of the experimental embedded host transport (#3955).
 
 MoonLadderStudios/MoonMind#3955 retires the experimental embedded host/runner
 transport without removing native chat or historical evidence:
@@ -13,9 +13,9 @@ transport without removing native chat or historical evidence:
 * removed configuration is detected at API/worker startup, and readiness no
   longer advertises the removed transport.
 
-Physical removal of the launch code follows at the launch-only removal stage
-once bounded drain probes establish no active or cleanup owner remains; these
-tests pin the admission-disabled stage, not the deletion.
+Physical removal of the launch code follows once bounded drain probes
+establish no active or cleanup owner remains; these tests pin disabled
+admission, not the deletion.
 """
 
 from __future__ import annotations
