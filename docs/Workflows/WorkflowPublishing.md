@@ -237,7 +237,7 @@ Publication scan fetches terminate option parsing before remote/ref operands, pe
 
 ### Dependency Publication
 
-Managed and saved-candidate Git publication verify each changed gitlink against its revision's `.gitmodules` URL (relative URLs resolved against the publication remote) by fetching the exact commit into a temporary repository; local overrides, cached refs, and fork-only commits do not count. The parent push uses `--recurse-submodules=no` so local configuration cannot publish dependencies on the consumer's behalf. An unfetchable dependency records `dependency_commit_unavailable` as a prerequisite failure instead of retrying the push, and the same candidate resumes once the dependency is published.
+Managed and saved-candidate publication fetch each changed gitlink from its committed `.gitmodules` URL. An owned temporary consumer uses committed declarations and gitlinks to resolve relative URLs against the publication remote. Local overrides, cached refs and fork-only commits do not count. The parent push uses `--recurse-submodules=no`, leaving dependency publication with its owner. An unfetchable dependency records `dependency_commit_unavailable` as a prerequisite failure; the same candidate resumes once the dependency is published.
 
 ## 12. Historical Contracts
 
