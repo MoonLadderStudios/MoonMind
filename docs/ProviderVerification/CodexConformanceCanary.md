@@ -9,8 +9,8 @@ last_reviewed: 2026-07-10
 
 ## CONTRACT-001 Live Long-Command Canary
 
-MoonMind maintains a credentialed provider-verification canary for
-`MoonLadderStudios/MoonMind#3150`. The canary runs a managed Codex session with
+MoonMind maintains a credentialed provider-verification canary for long-running
+foreground commands in managed Codex sessions. The canary runs a managed Codex session with
 a harmless foreground command that outlives the first tool yield, is polled at
 least once after that yield, writes `var/conformance/long_command_result.json`
 only after the helper process exits, and returns a terminal result that

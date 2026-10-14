@@ -2,7 +2,6 @@
 
 **Document Class:** Working document (owning tool/report note)
 **Viewpoint:** Security tooling
-**Implementation tracking:** MoonLadderStudios/MoonMind#3970
 **Status:** Implemented
 **Owners:** MoonMind Engineering
 **Last Updated:** 2026-09-22

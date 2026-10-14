@@ -135,7 +135,7 @@ for module in (
     "moonmind.omnigent.embedded_evidence",
 ):
     # Poison the import system: any import of a launch module raises
-    # ImportError, exactly as if the removal stage had deleted it.
+    # ImportError, exactly as if the module had been deleted.
     sys.modules[module] = None
 
 import api_service.api.routers.omnigent_bridge as router

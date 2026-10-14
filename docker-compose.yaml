@@ -99,7 +99,7 @@ services:
       # MoonLadderStudios/MoonMind#4115: the native Qdrant backend is retired.
       # The vector-free release wires no QDRANT_URL; a stale QDRANT_URL in an
       # old .env is ignored. Exact-container retirement of a pre-cutover
-      # orphan is an explicit operator action (see docs/tmp/QdrantCutoverRunbook-4115.md),
+      # orphan is an explicit operator action (docs/Runbooks/QdrantRetirement.md),
       # never broad orphan cleanup or `down -v`.
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
@@ -132,15 +132,11 @@ services:
       # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
       # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
       # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
-      # the upstream server directly. Enabled by default. The compatibility
-      # version is derived from the same immutable server image evidence the
-      # execution catalog already requires (OMNIGENT_IMAGE_REF digest), so
-      # pinning the image is the only step needed to serve native chat. A
-      # mutable tag stays unverified and the gate fails closed
-      # (MoonLadderStudios/MoonMind#3685). OMNIGENT_NATIVE_UI_VERSION is the
-      # explicit override an operator sets after a new build passes conformance.
+      # the upstream server directly. Enabled by default; set
+      # OMNIGENT_NATIVE_UI_ENABLED=false to disable it. Compatibility is the
+      # scoped route/bootstrap contract, not the image identity, so updating
+      # the server image needs no version pin.
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
-      - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
@@ -1160,7 +1156,7 @@ services:
   # qdrant-storage:/qdrant/storage. Removing this YAML definition does not
   # stop a running pre-cutover orphan nor delete pre-cutover host data:
   # exact-container retirement is an explicit operator action with ownership
-  # checks (see docs/tmp/QdrantCutoverRunbook-4115.md), and the pre-cutover
+  # checks (docs/Runbooks/QdrantRetirement.md), and the pre-cutover
   # volume persists as an unmanaged host orphan through the #4115
   # recovery window; its eventual deletion is a separate exact-resource
   # operator action, never automatic.

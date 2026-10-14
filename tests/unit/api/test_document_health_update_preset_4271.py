@@ -192,15 +192,6 @@ def test_document_author_discovers_conventions_without_mandatory_detour():
     assert "do not replace it with a plan solely because it is substantial" in text
 
 
-def test_reconcile_gate_stays_truthful():
-    text = _skill_text("moonspec-doc-reconcile")
-    assert "Divergence alone is never doc drift" in text
-    assert "escalate for an owner decision instead of editing" in text
-    assert "Supplementary instructions narrow scope" in text
-    assert "never widen the update gate" in text
-    assert "The structured outcome is mandatory in every run" in text
-
-
 def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
     """A9: report-driven move + repair-before-removal execution boundary.
 

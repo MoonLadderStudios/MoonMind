@@ -474,7 +474,7 @@ Rules:
 - preserve horizontal space for comparison instead of collapsing into stacked cards on desktop
 - use cards only for narrow/mobile layouts
 
-Mobile record cards (MoonMind#4559) stack label above value at full record
+Mobile record cards stack label above value at full record
 width; actions get their own wrapping area below the fields instead of
 competing inside a label column. The shared `DataTable` responsive cards carry
 loading/error/empty states because mobile CSS hides the table that holds those
@@ -722,7 +722,7 @@ Any liquidGL-enabled surface must satisfy all of the following:
 
 ---
 
-### 13.6 shared responsive layout contract (MoonMind#4559)
+### 13.6 shared responsive layout contract
 
 Non-workflow surfaces share one responsive implementation in
 `frontend/src/styles/dashboard.css`, owned by the existing

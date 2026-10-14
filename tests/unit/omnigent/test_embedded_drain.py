@@ -1,6 +1,6 @@
 """Bounded drain disposition for the retired embedded host transport.
 
-MoonLadderStudios/MoonMind#3955 (remediation): Stage 1 disabled new admission
+MoonLadderStudios/MoonMind#3955 (remediation): new admission is disabled
 while in-flight sessions drain. These tests pin the bounded, side-effect-free
 half of the remaining work:
 
@@ -11,7 +11,7 @@ half of the remaining work:
   zero *and* historical decoding is available — missing evidence blocks,
   never drains;
 * the drain module itself never imports the launch/store/channel/evidence/DB
-  modules a later removal stage will delete.
+  modules that are deleted once the drain completes.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from moonmind.omnigent.embedded_drain import (
 
 DRAIN_MODULE = Path(__file__).resolve().parents[3] / "moonmind/omnigent/embedded_drain.py"
 
-# Modules a later removal stage will delete (or drain-only restrict). The
+# Modules deleted (or drain-only restricted) once the drain completes. The
 # read-only decoder must never require them: historical data does not need a
 # live transport.
 _FORBIDDEN_DRAIN_IMPORTS = frozenset(

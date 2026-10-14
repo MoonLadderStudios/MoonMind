@@ -23,7 +23,6 @@ The generated task list must:
 - Preserve traceability to the original request or source design preserved in `spec.md`.
 - Carry forward docs-native packet provenance from `spec.md`: source document path, document class, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and source issue traceability such as `MM-933` / `MM-927`.
 - Include final `/moonspec.verify` work after implementation and tests pass.
-- Include a final doc-reconciliation task (`moonspec-doc-reconcile`) after `/moonspec.verify` when `spec.md` records a canonical source document under `docs/`.
 
 `tasks.md` is an imperative, temporary execution artifact (see `docs/Workflows/MoonSpecDocumentModel.md`). Never copy its content into canonical `docs/` files.
 
@@ -308,7 +307,6 @@ Before reporting, verify:
 - `## Requirement Status` rows from `plan.md`, when present, are reflected without forcing unnecessary implementation tasks for `implemented_verified` rows.
 - `implemented_unverified` rows include fallback implementation tasks that are conditional on verification failure.
 - Final `/moonspec.verify` task exists.
-- Final `moonspec-doc-reconcile` task exists after `/moonspec.verify` when `spec.md` records a canonical source document under `docs/`.
 
 If validation fails, update `tasks.md` and validate again before reporting.
 

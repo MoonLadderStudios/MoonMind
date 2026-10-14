@@ -12,7 +12,8 @@ Use this skill to perform the final MoonSpec verification workflow.
 
 Read [the acceptance policy](references/acceptance-policy.md) before selecting
 scope, evidence, verdict, reuse, or completion. This bundle owns that policy;
-caller instructions supply scope and evidence, not alternative acceptance rules.
+caller instructions and the selected source supply scope, explicit acceptance
+requirements, and evidence.
 
 ## Scope
 
@@ -25,7 +26,7 @@ This skill answers:
 - Do unit tests and integration tests provide credible evidence?
 - Which requirements, scenarios, source design mappings, or AGENTS.md principles remain partial, missing, conflicting, or unverified?
 - Which stable canonical source claims are covered by implementation behavior, test evidence, artifact evidence, or a clear gap reason?
-- Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift that reconciliation must handle?
+- Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift?
 
 ## Source Acceptance Matrix Verification
 
@@ -89,7 +90,7 @@ Resolve the verification baseline in this order:
 3. An explicitly provided `spec.md` or feature directory.
 4. An active feature directory discovered from repository context by running `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`.
 
-The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. Workflow-stage prose such as "run the final gate", ad hoc verifier guidance such as "focus on API tests", or other process instructions are operational guidance, not source-direct authority; do not let them outrank an explicit feature directory, `spec.md`, original request, issue brief, declarative source document, or discovered active-feature source. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
+The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. Workflow-stage prose such as "run the final gate", ad hoc verifier guidance such as "focus on API tests", or other process instructions are operational guidance, not source-direct authority; do not let them outrank an explicit feature directory, `spec.md`, original request, issue brief, declarative source document, or discovered active-feature source.
 
 In source-direct verification mode:
 
@@ -213,7 +214,7 @@ In MoonSpec feature-directory mode, read when present:
 - `AGENTS.md` when present: project principles, repo constraints, `MUST` rules, and testing discipline.
 - `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/` when present and relevant.
 - `specs/breakdown.md` when source design coverage or cross-spec dependencies matter.
-- The canonical source document named by `spec.md` `**Source Document**` when present, plus `artifacts/doc-discoveries/<feature>.json` when it exists, so source-document drift can be assessed.
+- The canonical source document named by `spec.md` `**Source Document**` when present, so source-document drift can be assessed.
 
 Do not use copied source requirement text in `spec.md` as evidence that behavior exists.
 
@@ -228,7 +229,7 @@ Do not use the issue brief, assessment, or generated handoff text as evidence th
 
 ## Canonical Claim Coverage
 
-When a canonical source document is present, report first-class Canonical Claim Coverage over stable canonical claims from that source while preserving the existing Source Document Drift section for reconciliation handoff.
+When a canonical source document is present, report first-class Canonical Claim Coverage over stable canonical claims from that source while preserving the existing Source Document Drift section.
 
 Build the claim inventory from the canonical source document's stable claim headings and durable claim anchors, such as `DOC-REQ-*`, `CONTRACT-*`, `INV-*`, `NON-GOAL-*`, `QUALITY-*`, and `TEST-*`. Use temporary `DESIGN-REQ-*` values only as source-issue traceability, not as stable canonical claim IDs. Preserve source issue traceability or related coverage IDs when the canonical document provides it, but do not treat traceability prose as proof of behavior.
 
@@ -242,7 +243,7 @@ Each claim row must include at least one durable reference in one of these field
 
 - Code evidence, such as repository file paths with line numbers or named code symbols.
 - Test evidence, such as test file paths, test names, and command results.
-- Artifact evidence, such as artifact refs, discovery ledger paths, diagnostics refs, or report refs.
+- Artifact evidence, such as artifact refs, diagnostics refs, or report refs.
 - Gap reason, when evidence is missing, ambiguous, contradictory, or out of scope.
 
 Classify gaps separately:
@@ -251,7 +252,7 @@ Classify gaps separately:
 - Verification gaps mean tests, command evidence, or inspection evidence are missing or insufficient.
 - Doc drift means verified behavior contradicts, supersedes, or reveals ambiguity in the canonical source document.
 
-Doc drift alone does not block `FULLY_IMPLEMENTED` when implementation behavior and required verification are correct for the agreed story scope. In that case, set the claim's drift status and also record the structured drift in Source Document Drift for `moonspec-doc-reconcile`.
+Record source drift in the report; required in-scope documentation corrections are ordinary remaining implementation work.
 
 Use durable evidence references instead of pasting large source, code, test, artifact, or log content into the report.
 
@@ -290,20 +291,15 @@ assessment requirements verification map; fill missing historical entries from
 visible source requirements before executing checks. Never change acceptance
 scope to fit the available environment.
 
-Prerequisite preparation has at most two authorized setup attempts per owning
-service and candidate. Persist readiness, setup actions, failures and resume
-commands with the inventory; continuation preserves this budget. Use available
-repository and managed container capabilities before declaring a dependency
-unavailable. A verification infrastructure failure preserves the same saved
-candidate. Request evidence retry only when an authorized setup attempt remains
-or a concrete environment or authority change allows a controlling check to
-obtain different evidence without another setup attempt. An exhausted setup
-budget remains exhausted across continuation. If the prerequisite is unchanged
-and no authorized recovery action remains, follow the Continuation Decision
-rules to return `blocked`, or `needs_human` only for an actual human-owned
-authority decision. A demonstrated code defect requests remediation. Missing
-authority names the actual granting owner. These outcomes must not be conflated
-or consume each other's budgets.
+Apply the acceptance policy's setup recovery and attempt accounting. Persist
+readiness, setup actions, original errors, and resume commands with the inventory;
+reuse supplied history and honor the owning workflow's limits. Missing historical
+setup records do not establish exhausted attempts or prevent safe repository
+fixes. Use available repository and managed container capabilities before
+classifying a controlling dependency as unavailable. Preserve the same saved
+candidate on infrastructure failures and distinguish evidence retry from code
+remediation. Do not repeat an unchanged rejected setup. Browser tooling follows
+the browser-independent defaults below and is never an implicit prerequisite.
 
 Inspect production code before tests so behavior is verified directly.
 
@@ -345,6 +341,26 @@ invalid verification evidence. A missing host-local runner does not make a
 test unavailable while the documented delegated capability exists. If that
 capability is missing or rejects the job, preserve its explicit evidence and
 classify the environment according to `AGENTS.md`.
+
+### Browser-independent verification
+
+Apply the acceptance policy's browser-independent defaults in every mode. Browser
+checks are optional diagnostics unless the controlling source, caller, or
+applicable root or scoped `AGENTS.md` instructions explicitly require a browser
+acceptance gate or human visual signoff for this verification run. Preserve that
+explicit authority. Merely naming a browser suite in guidance or generic docs
+does not make it an acceptance requirement. Missing browsers, Playwright,
+browser installation, screenshots, live UI access, or human visual review must never
+block the default verifier or fail its workflow. Record unavailable browser
+checks as advisory `NOT RUN`; do not put them in Remaining Work or choose a
+non-passing verdict or stop action solely for that reason.
+
+Use executed server/API, client-contract, component, and other non-browser
+integration checks to prove the same requested behavior across its real
+producers and consumers. Reuse valid candidate-bound evidence where available.
+Keep functional defects and missing controlling non-browser evidence actionable;
+passing unit helpers alone do not prove an end-to-end requirement. Describe
+visual diagnostic limits honestly without requiring a browser to close them.
 
 ### Discover Docker Test Options
 
@@ -418,8 +434,7 @@ Rules:
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
-- Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section as structured input for `moonspec-doc-reconcile`. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
-- Canonical claim doc drift alone follows the same rule: it is non-blocking when behavior and verification are correct, but implementation gaps and verification gaps remain blocking until resolved or explicitly out of scope.
+- When the change requires an in-scope documentation edit, a definite missing or incorrect update is ordinary remaining implementation work: record it in `remainingWork` and return `ADDITIONAL_WORK_NEEDED`. Record possible or unrelated source drift as observations. The current task and applicable AGENTS.md decide scope; this does not add a separate reconciliation stage or make reference documents override the task.
 
 ## Verdict
 
@@ -644,8 +659,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Verification is read-only except ignored disposable test artifacts.
 - Original instructions, a declarative source document, an issue brief, or an optional `spec.md` may define the bounded verification scope.
 - `spec.md`, `plan.md`, and `tasks.md` are disposable derived artifacts. Their absence never blocks verification when another usable baseline exists.
-- When `spec.md` names a canonical source document, interpret the story against that document's in-scope stable claims; the canonical document remains the durable desired-state authority unless verified drift is handed off to doc reconciliation.
-- Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
+- When `spec.md` names a canonical source document, verify the in-scope claims the story adopted from it and record verified drift in Source Document Drift.
+- Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently drop an in-scope requirement the story adopted.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
 - Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.

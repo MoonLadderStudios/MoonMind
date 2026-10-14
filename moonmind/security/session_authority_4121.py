@@ -1,7 +1,7 @@
 """Application-bound session authority (MoonLadderStudios/MoonMind#4121).
 
-Parent: #4116. Depends on #4118, #4119, #4120. Plan coverage: session and
-browser security, K2/K4 in ``docs/tmp/KeycloakRemovalPlan.md``.
+Parent: #4116. Depends on #4118, #4119, #4120. Covers session and
+browser security.
 
 This module owns the one reusable MoonMind session authority that account,
 OIDC, API, machine, and dashboard issues consume rather than implementing

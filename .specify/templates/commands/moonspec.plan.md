@@ -66,7 +66,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Evaluate principle conflicts (ERROR if violations are unjustified)
    - Phase 0: Generate research.md (resolve all NEEDS CLARIFICATION)
    - Phase 1: Generate data-model.md, contracts/, quickstart.md, including test-first validation scenarios
-   - Phase 1: Update agent context by running the agent script
+   - Phase 1: Keep feature context in plan.md; update lasting agent guidance only on explicit user request
    - Re-evaluate Principles Check post-design
 
 4. **Stop and report**: Command ends after design planning. Report branch, IMPL_PLAN path, generated artifacts, and the unit/integration test strategy to be used by `/moonspec.tasks`.
@@ -140,14 +140,15 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Examples: public APIs for libraries, command schemas for CLI tools, endpoints for web services, grammars for parsers, UI contracts for applications
    - Skip if project is purely internal (build scripts, one-off tools, etc.)
 
-3. **Agent context update**:
-   - Run `{AGENT_SCRIPT}`
-   - These scripts detect which AI agent is in use
-   - Update the appropriate agent-specific context file
-   - Add only new technology from current plan
-   - Preserve manual additions between markers
+3. **Agent context update (only on explicit request)**:
+   - Keep feature technology and status in plan.md during routine planning
+   - `{AGENT_SCRIPT}` changes nothing by default
+   - Only when the user explicitly requests a lasting guidance edit, add `--write` to the agent script invocation
+   - Preserve manual additions, symlink targets and existing file permissions
+   - Never create or update AGENTS.md from plan data, including through an alias; handle explicitly requested policy edits separately
+   - Report any update failure
 
-**Output**: data-model.md, /contracts/*, quickstart.md, agent-specific file
+**Output**: data-model.md, /contracts/*, quickstart.md; agent-specific guidance only when explicitly requested
 
 ## Key rules
 

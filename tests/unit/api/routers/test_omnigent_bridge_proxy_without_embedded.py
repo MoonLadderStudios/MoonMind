@@ -86,7 +86,7 @@ for module in (
     "moonmind.omnigent.embedded_evidence",
 ):
     # Poison the import system: any import of a launch module raises
-    # ImportError, exactly as if the removal stage had deleted it.
+    # ImportError, exactly as if the module had been deleted.
     sys.modules[module] = None
 
 from moonmind.omnigent.bridge_config import parse_bridge_config

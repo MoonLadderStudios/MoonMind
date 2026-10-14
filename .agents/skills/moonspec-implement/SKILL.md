@@ -201,29 +201,7 @@ Rules:
 - Confirm new tests fail before implementing production behavior, then make them pass.
 - Refactor only after tests pass.
 - Preserve unrelated user changes in the worktree.
-
-## Discovery Ledger
-
-When implementation deviates from the canonical source document recorded in `spec.md`, or reveals that the document is impossible to satisfy as written, unclear, or internally inconsistent, append a structured entry to a gitignored handoff at `artifacts/doc-discoveries/<feature>.json` (create the file with a top-level `discoveries` array on first use):
-
-```json
-{
-  "docPath": "docs/Workflows/Example.md",
-  "section": "heading or anchor",
-  "claim": "what the document says",
-  "observed": "what implementation showed",
-  "evidence": "file paths, tests, or command output supporting the observation",
-  "severity": "definite | possible"
-}
-```
-
-Rules:
-
-- Use `definite` only when verified evidence shows the document cannot be satisfied as written, is factually incorrect independent of this implementation, is internally inconsistent, or contains an ambiguity the implementation had to resolve.
-- When the implementation deliberately diverged from a clear, satisfiable documented approach, record the divergence as its own entry and state in `observed` that it is a deliberate divergence; doc reconciliation escalates these for an owner decision instead of editing the document.
-- Use `possible` for unconfirmed suspicions; these never authorize doc edits.
-- Write no entry when there is nothing to report. Do not invent discoveries.
-- Discoveries do not authorize editing canonical `docs/` files during implementation. They feed the `moonspec-doc-reconcile` step that runs after verification (see `docs/Workflows/MoonSpecDocumentModel.md`).
+- Review documentation relevant to the change: rewrite affected explanations in place, remove superseded or duplicated material, leave accurate documentation unchanged, and report the edited paths. Describe supported behavior without recording an unintended regression as intended design (see `docs/Workflows/MoonSpecDocumentModel.md`).
 
 ## Completion Validation
 
@@ -304,5 +282,5 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Preserve traceability to the original request and source design mappings.
 - Preserve relevant `AGENTS.md` principles and repo constraints.
 - Mark completed tasks `[X]` only after real completion.
-- Record canonical-doc drift in the discovery ledger instead of editing `docs/` files inline.
+- Update documentation the change makes inaccurate in the same change.
 - Run or recommend `/moonspec.verify` as the final alignment check.

@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
+from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.publish.service import PublishService
-from moonmind.publish.submodules import SubmodulePublicationError
+from moonmind.publish.submodules import (
+    SubmodulePublicationError,
+    verify_submodule_publication,
+)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     classify_git_push_failure,
+)
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
 )
 
 
@@ -100,6 +110,115 @@ async def _command(command, *, cwd, check=True, env=None, **_kwargs):
         raise subprocess.CalledProcessError(proc.returncode, command, stdout, stderr)
     return SimpleNamespace(
         stdout=stdout.decode(), stderr=stderr.decode(), returncode=proc.returncode
+    )
+
+
+@pytest.mark.asyncio
+async def test_verification_uses_trusted_source_without_local_clone(
+    dependency_candidate,
+):
+    candidate = dependency_candidate
+    _git(candidate.parent / "dependency", "push", "origin", "HEAD:main")
+    if getattr(os, "geteuid", lambda: -1)() == 0:
+        # The Linux test image can reproduce the actual restored-sandbox
+        # ownership boundary using only this disposable fixture.
+        os.chown(candidate.parent / ".git", 1000, -1)
+
+    async def run_git(*args, cwd, network=False):
+        # The admitted Git runner already trusts the exact source workspace.
+        # Git's test hook reproduces its different-owner sandbox without
+        # changing filesystem ownership or persistent Git configuration.
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        if cwd == candidate.parent:
+            env["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
+        return subprocess.run(
+            ["git", "-c", f"safe.directory={cwd.resolve()}", *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    await verify_submodule_publication(
+        repo_dir=candidate.parent,
+        candidate_ref=candidate.head,
+        base_ref=candidate.base,
+        remote_url=str(candidate.remote),
+        run_git=run_git,
+    )
+
+    assert (
+        await run_git("rev-parse", "HEAD", cwd=candidate.parent)
+    ).stdout.strip() == candidate.head
+    assert not _git(candidate.remote, "for-each-ref", "refs/heads/feature/rescue").stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dependency_published", [False, True])
+async def test_omnigent_publication_keeps_dependency_git_out_of_source(
+    dependency_candidate, tmp_path, monkeypatch, dependency_published
+):
+    from moonmind.config.settings import settings
+
+    candidate = dependency_candidate
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Fixture")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+    workflow_id, step_id = "dependency-publication", "implementation"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.parent.mkdir(parents=True)
+    candidate.parent.rename(workspace)
+    if dependency_published:
+        _git(workspace / "dependency", "push", "origin", "HEAD:main")
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    before_index = _git(workspace, "ls-files", "--stage").stdout
+    before_modules = _git(workspace, "config", "--get-regexp", r"^submodule\.").stdout
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                resolved=True, pr_url="https://github.com/example/consumer/pull/1"
+            )
+        ),
+    )
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    args = dict(
+        workspace_locator={
+            "kind": "sandbox", "workspaceId": workspace_id, "relativePath": "repo"
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+        publication_identity="dependency-publication",
+        publish_mode="pr",
+        base_branch="main",
+        repository="example/consumer",
+        github_token="fixture-token",
+    )
+    if dependency_published:
+        result = await publisher.publish_workspace(**args)
+        assert result["push_status"] == "pushed"
+        assert result["remote_verified"] is True
+        assert result["push_head_sha"] == candidate.head
+        assert (
+            _git(candidate.remote, "rev-parse", result["push_branch"]).stdout.strip()
+            == candidate.head
+        )
+    else:
+        with pytest.raises(RuntimeError, match="could not be found on its declared remote"):
+            await publisher.publish_workspace(**args)
+        assert not _git(
+            candidate.remote, "for-each-ref", "refs/heads/moonmind-job-"
+        ).stdout
+    assert _git(workspace, "ls-files", "--stage").stdout == before_index
+    assert _git(workspace, "status", "--porcelain").stdout == ""
+    assert (
+        _git(workspace, "config", "--get-regexp", r"^submodule\.").stdout
+        == before_modules
     )
 
 

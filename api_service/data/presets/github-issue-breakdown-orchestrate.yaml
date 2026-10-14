@@ -131,7 +131,7 @@ steps:
       Create one GitHub Issue Orchestrate workflow execution for each GitHub issue created from the trusted GitHub story output.
 
       Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating downstream workflow executions.
-      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream GitHub Issue Orchestrate doc-reconciliation step knows the canonical source document. If the source path is absent because the story came from workflow instructions, preserve the source title and source issue traceability instead of inventing a document path.
+      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream GitHub Issue Orchestrate workflow knows the canonical source document. If the source path is absent because the story came from workflow instructions, preserve the source title and source issue traceability instead of inventing a document path.
       Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce GitHub issue mappings.
       Each downstream workflow execution must run GitHub Issue Orchestrate on its corresponding GitHub issue and must not run implementation inline inside this breakdown run.
       Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.

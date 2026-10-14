@@ -5,7 +5,7 @@ Owners: MoonMind Engineering
 Last updated: 2026-07-10
 Canonical for: reusable collection sidebars, workspace geometry, and the shared Workflow/Recurring entity-detail frame
 
-**Implementation tracking:** implementation checklists belong in GitHub issues or `docs/tmp/`. This document defines durable desired state.
+This document defines durable desired state.
 
 ## 1. Purpose
 
@@ -174,12 +174,12 @@ Representative frontend tests must prove:
 9. mobile removes non-rendered desktop controls from the accessibility tree;
 10. screenshots/layout assertions catch a reintroduced large left margin or centered split workspace.
 
-## 10. Relation to MoonMind#4559
+## 10. Relation to mobile overflow handling
 
-The mobile-overflow repair (MoonMind#4559) does not change this shared
-contract: workflow, Recurring, Skills, Remediation, and Artifacts keep their
-existing desktop workspace, list-display modes, sidebars, information
-hierarchy, and action semantics. The #4559 changes are scoped to the
+Mobile overflow handling does not change this shared contract: workflow,
+Recurring, Skills, Remediation, and Artifacts keep their existing desktop
+workspace, list-display modes, sidebars, information hierarchy, and action
+semantics. Mobile overflow handling is scoped to the
 inventory/provider/settings responsive rules and the shared dialog bounds;
 regression cover for those boundaries lives in
 `frontend/src/browser/mobileOverflow4559.browser.test.tsx` (geometry) and the

@@ -62,7 +62,7 @@ Use supported catalog data, not page-local enum lists or combined primary option
 
 The selected profile supplies its configured tier choices and actual default tier. The approved Tier/Custom interaction is owned by the model-selection and tier contracts, not a second policy inside the Harness control: numbered Tier selection populates Model and Effort, editing either field selects Custom while preserving the other field, and selecting Custom directly leaves both fields unchanged. Do not restore the Tier fallback selector, including under Advanced.
 
-Saved, preset, inherited, and Custom choices survive reconstruction and compatible profile/harness changes. A genuinely incompatible explicit value remains visible for correction. Stale asynchronous responses cannot overwrite newer input or convert derived previews into authored overrides. The companion Tier/Custom design is recorded in [documentation PR #4635](https://github.com/MoonLadderStudios/MoonMind/pull/4635); its separate implementation must be reused rather than duplicated here.
+Saved, preset, inherited, and Custom choices survive reconstruction and compatible profile/harness changes. A genuinely incompatible explicit value remains visible for correction. Stale asynchronous responses cannot overwrite newer input or convert derived previews into authored overrides. The Tier/Custom implementation is reused rather than duplicated here.
 
 Steps inherit workflow selection unless explicitly specialized through the existing supported override boundary. Viewing or saving an inherited value does not pin it as a new override. Tools and container jobs without an agent do not invent a Harness or Provider Profile.
 
@@ -90,7 +90,7 @@ A supported-but-busy route waits through existing capacity handling. Missing set
 
 ## Provider Profile in the Workflows list
 
-[Workflows List](WorkflowsListPage.md) owns table interaction. This section owns the identity shown there. MoonLadderStudios/MoonMind#4640 implements it through the admission-recorded projection described in [Workflows List §7.3](WorkflowsListPage.md#73-recorded-provider-profile-projection).
+[Workflows List](WorkflowsListPage.md) owns table interaction. This section owns the identity shown there, which is implemented through the admission-recorded projection described in [Workflows List §7.3](WorkflowsListPage.md#72-how-the-projection-is-recorded).
 
 Replace the ordinary desktop Runtime column and mobile Runtime field with **Provider Profile**. Show its friendly recorded name, with Harness as optional secondary text in the same cell. Do not add ordinary Provider, Harness, Backend, Host, and Container columns alongside it. Execution details retain authorized provenance.
 
@@ -112,7 +112,7 @@ Project this compact summary through the existing execution list/read model. No 
 
 Provider Profile filters use stable profile IDs, not display labels or `targetRuntime`. Extend the existing list/facet query owner with the required profile summary and membership data. Desktop headers, mobile filters, active chips, URL/query serialization, saved column preferences, and list-to-detail return context all use the same semantics.
 
-For a multiple-profile workflow, an include filter matches any recorded applicable member and an exclude filter rejects any listed member. Unresolved, historical-unknown, and not-applicable states remain distinguishable in display and queries through `providerProfileStateIn` / `providerProfileStateNotIn` values `pending`, `not_recorded`, and `not_applicable`. [Workflows List sections 7.2, 9.3, 12.1, and 13.2](WorkflowsListPage.md#93-provider-profile-filter) own the row state, ID/state union, aggregate blank shortcut, and state facet/count contract. Do not imply a missing projection proves a known absence.
+For a multiple-profile workflow, an include filter matches any recorded applicable member and an exclude filter rejects any listed member. Unresolved, historical-unknown, and not-applicable states remain distinguishable in display and queries through `providerProfileStateIn` / `providerProfileStateNotIn` values `pending`, `not_recorded`, and `not_applicable`. [Workflows List sections 7.2, 9.3, 12.1, and 13.2](WorkflowsListPage.md#93-provider-profile) own the row state, ID/state union, aggregate blank shortcut, and state facet/count contract. Do not imply a missing projection proves a known absence.
 
 Facets describe authorized workflow records, not just currently enabled profiles or the currently loaded page. Retain recorded profiles that are no longer launchable. Deduplicate by stable ID and show a short ID when equal labels require disambiguation. Count and pagination semantics must agree with the list. Facet failure preserves the table and selected filter, with truthful partial/unavailable coverage.
 
@@ -146,4 +146,4 @@ Required evidence covers:
 - Desktop/mobile controls, long labels, equal-name profiles, keyboard focus, filter chips, query round trips, saved preferences, and list/detail return state preserve the same meaning.
 - Historical payloads and active attempts retain their original IDs, interpretation, digests, and recorded evidence. Compatible installed-image changes do not become identity conflicts.
 
-Share tests for common behavior and add focused cases for genuine credential/protocol differences. An external-provider substitute proves only the stated integration boundary. Live support is separately observed or honestly unverified, never a universal prerequisite for a terminology or list change. Implementation tracking belongs in GitHub issues and the PR, not another checklist document.
+Share tests for common behavior and add focused cases for genuine credential/protocol differences. An external-provider substitute proves only the stated integration boundary. Live support is separately observed or honestly unverified, never a universal prerequisite for a terminology or list change.

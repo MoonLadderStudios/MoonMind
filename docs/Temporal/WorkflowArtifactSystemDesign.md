@@ -5,8 +5,6 @@ Status: Draft
 Owners: MoonMind Platform 
 Last updated: 2026-10-06
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 ## Related docs
 
 - `docs/Steps/SkillSystem.md`
@@ -511,7 +509,7 @@ This is an API-layer auth choice. It does **not** require public object-storage 
 Native chat and upstream runtime access stay behind the qualified same-origin
 binding facade, not an unrestricted upstream proxy.
 
-## 9.6 Single-user operation (#4351)
+## 9.6 Single-user operation
 
 Artifacts are instance resources for the admitted operator: the stable
 `operator`/`system` principal (and legacy human-owner UUID strings as
