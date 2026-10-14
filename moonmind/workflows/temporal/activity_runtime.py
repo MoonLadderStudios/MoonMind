@@ -9218,6 +9218,28 @@ class TemporalAgentRuntimeActivities:
                 gate_payload,
                 require_acceptance=_metadata_text("acceptanceContract") == "acceptance/v1",
             )
+            assessment_ref = _metadata_text("assessmentArtifactRef")
+            if assessment_ref and _metadata_text("acceptanceContract") == "acceptance/v1":
+                from moonmind.workflows.skills.acceptance_contract import (
+                    assessment_scope_violations,
+                )
+
+                try:
+                    assessment = await _read_json_artifact(
+                        self._artifact_service,
+                        artifact_ref=assessment_ref,
+                        principal="system:agent_runtime",
+                    )
+                except (OSError, ValueError, TypeError):
+                    assessment = None
+                if isinstance(assessment, Mapping):
+                    contract_violations.extend(
+                        assessment_scope_violations(gate_payload, assessment)
+                    )
+                else:
+                    contract_violations.append(
+                        "Original assessment evidence is unreadable; retry its artifact read"
+                    )
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
                 # enters MoonMind so the workflow gate can request a bounded

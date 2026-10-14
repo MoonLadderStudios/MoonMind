@@ -106,6 +106,47 @@ def acceptance_evidence(payload: Mapping[str, Any]) -> AcceptanceEvidence | None
         return None
 
 
+def assessment_scope_violations(
+    gate: Mapping[str, Any], assessment: Mapping[str, Any]
+) -> list[str]:
+    """Prevent a verifier from adding mandatory work to the admitted issue.
+
+    The assessment artifact is the frozen process handoff. It is not proof of
+    success, but its original scope binding is the boundary for both a success
+    declaration and a blocking recommendation.
+    """
+    scope = assessment.get("scope")
+    if not isinstance(scope, Mapping) or scope.get("complete") is not True:
+        return [] if gate.get("verdict") != "FULLY_IMPLEMENTED" else [
+            "The original source scope is incomplete; objective success is unavailable"
+        ]
+    declared = (
+        (gate.get("validatedRefs") or {}).get("acceptance", {}).get("scope")
+        if gate.get("verdict") == "FULLY_IMPLEMENTED"
+        else gate.get("scope")
+    )
+    if declared != scope:
+        return ["Verifier scope differs from the original source scope"]
+    if gate.get("verdict") == "FULLY_IMPLEMENTED":
+        return []
+
+    mandatory = set(scope.get("requirementIds") or ())
+    work = gate.get("remainingWork")
+    if not isinstance(work, list) or not work:
+        return ["Blocking report needs inline work linked to a mandatory requirement"]
+    violations = []
+    for item in work:
+        if not isinstance(item, Mapping):
+            violations.append("Blocking report has malformed remaining work")
+            continue
+        ids = item.get("requirementIds")
+        if not isinstance(ids, list) or not ids:
+            ids = [item.get("requirement")]
+        if not all(isinstance(value, str) and value.strip() in mandatory for value in ids):
+            violations.append("Blocking work must name a mandatory requirement in the original source scope")
+    return violations
+
+
 async def validate_completion_target(
     payload: Mapping[str, Any],
     *,

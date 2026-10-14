@@ -8,6 +8,7 @@ authorized fetch first and supply the actual source and completion target.
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -129,6 +130,40 @@ def scope(
     }
 
 
+def bind_verification_map(current: dict, assessment: dict) -> dict:
+    """Attach the existing assessment plan only for its original source scope.
+
+    The map is process context for selecting checks, not a source of additional
+    mandatory obligations or an accepted result from the initial assessment.
+    """
+    original_scope = current.get("scope")
+    if not isinstance(original_scope, dict) or assessment.get("scope") != original_scope:
+        raise ValueError("assessment verification map does not match the original source scope")
+    mandatory = set(original_scope.get("requirementIds") or ())
+    rows = assessment.get("verificationMap")
+    if not mandatory or not isinstance(rows, list):
+        raise ValueError("assessment verification map is missing original mandatory scope")
+    seen = set()
+    mapped_mandatory = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            raise ValueError("assessment verification map has an invalid requirement")
+        requirement_id = row["id"].strip()
+        if not requirement_id or requirement_id in seen:
+            raise ValueError("assessment verification map has duplicate or blank requirement IDs")
+        seen.add(requirement_id)
+        is_mandatory = row.get("mandatory", requirement_id in mandatory) is True
+        if is_mandatory != (requirement_id in mandatory):
+            raise ValueError("assessment verification map adds work outside the original mandatory scope")
+        if is_mandatory:
+            if not nonblank_strings(row.get("executableChecks")):
+                raise ValueError("mandatory assessment requirement lacks an executable check")
+            mapped_mandatory.add(requirement_id)
+    if mapped_mandatory != mandatory:
+        raise ValueError("assessment verification map omits original mandatory scope")
+    return {**current, "verificationMap": copy.deepcopy(rows)}
+
+
 def reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
     """Check an objective report against freshly captured subject/scope/policy."""
     try:
@@ -203,7 +238,7 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
         except (TypeError, ValueError):
             reasons.append("invalid evidence expiry")
     reusable = not reasons
-    return {
+    result = {
         "reusable": reusable,
         "completionEligible": bool(
             reusable
@@ -212,6 +247,55 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
         ),
         "reasons": reasons,
     }
+    if not reusable:
+        # These are inspection candidates, never accepted evidence. The
+        # verifier must still read the referenced reports and prove outcomes.
+        result["candidateRows"] = _candidate_rows(report, current)
+    return result
+
+
+def _candidate_rows(report: dict, current: dict) -> list[dict]:
+    subject = report.get("subject")
+    current_subject = current.get("subject")
+    if not isinstance(subject, dict) or not isinstance(current_subject, dict) or any(
+        not subject.get(key) or subject.get(key) != current_subject.get(key)
+        for key in ("repository", "contentDigest")
+    ):
+        return []
+    scope = current.get("scope")
+    if not isinstance(scope, dict) or scope.get("complete") is not True or report.get("scope") != scope:
+        return []
+    prior_map = report.get("verificationMap")
+    current_map = current.get("verificationMap")
+    if not isinstance(prior_map, list) or not isinstance(current_map, list):
+        return []
+    prior_checks = {
+        row.get("id"): row.get("executableChecks")
+        for row in prior_map if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    current_checks = {
+        row.get("id"): row.get("executableChecks")
+        for row in current_map if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    rows = report.get("requirementCoverage")
+    if not isinstance(rows, list):
+        return []
+    retained = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        requirement_id = row.get("id")
+        refs = row.get("testEvidenceRefs")
+        if (
+            requirement_id not in scope.get("requirementIds", ())
+            or str(row.get("verificationStatus") or "").upper() != "VERIFIED"
+            or not nonblank_strings(refs)
+            or not nonblank_strings(prior_checks.get(requirement_id))
+            or prior_checks[requirement_id] != current_checks.get(requirement_id)
+        ):
+            continue
+        retained.append({"requirementId": requirement_id, "evidenceRefs": refs})
+    return retained
 
 
 def _valid_remaining_work(work: object) -> bool:
@@ -226,6 +310,47 @@ def _valid_remaining_work(work: object) -> bool:
             if not isinstance(value, str) or not value.strip():
                 return False
     return True
+
+
+def _current_nonpassing_errors(report: dict, current: dict) -> list[str]:
+    """Keep a non-pass tied to the candidate and mandatory source obligations.
+
+    A prior blocker is useful history, but it cannot decide publication for a
+    later candidate or add requirements from a parent story or optional check.
+    The caller still inspects the actual evidence; this is a binding preflight.
+    """
+    errors = []
+    subject = report.get("subject")
+    current_subject = current.get("subject")
+    if not isinstance(subject, dict) or not isinstance(current_subject, dict) or any(
+        not subject.get(key) or subject.get(key) != current_subject.get(key)
+        for key in ("repository", "contentDigest")
+    ) or not subject.get("revision"):
+        errors.append("non-passing report is not bound to the current candidate")
+
+    scope = report.get("scope")
+    current_scope = current.get("scope")
+    if not isinstance(scope, dict) or not isinstance(current_scope, dict) or scope != current_scope:
+        errors.append("non-passing report is not bound to the current source scope")
+        return errors
+
+    mandatory = set(current_scope.get("requirementIds") or ())
+    work = report.get("remainingWork")
+    if not _valid_remaining_work(work):
+        errors.append("non-passing report needs inline source-linked remaining work")
+        return errors
+    for item in work:
+        raw_ids = item.get("requirementIds")
+        ids = raw_ids if nonblank_strings(raw_ids) else [item.get("requirement")]
+        if not nonblank_strings(ids) or not set(ids) <= mandatory:
+            errors.append("remaining work must name a mandatory requirement in the current source scope")
+        candidate = item.get("candidate")
+        if isinstance(candidate, dict) and any(
+            candidate.get(key) != current_subject.get(key)
+            for key in ("repository", "contentDigest")
+        ):
+            errors.append("remaining work refers to a different candidate")
+    return errors
 
 
 def validate_report(report: object, current: dict | None = None) -> dict:
@@ -269,6 +394,8 @@ def validate_report(report: object, current: dict | None = None) -> dict:
             isinstance(reference, str) and reference.strip()
         ):
             errors.append("non-passing report requires remainingWork or a remainingWorkRef")
+        if current is not None:
+            errors.extend(_current_nonpassing_errors(report, current))
     return {"valid": not errors, "errors": errors}
 
 
@@ -323,6 +450,7 @@ def main() -> None:
     capture_parser.add_argument("--requirement", action="append", required=True)
     capture_parser.add_argument("--incomplete", action="store_true")
     capture_parser.add_argument("--freshness-policy", default="content")
+    capture_parser.add_argument("--assessment", type=Path)
     reuse_parser = commands.add_parser("reuse")
     reuse_parser.add_argument("--report", type=Path, required=True)
     reuse_parser.add_argument("--current", type=Path, required=True)
@@ -342,6 +470,8 @@ def main() -> None:
             complete=not args.incomplete,
         )
         result["freshnessPolicy"] = args.freshness_policy
+        if args.assessment:
+            result = bind_verification_map(result, read_report_json(args.assessment))
     elif args.command == "reuse":
         result = reuse(
             json.loads(args.report.read_text()), json.loads(args.current.read_text())
