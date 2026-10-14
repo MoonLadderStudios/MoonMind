@@ -5,7 +5,6 @@
 **Owners:** MoonMind Platform
 **Last updated:** 2026-10-14
 **Authority:** Short architecture/operator entrypoint for the Omnigent module. Each contract below has one surviving owner; this page routes, it does not restate.
-**Issue:** [MoonLadderStudios/MoonMind#3962](https://github.com/MoonLadderStudios/MoonMind/issues/3962).
 
 Omnigent is becoming MoonMind's primary runtime provider: one generic execution
 plane over approved harnesses (Codex, Claude Code, OpenCode), while MoonMind
@@ -57,7 +56,7 @@ interchangeable responsibilities.
 - Direct Codex / direct Claude paths remain labeled compatibility paths until
   their retirement rows close.
 
-The current ordinary/strict distinction is implemented by #4560. Remaining
+The current ordinary/strict distinction is implemented. Remaining
 selection controls and compatibility paths are separate from the desired
 simplification in `PrimaryRuntimeProviderStrategy.md`; this entrypoint does
 not declare their migration or a deployment complete.

@@ -1,4 +1,4 @@
-# First-Run Service Inventory (MoonMind#3940)
+# First-Run Service Inventory
 
 This is the operational counterpart of the conceptual [architecture overview in the
 README](../README.md#architecture). The README describes the main components

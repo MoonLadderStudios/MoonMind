@@ -350,21 +350,14 @@ def test_findings_are_sorted_deterministically() -> None:
 
 
 def test_repo_doc_helpers_resolve_real_tree() -> None:
-    # The shipped advisory docs/tool must exist and be classifiable.
     paths = mod.all_doc_paths()
-    assert "docs/DocumentationArchitectureValidation.md" in paths
+    assert "docs/MoonMindArchitecture.md" in paths
     assert mod.is_canonical_doc("docs/MoonMindArchitecture.md")
     assert not mod.is_canonical_doc("docs/tmp/SomePlan.md")
 
 
-def test_shipped_validation_doc_declares_document_class() -> None:
-    doc = mod.load_docs(["docs/DocumentationArchitectureValidation.md"])
-    assert doc, "validation doc should load"
-    assert mod.check_missing_document_class(doc) == []
-
-
 def test_cli_json_output_is_advisory_and_exit_zero(capsys) -> None:
-    rc = mod.main(["--format", "json", "docs/DocumentationArchitectureValidation.md"])
+    rc = mod.main(["--format", "json", "docs/MoonMindArchitecture.md"])
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert rc == 0

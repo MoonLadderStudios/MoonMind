@@ -9,9 +9,9 @@ Define the shared dashboard shimmer treatment used by active and transition work
 
 The effect communicates **active progress, preparation, or wrap-up** without implying error, urgency, or instability. It should feel like a premium “thinking” shimmer: focused, calm, phase-locked, and readable at small sizes.
 
-The **approved sweep palette is fixed and status-agnostic**: a translucent accent halo (`--mm-accent` at 14%) beneath a translucent accent-2 core (`--mm-accent-2` at 34%), giving the subtle purple/cyan two-tone edge interaction operators reviewed and approved (MM-1036 as shipped). Only the **glyph fallback letter treatment** is status-aware (`currentColor`-derived), because that is the MM-1048 portion that actually rendered and was accepted.
+The **approved sweep palette is fixed and status-agnostic**: a translucent accent halo (`--mm-accent` at 14%) beneath a translucent accent-2 core (`--mm-accent-2` at 34%), giving the subtle purple/cyan two-tone edge interaction operators reviewed and approved. Only the **glyph fallback letter treatment** is status-aware (`currentColor`-derived).
 
-History note: MM-1048 proposed re-tinting the whole sweep from the pill hue with brighter mixes (30% halo, fully opaque whitened core), but the same change broke gradient resolution, so that treatment never rendered. When the shimmer was later restored, the latent MM-1048 palette appeared for the first time and was rejected by the operator as far brighter and thicker than the approved look. The values in this document are the operator-approved on-screen aesthetic; do not change them without an operator-reviewed visual baseline update.
+The sweep is not re-tinted from the pill hue with brighter mixes (30% halo, fully opaque whitened core) because that treatment reads as far brighter and thicker than the approved look. The values in this document are the operator-approved on-screen aesthetic; do not change them without an operator-reviewed visual baseline update.
 
 ---
 
@@ -255,11 +255,8 @@ motion:
     angle_deg: -28
     keyframes: mm-status-pill-shimmer
     note: >
-      These are the approved on-screen values: the MM-1036 sweep steepened from
-      -18deg to -28deg per operator review so the shimmer line sits ~10deg
-      further from horizontal (closer to vertical). MM-1048's -20deg / +/-120%
-      horizontal-bias refinement never rendered (its own commit broke gradient
-      resolution) and is retired. Do not turn the shimmer into a scanner beam or
+      These are the approved on-screen values: the sweep angle is -28deg per
+      operator review so the shimmer line sits closer to vertical. Do not turn the shimmer into a scanner beam or
       horizontal loading bar.
 
   band:
@@ -301,7 +298,7 @@ The motion profile is settled: `-28deg` with `±160%` vertical travel is the app
 
 ## 8. Shimmer palette
 
-The **sweep palette is fixed and status-agnostic** — the operator-approved MM-1036 look. Only the glyph-fallback letter treatment derives from the pill hue.
+The **sweep palette is fixed and status-agnostic** — the operator-approved look. Only the glyph-fallback letter treatment derives from the pill hue.
 
 ```yaml
 shimmer_palette:
@@ -327,7 +324,7 @@ Canonical CSS shape (declared on the shimmer host rule):
 }
 ```
 
-MM-1048's status-derived sweep hue binding (`color-mix` from `currentColor`, whitened opaque core) is retired: it never rendered while it was in the tree, and when finally revealed it read as a different, far brighter effect than the approved design. If a status-aware sweep is ever wanted, it must be proposed as a new visual change with operator review and updated computed-style baselines — not reintroduced as part of a repair.
+The sweep does not bind its hue to the status (`color-mix` from `currentColor`, whitened opaque core) because that treatment reads as a different, far brighter effect than the approved design. If a status-aware sweep is ever wanted, it must be proposed as a new visual change with operator review and updated computed-style baselines — not reintroduced as part of a repair.
 
 ---
 

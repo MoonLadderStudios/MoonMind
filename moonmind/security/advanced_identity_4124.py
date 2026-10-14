@@ -1,8 +1,7 @@
 """Generic OIDC and trusted-proxy identity through the shared auth boundary.
 
 Source issue: MoonLadderStudios/MoonMind#4124 (parent #4116; depends on
-#4118, #4119, #4120, #4121). Plan coverage: advanced modes, K3 and K4 in
-``docs/tmp/KeycloakRemovalPlan.md``.
+#4118, #4119, #4120, #4121). Covers advanced modes.
 
 This module owns both advanced identity sources. They use the same
 UUID/account/session authority rather than separate user stores or

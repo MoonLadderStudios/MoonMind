@@ -286,7 +286,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/
 COPY config /app/config/
-COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
 COPY .agents /app/.agents/
 COPY services /app/services/
 COPY docs /app/docs/

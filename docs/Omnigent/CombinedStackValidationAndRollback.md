@@ -6,7 +6,7 @@ direct-runtime retirement gates are defined in
 [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md). Local validation must
 not promote a rollout phase without the protected-live artifact required there.
 Promotion binds every `codex-omnigent-support-matrix/v1` row to independently
-re-validated observed evidence (MoonLadderStudios/MoonMind#3564): the mounted
+re-validated observed evidence: the mounted
 promotion document names the support-matrix version, covered rows, image
 digests, architecture, and the exact evidence generation and expiry, and the
 launch boundary re-parses each artifact's observed per-row result before it
@@ -28,8 +28,7 @@ phase stays available without rewriting those immutable per-run snapshots.
 > credentials, and Omnigent host-auth lifecycles are not application-login
 > cleanup targets and are never repurposed as user credentials. Retired
 > selectors (`keycloak`, `default`, `google`, `local`) fail at startup with migration
-> guidance.  
-**Related Implementation:** MM-972, source issue MM-968, coverage DESIGN-REQ-019 through DESIGN-REQ-022, DESIGN-REQ-010, DESIGN-REQ-018
+> guidance.
 
 ## Purpose
 
@@ -491,7 +490,7 @@ Requirements:
 
 The runner uses the isolated `moonmind-test-omnigent-live` Compose project. It always attempts cleanup and evidence scanning, including after failed startup or failed journeys. Cleanup removes that project's containers and networks only and intentionally never passes `--volumes`, so enrolled OAuth and unrelated volumes survive.
 
-`--mode browser` is the controlling #3508 release journey. It opens
+`--mode browser` is the controlling release journey. It opens
 `/workflows/new` in a headless browser, submits through the normal frontend
 request path, and follows Workflow Detail through terminal harvest, cleanup,
 and replay for every required release row. `--mode static` covers restart and
@@ -500,6 +499,6 @@ on-demand lifecycle, and failure-path scenarios can be gated independently in
 provider environments. A passed release matrix records exact images,
 architecture, advertised capabilities, workflow/session/lease identities,
 lifecycle ordering, evidence refs, and cleanup results. The rollout gate accepts
-only a schema-valid #3508 manifest for the deployed commit with immutable image
+only a schema-valid release manifest for the deployed commit with immutable image
 digests, all rows and authority fields present, and an unexpired `expiresAt`;
 missing, expired, malformed, or mutable-image evidence fails closed.

@@ -8,6 +8,7 @@ import pytest
 from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalExecutionProjectionSourceMode,
+    TemporalExecutionOwnerType,
     TemporalWorkflowType,
     MoonMindWorkflowState,
 )
@@ -72,6 +73,25 @@ async def test_scheduled_source_preserves_start_authority_and_current_terminal_e
     )
     assert projection.parameters == {"model": "compact projection only"}
     assert not session.mock_calls
+
+
+@pytest.mark.asyncio
+async def test_system_schedule_preserves_its_ownerless_admitted_inputs():
+    projection = source()
+    projection.owner_type = TemporalExecutionOwnerType.SYSTEM
+    projection.owner_id = "system"
+    payload = admitted()
+    payload["owner_user_id"] = None
+    reader = AsyncMock(return_value=payload)
+    service = TemporalExecutionService(
+        AsyncMock(), client_adapter=SimpleNamespace(read_workflow_start_input=reader)
+    )
+
+    recovered = await service.read_scheduled_execution_source(projection)
+
+    assert recovered.owner_id == "system"
+    assert recovered.parameters == payload["initial_parameters"]
+    reader.assert_awaited_once_with("mm:scheduled", run_id="reset-run")
 
 
 @pytest.mark.asyncio

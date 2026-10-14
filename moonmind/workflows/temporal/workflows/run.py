@@ -1361,8 +1361,7 @@ class GateTransitionDecision:
 
 # Replay-stable patch id for the status-only memo update emitted from
 # _update_search_attributes. Histories that already recorded the prior ungated
-# memo command require a reset/versioning cutover; see
-# docs/tmp/RunStatusMemoUpsertCutover.md.
+# memo command require a reset/versioning cutover.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 # MoonLadderStudios/MoonMind#4640: fold the Provider Profile a managed launch
 # actually used into the admitted list projection. Histories recorded before

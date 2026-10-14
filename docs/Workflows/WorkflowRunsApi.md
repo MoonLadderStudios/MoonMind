@@ -49,11 +49,10 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 | `POST` | `/api/executions/{workflowId}/recover-from-selected-step` | Create a linked recovery execution from an operator-selected eligible Step using pinned source identity and checkpoint evidence. |
 | `POST` | `/api/executions/{workflowId}/continue` | Create an authorized linked continuation from terminal source evidence when the product exposes **Continue in a new workflow**. |
 
-> Retired: `GET /api/executions/{workflowId}/manifest-status` and
-> `GET /api/executions/{workflowId}/manifest-nodes` were removed with the
-> native Manifest product (MoonLadderStudios/MoonMind#4192). Historical
-> `manifest_ref`/`manifestArtifactRef` reads stay served through the
-> execution list/detail projections, not through retired endpoints.
+> There are no `GET /api/executions/{workflowId}/manifest-status` or
+> `GET /api/executions/{workflowId}/manifest-nodes` endpoints. Historical
+> `manifest_ref`/`manifestArtifactRef` reads are served through the
+> execution list/detail projections.
 
 The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not failed-Step recovery, and not proof that the deferred chat-instruction feature is enabled.
 

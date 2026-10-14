@@ -7,15 +7,13 @@
 **Authority:** Reconciliation index that pins one internally consistent normal
 Codex-through-Omnigent product path across its canonical owners. It does not
 redefine any owned contract; each stage names the document that owns it.
-**Traceability:** MoonLadderStudios/MoonMind#3565 (Omnigent Milestone 1, item 1.0
-declarative reconciliation)
 
 This document reconciles the **Codex via Omnigent** journey across its existing
-owners. Ordinary admission is certificate independent (#4560); explicitly
+owners. Ordinary admission is certificate independent; explicitly
 selected strict certification retains the evidence requirements in
 [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 New-work selection uses the shared rollout boundary without the retired Codex
-phase inputs (#3931), as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration).
+phase inputs, as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration).
 The v1 cutover evidence and phase examples below describe the retained diagnostic
 projection and historical interpretation, not ordinary startup instructions.
 Where a detail is owned elsewhere, that owner
@@ -256,7 +254,7 @@ repeating these exact words, and no weaker state is written as a stronger one:
 - **deprecated-disabled** — retained for compatibility, scheduling disabled.
 - **retired** — removed after history, rollback, and release gates pass.
 
-The original Milestone 1 protected browser-to-host matrix (#3564/#3508) proves
+The original Milestone 1 protected browser-to-host matrix proves
 only the subject and operations it observed. It does not establish another
 credential protocol, recovery journey, or deployed migration. Current support
 evidence and optional remediation observations remain with
