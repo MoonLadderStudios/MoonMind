@@ -19,8 +19,7 @@ composes so they can be unit-tested in isolation and the browser-boundary
 semantics stay in one place:
 
 * the browser-safe bootstrap contract (:func:`build_chat_bootstrap`);
-* the native UI/server version compatibility gate
-  (:func:`evaluate_native_ui_compatibility`);
+* the serving gate (:func:`native_ui_unavailable_reason`);
 * the embedded vs full-page security-header policy
   (:func:`native_ui_security_headers`);
 * SPA-document vs hashed-asset request classification
@@ -38,10 +37,7 @@ from __future__ import annotations
 import html
 import json
 import re
-from dataclasses import dataclass
 from typing import Any, Literal, Mapping
-
-from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 
 # --- Route / contract constants ----------------------------------------------
 # The native UI is served under this fixed, server-owned mount prefix. The
@@ -59,14 +55,9 @@ NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION = "moonmind.omnigent_native_ui.bootstrap.v1"
 # requires a matching native UI build.
 NATIVE_UI_ROUTE_FEATURE_VERSION = "1"
 
-# The single upstream source pin MoonMind's native UI serving is verified
-# against. Reuses the one upstream commit pin (host_auth_adapter) so there is no
-# parallel native-UI version authority (Simplicity Gate / Compatibility Policy).
-SUPPORTED_NATIVE_UI_VERSIONS: frozenset[str] = frozenset({PINNED_OMNIGENT_COMMIT})
-
-# Stable, actionable failure code for an unknown/incompatible native UI version.
-# The serving router returns this instead of partially bypassing the scoped
-# facade (issue #3638 requirement 6).
+# Stable, actionable failure code when native chat cannot be served. The
+# serving router returns this instead of partially bypassing the scoped facade
+# (issue #3638 requirement 6).
 CODE_NATIVE_CHAT_UNAVAILABLE = "omnigent_native_chat_unavailable"
 
 PresentationMode = Literal["embedded", "full_page"]
@@ -130,71 +121,29 @@ def presentation_mode_from_query(value: Any) -> PresentationMode:
     return "embedded" if token in _TRUE_QUERY_VALUES else "full_page"
 
 
-# --- Version compatibility gate ----------------------------------------------
+# --- Serving gate -------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class NativeUiCompatibility:
-    """Result of the native UI/server version compatibility gate."""
+def native_ui_unavailable_reason(
+    *, omnigent_enabled: bool, serving_enabled: bool
+) -> str | None:
+    """Return why the native UI cannot be served, or ``None`` when it can.
 
-    ready: bool
-    reported_version: str | None
-    supported_versions: tuple[str, ...]
-    reason: str | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "ready": self.ready,
-            "reportedVersion": self.reported_version,
-            "supportedVersions": list(self.supported_versions),
-            "reason": self.reason,
-        }
-
-
-def evaluate_native_ui_compatibility(
-    reported_version: str | None,
-    *,
-    enabled: bool = True,
-    supported_versions: frozenset[str] = SUPPORTED_NATIVE_UI_VERSIONS,
-) -> NativeUiCompatibility:
-    """Gate serving on a known-compatible native UI/server version.
-
-    An unknown, blank, or unsupported version fails closed with an actionable
-    ``native-chat-unavailable`` reason rather than partially serving a native UI
-    that has not run conformance (issue #3638 requirement 6). Upgrading the
-    upstream image is therefore a deliberate step: the operator pins the new
-    version only after conformance adds it to ``supported_versions``.
+    Only the explicit enable controls gate serving. The server image or build
+    identity is not a compatibility input: compatibility is the scoped contract
+    itself. Every native request is classified against the versioned route map
+    (``native_ui_compat``) and an unsupported operation fails closed there, and
+    the injected adapter validates the bound session and transcript reads
+    before announcing readiness, so an incompatible build falls back to the
+    read-only surface instead of being trusted. A compatible rebuild therefore
+    serves without any manual version pin.
     """
 
-    ordered = tuple(sorted(supported_versions))
-    if not enabled:
-        return NativeUiCompatibility(
-            ready=False,
-            reported_version=reported_version,
-            supported_versions=ordered,
-            reason="omnigent_disabled",
-        )
-    version = str(reported_version or "").strip()
-    if not version:
-        return NativeUiCompatibility(
-            ready=False,
-            reported_version=None,
-            supported_versions=ordered,
-            reason="native_ui_version_unknown",
-        )
-    if version not in supported_versions:
-        return NativeUiCompatibility(
-            ready=False,
-            reported_version=version,
-            supported_versions=ordered,
-            reason="native_ui_version_unsupported",
-        )
-    return NativeUiCompatibility(
-        ready=True,
-        reported_version=version,
-        supported_versions=ordered,
-        reason=None,
-    )
+    if not omnigent_enabled:
+        return "omnigent_disabled"
+    if not serving_enabled:
+        return "native_ui_serving_disabled"
+    return None
 
 
 # --- Browser-safe bootstrap contract -----------------------------------------
@@ -751,14 +700,12 @@ __all__ = [
     "NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION",
     "NATIVE_UI_MOUNT_PREFIX",
     "NATIVE_UI_ROUTE_FEATURE_VERSION",
-    "NativeUiCompatibility",
     "PresentationMode",
-    "SUPPORTED_NATIVE_UI_VERSIONS",
     "build_chat_bootstrap",
-    "evaluate_native_ui_compatibility",
     "is_document_request",
     "is_valid_chat_binding_id",
     "native_ui_security_headers",
+    "native_ui_unavailable_reason",
     "presentation_mode_from_query",
     "render_native_ui_document",
     "rewrite_asset_urls",

@@ -2,8 +2,8 @@
 
 MoonLadderStudios/MoonMind#3638. The browser loads the native UI document and its
 assets exclusively through ``/omnigent-ui/workflow-chat/{chatBindingId}[...]``.
-Every request authorizes the durable binding, gates on a compatible native UI
-version, injects a browser-safe bootstrap into the served document, scopes asset
+Every request authorizes the durable binding, gates on the native-UI enable
+controls, injects a browser-safe bootstrap into the served document, scopes asset
 URLs, and applies the embedded vs full-page security-header policy — never
 leaking a provider session id, upstream URL, or credential to the browser.
 """
@@ -119,21 +119,18 @@ class _FakeUpstream:
         return self._responses[path]
 
 
-_SERVER_IMAGE_DIGEST_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
-
-
 @pytest.fixture(autouse=True)
-def _verified_immutable_server_image(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Serve as a deployment with verified immutable image evidence.
+def _default_latest_server_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve as the default Compose deployment: a mutable ``latest`` image.
 
-    MoonLadderStudios/MoonMind#3685: the native-UI compatibility version derives
-    from the deployment's declared immutable Omnigent server image, so serving
-    tests must declare one. A mutable tag stays unverified and fails closed —
-    covered in ``tests/unit/omnigent/test_omnigent_settings.py``.
+    Serving depends on the enable controls and the scoped route/bootstrap
+    contract, not on the server image or build identity, so the default
+    update-to-latest path must serve native chat without any version pin.
     """
 
+    monkeypatch.delenv("OMNIGENT_IMAGE_REF", raising=False)
     monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
-    monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_DIGEST_REF)
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_ENABLED", raising=False)
 
 
 def _index_response() -> NativeUiUpstreamResponse:
@@ -299,19 +296,43 @@ def test_unknown_binding_is_non_enumerating() -> None:
     assert body["detail"]["code"] == "omnigent_native_chat_unavailable"
 
 
-# --- Version compatibility gate ----------------------------------------------
+# --- Serving gate ---------------------------------------------------------------
 
 
-def test_unsupported_native_ui_version_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "image_ref",
+    [
+        "ghcr.io/omnigent-ai/omnigent-server:latest",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "e" * 64,
+    ],
+)
+@pytest.mark.parametrize("stale_pin", [None, "previous-upstream-build"])
+def test_rebuilt_server_image_serves_without_manual_repin(
+    monkeypatch: pytest.MonkeyPatch, image_ref: str, stale_pin: str | None
 ) -> None:
-    monkeypatch.setenv("OMNIGENT_NATIVE_UI_VERSION", "not-a-supported-build")
-    client, _upstream = _build()
+    """A compatible rebuild is identified by the contract, not its identity."""
+
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", image_ref)
+    if stale_pin is not None:
+        monkeypatch.setenv("OMNIGENT_NATIVE_UI_VERSION", stale_pin)
+    client, upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 200
+    assert '"schemaVersion":"moonmind.omnigent_native_ui.bootstrap.v1"' in response.text
+    assert '"compatibilityVersion":"1"' in response.text
+    assert upstream.paths == ["/"]
+
+
+def test_disabled_omnigent_fails_closed_without_fetching_upstream() -> None:
+    client, upstream = _build(enabled=False)
 
     response = client.get(_url(), params={"embedded": "1"})
 
     assert response.status_code == 503
-    assert 'data-reason="native_ui_version_unsupported"' in response.text
+    assert 'data-reason="omnigent_disabled"' in response.text
+    assert upstream.paths == []
 
 
 def test_serving_disabled_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
