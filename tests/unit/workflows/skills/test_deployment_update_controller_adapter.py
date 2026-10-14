@@ -9,6 +9,7 @@ Runs against the in-process ``deploy/controller`` endpoint.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -22,6 +23,7 @@ from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 from tests.support.deployment_controller import (
     DEFAULT_TARGET,
     InProcessController,
+    failing_until,
     forget_controller_modules,
     install_controller_state,
     load_controller_modules,
@@ -167,8 +169,53 @@ def test_tool_waits_for_a_running_operation_after_a_lost_acknowledgment(
     assert controller.applied == [result.outputs["operationId"]]
 
 
+def _refresh_receipt(refreshed: bool) -> SimpleNamespace:
+    receipt = {"refreshed": refreshed, "image": "sha256:requested"}
+    return SimpleNamespace(
+        returncode=0,
+        stdout=f"MOONMIND_CONTROLLER_REFRESH={json.dumps(receipt)}\n",
+        stderr="",
+    )
+
+
+@pytest.mark.parametrize("controller_changed", [True, False])
+def test_tool_retries_with_the_requested_release_controller_after_installed_one_fails(
+    controller_factory, monkeypatch, controller_changed
+):
+    """A capable installed controller can still carry the bug its release fixes."""
+    refreshed = False
+    controller = controller_factory(failing_until(lambda: refreshed))
+    ensures = []
+
+    def bootstrap(command, **kwargs):
+        nonlocal refreshed
+        assert command[2] == "ensure" and "--prefer-requested" in command
+        assert command[command.index("--image") + 1] == IMAGE
+        ensures.append(command)
+        refreshed = controller_changed
+        return _refresh_receipt(controller_changed)
+
+    monkeypatch.setattr(controller_client, "subprocess", SimpleNamespace(run=bootstrap))
+
+    result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
+
+    assert len(ensures) == 1
+    operation = controller.store.load(result.outputs["operationId"])
+    if controller_changed:
+        assert result.status == "COMPLETED", result
+        assert (operation["status"], operation["attemptGroup"]) == ("succeeded", 2)
+        assert "Expecting value" in operation["attempts"][0]["error"]
+    else:
+        assert result.status == "FAILED"
+        assert operation["attemptGroup"] == 1
+        assert result.outputs["failure"]["reason"].startswith(
+            "attempt 1: apply failed: journal-prepare failed"
+        )
+
+
 def test_tool_reports_a_failed_controller_operation_with_its_original_error(
     controller_factory: Callable[..., InProcessController],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def failing(controller: InProcessController, operation: dict) -> None:
         controller.store.record_attempt_error(
@@ -177,6 +224,12 @@ def test_tool_reports_a_failed_controller_operation_with_its_original_error(
         raise controller.engine.ApplyError("up", 1, "init-db exited 1")
 
     controller_factory(failing)
+    # The controller already runs the requested release's code.
+    monkeypatch.setattr(
+        controller_client,
+        "subprocess",
+        SimpleNamespace(run=lambda command, **kwargs: _refresh_receipt(False)),
+    )
 
     result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
 
