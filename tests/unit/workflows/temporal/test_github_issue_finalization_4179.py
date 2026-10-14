@@ -334,7 +334,9 @@ class _FakeService:
         self.calls: list[str] = []
         self.list_calls: list[str] = []
 
-    async def resolve_github_token(self, repo: str = "") -> tuple[str | None, str]:
+    async def resolve_github_token(
+        self, repo: str = "", operations: tuple[str, ...] = ()
+    ) -> tuple[str | None, str]:
         _ = repo
         return "token", ""
 

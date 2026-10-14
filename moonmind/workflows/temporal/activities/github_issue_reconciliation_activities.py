@@ -176,7 +176,11 @@ async def _fetch_issue(*, service: Any, repository: str, issue_number: int) -> d
                 return dict(result)
         except Exception as exc:  # noqa: BLE001 - transport shape mapped below
             return {"ok": False, "reasonCode": "outcome_unknown", "summary": f"Issue read unknown: {exc.__class__.__name__}."}
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS
+
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return {"ok": False, "reasonCode": "auth_unavailable", "summary": resolution_error or "GitHub read unavailable."}
     import httpx
@@ -980,11 +984,16 @@ async def reconcile_github_issue_handoffs(
     started = time.time()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", _string(repository)):
         return {"ok": False, "reasonCode": "invalid_repository", "summary": f"Invalid repository {_string(repository)!r}."}
-    if service is None:
-        from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.adapters.github_service import (
+        ISSUE_OPERATIONS,
+        GitHubService,
+    )
 
+    if service is None:
         service = GitHubService()
-    token, token_error = await service.resolve_github_token(repo=_string(repository))
+    token, token_error = await service.resolve_github_token(
+        repo=_string(repository), operations=ISSUE_OPERATIONS
+    )
     authenticated_login = await _resolve_authenticated_login(service=service, token=token)
     permission_ok, permission_detail, repository_authorized = await _probe_reconciliation_access(
         service=service, repository=_string(repository), token=token

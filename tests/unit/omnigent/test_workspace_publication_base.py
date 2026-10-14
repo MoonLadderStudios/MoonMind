@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 import pytest
@@ -853,6 +853,122 @@ async def test_selected_branch_rejects_remote_changes(
     else:
         assert git("for-each-ref", "refs/heads/selected", cwd=origin) == ""
     assert git("rev-parse", "HEAD", cwd=workspace) == agent_sha
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_remote", ["lost_ack", "competing"])
+async def test_pr_candidate_reconciles_lost_ack_and_never_overwrites_competing_tip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_remote: str,
+) -> None:
+    """Immediate PR publication reconciles its own push before mutating again.
+
+    The generated candidate branch already exists remotely: either holding this
+    exact candidate (the first push succeeded but its acknowledgment was lost)
+    or holding someone else's commit. The retry reuses the selected base and the
+    same candidate; a freshly observed foreign tip is never force-replaced.
+    """
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    resolve_pr = AsyncMock(
+        return_value=SimpleNamespace(
+            resolved=True, pr_url="https://github.com/example/repository/pull/7"
+        )
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        resolve_pr,
+    )
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    git("init", "--initial-branch=main", cwd=seed)
+    (seed / "base.txt").write_text("base\n")
+    git("add", ".", cwd=seed)
+    git("commit", "-m", "base", cwd=seed)
+    git("remote", "add", "origin", str(origin), cwd=seed)
+    git("push", "origin", "main", cwd=seed)
+    git("checkout", "-b", "release", cwd=seed)
+    (seed / "release.txt").write_text("release\n")
+    git("add", ".", cwd=seed)
+    git("commit", "-m", "release", cwd=seed)
+    git("push", "origin", "release", cwd=seed)
+
+    workflow_id, step_id = "workflow-4003", "publish-step"
+    identity = "workflow-4003-publication"
+    candidate_branch = f"moonmind-job-{str(uuid5(NAMESPACE_URL, identity))[:8]}"
+    workspace_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.parent.mkdir(parents=True)
+    git("clone", "--branch", "release", str(origin), str(workspace), cwd=tmp_path)
+    (workspace / "work.txt").write_text("agent work\n")
+    git("add", ".", cwd=workspace)
+    git("commit", "-m", "agent work", cwd=workspace)
+    candidate_sha = git("rev-parse", "HEAD", cwd=workspace)
+    SandboxWorkspaceRecordStore(tmp_path).ensure(
+        SandboxWorkspaceRecord(workspace_id, workflow_id, step_id, "repo")
+    )
+    if prior_remote == "lost_ack":
+        git("push", "origin", f"HEAD:refs/heads/{candidate_branch}", cwd=workspace)
+        expected_remote = candidate_sha
+    else:
+        git("checkout", "-b", "peer", "main", cwd=seed)
+        (seed / "peer.txt").write_text("someone else's work\n")
+        git("add", ".", cwd=seed)
+        git("commit", "-m", "peer work", cwd=seed)
+        git("push", "origin", f"HEAD:refs/heads/{candidate_branch}", cwd=seed)
+        expected_remote = git("rev-parse", "HEAD", cwd=seed)
+
+    args = dict(
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+        publication_identity=identity,
+        publish_mode="pr",
+        base_branch="release",
+        repository="example/repository",
+        github_token="fixture-credential",
+    )
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    if prior_remote == "competing":
+        with pytest.raises(RuntimeError, match="not a fast-forward"):
+            await publisher.publish_workspace(**args)
+        resolve_pr.assert_not_awaited()
+    else:
+        evidence = await publisher.publish_workspace(**args)
+        assert evidence["push_status"] == "pushed"
+        assert evidence["push_branch"] == candidate_branch
+        assert evidence["push_base_branch"] == "release"
+        assert evidence["push_head_sha"] == candidate_sha
+        assert evidence["push_commit_count"] == 1
+        assert evidence["remote_verified"] is True
+        assert evidence["pull_request_url"] == (
+            "https://github.com/example/repository/pull/7"
+        )
+        resolve_pr.assert_awaited_once_with(
+            repo="example/repository",
+            selector=candidate_branch,
+            github_token="fixture-credential",
+            expected_head_sha=candidate_sha,
+            expected_base_branch="release",
+            expected_draft=False,
+        )
+    assert git("rev-parse", f"refs/heads/{candidate_branch}", cwd=origin) == (
+        expected_remote
+    )
+    assert git("rev-parse", "HEAD", cwd=workspace) == candidate_sha
+    assert sorted(
+        git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=origin)
+        .splitlines()
+    ) == sorted([candidate_branch, "main", "release"])
 
 
 @pytest.mark.asyncio

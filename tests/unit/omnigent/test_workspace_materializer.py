@@ -785,7 +785,7 @@ def test_runtime_input_ownership_handoff_targets_selected_identity(
 
 
 @pytest.mark.asyncio
-async def test_materializer_fails_closed_without_safe_branch(tmp_path):
+async def test_materializer_fails_closed_on_unsafe_branch(tmp_path):
     async def runner(argv):
         return 0, "", ""
 
@@ -801,11 +801,109 @@ async def test_materializer_fails_closed_without_safe_branch(tmp_path):
                         "workspaceId": _workspace_id(),
                         "relativePath": "repo",
                     },
-                    "repository": "../etc/passwd",
-                    "branch": "",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "branch": "b" * 401,
                 }
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_materializer_clones_remote_default_branch_when_branch_is_omitted(
+    tmp_path,
+):
+    """An omitted branch follows the remote's actual default, not ``main``."""
+
+    captured: list[list[str]] = []
+
+    async def runner(argv, input_bytes=None):
+        captured.append(argv)
+        if input_bytes is not None:
+            import pathlib
+
+            local = tmp_path / pathlib.Path(argv[-3].removeprefix("/work/"))
+            local.mkdir(parents=True, exist_ok=True)
+        return 0, "", ""
+
+    async def fake_token(*args, **kwargs):
+        return "selected-token"
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=runner,
+        workspace_root=tmp_path,
+        repository_credential_service=_SelectedRepositoryCredentials(fake_token),
+    )
+    await materializer.materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": _workspace_id(),
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+            }
+        ),
+        plan=object(),
+    )
+
+    clone_argv = captured[0]
+    assert clone_argv[-5] == ""
+    assert "https://github.com/MoonLadderStudios/MoonMind.git" in clone_argv
+
+
+@pytest.mark.parametrize(
+    ("branch", "expected_options"),
+    [
+        ("", ["--single-branch"]),
+        ("feature/foo!bar", ["--branch", "feature/foo!bar", "--single-branch"]),
+    ],
+)
+def test_daemon_git_clone_script_selects_branch_or_remote_default(
+    tmp_path, branch: str, expected_options: list[str]
+):
+    """An omitted branch lets Git check out the remote HEAD it advertises."""
+
+    result_file = tmp_path / "clone-args.json"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "if 'clone' in args:\n"
+        "    clone = args[args.index('clone') + 1:]\n"
+        f"    Path({str(result_file)!r}).write_text(json.dumps(clone))\n"
+        "if args[:1] == ['check-ref-format'] and args[-1] == '':\n"
+        "    sys.exit(1)\n"
+    )
+    fake_git.chmod(0o755)
+    argv = build_daemon_git_clone_argv(
+        volume="agent_workspaces",
+        target_in_volume="ws-1/repo",
+        source="https://github.com/owner/repo.git",
+        branch=branch,
+        image="git-image",
+        git_user_name="Test Operator",
+        git_user_email="operator@example.test",
+        authenticated=False,
+    )
+    script = argv[argv.index("-ceu") + 1]
+    subprocess.run(
+        ["sh", "-ceu", script, "--", *argv[-5:]],
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(result_file.read_text()) == [
+        *expected_options,
+        "--",
+        "https://github.com/owner/repo.git",
+        "/work/ws-1/repo",
+    ]
 
 
 @pytest.mark.asyncio

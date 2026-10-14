@@ -986,7 +986,7 @@ jobs:
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
-      - name: Qualify active journal process transition and rollback
+      - name: Qualify active journal transition and host controller refresh
         # Real Docker consumers, PostgreSQL, artifact bytes and source-image
         # helper. Kill the owner after partial recreation, resume the same
         # operation, then run the pre-chunk reader/sweeper contract.
@@ -1003,7 +1003,8 @@ jobs:
           "$journal_test_env/bin/python" -m pip install 'pytest>=9.0.3,<9.2'
           "$journal_test_env/bin/python" -m pytest \
             --confcutdir=tests/integration/host_update \
-            tests/integration/host_update/test_journal_transition.py -q
+            tests/integration/host_update/test_journal_transition.py \
+            tests/integration/host_update/test_controller_refresh.py -q
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         uses: actions/upload-artifact@v7

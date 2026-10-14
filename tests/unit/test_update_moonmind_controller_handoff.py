@@ -95,6 +95,20 @@ def _stub_host_docker(
     commands: list[list[str]] = []
 
     def command(args, **kwargs):
+        if "describe-installation" in args:
+            repo = args[args.index("--repo") + 1]
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    {
+                        "bindSources": {
+                            "repo": repo,
+                            "state": f"{repo}/deploy/state/controller",
+                        },
+                    }
+                ),
+            )
         if args[0] != "docker":
             return original_run(args, **kwargs)
         commands.append(list(args))
@@ -115,12 +129,288 @@ def _stub_host_docker(
             )
         elif args[1] == "pull":
             output = ""
+        elif args[1] == "ps":
+            output = ""
+        elif args[1] == "run":
+            if update._CONTROLLER_SOURCE_EXPORT in args:
+                output = json.dumps(
+                    {
+                        "bootstrap.py": "# requested release bootstrap",
+                        "mounts.py": (ROOT / "deploy/controller/mounts.py").read_text(),
+                    }
+                )
+            else:
+                assert "ensure" in args
+                assert "--user" in args and "0:0" in args
+                assert "--network" in args
+                assert "moonmind_deployment-controller-network" in args
+                bootstrap_mount = next(
+                    part for part in args if "target=/controller-bootstrap," in part
+                )
+                source = bootstrap_mount.split("source=", 1)[1].split(",", 1)[0]
+                assert (Path(source) / "bootstrap.py").read_text() == (
+                    "# requested release bootstrap"
+                )
+                assert (
+                    "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
+                    in args
+                )
+                output = ""
         else:
             raise AssertionError(f"unexpected host docker command: {args}")
         return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
     monkeypatch.setattr(update.subprocess, "run", command)
     return commands
+
+
+def test_no_argument_host_refreshes_a_capable_controller_before_submission(
+    installed, monkeypatch
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    assert update.main([]) == 0
+
+    refreshes = [command for command in commands if "ensure" in command]
+    assert len(refreshes) == 1
+    refresh = refreshes[0]
+    assert IMAGE in refresh
+    assert f"http://moonmind-controller:{controller.port}" in refresh
+    assert f"type=bind,source={repo},target=/deployment,readonly" in refresh
+    state = repo / "deploy/state/controller"
+    assert f"type=bind,source={state},target=/var/lib/moonmind-controller" in refresh
+    assert refresh[refresh.index("--repo") + 1] == "/deployment"
+    assert refresh[refresh.index("--state-dir") + 1] == "/var/lib/moonmind-controller"
+    assert len(controller.applied) == 1
+
+
+@pytest.mark.parametrize(
+    "checkout,daemon_source",
+    [
+        ("/mnt/c/MoonMind", "/mnt/c/operator-installed-moonmind"),
+        ("C:\\MoonMind", "/run/desktop/mnt/host/c/MoonMind"),
+    ],
+)
+def test_refresh_preserves_installed_bind_sources_and_uses_linux_container_paths(
+    monkeypatch, checkout, daemon_source
+):
+    repo = Path(checkout)
+    commands = []
+    bundle = {
+        "bootstrap.py": "# requested release bootstrap",
+        "mounts.py": (ROOT / "deploy/controller/mounts.py").read_text(),
+    }
+    monkeypatch.setattr(
+        update,
+        "_controller_identity",
+        lambda _repo: {"project": "controller", "port": 8521, "targetNetwork": "link"},
+    )
+    monkeypatch.setattr(
+        update,
+        "_controller_call",
+        lambda *args, **kwargs: (200, {"capabilities": ["active-journal-transition"]}),
+    )
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "describe-installation" in command:
+            return json.dumps(
+                {
+                    "bindSources": {
+                        "repo": daemon_source,
+                        "state": f"{daemon_source}/deploy/state/controller",
+                    },
+                }
+            )
+        if command[:2] == ["docker", "ps"]:
+            return ""
+        if update._CONTROLLER_SOURCE_EXPORT in command:
+            return json.dumps(bundle)
+        assert "ensure" in command
+        mounts = [part for part in command if part.startswith("type=bind,source=")]
+        assert f"type=bind,source={daemon_source},target=/deployment,readonly" in mounts
+        assert (
+            f"type=bind,source={daemon_source}/deploy/state/controller,"
+            "target=/var/lib/moonmind-controller"
+        ) in mounts
+        bootstrap_mount = next(
+            part for part in mounts if "target=/controller-bootstrap," in part
+        )
+        source = bootstrap_mount.split("source=", 1)[1].split(",", 1)[0]
+        assert (Path(source) / "bootstrap.py").read_text() == bundle["bootstrap.py"]
+        assert command[command.index("--repo") + 1] == "/deployment"
+        assert (
+            command[command.index("--state-dir") + 1] == "/var/lib/moonmind-controller"
+        )
+        return ""
+
+    monkeypatch.setattr(update, "run", run)
+    update._ensure_controller_journal_transition(
+        {"project": "moonmind", "image": IMAGE},
+        repo,
+        "http://127.0.0.1:8521",
+        SECRET,
+        refresh=True,
+    )
+    assert len([command for command in commands if "ensure" in command]) == 1
+
+
+@pytest.mark.parametrize("recovery_source", ["requested", "installed"])
+def test_default_host_recovers_missing_identity_before_discovering_endpoint(
+    installed, monkeypatch, recovery_source
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    state = repo / "deploy/state/controller"
+    saved = json.loads((state / "controller-identity.json").read_text())
+    saved.update(targetNetwork="bespoke-link", targetProject="moonmind", repo=str(repo))
+    (state / "controller-identity.json").unlink()
+    (state / "controller-compose.yaml").write_text(
+        "# Existing controller installation\n"
+    )
+    commands = _stub_host_docker(monkeypatch, revision)
+    original_run = update.subprocess.run
+
+    def run(args, **kwargs):
+        if recovery_source == "installed" and args[:2] == ["docker", "ps"]:
+            commands.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="installed-api", stderr="")
+        if recovery_source == "installed" and args[:2] == ["docker", "inspect"]:
+            commands.append(list(args))
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    [
+                        {
+                            "Image": "sha256:installed-source",
+                            "Config": {"Labels": {"com.docker.compose.service": "api"}},
+                        }
+                    ]
+                ),
+            )
+        if (
+            recovery_source == "installed"
+            and update._CONTROLLER_SOURCE_EXPORT in args
+            and ("identity-recovery" in args or "bind-discovery" in args)
+            and IMAGE in args
+        ):
+            commands.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        if args[0] == "docker" and "recover-identity" in args:
+            commands.append(list(args))
+            assert (
+                IMAGE if recovery_source == "requested" else "sha256:installed-source"
+            ) in args
+            assert args[args.index("--network") + 1] == "none"
+            assert args[args.index("--state-dir") + 1] == "/var/lib/moonmind-controller"
+            (state / "controller-identity.json").write_text(json.dumps(saved))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "docker" and "ensure" in args:
+            commands.append(list(args))
+            assert "bespoke-link" in args
+            assert f"http://moonmind-controller:{controller.port}" in args
+            assert args[args.index("--image") + 1] == (
+                IMAGE if recovery_source == "requested" else "sha256:installed-source"
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(update.subprocess, "run", run)
+    monkeypatch.chdir(repo)
+
+    assert update.main([]) == 0
+    assert len([command for command in commands if "recover-identity" in command]) == 1
+    assert len([command for command in commands if "ensure" in command]) == 1
+    assert len(controller.applied) == 1
+    assert controller.store.load(controller.applied[0])["desired"]["image"] == IMAGE
+    assert json.loads((state / "controller-identity.json").read_text()) == saved
+
+
+def test_refresh_uses_the_shipped_adapter_for_the_new_bootstrap_bind(
+    tmp_path, monkeypatch
+):
+    bundle = {
+        "bootstrap.py": "# image-owned bootstrap",
+        "mounts.py": "def resolve_bind_source(source):\n    return '/daemon/private-bootstrap'\n",
+    }
+    with update._materialized_controller(bundle) as bootstrap:
+        monkeypatch.setattr(
+            update,
+            "run",
+            lambda *args, **kwargs: json.dumps(
+                {
+                    "bindSources": {
+                        "repo": "/installed-repo",
+                        "state": "/installed-state",
+                    },
+                }
+            ),
+        )
+        command = update._controller_bootstrap_container(
+            bootstrap, tmp_path, IMAGE, network="link"
+        )
+    assert "type=bind,source=/installed-repo,target=/deployment,readonly" in command
+    assert (
+        "type=bind,source=/installed-state,target=/var/lib/moonmind-controller"
+        in command
+    )
+    assert (
+        "type=bind,source=/daemon/private-bootstrap,target=/controller-bootstrap,readonly"
+        in command
+    )
+
+
+def test_explicit_host_controller_keeps_its_release_choice(installed, monkeypatch):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    assert update.main(["--controller-url", controller.url]) == 0
+
+    assert not any(command[1] == "run" for command in commands)
+    assert len(controller.applied) == 1
+
+
+@pytest.mark.parametrize("selection", ["endpoint", "secret"])
+def test_explicit_host_controller_keeps_its_release_after_a_failed_operation(
+    installed, monkeypatch, selection
+):
+    repo, controller = installed(failing_until(lambda: False))
+    monkeypatch.setattr(
+        update, "run", lambda *args, **kwargs: json.dumps({"services": {"api": {}}})
+    )
+    monkeypatch.setattr(
+        update,
+        "_refresh_controller_to_requested",
+        lambda *args: pytest.fail("Explicit controller release was replaced"),
+    )
+    record = {
+        "project": "moonmind",
+        "image": IMAGE,
+        "inputs": {},
+        "context": {"idempotency_key": "host-update:explicit-failed"},
+    }
+    with pytest.raises(RuntimeError, match="Expecting value"):
+        update._submit_release(
+            record,
+            repo,
+            controller_url=controller.url,
+            controller_url_explicit=selection == "endpoint",
+            secret_file=(
+                str(update._default_controller_secret_file(repo))
+                if selection == "secret"
+                else None
+            ),
+        )
+    recorded = controller.store.load("host-explicit-failed")
+    assert recorded["attemptGroup"] == 1
+    assert recorded["desired"]["image"] == IMAGE
+    assert set(controller.applied) == {"host-explicit-failed"}
 
 
 def test_no_argument_host_command_submits_the_controller_operation(
@@ -144,8 +434,13 @@ def test_no_argument_host_command_submits_the_controller_operation(
     assert recorded["desired"]["sourceRevision"] == revision
     assert recorded["target"]["projectDir"] == str(repo)
     assert recorded["target"]["services"] == ["api"]
-    # No application-owned updater is launched from the target image.
-    assert not any(item[1] == "run" for item in commands)
+    # One-offs only export/bootstrap the standalone controller; none
+    # launches an application-owned deployment updater.
+    assert all(
+        update._CONTROLLER_SOURCE_EXPORT in item or "ensure" in item
+        for item in commands
+        if item[1] == "run"
+    )
     # Resuming the same submission observes the same operation; nothing reapplies.
     assert update.main(["--resume", submission.stem]) == 0
     assert controller.applied == [operation_id]
@@ -157,7 +452,9 @@ def test_no_argument_host_command_submits_the_controller_operation(
 def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
     installed, monkeypatch, reachable
 ):
-    monkeypatch.setenv("MOONMIND_DEPLOYMENT_WORKER_IMAGE", "ghcr.io/org/moonmind:explicit-old")
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_WORKER_IMAGE", "ghcr.io/org/moonmind:explicit-old"
+    )
     repo, controller = installed()
     request = update._controller_call
     bootstrapped = False
@@ -166,7 +463,9 @@ def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
     def old_health(url, secret, method, path, *args, **kwargs):
         if path == "/v1/healthz" and not bootstrapped:
             if not reachable:
-                raise update.ControllerUnreachableError("controller recreation interrupted")
+                raise update.ControllerUnreachableError(
+                    "controller recreation interrupted"
+                )
             return 200, {"status": "ok"}
         if method == "POST":
             assert bootstrapped
@@ -243,6 +542,15 @@ def test_host_retries_with_the_requested_release_controller_after_installed_one_
 
     def run(command, **kwargs):
         nonlocal refreshed
+        if "describe-installation" in command:
+            return json.dumps(
+                {
+                    "bindSources": {
+                        "repo": str(repo),
+                        "state": str(repo / "deploy/state/controller"),
+                    },
+                }
+            )
         if command[:3] == ["docker", "compose", "config"]:
             return json.dumps({"services": {"api": {}}})
         if command[:2] == ["docker", "ps"]:
@@ -256,9 +564,20 @@ def test_host_retries_with_the_requested_release_controller_after_installed_one_
                     }
                 ]
             )
-        if command[:2] == ["docker", "run"]:
-            return json.dumps({"bootstrap.py": "# shipped host lifecycle source"})
-        assert command[2] == "ensure"
+        if update._CONTROLLER_SOURCE_EXPORT in command:
+            return json.dumps(
+                {
+                    "bootstrap.py": "# shipped host lifecycle source",
+                    "mounts.py": (ROOT / "deploy/controller/mounts.py").read_text(),
+                }
+            )
+        assert command[:2] == ["docker", "run"]
+        assert "ensure" in command and "--user" in command and "0:0" in command
+        assert (
+            command[command.index("--state-dir") + 1] == "/var/lib/moonmind-controller"
+        )
+        assert command[command.index("--repo") + 1] == "/deployment"
+        assert f"http://moonmind-controller:{controller.port}" in command
         assert command[command.index("--image") + 1] == IMAGE
         assert "--prefer-requested" in command
         # Only a terminal failure is handed to the requested release.

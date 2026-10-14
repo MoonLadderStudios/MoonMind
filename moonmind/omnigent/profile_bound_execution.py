@@ -9,6 +9,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from moonmind.omnigent.authority_chain import (
@@ -131,6 +132,8 @@ from moonmind.workflows.executions.runtime_capabilities import (
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
 HeartbeatResult = TypeVar("HeartbeatResult")
 HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
+#: How long before an expiring gh issuance lapses its projection is re-issued.
+GITHUB_PROJECTION_REFRESH_LEAD_SECONDS = 600.0
 # The deployment janitor reconciles abandoned OAuth hosts on a five-minute
 # cadence.  Cover one complete cadence plus scheduling slack so an exact rerun
 # submitted immediately after cancellation can wait for the same profile
@@ -474,14 +477,67 @@ class OmnigentProfileBoundExecutionCoordinator:
             link_type="omnigent_runtime_authority",
         )
 
+    async def _refresh_github_projection(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        host_lease: Any,
+        effective_launch: Mapping[str, Any],
+        preflight: dict[str, Any],
+        issuance: dict[str, Any],
+    ) -> Any:
+        """Re-issue the host's gh projection through the same selection.
+
+        ``issuance`` is the projected issuance's source and expiry. A default
+        connection that now names another source is refused before anything
+        is published; MoonMind does not switch accounts mid-run. Returns the
+        new issuance's expiry.
+        """
+
+        reservation = await self._run_store.reserve_github_projection(
+            request=request, host_lease_ref=host_lease.lease_id
+        )
+        # Later recovery is fenced by the newest reservation.
+        preflight["githubProjectionReservation"] = dict(reservation)
+        renewed: dict[str, Any] = {}
+
+        async def selected_token() -> str | None:
+            value = await self._github_token(request, issuance=renewed)
+            if renewed.get("sourceName") != issuance.get("sourceName"):
+                raise OmnigentOAuthHostError(
+                    "the selected GitHub connection changed; MoonMind does not "
+                    "switch accounts mid-run",
+                    code="github_auth_unavailable",
+                )
+            return value
+
+        await self._host_preparation.refresh_github_projection(
+            host_lease=host_lease,
+            effective_launch=effective_launch,
+            evidence_request=request,
+            cleanup_authority_store=self._run_store,
+            reservation=reservation,
+            github_token_resolver=selected_token,
+        )
+        issuance["expiresAt"] = renewed.get("expiresAt")
+        return renewed.get("expiresAt")
+
     async def _execute_with_host_lease_heartbeat(
         self,
         execution: Awaitable[HeartbeatResult],
         *,
         host_lease_ref: str,
         ttl_seconds: int,
+        github_refresh: Callable[[], Awaitable[Any]] | None = None,
+        github_expires_at: Any = None,
     ) -> HeartbeatResult:
-        """Keep the durable host lease live for one owned runtime operation."""
+        """Keep the durable host lease live for one owned runtime operation.
+
+        ``github_refresh`` re-issues the agent's gh projection before the
+        issuance expiring at ``github_expires_at`` lapses and returns the new
+        expiry. A failed refresh leaves the current issuance in place and is
+        retried each heartbeat interval; it never ends the operation.
+        """
 
         async def heartbeat() -> None:
             while True:
@@ -491,8 +547,29 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
                 await asyncio.sleep(HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS)
 
+        async def refresh_github() -> None:
+            expires_at = github_expires_at
+            while github_refresh is not None and expires_at is not None:
+                remaining = (expires_at - datetime.now(UTC)).total_seconds()
+                await asyncio.sleep(
+                    max(
+                        HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS,
+                        remaining - GITHUB_PROJECTION_REFRESH_LEAD_SECONDS,
+                    )
+                )
+                try:
+                    expires_at = await github_refresh()
+                except Exception as exc:  # noqa: BLE001 - retried while valid
+                    logger.warning(
+                        "profile-bound GitHub projection refresh failed; "
+                        "retrying in %ss: %s",
+                        HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS,
+                        type(exc).__name__,
+                    )
+
         execution_task = asyncio.create_task(execution)
         heartbeat_task = asyncio.create_task(heartbeat())
+        refresh_task = asyncio.create_task(refresh_github())
         try:
             done, _pending = await asyncio.wait(
                 {execution_task, heartbeat_task},
@@ -513,12 +590,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                 raise
             raise RuntimeError("host lease heartbeat stopped unexpectedly")
         finally:
-            for task in (execution_task, heartbeat_task):
+            for task in (execution_task, heartbeat_task, refresh_task):
                 if not task.done():
                     task.cancel()
             await asyncio.gather(
                 execution_task,
                 heartbeat_task,
+                refresh_task,
                 return_exceptions=True,
             )
 
@@ -1411,6 +1489,8 @@ class OmnigentProfileBoundExecutionCoordinator:
             github_token: str | None = None
             github_token_resolved = False
             github_publication_token_resolved = False
+            # Non-secret identity and expiry of the agent-facing issuance.
+            github_issuance: dict[str, Any] = {}
 
             async def resolve_github_token(
                 *, for_publication: bool = False
@@ -1426,9 +1506,29 @@ class OmnigentProfileBoundExecutionCoordinator:
                     github_token_resolved = True
                     github_publication_token_resolved = True
                 elif not github_token_resolved:
-                    github_token = await self._github_token(request)
+                    github_token = await self._github_token(
+                        request, issuance=github_issuance
+                    )
                     github_token_resolved = True
                 return github_token
+
+            def github_projection_refresh() -> dict[str, Any]:
+                if not preflight.get("githubProjectionReservation"):
+                    return {}
+
+                async def refresh() -> Any:
+                    return await self._refresh_github_projection(
+                        request=request,
+                        host_lease=host_lease,
+                        effective_launch=effective_launch,
+                        preflight=preflight,
+                        issuance=github_issuance,
+                    )
+
+                return {
+                    "github_refresh": refresh,
+                    "github_expires_at": github_issuance.get("expiresAt"),
+                }
 
             # The host owner reserves destination publication before acquiring
             # agent-facing credentials. Clone-only authority stays lazy and is
@@ -1767,6 +1867,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     ),
                     host_lease_ref=host_lease.lease_id,
                     ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
+                    **github_projection_refresh(),
                 )
             except OmnigentSameSessionContinuationRequired as exc:
                 if (
@@ -2181,6 +2282,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ),
                         host_lease_ref=host_lease.lease_id,
                         ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
+                        **github_projection_refresh(),
                     )
                     deferred_count = len(deferred_bridge_terminals)
                     result = collect_deferred_bridge_terminal(continuation_result)
@@ -3335,8 +3437,17 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     @classmethod
     async def _github_token(
-        cls, request: AgentExecutionRequest, *, for_publication: bool = False
+        cls,
+        request: AgentExecutionRequest,
+        *,
+        for_publication: bool = False,
+        issuance: dict[str, Any] | None = None,
     ) -> str | None:
+        """Resolve the default connection's token for this request.
+
+        ``issuance`` receives the selected source's name and expiry (never the
+        token), so a holder can renew through the same selection.
+        """
         gh_required = "gh" in cls._required_capabilities(request)
         # A GitHub repository source must be cloned into the sandbox before the
         # host launches. Private repositories require a credential for that clone
@@ -3380,6 +3491,10 @@ class OmnigentProfileBoundExecutionCoordinator:
         )
         token = str(resolved.token or "").strip()
         if token:
+            if issuance is not None:
+                issuance.update(
+                    sourceName=resolved.source_name, expiresAt=resolved.expires_at
+                )
             return token
         if resolved.source != GitHubCredentialSource.MISSING:
             # A selected credential that failed is the result: it never

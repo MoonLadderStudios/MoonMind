@@ -5751,7 +5751,7 @@ export interface components {
             /** Repository */
             repository: string;
             /** Operations */
-            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
+            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
             /**
              * Revision
              * @default 1
@@ -7035,7 +7035,7 @@ export interface components {
             /** Token */
             token?: string | null;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[] | null;
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[] | null;
         };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
@@ -7647,6 +7647,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Publishcontract
+             * @description Publication constraints the submit path enforces for this Skill: selfManaged (Skill-owned Auto) and repositoryPublishDisabled (None only)
+             */
+            publishContract?: {
+                [key: string]: boolean;
+            };
+            /**
              * Markdown
              * @description Markdown content of the skill, if requested
              */
@@ -7766,6 +7773,13 @@ export interface components {
             sideEffect?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Publishcontract
+             * @description Publication constraints the submit path enforces for this Skill: selfManaged (Skill-owned Auto) and repositoryPublishDisabled (None only)
+             */
+            publishContract?: {
+                [key: string]: boolean;
+            };
             /**
              * Markdown
              * @description Markdown content of the skill, if requested
@@ -9701,7 +9715,7 @@ export interface components {
              *       "read"
              *     ]
              */
-            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
+            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
         };
         /** GitHubAppBeginResponse */
         GitHubAppBeginResponse: {
@@ -10630,7 +10644,7 @@ export interface components {
              */
             token: string;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request")[];
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
         };
         /**
          * PinArtifactRequest
@@ -10939,6 +10953,13 @@ export interface components {
              * @default draft
              */
             releaseStatus: string;
+            /**
+             * Workflowpublish
+             * @description Workflow publication the preset declares, when it declares one
+             */
+            workflowPublish?: {
+                [key: string]: unknown;
+            } | null;
             /** Steps */
             steps?: components["schemas"]["PresetStepBlueprintSchema"][];
             /** Annotations */
@@ -11136,6 +11157,13 @@ export interface components {
              * @default draft
              */
             releaseStatus: string;
+            /**
+             * Workflowpublish
+             * @description Workflow publication the preset declares, when it declares one
+             */
+            workflowPublish?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * PresignDownloadResponse
