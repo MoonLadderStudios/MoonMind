@@ -364,6 +364,7 @@ Recommended persisted preferences:
 type DashboardWorkflowListPreferences = {
   workflowListDisplayMode?: 'hidden' | 'sidebar' | 'table';
   lastSelectedWorkflowId?: string;
+  workflowListSort?: { field: string; direction: 'asc' | 'desc' };
 };
 ```
 
@@ -373,7 +374,7 @@ Rules:
 2. Persist the last explicitly selected workflow ID for first-row fallback avoidance.
 3. Do not put `hidden` or `sidebar` mode in the workflow detail path; detail URLs remain canonical workflow URLs.
 4. Full table mode is naturally represented by `/workflows`.
-5. Query parameters may preserve list filters, sort, page size, cursor, and safe return context according to the Workflows list contract.
+5. Query parameters preserve list filters, page size, cursor, and safe return context according to the Workflows list contract. Current-page sort is retained in the existing dashboard preferences across display changes; it is never written to the URL or list API and remains labelled as current-page-only.
 6. Query parameters must not include raw prompts, full Create drafts, secrets, presigned URLs, logs, artifacts, or large detail payloads.
 7. On direct desktop visits to `/workflows/{workflowId}`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `sidebar` so navigation context is visible.
 8. On direct desktop visits to `/workflows/new`, default to the persisted mode when it is `hidden` or `sidebar`; otherwise default to `hidden` so authoring remains focused.

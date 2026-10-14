@@ -290,8 +290,8 @@ export function WorkflowWorkspaceSidebarPanel({
     }
     return buildWorkflowListQueryParams(params);
   }, [defaultSource, searchKey]);
-  const listQueryKey = useMemo(() => ['workflow-workspace-sidebar', listQueryParams] as const, [listQueryParams]);
   const listQuery = useMemo(() => workflowListQueryString(listQueryParams), [listQueryParams]);
+  const listQueryKey = useMemo(() => ['workflow-workspace-sidebar', listQuery] as const, [listQuery]);
   const [sidebarFilterText, setSidebarFilterText] = useState('');
   const workflowsQuery = useQuery({
     queryKey: listQueryKey,
