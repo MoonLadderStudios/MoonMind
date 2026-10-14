@@ -165,9 +165,32 @@ def _first_capable_controller_image(candidates: list[str], requested: str) -> st
     )
 
 
-def _image_id(image: str) -> str:
-    result = _run_capture(["docker", "image", "inspect", "--format", "{{.Id}}", image])
-    return (result.stdout or "").strip() if result.returncode == 0 else image
+def _running_controller_image(project: str) -> str | None:
+    """The image the live controller container runs; ``None`` when none runs.
+
+    The Compose file is not proof: an interrupted refresh can name the
+    requested image there while the old or a stopped controller remains.
+    """
+    listed = _run_capture(
+        [
+            "docker",
+            "ps",
+            "--quiet",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={CONTROLLER_SERVICE}",
+        ]
+    )
+    identifiers = (listed.stdout or "").split() if listed.returncode == 0 else []
+    if len(identifiers) != 1:
+        return None
+    inspected = _run_capture(
+        ["docker", "inspect", "--format", "{{.Image}}", identifiers[0]]
+    )
+    if inspected.returncode:
+        return None
+    return (inspected.stdout or "").strip() or None
 
 
 def cmd_ensure(args, env) -> int:
@@ -237,11 +260,9 @@ def cmd_ensure(args, env) -> int:
             raise RuntimeError(
                 "Controller Compose project has no unique controller image."
             )
-        if prefer_requested:
-            running = lines[image_lines[0]].partition(":")[2].strip().strip("\"'")
-            if _image_id(running) == image:
-                _print_refresh_receipt(refreshed=False, image=image)
-                return 0
+        if prefer_requested and _running_controller_image(identity["project"]) == image:
+            _print_refresh_receipt(refreshed=False, image=image)
+            return 0
         lines = [line for line in lines if not line.startswith("    entrypoint:")]
         index = next(
             index for index, line in enumerate(lines) if line.startswith("    image:")

@@ -216,15 +216,30 @@ def test_host_refreshes_old_controller_before_submitting_without_api_or_worker(
     assert len(controller.applied) == 1
 
 
-@pytest.mark.parametrize("controller_changed", [True, False])
+@pytest.mark.parametrize(
+    ("controller_changed", "first_retry_arrives"),
+    [(True, True), (True, False), (False, True)],
+)
 def test_host_retries_with_the_requested_release_controller_after_installed_one_fails(
-    installed, monkeypatch, controller_changed
+    installed, monkeypatch, controller_changed, first_retry_arrives
 ):
     """A capable installed controller can still carry the bug its release fixes."""
     refreshed = False
     repo, controller = installed(failing_until(lambda: refreshed))
     monkeypatch.setattr(update, "_sleep", lambda _seconds: None)
     ensures = []
+    retry_posts = []
+    request = update._controller_call
+
+    def recreated_controller(url, secret, method, path, *args, **kwargs):
+        if path.endswith("/retry"):
+            retry_posts.append(path)
+            if not first_retry_arrives and len(retry_posts) == 1:
+                # The just-recreated controller refused the connection.
+                raise update.ControllerUnreachableError("connection refused")
+        return request(url, secret, method, path, *args, **kwargs)
+
+    monkeypatch.setattr(update, "_controller_call", recreated_controller)
 
     def run(command, **kwargs):
         nonlocal refreshed
@@ -264,13 +279,16 @@ def test_host_retries_with_the_requested_release_controller_after_installed_one_
         record, repo, controller_url=controller.url, secret_file=None
     )
     if not controller_changed:
-        with pytest.raises(RuntimeError, match="Expecting value"):
+        with pytest.raises(RuntimeError, match="Expecting value") as failure:
             submit()
+        assert "already runs the requested release" in str(failure.value)
         assert len(ensures) == 1
+        assert retry_posts == []
         assert controller.store.load("host-refresh-test")["attemptGroup"] == 1
         return
     assert submit() == 0
     assert len(ensures) == 1
+    assert len(retry_posts) == (1 if first_retry_arrives else 2)
     recorded = controller.store.load("host-refresh-test")
     assert (recorded["status"], recorded["attemptGroup"]) == ("succeeded", 2)
     # The original failure stays in the operation record.
