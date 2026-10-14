@@ -17872,15 +17872,44 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         publish_payload: Mapping[str, Any],
         task_payload: Mapping[str, Any],
     ) -> str:
-        publish_body = self._coerce_text(publish_payload.get("prBody"), flatten=False)
-        if publish_body:
-            return publish_body
-        default_summary = self._resolve_task_body_instructions(task_payload)
-        if default_summary:
-            return default_summary
-        if self._summary and not self._is_transient_summary(self._summary):
-            return self._summary
-        return "Automated changes by MoonMind."
+        body = (
+            self._coerce_text(publish_payload.get("prBody"), flatten=False)
+            or self._resolve_task_body_instructions(task_payload)
+            or (
+                self._summary
+                if self._summary and not self._is_transient_summary(self._summary)
+                else None
+            )
+            or "Automated changes by MoonMind."
+        )
+        unverified = self._moonspec_unverified_body_section()
+        return f"{body.rstrip()}\n\n{unverified}" if unverified else body
+
+    def _moonspec_unverified_body_section(self) -> str:
+        """List criteria the verifier recorded as outside its reach."""
+        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+        gate = self._publish_context.get("moonSpecGate")
+        evidence = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
+        rows = [
+            (row.requirement_id, row.unverified)
+            for row in (evidence.evidence if evidence else ())
+            if row.unverified is not None
+        ]
+        if not rows:
+            return ""
+        lines = [
+            "## Unverified criteria",
+            "",
+            "MoonSpec verification could not check these criteria in its environment:",
+            "",
+        ]
+        lines.extend(
+            f"- {requirement}: {unverified.reason} "
+            f"Verifiable by: {unverified.verifiable_by}"
+            for requirement, unverified in rows
+        )
+        return "\n".join(lines)
 
     def _resolve_publish_base_branch(
         self, publish_payload: Mapping[str, Any]

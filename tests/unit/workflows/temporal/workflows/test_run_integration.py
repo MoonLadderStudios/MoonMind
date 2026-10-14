@@ -10595,3 +10595,63 @@ async def test_preserved_draft_finalization_keeps_publication_and_blocked_object
     assert "completed successfully" not in memos[-1]["summary"]
     assert workflow._pull_request_url in memos[-1]["summary"]
     assert workflow._attention_required is True
+
+
+def test_passing_gate_lists_unverified_criteria_in_native_pr_body(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "FULLY_IMPLEMENTED",
+                "recommendedNextAction": "advance",
+                "recoverableInCurrentRuntime": False,
+                "validatedRefs": {
+                    "acceptance": {
+                        "schemaVersion": "acceptance/v1",
+                        "subject": {
+                            "repository": "org/repo",
+                            "revision": "abc",
+                            "contentDigest": "git-tree:abc",
+                        },
+                        "scope": {
+                            "sourceRef": "org/repo#7",
+                            "sourceDigest": "sha256:source",
+                            "complete": True,
+                            "requirementIds": ["AC-1", "AC-2"],
+                        },
+                        "completionTarget": {
+                            "ref": "refs/heads/main",
+                            "revision": "def",
+                            "contentDigest": "git-tree:def",
+                        },
+                        "evidence": [
+                            {"requirementId": "AC-1", "evidenceRefs": ["test:ac-1"]},
+                            {
+                                "requirementId": "AC-2",
+                                "unverified": {
+                                    "reason": "Needs a GPU render host.",
+                                    "verifiableBy": "the repository's GPU CI lane",
+                                },
+                            },
+                        ],
+                        "freshness": {"policy": "content"},
+                    }
+                },
+            }
+        },
+    )
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    body = mock_run_workflow._resolve_native_pr_body(
+        publish_payload={"prBody": "Implements the change."},
+        task_payload={},
+    )
+    assert body.startswith("Implements the change.")
+    assert "## Unverified criteria" in body
+    assert (
+        "- AC-2: Needs a GPU render host. Verifiable by: the repository's GPU CI lane"
+        in body
+    )
+    assert "AC-1" not in body

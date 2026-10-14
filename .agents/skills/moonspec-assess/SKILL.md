@@ -48,9 +48,9 @@ check; complete independent safe inspection first.
 
 Use `FULLY_IMPLEMENTED` for apparently present implementation, `PARTIALLY_IMPLEMENTED`
 for some implementation with gaps, `NOT_IMPLEMENTED` for missing implementation,
-or `BLOCKED` when unavailable mandatory source prevents trustworthy assessment
-or only unavailable prerequisites remain. Preserve mixed executable work as a
-bounded backlog with its explicit prerequisite handoff. These are
+or `BLOCKED` when unavailable mandatory source prevents trustworthy assessment.
+Prerequisites outside the verifier's reach never make an assessment `BLOCKED`.
+Preserve mixed executable work as a bounded backlog. These are
 initial inspection verdicts, not objective acceptance or landing evidence. The
 verifier must check/reuse objective evidence before publication or completion.
 Do not overwrite this artifact with a later verifier verdict.
@@ -92,9 +92,8 @@ Produce `boundedBacklog` for every missing, partial, conflict, or required-unver
 Separate executable repository changes from required evidence or decisions owned
 outside the current runtime. Name the owner, missing evidence, and resume check
 for each unavailable prerequisite. A mixed backlog can proceed with independent
-repository work, but if only unavailable mandatory prerequisites remain, report
-`BLOCKED` with that handoff instead of starting another implementation pass.
-Optional deployment diagnostics are limitations, not blockers; explicitly required
-deployment acceptance cannot be silently excluded because access is unavailable.
+repository work. Prerequisites outside the verifier's reach do not block: they
+become Unverified criteria under the shared acceptance policy. Optional
+deployment diagnostics are limitations, not blockers.
 
-Do not choose `FULLY_IMPLEMENTED` for objective acceptance unless every mandatory source row is verified under the shared acceptance policy. A bounded initial assessment may identify apparently present implementation; it cannot replace objective verification or prove landing.
+Do not choose `FULLY_IMPLEMENTED` for objective acceptance unless every mandatory source row is verified or Unverified under the shared acceptance policy. A bounded initial assessment may identify apparently present implementation; it cannot replace objective verification or prove landing.

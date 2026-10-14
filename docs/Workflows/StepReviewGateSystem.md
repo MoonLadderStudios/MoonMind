@@ -59,9 +59,11 @@ Original issue scope and constraints control implementation acceptance. Related
 epics, old assessments, and previous reports are context. They do not add unrelated
 acceptance obligations. Separate production operations and physical-event release
 qualification from implementation unless the selected scope explicitly owns them.
-Required runtime, rendered, or other tests cannot be waived merely because the
-current agent lacks their toolchain. An AI visual judgment must use the actual
-images and rubric through the repository's declared proof owner.
+A criterion the verifier cannot check with the capabilities, access, and time it
+has is recorded as Unverified, with the reason and who can verify it. It is listed
+in the pull request instead of blocking publication, and is never reported as
+passed. An AI visual judgment that does run must use the actual images and rubric
+through the repository's declared proof owner.
 
 Input sections remain bounded to 64,000 bytes, the complete prompt to 256,000
 bytes, and responses to 64,000 bytes. Feedback and finding limits stay enforced

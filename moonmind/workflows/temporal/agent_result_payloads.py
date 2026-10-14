@@ -139,7 +139,8 @@ def compact_moonspec_verify_metadata(
         evidence_ref = value.get("gateResultRef")
         if isinstance(evidence_ref, str) and evidence_ref.strip():
             for row in projected["evidence"]:
-                row["evidenceRefs"] = [evidence_ref]
+                if row["evidenceRefs"]:
+                    row["evidenceRefs"] = [evidence_ref]
         validated_refs["acceptance"] = projected
     if validated_refs:
         compact["validatedRefs"] = validated_refs
