@@ -1233,16 +1233,12 @@ def test_architecture_exception_modules_are_inventoried_legacy_paths() -> None:
 
     from moonmind.omnigent.legacy_retirement import (
         ARCHITECTURE_BOUNDARY_EXCEPTIONS,
-        RetirementClass,
         get_retirement_record,
     )
 
     for exception in ARCHITECTURE_BOUNDARY_EXCEPTIONS:
-        record = get_retirement_record(exception.retirement_path_id)
-        assert record.retirement_class is not RetirementClass.REMOVED, (
-            f"architecture exception {exception.exception_id} is owned by a "
-            "removed retirement row; delete the exemption with the code"
-        )
+        # An unknown row fails closed: delete the exemption with the code.
+        get_retirement_record(exception.retirement_path_id)
 
 
 # Negative fixtures: each retirement guard must actually reject the shape it

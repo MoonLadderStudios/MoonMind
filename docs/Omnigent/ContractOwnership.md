@@ -3,7 +3,7 @@
 **Document Class:** Module ownership map
 **Status:** Current
 **Owners:** MoonMind Platform
-**Last updated:** 2026-09-07
+**Last updated:** 2026-10-14
 **Authority:** Maps every `docs/Omnigent/` path and known duplicated section to
 its one surviving owner. Owners hold the contract; all other docs point.
 **Issue:** [MoonLadderStudios/MoonMind#3962](https://github.com/MoonLadderStudios/MoonMind/issues/3962).
@@ -20,7 +20,7 @@ work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 | 1 | Pinned upstream transport, provider/service session facade, native Workflow Chat facade, bridge session store | `OmnigentBridge.md` |
 | 2 | Adapter launch modes, workspace/mount/network contract, readiness, session/stream/artifact contract | `OmnigentAdapter.md` |
 | 3 | Module packages, dependency direction, ports | `OmnigentModuleArchitecture.md` §§1–4, 6 |
-| 4 | Retained duplicate architecture and removal staging (code-owned inventory) | `OmnigentModuleArchitecture.md` §5 over `moonmind/omnigent/legacy_retirement.py` |
+| 4 | Retained duplicate architecture and legacy new-admission control (code-owned table) | `OmnigentModuleArchitecture.md` §5 over `moonmind/omnigent/legacy_retirement.py` |
 | 5 | Target harness-platform model (catalog, attestation, plans, bindings, capability negotiation) | `OmnigentHarnessPlatformDesign.md` (Status: Proposed) |
 | 6 | Product selection, defaults, migration stages, acceptance gates | `PrimaryRuntimeProviderStrategy.md` |
 | 7 | Shared image, runtime packs, Host Classes, credential ownership, realizer admission | `SharedHostImage.md` |
@@ -79,7 +79,7 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 | --- | --- | --- |
 | `README.md` | Module entrypoint (new, #3962) | Current |
 | `ContractOwnership.md` | Ownership map (new, #3962) | Current |
-| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion/retirement evidence-gated (#3832–#3835). Per-combination and staged-retirement assignments below remain authoritative for current behavior until the owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target |
+| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion evidence-gated (#3832–#3834). Per-combination assignments below remain authoritative for current behavior until the owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target. Retirement (#3835, #3932) is class-based new-admission control only: removing a retained path deletes its code and row while the surviving owner's replay, historical-read, cleanup, and credential checks keep passing (`OmnigentModuleArchitecture.md` §5.2) |
 | `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; does not remove the implemented per-combination controls by itself |
 | `OmnigentHostOAuth.md` | Owner: materializer mechanisms; §§10–11 point to `SharedHostImage.md` | Current desired state |
 | `OpenCodeHost.md` | Owner: OpenCode runtime contract; §§1–3, 6 point to `SharedHostImage.md` | Current |
