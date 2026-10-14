@@ -6042,7 +6042,7 @@ async def test_github_blocker_preserves_exact_unmet_assessment_requirements(monk
             "assessmentArtifactRef": "art_blocked",
         },
         {"temporal_artifact_service": artifact_service},
-        github_service_factory=lambda: _FakeGitHubService(),
+        github_service_factory=_FakeGitHubService,
     )
 
     assert result.status == "FAILED"
