@@ -23,7 +23,7 @@ This skill edits MoonSpec execution artifacts, not application feature code. Typ
 - files under `contracts/`
 - feature checklists when present
 
-Alignment operates only among temporary execution artifacts. It must never edit canonical `docs/` files and never aligns a canonical document toward a spec; the canonical document is the higher authority (see `docs/Workflows/MoonSpecDocumentModel.md`). Canonical document updates belong to the implementation change, not to alignment edits.
+Alignment edits only temporary execution artifacts, never canonical `docs/` files. Preserve explicit task-authorized behavior changes even when existing documentation describes the old behavior; their required in-place documentation corrections belong to implementation, not alignment edits. Otherwise use the adopted source requirements to guide the derived artifacts.
 
 Do not ask the user for clarification. Resolve uncertainty by reading project context, making conservative decisions, documenting assumptions, and applying the least surprising artifact changes.
 
@@ -76,6 +76,7 @@ Read:
 - `tasks.md`: phases, task IDs, dependencies, parallel markers, file paths, tests, implementation tasks.
 - `AGENTS.md` when present: project principles, repo constraints, and test discipline.
 - optional docs listed by the prerequisite script when findings refer to them.
+- Markdown checklists under `FEATURE_DIR/checklists/` when present; the prerequisite script does not list them in `AVAILABLE_DOCS`.
 
 Also inspect relevant repository files when needed to resolve uncertainty, especially test framework configuration, project layout, existing contracts, and naming conventions.
 
@@ -87,12 +88,14 @@ Build an internal model before editing:
 - User-story inventory with acceptance scenarios and edge cases.
 - Task coverage mapping from task IDs to requirements, scenarios, success criteria, and design artifacts.
 - Artifact authority order:
-  1. Explicit source design requirements and relevant `AGENTS.md` principles.
-  2. Original feature input preserved in `spec.md`.
-  3. `spec.md` user-visible behavior and acceptance criteria.
-  4. `plan.md` architecture and technical decisions.
-  5. Design artifacts such as contracts, data model, research, and quickstart.
-  6. `tasks.md` execution breakdown.
+  1. Explicit task-authorized behavior changes.
+  2. Applicable `AGENTS.md` requirements.
+  3. Source design requirements adopted by the task.
+  4. Original feature input preserved in `spec.md`.
+  5. `spec.md` user-visible behavior and acceptance criteria.
+  6. `plan.md` architecture and technical decisions.
+  7. Design artifacts such as contracts, data model, research, and quickstart.
+  8. `tasks.md` execution breakdown.
 - Project context: language, frameworks, test tools, existing file structure, and conventions.
 
 ## Detection Passes
@@ -127,8 +130,7 @@ Use this decision process:
 
 Default choices:
 
-- If `tasks.md` conflicts with `spec.md`, update `tasks.md` unless the spec is clearly incomplete relative to the original input.
-- If `plan.md` conflicts with an explicit source design requirement or relevant `AGENTS.md` principle, update `plan.md`.
+- Resolve task, spec, plan, and source conflicts using the artifact authority order above. Bring stale upstream artifacts into line with an explicitly task-authorized change before aligning downstream artifacts; otherwise use the adopted requirements.
 - If `spec.md` is ambiguous but the repo has a clear established convention, update `spec.md` with that convention as an assumption or measurable requirement.
 - If two options are equally plausible and neither is required by higher authority, choose the simpler and more reversible option.
 - If a finding cannot be remediated without inventing product scope, add a bounded assumption and a validation task instead of asking the user.
@@ -142,7 +144,7 @@ Prefer these remediation patterns:
 - Merge duplicate requirements and update downstream references.
 - Replace vague adjectives with measurable, testable criteria when context supports a defensible threshold.
 - Add missing acceptance criteria for already-implied behavior.
-- Add tasks for uncovered requirements, edge cases, contracts, and buildable success criteria.
+- Add tasks for uncovered requirements, edge cases, contracts, buildable success criteria, and required in-scope documentation corrections; check that those tasks cover the identified gaps before handing off to implementation.
 - Add or reorder test tasks so tests precede implementation when the workflow requires test-first development.
 - Align terminology across artifacts with the term used by the highest-authority artifact.
 - Update `quickstart.md` so it validates the same story, contracts, and test commands represented by `tasks.md`.
@@ -178,12 +180,13 @@ After editing:
 1. Rerun the prerequisite script.
 2. Rebuild the analysis model.
 3. Verify:
-   - every functional requirement has task coverage
+   - every adopted in-scope source requirement maps to a functional requirement and a task, and every functional requirement has task coverage
    - every buildable success criterion has task or quickstart coverage
    - test tasks cover required unit and integration behavior where applicable
-   - no relevant `AGENTS.md` `MUST` conflict remains
+   - no unresolved applicable `AGENTS.md` conflict remains after honoring explicit task overrides
    - no unresolved placeholders remain unless explicitly intentional and explained
-   - task ordering is coherent
+   - feature checklists remain consistent with the updated artifacts; do not mark unverified work complete
+   - task ordering is coherent and coverage is complete for the bounded scope before handoff; repair partial task lists during alignment
 4. Run lightweight repository tests or formatting commands when the edits touched generated checks, test commands, or machine-readable contracts. If no relevant command exists, say so.
 
 ## Report
