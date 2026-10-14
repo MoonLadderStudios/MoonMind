@@ -67,6 +67,9 @@ New workflow starts use `mm.workflow.user.v2`. The workflow fleet polls:
 - `mm.workflow.user.v2`
 - `mm.workflow`
 - `mm.workflow.merge_automation`
+- `mm.workflow.user.v2.publication-v1`
+- `mm.workflow.publication-v1`
+- `mm.workflow.merge_automation.publication-v1`
 
 A pre-patch replay queue is polled only when it differs from the
 start queue (`get_workflow_poll_task_queues`). This conditional queue
