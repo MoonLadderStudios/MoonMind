@@ -1005,22 +1005,31 @@ async def test_static_host_cleanup_removes_lease_owned_credential_validator() ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("service_replaced", [True, False], ids=["replaced", "same"])
+@pytest.mark.parametrize("scenario", ["replaced", "same", "removed-during-stop"])
 async def test_static_host_cleanup_stops_only_its_observed_container(
-    service_replaced: bool,
+    scenario: str,
 ) -> None:
     """A late cleanup cannot stop a successor's recreated static host."""
 
     launched = "a" * 64
     successor = "b" * 64
     # Compose recreation removed the launched container and started a successor
-    # for the same service; otherwise the launched container still runs.
+    # for the same service; otherwise the launched container still runs. It may
+    # also remove the launched container between observation and the stop.
+    service_replaced = scenario == "replaced"
     running = {successor} if service_replaced else {launched}
     commands: list[tuple[str, ...]] = []
 
-    async def fake_run(*args: str, **_kwargs: object) -> tuple[int, str, str]:
+    async def fake_run(
+        *args: str, check: bool = True, **_kwargs: object
+    ) -> tuple[int, str, str]:
         commands.append(args)
         if args[:2] == ("docker", "stop"):
+            if scenario == "removed-during-stop":
+                running.discard(args[-1])
+                if check:
+                    raise RuntimeError(f"No such container: {args[-1]}")
+                return 1, "", f"No such container: {args[-1]}"
             running.discard(args[-1])
         return 0, "", ""
 
@@ -1042,6 +1051,7 @@ async def test_static_host_cleanup_stops_only_its_observed_container(
     )
 
     assert result["cleanupResult"] == "drained_owned_static_host"
+    assert result["resourceCleanup"]["containerRunning"] is False
     runtime.stop_static_host.assert_not_awaited()
     assert successor in running or not service_replaced
     stopped = [args for args in commands if args[:2] == ("docker", "stop")]

@@ -3017,8 +3017,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
         A replaced host leaves no live sandbox to continue. Only the
         after-execution worktree archive, captured with verified digests into
-        artifact storage, is real saved work. Without one the successor
-        restarts from the Step's admitted inputs and says so.
+        artifact storage, is real saved work. When the interrupted attempt
+        produced none, the save it was itself restored from is carried
+        forward. Without either the successor restarts from the Step's
+        admitted inputs and says so.
         """
 
         key = self._step_execution_launch_block_key(logical_step_id, next_attempt)
@@ -3037,6 +3039,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and str(evidence.get("checkpointManifestRef") or "").strip()
         ):
             archive_ref = str(evidence.get("workspaceArchiveRef") or "").strip()
+        if not archive_ref.startswith("artifact://"):
+            # A host lost before its own capture still restored the save it
+            # inherited from an earlier interruption; keep carrying that save.
+            archive_ref = self._interrupted_step_restore_refs.get(
+                self._step_execution_launch_block_key(
+                    logical_step_id, next_attempt - 1
+                ),
+                "",
+            )
         if archive_ref.startswith("artifact://"):
             self._interrupted_step_restore_refs[key] = archive_ref
             return
@@ -13381,20 +13392,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
-                            if (
-                                trusted_remediation_checkpoint_restore_ref is None
-                                and current_step_execution > 1
-                                and workflow.patched(
-                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
-                                )
+                            if current_step_execution > 1 and workflow.patched(
+                                RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
                             ):
-                                trusted_remediation_checkpoint_restore_ref = (
+                                interrupted_restore_ref = (
                                     self._interrupted_step_restore_refs.get(
                                         self._step_execution_launch_block_key(
                                             node_id, current_step_execution
                                         )
                                     )
                                 )
+                                # The interrupted attempt started from any
+                                # earlier trusted restore, so its own verified
+                                # save holds the newer work.
+                                if interrupted_restore_ref:
+                                    trusted_remediation_checkpoint_restore_ref = (
+                                        interrupted_restore_ref
+                                    )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
