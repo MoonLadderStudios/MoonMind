@@ -728,3 +728,914 @@ async def test_failed_child_brief_read_keeps_parent_reservation(journey, monkeyp
     retained = await IssueClaimStore(sessions).get(parent)
     assert retained == receipt
     assert state["posts"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["lose_release_ack", "reject_release"])
+@pytest.mark.parametrize("explicit_gap", [True, False])
+@pytest.mark.parametrize("legacy_plan", [True, False])
+@pytest.mark.parametrize("revision_alias", [True, False])
+async def test_terminal_handoff_keeps_portable_candidate_and_gap_after_restart(
+    journey, fault, explicit_gap, legacy_plan, revision_alias
+):
+    from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-portable"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    evidence = {
+        **inputs,
+        "executionEvent": "failed",
+        "writerEvidence": {
+            "writers_stopped": True,
+            "stop_method": "runtime_quiescence",
+            "stop_evidence": "writer exited",
+        },
+        "mutationEvidence": {
+            "push_outcome_absent": True,
+            "pr_outcome_absent": True,
+            "merge_outcome_absent": True,
+        },
+        "preservationEvidence": {
+            "save_method": "pr_head_verified",
+            "preservation_verified": True,
+            "pr_url": "https://github.com/example/repo/pull/42",
+            "pr_head_sha": "candidate-a",
+            "pr_base": "main",
+            "saved_branch": "saved-work",
+            "saved_sha": "candidate-a",
+        },
+        "dispositionEvidence": {
+            "portable_work_safe": True,
+            "preservation_verified": True,
+            "handoff_published": True,
+        },
+        "remainingRequirements": ["Run the missing gameplay acceptance scenario"],
+        "nextAction": "verify",
+        "reason": "Acceptance evidence is incomplete",
+    }
+    if not explicit_gap or revision_alias:
+        from dataclasses import replace
+
+        from moonmind.workflows.temporal.github_issue_attempts import (
+            render_attempt_comment,
+        )
+        from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+        store = IssueClaimStore(sessions)
+        receipt = await store.get(context["execution_owner"])
+        prior = parse_attempt_comment(receipt.comment_body).handoff
+        await publish_claim_comment(
+            store,
+            receipt,
+            service,
+            render_attempt_comment(
+                replace(
+                    prior,
+                    remaining_requirements=(
+                        tuple(evidence.pop("remainingRequirements"))
+                        if not explicit_gap
+                        else ()
+                    ),
+                    pr_url="https://github.com/example/repo/pull/42",
+                    pr_head="candidate-old",
+                    saved_sha="candidate-old",
+                )
+            ),
+        )
+    if revision_alias:
+        # The generic PR revision proves only the PR; the saved branch has
+        # its own explicitly supplied SHA.
+        evidence["preservationEvidence"].pop("pr_head_sha")
+        evidence["preservationEvidence"]["revision"] = "candidate-a"
+    state[fault] = True
+    await tools.finalize_github_issue_failed_attempt(
+        evidence, context, github_service_factory=lambda: service
+    )
+    state[fault] = False
+    if legacy_plan:
+        # Retained deployments saved this shape before portable snapshots were
+        # added. A lost acknowledgement can leave only a plan even if the
+        # released comment is already confirmed remotely.
+        async with IssueClaimStore(sessions).locked(context["execution_owner"]) as row:
+            retained_plan = dict(row.finalization_json["plan"])
+            retained_plan.pop("attempt_handoff")
+            row.finalization_json = {"plan": retained_plan}
+    # Restart with changed caller data: the committed plan, not a new candidate,
+    # must supply both the readable and machine-readable released handoff.
+    resumed = await tools.finalize_github_issue_failed_attempt(
+        {
+            **evidence,
+            "remainingRequirements": ["Wrong later gap"],
+            "preservationEvidence": {
+                **evidence["preservationEvidence"],
+                "saved_sha": "candidate-b",
+                "pr_head_sha": "candidate-b",
+            },
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert resumed.status == "COMPLETED", resumed.outputs
+    handoff = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert handoff.activity == "released"
+    assert handoff.pr_url == "https://github.com/example/repo/pull/42"
+    assert handoff.pr_head == "candidate-a"
+    assert handoff.pr_base == "main"
+    assert handoff.saved_branch == "saved-work"
+    assert handoff.saved_sha == "candidate-a"
+    assert handoff.remaining_requirements == (
+        "Run the missing gameplay acceptance scenario",
+    )
+    assert "Remaining requirements: none recorded." not in state["comments"][0]["body"]
+    assert "Preserved work: none recorded." not in state["comments"][0]["body"]
+    assert "candidate-old" not in state["comments"][0]["body"]
+    assert handoff.last_report == "Acceptance evidence is incomplete"
+    assert handoff.next_action == "verify"
+    assert state["posts"] == 1
+    if legacy_plan:
+        receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+        assert receipt.finalization_json["plan"] == retained_plan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_ref",
+    [
+        {"pr_url": "https://github.com/example/repo/pull/43"},
+        {"saved_branch": "different-work"},
+    ],
+)
+@pytest.mark.parametrize("new_revision", [None, "new-sha"])
+async def test_finalization_does_not_verify_new_reference_with_retained_sha(
+    journey, new_ref, new_revision
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-changed-candidate"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    prior = parse_attempt_comment(receipt.comment_body).handoff
+    await publish_claim_comment(
+        store,
+        receipt,
+        service,
+        render_attempt_comment(
+            replace(
+                prior,
+                pr_url="https://github.com/example/repo/pull/42",
+                pr_head="old-sha",
+                saved_branch="old-work",
+                saved_sha="old-sha",
+            )
+        ),
+    )
+    before = state["comments"][0]["body"]
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "executionEvent": "failed",
+            "writerEvidence": {
+                "writers_stopped": True,
+                "stop_method": "runtime_quiescence",
+                "stop_evidence": "writer exited",
+            },
+            "mutationEvidence": {
+                "push_outcome_absent": True,
+                "pr_outcome_absent": True,
+                "merge_outcome_absent": True,
+            },
+            "preservationEvidence": {
+                "save_method": (
+                    "saved_branch_verified" if "saved_branch" in new_ref else "pr_head_verified"
+                ),
+                "preservation_verified": True,
+                **new_ref,
+                **({"revision": new_revision} if new_revision else {}),
+            },
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+            "remainingRequirements": ["Verify the changed candidate"],
+            "nextAction": "verify",
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    if new_revision:
+        assert result.status == "COMPLETED", result.outputs
+        body = state["comments"][0]["body"]
+        handoff = parse_attempt_comment(body).handoff
+        assert handoff.pr_url == new_ref.get("pr_url", "")
+        assert handoff.saved_branch == new_ref.get("saved_branch", "")
+        assert "old-sha" not in body
+        assert "old-work" not in body
+        assert new_revision in body
+    else:
+        assert result.status == "FAILED", result.outputs
+        assert result.outputs["reasonCode"] == "preservation_incomplete"
+        assert state["comments"][0]["body"] == before
+        assert not (await store.get(context["execution_owner"])).released
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["pr_url", "saved_branch"])
+async def test_finalization_generic_revision_only_populates_matching_reference(
+    journey, reference
+):
+    from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-single-reference"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "executionEvent": "failed",
+            "writerEvidence": {
+                "writers_stopped": True,
+                "stop_method": "runtime_quiescence",
+                "stop_evidence": "fixture writer exited",
+            },
+            "mutationEvidence": {
+                "push_outcome_absent": True,
+                "pr_outcome_absent": True,
+                "merge_outcome_absent": True,
+            },
+            "preservationEvidence": {
+                "save_method": (
+                    "pr_head_verified"
+                    if reference == "pr_url"
+                    else "saved_branch_verified"
+                ),
+                "preservation_verified": True,
+                reference: (
+                    "https://github.com/example/repo/pull/42"
+                    if reference == "pr_url"
+                    else "saved-work"
+                ),
+                "revision": "candidate-a",
+            },
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+            "nextAction": "verify",
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    body = state["comments"][0]["body"]
+    handoff = parse_attempt_comment(body).handoff
+    assert handoff.pr_head == ("candidate-a" if reference == "pr_url" else "")
+    assert handoff.saved_sha == ("candidate-a" if reference == "saved_branch" else "")
+    assert "Saved: ?@" not in body
+    if reference == "saved_branch":
+        assert "Head/base:" not in body
+    receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+    planned = receipt.finalization_json["plan"]["attempt_handoff"]
+    assert planned["prHead"] == handoff.pr_head
+    assert planned["savedSha"] == handoff.saved_sha
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "secret_field", ["reason", "remainingRequirements", "retryHistory", "overflow_retry_history", "scanner_unavailable"]
+)
+async def test_finalization_scans_raw_handoff_before_record_or_mutation(
+    journey, monkeypatch, secret_field
+):
+    from unittest.mock import AsyncMock
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-blocked-handoff"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    state["labels"] = ["status: in-progress"]
+    before_body = state["comments"][0]["body"]
+    before = await IssueClaimStore(sessions).get(context["execution_owner"])
+    calls = []
+    original_record = IssueClaimStore.record_finalization
+
+    async def record(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return await original_record(self, *args, **kwargs)
+
+    monkeypatch.setattr(IssueClaimStore, "record_finalization", record)
+    mutations = []
+    for name in (
+        "create_issue_comment",
+        "update_issue_comment",
+        "add_issue_labels",
+        "remove_issue_label",
+        "close_issue",
+    ):
+        spy = AsyncMock(wraps=getattr(service, name))
+        monkeypatch.setattr(service, name, spy)
+        mutations.append(spy)
+    if secret_field == "scanner_unavailable":
+        import moonmind.security
+
+        def unavailable(*args, **kwargs):
+            raise RuntimeError("fixture scanner outage")
+
+        monkeypatch.setattr(moonmind.security, "scan_outbound_bundle", unavailable)
+    # A synthetic fixture credential, never a real token.
+    unsafe = "Synthetic fixture credential ghp_" + "A" * 36
+    secret_input = (
+        {"retryHistory": [f"prior-{index}" for index in range(20)] + [unsafe]}
+        if secret_field == "overflow_retry_history"
+        else {secret_field: [unsafe] if secret_field == "remainingRequirements" else unsafe}
+    )
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "executionEvent": "failed",
+            "writerEvidence": {
+                "writers_stopped": True,
+                "stop_method": "runtime_quiescence",
+                "stop_evidence": "fixture writer exited",
+            },
+            "mutationEvidence": {
+                "push_outcome_absent": True,
+                "pr_outcome_absent": True,
+                "merge_outcome_absent": True,
+            },
+            "preservationEvidence": {
+                "save_method": "explicit_no_work",
+                "trustworthy_no_work": True,
+            },
+            "dispositionEvidence": {"no_work": True, "fresh_retry_safe": True},
+            "nextAction": "fresh_retry",
+            **(
+                secret_input if secret_field != "scanner_unavailable"
+                else {"reason": "Fixture safe reason"}
+            ),
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED", result.outputs
+    assert result.outputs["reasonCode"] == "comment_blocked_by_scan"
+    assert result.outputs["released"] is False
+    assert result.outputs["workspaceRetained"] is True
+    assert calls == []
+    for mutation in mutations:
+        mutation.assert_not_awaited()
+    assert state["comments"][0]["body"] == before_body
+    assert state["posts"] == 1
+    assert state["labels"] == ["status: in-progress"]
+    assert state.get("state", "open") == "open"
+    after = await IssueClaimStore(sessions).get(context["execution_owner"])
+    assert after == before
+    assert unsafe not in json.dumps(result.outputs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_plan", [False, True])
+@pytest.mark.parametrize("release_confirmed", [False, True])
+async def test_finalization_recovers_confirmed_release_without_rescanning(
+    journey, monkeypatch, legacy_plan, release_confirmed
+):
+    from unittest.mock import AsyncMock, Mock
+
+    import moonmind.security
+
+    state, service, sessions = journey
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    context = {"execution_owner": "default/workflow-release-result-crash"}
+    brief = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert brief.status == "COMPLETED", brief.outputs
+    evidence = {
+        **inputs,
+        "executionEvent": "failed",
+        "writerEvidence": {
+            "writers_stopped": True,
+            "stop_method": "runtime_quiescence",
+            "stop_evidence": "fixture writer exited",
+        },
+        "mutationEvidence": {
+            "push_outcome_absent": True,
+            "pr_outcome_absent": True,
+            "merge_outcome_absent": True,
+        },
+        "preservationEvidence": {
+            "save_method": "explicit_no_work",
+            "trustworthy_no_work": True,
+        },
+        "dispositionEvidence": {"no_work": True, "fresh_retry_safe": True},
+        "nextAction": "fresh_retry",
+    }
+    original_record = IssueClaimStore.record_finalization
+
+    async def crash_before_result(self, owner, phase, payload):
+        if phase == "result":
+            raise RuntimeError("fixture crash before final result persistence")
+        return await original_record(self, owner, phase, payload)
+
+    state["lose_release_ack" if release_confirmed else "reject_release"] = True
+    with monkeypatch.context() as patch:
+        patch.setattr(IssueClaimStore, "record_finalization", crash_before_result)
+        if release_confirmed:
+            with pytest.raises(RuntimeError, match="fixture crash before final result"):
+                await tools.finalize_github_issue_failed_attempt(
+                    evidence, context, github_service_factory=lambda: service
+                )
+        else:
+            first = await tools.finalize_github_issue_failed_attempt(
+                evidence, context, github_service_factory=lambda: service
+            )
+            assert first.status == "FAILED", first.outputs
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    assert receipt.released is release_confirmed
+    assert "result" not in receipt.finalization_json
+    if legacy_plan:
+        async with store.locked(context["execution_owner"]) as row:
+            plan = dict(row.finalization_json["plan"])
+            plan.pop("attempt_handoff")
+            row.finalization_json = {"plan": plan}
+        receipt = await store.get(context["execution_owner"])
+    before_plan = receipt.finalization_json["plan"]
+    before_body = state["comments"][0]["body"]
+    before_labels = list(state["labels"])
+    writes = []
+    for name in (
+        "create_issue_comment",
+        "update_issue_comment",
+        "add_issue_labels",
+        "remove_issue_label",
+        "close_issue",
+    ):
+        spy = AsyncMock(wraps=getattr(service, name))
+        monkeypatch.setattr(service, name, spy)
+        writes.append(spy)
+    scanner = Mock(side_effect=RuntimeError("fixture scanner outage"))
+    monkeypatch.setattr(moonmind.security, "scan_outbound_bundle", scanner)
+    resumed = await tools.finalize_github_issue_failed_attempt(
+        evidence, context, github_service_factory=lambda: service
+    )
+    after = await store.get(context["execution_owner"])
+    if release_confirmed:
+        assert resumed.status == "COMPLETED", resumed.outputs
+        assert resumed.outputs["released"] is True
+        assert resumed.outputs["reasonCode"] == "released"
+        assert after.finalization_json["result"]["released"] is True
+        scanner.assert_not_called()
+    else:
+        assert resumed.status == "FAILED", resumed.outputs
+        assert resumed.outputs["reasonCode"] == "comment_blocked_by_scan"
+        assert after == receipt
+        scanner.assert_called_once()
+    assert after.finalization_json["plan"] == before_plan
+    assert state["comments"][0]["body"] == before_body
+    assert state["labels"] == before_labels
+    assert state["posts"] == 1
+    for write in writes:
+        write.assert_not_awaited()
+
+
+def _safe_terminal_inputs(**overrides):
+    return {
+        "repository": "example/repo",
+        "issueNumber": 3970,
+        "executionEvent": "failed",
+        "writerEvidence": {
+            "writers_stopped": True,
+            "stop_method": "runtime_quiescence",
+            "stop_evidence": "fixture writer exited",
+        },
+        "mutationEvidence": {
+            "push_outcome_absent": True,
+            "pr_outcome_absent": True,
+            "merge_outcome_absent": True,
+        },
+        "preservationEvidence": {
+            "save_method": "explicit_no_work",
+            "trustworthy_no_work": True,
+        },
+        "dispositionEvidence": {
+            "trustworthy_no_work": True,
+            "fresh_retry_allowed": True,
+        },
+        "nextAction": "fresh_retry",
+        **overrides,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["pr_head_verified", "saved_branch_verified"])
+@pytest.mark.parametrize("explicit_sha", [False, True])
+async def test_reconciler_revision_does_not_rewrite_other_retained_candidate(
+    journey, method, explicit_sha
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+        _preservation_evidence_from_handoff,
+    )
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    inputs = _safe_terminal_inputs()
+    context = {"execution_owner": "default/workflow-reconcile-revision"}
+    await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    prior = replace(
+        parse_attempt_comment(receipt.comment_body).handoff,
+        pr_url="https://github.com/example/repo/pull/42",
+        pr_head="prior-pr-sha",
+        saved_branch="saved-work",
+        saved_sha="prior-branch-sha",
+    )
+    await publish_claim_comment(store, receipt, service, render_attempt_comment(prior))
+    observed = "observed-revision"
+    preservation = _preservation_evidence_from_handoff(
+        newest={},
+        preserved={
+            "prHeadSha": observed,
+            "savedBranch": prior.saved_branch,
+            "savedSha": observed,
+        },
+        pr_url=prior.pr_url,
+        pr_state={"known": method == "pr_head_verified", "headSha": observed},
+    )
+    assert preservation["save_method"] == method
+    if not explicit_sha:
+        preservation.pop("pr_head_sha" if method == "pr_head_verified" else "saved_sha")
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "preservationEvidence": preservation,
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    handoff = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert handoff.pr_head == (
+        observed if method == "pr_head_verified" else prior.pr_head
+    )
+    assert handoff.saved_sha == (
+        observed if method == "saved_branch_verified" else prior.saved_sha
+    )
+    assert handoff.pr_url == prior.pr_url
+    assert handoff.saved_branch == prior.saved_branch
+    receipt = await store.get(context["execution_owner"])
+    assert (
+        receipt.finalization_json["plan"]["attempt_handoff"]["savedSha"]
+        == handoff.saved_sha
+    )
+    assert (
+        receipt.finalization_json["plan"]["attempt_handoff"]["prHead"]
+        == handoff.pr_head
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["retryHistory", "retry_history", "nullable_camel"])
+@pytest.mark.parametrize("history_size", [2, 20])
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        "New verification retry",
+        ["admitted-attempt", "New verification retry", "New verification retry", ""],
+        "",
+        [],
+    ],
+)
+async def test_terminal_retry_history_extends_lineage_and_is_pinned(
+    journey, alias, incoming, history_size
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    inputs = _safe_terminal_inputs()
+    context = {"execution_owner": "default/workflow-retry-history"}
+    await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    prior = replace(
+        parse_attempt_comment(receipt.comment_body).handoff,
+        retry_history=(
+            "admitted-attempt",
+            "Prior retry evidence",
+            *(f"prior-attempt-{index}" for index in range(history_size - 2)),
+        ),
+        retry_allowance=3,
+        retry_remaining=1,
+    )
+    await publish_claim_comment(store, receipt, service, render_attempt_comment(prior))
+    state["reject_release"] = True
+    first = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            **(
+                {"retryHistory": None, "retry_history": incoming}
+                if alias == "nullable_camel"
+                else {alias: incoming}
+            ),
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert first.status == "FAILED", first.outputs
+    expected = (
+        list(prior.retry_history) + (["New verification retry"] if incoming else [])
+    )[:20]
+    receipt = await store.get(context["execution_owner"])
+    pinned = receipt.finalization_json["plan"]
+    assert pinned["attempt_handoff"]["retryHistory"] == expected
+    assert f"Retry history: {'; '.join(expected)}." in pinned["terminal_comment"]
+    if history_size == 20 and incoming:
+        assert "1 additional retry history entry omitted" in pinned["terminal_comment"]
+        assert "New verification retry" not in pinned["terminal_comment"]
+    state["reject_release"] = False
+    resumed = await tools.finalize_github_issue_failed_attempt(
+        {**inputs, alias: ["Wrong later retry"]},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert resumed.status == "COMPLETED", resumed.outputs
+    handoff = parse_attempt_comment(state["comments"][0]["body"]).handoff
+    assert handoff.retry_history == tuple(expected)
+    assert handoff.retry_allowance == prior.retry_allowance
+    assert handoff.retry_remaining == prior.retry_remaining
+    assert "Wrong later retry" not in state["comments"][0]["body"]
+    assert (await store.get(context["execution_owner"])).finalization_json[
+        "plan"
+    ] == pinned
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt_at", ["plan", "release_pending", "result"])
+@pytest.mark.parametrize("original_mode", ["parent_pr_and_merge", "pr_only_handoff"])
+async def test_terminal_recovery_preserves_original_completion_and_observation(
+    journey, monkeypatch, interrupt_at, original_mode
+):
+    from unittest.mock import AsyncMock
+
+    state, service, sessions = journey
+    inputs = _safe_terminal_inputs(completionMode=original_mode)
+    context = {"execution_owner": "default/workflow-completion-receipt"}
+    await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    original_record = IssueClaimStore.record_finalization
+    attempted_result = {}
+
+    async def interrupt(self, owner, phase, payload):
+        if phase == "result":
+            attempted_result.update(payload)
+        if phase == interrupt_at:
+            if phase == "plan":
+                await original_record(self, owner, phase, payload)
+            raise RuntimeError("fixture interrupted finalization")
+        return await original_record(self, owner, phase, payload)
+
+    state["reject_release"] = interrupt_at == "release_pending"
+    state["lose_release_ack"] = interrupt_at == "result"
+    with monkeypatch.context() as patch:
+        patch.setattr(IssueClaimStore, "record_finalization", interrupt)
+        if interrupt_at == "release_pending":
+            first = await tools.finalize_github_issue_failed_attempt(
+                inputs, context, github_service_factory=lambda: service
+            )
+            assert first.status == "FAILED", first.outputs
+        else:
+            with pytest.raises(RuntimeError, match="fixture interrupted finalization"):
+                await tools.finalize_github_issue_failed_attempt(
+                    inputs, context, github_service_factory=lambda: service
+                )
+    state["reject_release"] = False
+    store = IssueClaimStore(sessions)
+    observed_before = (
+        await store.get(context["execution_owner"])
+    ).finalization_json.get("observation")
+    if interrupt_at == "release_pending":
+        from dataclasses import replace
+
+        from moonmind.workflows.temporal import github_issue_lifecycle
+
+        assert observed_before is not None
+        original_classify = github_issue_lifecycle.classify_mutation_outcome
+
+        def reobserve(**kwargs):
+            return replace(
+                original_classify(**kwargs), detail="Equivalent later observation"
+            )
+
+        monkeypatch.setattr(
+            github_issue_lifecycle, "classify_mutation_outcome", reobserve
+        )
+    writes = []
+    if interrupt_at == "result":
+        for name in (
+            "create_issue_comment",
+            "update_issue_comment",
+            "add_issue_labels",
+            "remove_issue_label",
+            "close_issue",
+        ):
+            spy = AsyncMock(wraps=getattr(service, name))
+            monkeypatch.setattr(service, name, spy)
+            writes.append(spy)
+    resumed = await tools.finalize_github_issue_failed_attempt(
+        {
+            **inputs,
+            "completionMode": "pr_only_handoff"
+            if original_mode == "parent_pr_and_merge"
+            else "parent_pr_and_merge",
+        },
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert resumed.status == "COMPLETED", resumed.outputs
+    assert resumed.outputs["completionRoute"] == original_mode
+    assert resumed.outputs["mergeAuthorized"] is (
+        original_mode == "parent_pr_and_merge"
+    )
+    assert resumed.outputs["mutationOutcome"] is not None
+    if attempted_result:
+        for field in (
+            "mutationOutcome",
+            "completionRoute",
+            "mergeAuthorized",
+            "summary",
+            "commentId",
+            "workspaceRetained",
+        ):
+            assert resumed.outputs[field] == attempted_result[field]
+    if observed_before is not None:
+        assert resumed.outputs["mutationOutcome"] == observed_before["mutationOutcome"]
+        assert (await store.get(context["execution_owner"])).finalization_json[
+            "observation"
+        ] == observed_before
+    for write in writes:
+        write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_unavailable", [False, True])
+async def test_terminal_default_next_action_matches_canonical_and_prose(
+    journey, runtime_unavailable
+):
+    from dataclasses import replace
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        parse_attempt_comment,
+        render_attempt_comment,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import publish_claim_comment
+
+    state, service, sessions = journey
+    inputs = _safe_terminal_inputs()
+    inputs.pop("nextAction")
+    inputs["dispositionEvidence"] = {
+        "trustworthy_no_work": True,
+        "fresh_retry_allowed": True,
+        "runtime_unavailable": runtime_unavailable,
+    }
+    context = {"execution_owner": "default/workflow-terminal-next-action"}
+    await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    store = IssueClaimStore(sessions)
+    receipt = await store.get(context["execution_owner"])
+    prior = replace(
+        parse_attempt_comment(receipt.comment_body).handoff, next_action="verify"
+    )
+    await publish_claim_comment(store, receipt, service, render_attempt_comment(prior))
+    result = await tools.finalize_github_issue_failed_attempt(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert result.status == "COMPLETED", result.outputs
+    receipt = await store.get(context["execution_owner"])
+    plan = receipt.finalization_json["plan"]
+    assert plan["attempt_handoff"]["nextAction"] == "fresh_retry"
+    assert "Next action: **fresh_retry**." in plan["terminal_comment"]
+    assert (
+        parse_attempt_comment(state["comments"][0]["body"]).handoff.next_action
+        == "fresh_retry"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed_release", [False, True])
+async def test_legacy_finalization_does_not_invent_completion_authority(
+    journey, monkeypatch, confirmed_release
+):
+    _state, service, sessions = journey
+    inputs = _safe_terminal_inputs(completionMode="pr_only_handoff")
+    context = {"execution_owner": "default/workflow-legacy-completion"}
+    await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    original_record = IssueClaimStore.record_finalization
+    crash_phase = "result" if confirmed_release else "plan"
+
+    async def interrupt(self, owner, phase, payload):
+        if phase == crash_phase:
+            if phase == "plan":
+                await original_record(self, owner, phase, payload)
+            raise RuntimeError("fixture legacy interruption")
+        return await original_record(self, owner, phase, payload)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(IssueClaimStore, "record_finalization", interrupt)
+        with pytest.raises(RuntimeError, match="fixture legacy interruption"):
+            await tools.finalize_github_issue_failed_attempt(
+                inputs, context, github_service_factory=lambda: service
+            )
+    store = IssueClaimStore(sessions)
+    async with store.locked(context["execution_owner"]) as row:
+        legacy = dict(row.finalization_json["plan"])
+        legacy.pop("completion")
+        # Real old receipts have neither completion provenance nor a separately
+        # persisted label observation. Keep that absence explicit.
+        row.finalization_json = {"plan": legacy}
+    result = await tools.finalize_github_issue_failed_attempt(
+        {**inputs, "completionMode": "parent_pr_and_merge"},
+        context,
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["completionRoute"] == "needs_decision"
+    assert result.outputs["mergeAuthorized"] is False
+    if confirmed_release:
+        assert result.outputs["mutationOutcome"] is None
+    else:
+        assert result.outputs["mutationOutcome"] is not None
+    assert (await store.get(context["execution_owner"])).finalization_json[
+        "plan"
+    ] == legacy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["plan", "observation", "result"])
+async def test_finalization_receipt_phases_are_immutable_and_explicit(journey, phase):
+    _state, service, sessions = journey
+    context = {"execution_owner": "default/workflow-receipt-phases"}
+    await tools.load_github_issue_preset_brief(
+        _safe_terminal_inputs(), context, github_service_factory=lambda: service
+    )
+    store = IssueClaimStore(sessions)
+    value = {"fixture": "confirmed evidence"}
+    await store.record_finalization(context["execution_owner"], phase, value)
+    await store.record_finalization(context["execution_owner"], phase, value)
+    with pytest.raises(ValueError, match="claim_finalization_conflict"):
+        await store.record_finalization(
+            context["execution_owner"], phase, {"fixture": "changed evidence"}
+        )
+    with pytest.raises(ValueError, match="Unknown claim finalization phase"):
+        await store.record_finalization(context["execution_owner"], "unknown", value)
+    assert (await store.get(context["execution_owner"])).finalization_json == {phase: value}
