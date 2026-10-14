@@ -89,12 +89,9 @@ async def verify_submodule_publication(
     with tempfile.TemporaryDirectory(prefix="moonmind-submodule-check-") as root:
         consumer = Path(root) / "consumer"
         await checked(
-            "clone",
-            "--shared",
-            "--no-checkout",
-            "--no-recurse-submodules",
-            "--",
-            str(repo_dir.resolve()),
+            "init",
+            "--template=",
+            f"--object-format={'sha256' if len(changes[0][0]) == 64 else 'sha1'}",
             str(consumer),
         )
         await checked("config", "remote.origin.url", remote_url, cwd=consumer)
@@ -112,8 +109,23 @@ async def verify_submodule_publication(
                 if entry:
                     key, path = entry.split("\n", 1)
                     names[path] = key[len("submodule.") : -len(".path")]
-            await checked("read-tree", revision, cwd=consumer)
-            await checked("checkout", revision, "--", ".gitmodules", cwd=consumer)
+            # Resolve URLs in an owned consumer without opening the restored
+            # source as a second Git repository under a different identity.
+            # Only committed declarations and gitlinks influence this check.
+            (consumer / ".gitmodules").write_text(
+                await checked("show", f"{revision}:.gitmodules"), encoding="utf-8"
+            )
+            await checked("read-tree", "--empty", cwd=consumer)
+            for path, sha in links.items():
+                await checked(
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    "160000",
+                    sha,
+                    path,
+                    cwd=consumer,
+                )
             for path, sha in links.items():
                 name = names.get(path)
                 if name is None:
