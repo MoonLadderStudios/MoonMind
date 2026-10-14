@@ -845,8 +845,10 @@ def _refresh_controller_to_requested(record, repo, controller_url):
     so a rollback keeps current repair code; only after it fails does the
     bootstrap lifecycle owner refresh the controller to the requested release
     (never while an operation is open). Returns whether the controller now
-    runs different code, the only case where a retry can change the outcome.
+    runs different code, the only case where a retry can change the outcome,
+    and why it does not otherwise.
     """
+    detail = "no controller source supports refreshing to the requested release"
     for image in _controller_source_candidates(record, repo):
         bundle = _controller_sources(image, repo)
         if not bundle:
@@ -864,13 +866,19 @@ def _refresh_controller_to_requested(record, repo, controller_url):
                 )
             except RuntimeError as exc:
                 # A source predating --prefer-requested refuses the flag.
-                print(f"Controller source {image} could not refresh: {exc}", flush=True)
+                detail = f"controller source {image} could not refresh: {exc}"
+                print(detail[:1].upper() + detail[1:], flush=True)
                 continue
         for line in reversed(output.splitlines()):
             if line.startswith(_CONTROLLER_REFRESH_PREFIX):
                 receipt = json.loads(line[len(_CONTROLLER_REFRESH_PREFIX) :])
-                return bool(receipt.get("refreshed"))
-    return False
+                if receipt.get("refreshed"):
+                    return True, ""
+                return False, (
+                    "the controller already runs the requested release "
+                    f"{receipt.get('image', '')}".rstrip()
+                )
+    return False, detail
 
 
 def _submit_via_controller(record, repo, *, controller_url, secret_file):
@@ -973,17 +981,28 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
             )
             if not requested_controller_tried:
                 requested_controller_tried = True
-                if _refresh_controller_to_requested(record, repo, controller_url):
+                refreshed, refresh_detail = _refresh_controller_to_requested(
+                    record, repo, controller_url
+                )
+                if refreshed:
                     print(
                         f"{failure} Retrying with the requested release's controller.",
                         flush=True,
                     )
                     _retry_controller_operation(
-                        controller_url, secret, operation_id, failure
+                        controller_url,
+                        secret,
+                        operation_id,
+                        operation.get("attemptGroup", 1),
+                        failure,
                     )
                     last_status = None
                     deadline = time.time() + _CONTROLLER_POLL_TIMEOUT_SECONDS
                     continue
+                failure += (
+                    " The requested release's controller was not tried: "
+                    f"{_redact_diagnostics(refresh_detail)}."
+                )
             raise RuntimeError(
                 f"{failure} Retry it from Settings Operations or rerun this "
                 "command for a new attempt; the original error stays in its record."
@@ -1003,24 +1022,56 @@ def _submit_via_controller(record, repo, *, controller_url, secret_file):
         _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
 
 
-def _retry_controller_operation(controller_url, secret, operation_id, failure):
-    """Start the controller's fresh attempt group for the same operation."""
-    try:
-        _controller_call(
-            controller_url,
-            secret,
-            "POST",
-            f"/v1/operations/{operation_id}/retry",
-            timeout=_CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+def _retry_controller_operation(
+    controller_url, secret, operation_id, attempt_group, failure
+):
+    """Start the controller's fresh attempt group for the same operation.
+
+    The controller applies inside the request, so a transport error may be a
+    lost answer or a request that never arrived (a just-recreated controller
+    refusing connections). Observation decides: a new attempt group means the
+    retry started; an unchanged failed record is retried within the budget.
+    A duplicate that does arrive is refused by the controller, never applied.
+    """
+    def started():
+        try:
+            _, observed = _controller_call(
+                controller_url, secret, "GET", f"/v1/operations/{operation_id}"
+            )
+        except ControllerUnreachableError:
+            return False
+        return (
+            observed.get("status") != "failed"
+            or observed.get("attemptGroup", 1) != attempt_group
         )
-    except ControllerUnreachableError:
-        # The controller applies inside the request; a lost answer is
-        # resolved by observing the same operation.
-        pass
-    except ControllerHTTPError as exc:
-        raise RuntimeError(
-            f"{failure} The controller refused its retry: {exc}"
-        ) from None
+
+    last_error = None
+    for attempt in range(_CONTROLLER_SUBMIT_ATTEMPTS):
+        if attempt:
+            _sleep(_CONTROLLER_POLL_INTERVAL_SECONDS)
+        try:
+            _controller_call(
+                controller_url,
+                secret,
+                "POST",
+                f"/v1/operations/{operation_id}/retry",
+                timeout=_CONTROLLER_SUBMIT_TIMEOUT_SECONDS,
+            )
+            return
+        except ControllerHTTPError as exc:
+            # A refusal of a repeated request can mean the first one arrived.
+            if attempt and started():
+                return
+            raise RuntimeError(
+                f"{failure} The controller refused its retry: {exc}"
+            ) from None
+        except ControllerUnreachableError as exc:
+            last_error = exc
+        if started():
+            return
+    raise RuntimeError(
+        f"{failure} The refreshed controller did not accept its retry: {last_error}"
+    )
 
 
 def _compose_ps_state(*, repo, project):
