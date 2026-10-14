@@ -23,6 +23,7 @@ from .deployment_tools import (
 )
 from .deployment_controller import (
     ControllerEndpoint,
+    ControllerRefresh,
     ControllerTransportError,
     DeploymentOperationError,
     controller_action_status,
@@ -3723,7 +3724,12 @@ def _controller_failure(exc: DeploymentOperationError) -> ToolFailure:
     )
 
 
-def _controller_tool_result(operation: Mapping[str, Any], requested_image: str) -> ToolResult:
+def _controller_tool_result(
+    operation: Mapping[str, Any],
+    requested_image: str,
+    *,
+    refresh: ControllerRefresh | None = None,
+) -> ToolResult:
     status = controller_action_status(str(operation.get("status") or ""))
     installed = operation.get("installed") if isinstance(operation.get("installed"), Mapping) else {}
     installed_image = str((installed or {}).get("image") or "") or None
@@ -3744,6 +3750,12 @@ def _controller_tool_result(operation: Mapping[str, Any], requested_image: str) 
         "verification": verification,
         "retryAllowed": status == "FAILED",
     }
+    if refresh is not None:
+        # Recovery evidence sits beside, never in place of, the original error.
+        outputs["controllerRefresh"] = {
+            "refreshed": refresh.refreshed,
+            "detail": refresh.detail,
+        }
     if status != "SUCCEEDED":
         reason = str(
             operation.get("errorSummary")
@@ -3796,6 +3808,7 @@ async def _execute_through_controller(
             details={"failureClass": "invalid_input"},
         )
     operation_id = "wf-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    refresh: ControllerRefresh | None = None
     try:
         await asyncio.to_thread(
             ensure_controller_journal_transition, endpoint,
@@ -3816,13 +3829,14 @@ async def _execute_through_controller(
         # The installed controller applied first. A capable controller can
         # still carry a defect its requested release fixes, so its failure
         # earns one attempt by the requested release's own controller.
-        failed = controller_action_status(str(operation.get("status") or "")) == "FAILED"
-        if failed and await asyncio.to_thread(
-            refresh_controller_to_requested,
-            endpoint,
-            stack=parsed["stack"],
-            desired_image=requested_image,
-        ):
+        if controller_action_status(str(operation.get("status") or "")) == "FAILED":
+            refresh = await asyncio.to_thread(
+                refresh_controller_to_requested,
+                endpoint,
+                stack=parsed["stack"],
+                desired_image=requested_image,
+            )
+        if refresh is not None and refresh.refreshed:
             operation = await asyncio.to_thread(
                 retry_controller_operation, endpoint, observed_id
             )
@@ -3831,7 +3845,7 @@ async def _execute_through_controller(
             )
     except DeploymentOperationError as exc:
         raise _controller_failure(exc) from None
-    return _controller_tool_result(operation, requested_image)
+    return _controller_tool_result(operation, requested_image, refresh=refresh)
 
 
 async def _observe_controller_operation(
