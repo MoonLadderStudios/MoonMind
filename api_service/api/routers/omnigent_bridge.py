@@ -162,7 +162,7 @@ from moonmind.omnigent.host_auth_contracts import (
 from moonmind.omnigent.native_ui import (
     NATIVE_UI_MOUNT_PREFIX,
     NATIVE_UI_ROUTE_FEATURE_VERSION,
-    evaluate_native_ui_compatibility,
+    native_ui_unavailable_reason,
     scoped_api_base,
 )
 from moonmind.omnigent.native_ui_compat import (
@@ -185,7 +185,6 @@ from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_host_runner_token,
     resolved_native_ui_serving_enabled,
-    resolved_native_ui_version,
     resolved_server_url,
 )
 from moonmind.omnigent.native_outbound_scan import (
@@ -579,26 +578,25 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
     """Report native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
 
     Operators need a bounded, non-secret projection of whether the native
-    Workflow Chat UI is served through MoonMind: UI-asset serving, the
-    compatibility version gate, the scoped HTTP/SSE/WebSocket route surface,
-    and credential separation. It reveals no upstream URL, credential, or
-    provider session identity.
+    Workflow Chat UI is served through MoonMind: UI-asset serving, the scoped
+    route/bootstrap contract version, the scoped HTTP/SSE/WebSocket route
+    surface, and credential separation. Build identity is provenance
+    (``serverImage``), not a serving gate. It reveals no upstream URL,
+    credential, or provider session identity.
     """
 
     serving_enabled = resolved_native_ui_serving_enabled()
-    compatibility = evaluate_native_ui_compatibility(
-        resolved_native_ui_version(),
-        enabled=bool(config.enabled) and serving_enabled,
+    reason = native_ui_unavailable_reason(
+        omnigent_enabled=bool(config.enabled),
+        serving_enabled=serving_enabled,
     )
     scoped_api = scoped_api_base("{chatBindingId}")
     return {
         "servingEnabled": serving_enabled,
-        "ready": compatibility.ready,
-        "reason": compatibility.reason,
+        "ready": reason is None,
+        "reason": reason,
         "assetsServedThroughMoonMind": serving_enabled,
         "compatibilityVersion": NATIVE_UI_ROUTE_FEATURE_VERSION,
-        "reportedVersion": compatibility.reported_version,
-        "supportedVersions": list(compatibility.supported_versions),
         "scopedRoutes": {
             "uiMountPath": f"{NATIVE_UI_MOUNT_PREFIX}/{{chatBindingId}}",
             "apiBase": scoped_api,
