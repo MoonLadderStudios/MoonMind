@@ -1107,6 +1107,14 @@ async def get_omnigent_codex_catalog_readiness(
         .all()
     )
     rows = [row for row in rows if _can_view_profile(row, current_user)]
+    from fastapi import HTTPException
+
+    from api_service.services.profile_execution_selection import (
+        load_execution_configurations,
+        select_execution_configuration,
+    )
+
+    configurations = await load_execution_configurations(session, current_user, rows)
     secret_results = _secret_ref_results_for_rows(rows)
     secret_statuses = await _managed_secret_statuses_for_rows(
         session, rows, secret_ref_results=secret_results
@@ -1142,12 +1150,6 @@ async def get_omnigent_codex_catalog_readiness(
     for row in rows:
         raw_runtime_id = getattr(row, "runtime_id", "codex_cli")
         runtime_id = str(getattr(raw_runtime_id, "value", raw_runtime_id))
-        credential_source = getattr(
-            row.credential_source, "value", row.credential_source
-        )
-        materialization = getattr(
-            row.runtime_materialization_mode, "value", row.runtime_materialization_mode
-        )
         readiness = _provider_profile_readiness(
             row,
             managed_secret_statuses=secret_statuses,
@@ -1163,22 +1165,28 @@ async def get_omnigent_codex_catalog_readiness(
         # Busy is informational. The Provider Profile Manager queues every
         # request for a full profile, whatever its 429 ``rate_limit_policy``.
         busy = active_slot_counts.get(row.profile_id, 0) >= (row.max_parallel_runs or 1)
-        # MoonLadderStudios/MoonMind#3877: OpenCode's built-in Zen Contributor
-        # Free route is credentialless (`credential_source == "none"`, the
-        # `none@1` materializer), so eligibility must be derived from the
-        # runtime/provider capability rather than from the presence of a secret
-        # reference. Filtering on `secret_ref` alone hid the default provider
-        # profile from every launch surface that reads this projection.
-        compatible = (
-            credential_source == "oauth_volume" and materialization == "oauth_home"
-        ) or (
-            runtime_id == "opencode"
-            and credential_source in {"secret_ref", "none"}
-            and materialization in {"composite", "api_key_env", "config_bundle"}
-            and re.fullmatch(r"[a-z0-9][a-z0-9._-]*", str(row.provider_id or ""))
-            is not None
-            and (credential_source == "none") == (row.provider_id == "opencode")
-        )
+        # Compatibility is the admission decision itself: Create resolves a
+        # Profile to exactly one execution configuration through this owner,
+        # so the projection cannot offer a Profile admission rejects, or hide
+        # one it accepts. A rejected Profile is listed as incompatible input
+        # with admission's own reason instead of being omitted.
+        try:
+            select_execution_configuration(row, configurations)
+        except HTTPException as exc:
+            reason = _reason("compatible_provider_profile_unavailable")
+            if isinstance(exc.detail, dict) and exc.detail.get("message"):
+                reason = reason.model_copy(
+                    update={"message": str(exc.detail["message"])}
+                )
+            ineligible.append(
+                IneligibleProviderProfile(
+                    profileId=row.profile_id,
+                    label=label,
+                    runtimeId=runtime_id,
+                    gateReasons=[reason],
+                )
+            )
+            continue
         # MoonLadderStudios/MoonMind#4021 req-4/req-5: the credentialless free
         # route additionally needs the recorded per-policy-version data-use
         # authorization from the existing Settings authority, the exact
@@ -1190,13 +1198,12 @@ async def get_omnigent_codex_catalog_readiness(
         # structural, never capacity pressure.
         free_route_blocked_reasons: dict[str, str] = {}
         if (
-            compatible
-            and bool(readiness["launch_ready"])
+            bool(readiness["launch_ready"])
             and runtime_id == "opencode"
             and str(getattr(row, "provider_id", "") or "") == "opencode"
         ):
             free_route_blocked_reasons = free_model_gate_reasons_for_profile(row)
-        if compatible and readiness["launch_ready"] and not free_route_blocked_reasons:
+        if readiness["launch_ready"] and not free_route_blocked_reasons:
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
                 EligibleProviderProfile(
@@ -1207,7 +1214,7 @@ async def get_omnigent_codex_catalog_readiness(
                     busy=busy,
                 )
             )
-        elif compatible:
+        else:
             codes = _profile_gate_codes(readiness)
             gate_reasons: list[GateReason]
             if free_route_blocked_reasons:
@@ -1716,6 +1723,9 @@ async def get_omnigent_execution_readiness(
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
+    from api_service.services.profile_execution_selection import (
+        configuration_accepts_profile,
+    )
     from moonmind.omnigent.harness_platform.agent_profile import validate_agent_profile
     from moonmind.omnigent.harness_platform.catalog import (
         TrustState,
@@ -1859,21 +1869,18 @@ async def get_omnigent_execution_readiness(
             ):
                 reasons.append(_reason("harness_catalog_unavailable"))
 
-        accepted_ids = {
-            provider_id
-            for slot in profile.credentialSlots
-            for provider_id in slot.acceptedProviderIds
-        }
         compatible: list[dict[str, Any]] = []
         host_classes: set[str] = set()
         models: set[str] = set()
         for provider in visible_providers:
             state = getattr(provider.auth_state, "value", provider.auth_state)
+            # The admission predicate for this exact configuration: accepted
+            # providers plus the slot auth models and harness the selected
+            # Provider Profile's materializer must satisfy.
             if (
                 not provider.enabled
                 or state != "connected"
-                or accepted_ids
-                and provider.provider_id not in accepted_ids
+                or not configuration_accepts_profile(version.document, provider)
             ):
                 continue
             try:

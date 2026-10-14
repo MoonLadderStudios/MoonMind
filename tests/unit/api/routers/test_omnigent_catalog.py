@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -105,11 +106,79 @@ class _Result:
         return self._rows
 
 
+def _configuration(profile_id, document, *, default_for_runtime=False, metadata=None):
+    """One active, validated execution configuration as admission loads it."""
+
+    row = SimpleNamespace(
+        profile_id=profile_id,
+        active_version=1,
+        default_for_runtime=default_for_runtime,
+    )
+    version = SimpleNamespace(
+        version=1,
+        digest="sha256:" + "9" * 64,
+        document=document,
+        validation_result={"ready": True},
+        created_by=None,
+        rollout_metadata=metadata or {},
+    )
+    return row, version
+
+
+_OPENCODE_BUILTIN_DOCUMENT = {
+    "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+    "harness": {"id": "opencode-native", "implementationRef": ""},
+    "credentialSlots": [
+        {
+            "id": "primary-model",
+            "acceptedAuthModels": ["own-auth", "none"],
+            "acceptedProviderIds": [],
+        }
+    ],
+    "allowedLaunchPolicyRefs": ["opencode-on-demand@1"],
+}
+
+
+def _builtin_configurations():
+    """The deployment's managed Codex, Claude and OpenCode configurations."""
+
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        BOOTSTRAP_PROFILE_ID,
+        CLAUDE_BUILTIN_PROFILE_ID,
+        OPENCODE_BUILTIN_PROFILE_ID,
+        build_bootstrap_document,
+    )
+
+    return [
+        _configuration(
+            BOOTSTRAP_PROFILE_ID, build_bootstrap_document("codex-native-ui")
+        ),
+        _configuration(
+            CLAUDE_BUILTIN_PROFILE_ID,
+            build_bootstrap_document(
+                "claude-native-ui",
+                launch_policy_ref="claude-on-demand@1",
+                execution_profile_ref="omnigent-claude@1",
+                harness="claude-native",
+                provider_runtime_id="claude_code",
+                provider_ids=("anthropic",),
+            ),
+            metadata={"managedBuiltin": "claude"},
+        ),
+        _configuration(
+            OPENCODE_BUILTIN_PROFILE_ID,
+            _OPENCODE_BUILTIN_DOCUMENT,
+            default_for_runtime=True,
+        ),
+    ]
+
+
 class _Session:
     def __init__(
         self,
         profiles,
         *,
+        configurations=_DEFAULT,
         slots=(),
         bindings=(),
         host_leases=(),
@@ -128,9 +197,12 @@ class _Session:
             event_observed_at = latest_observation_at
         if bridge_sessions is _DEFAULT:
             bridge_sessions = (_attested_bridge_session(),)
+        if configurations is _DEFAULT:
+            configurations = _builtin_configurations()
         self._results = iter(
             (
                 _Result(profiles),
+                _Result(configurations),
                 _Result(slots),
                 _Result(bindings),
                 _Result(host_leases),
@@ -1579,7 +1651,288 @@ def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatc
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
     assert body["eligibleProviderProfiles"] == []
-    assert body["ineligibleProviderProfiles"] == []
+    # Reported as incompatible input, not silently omitted.
+    assert [
+        (item["profileId"], [reason["code"] for reason in item["gateReasons"]])
+        for item in body["ineligibleProviderProfiles"]
+    ] == [("claude-credentialless", ["compatible_provider_profile_unavailable"])]
+
+
+_MM3833_REPRESENTATIVE_PROFILES = (
+    _profile(profile_id="codex-oauth"),
+    _profile(
+        profile_id="claude-oauth",
+        account_label="Anthropic subscription",
+        provider_id="anthropic",
+        runtime_id="claude_code",
+    ),
+    _profile(
+        profile_id="opencode-keyed",
+        account_label="OpenRouter key",
+        provider_id="openrouter",
+        runtime_id="opencode",
+        credential_source=SimpleNamespace(value="secret_ref"),
+        runtime_materialization_mode=SimpleNamespace(value="api_key_env"),
+    ),
+    _profile(
+        profile_id="opencode-zen-free",
+        account_label="OpenCode Zen Contributor Free",
+        provider_id="opencode",
+        runtime_id="opencode",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    ),
+    # An OpenAI API key on the Codex runtime: no configuration accepts it.
+    _profile(
+        profile_id="codex-api-key",
+        account_label="OpenAI API key",
+        credential_source=SimpleNamespace(value="secret_ref"),
+        runtime_materialization_mode=SimpleNamespace(value="api_key_env"),
+    ),
+)
+
+
+@pytest.mark.asyncio
+async def test_mm3833_catalog_eligibility_agrees_with_profile_admission(monkeypatch):
+    """The catalog offers exactly the Profiles Create admission accepts.
+
+    Admission is ``profile_execution_selection``, which Create runs for a
+    selected Profile before resolving its launch snapshot. A Profile it
+    rejects is listed as incompatible input with admission's own reason; it is
+    never omitted, and no other account takes its place.
+    """
+
+    from api_service.services.profile_execution_selection import (
+        profile_execution_selection,
+    )
+
+    rows = list(_MM3833_REPRESENTATIVE_PROFILES)
+    admitted: set[str] = set()
+    rejected: dict[str, str] = {}
+    for row in rows:
+        admission_session = SimpleNamespace(
+            execute=AsyncMock(return_value=_Result(_builtin_configurations()))
+        )
+        try:
+            selection = await profile_execution_selection(admission_session, row, None)
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            rejected[row.profile_id] = exc.detail["message"]
+        else:
+            assert selection["providerProfileRef"] == row.profile_id
+            admitted.add(row.profile_id)
+    assert admitted == {
+        "codex-oauth",
+        "claude-oauth",
+        "opencode-keyed",
+        "opencode-zen-free",
+    }
+    assert set(rejected) == {"codex-api-key"}
+
+    body = (
+        TestClient(_app(monkeypatch, session=_Session(rows)))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+
+    eligible = {
+        item["profileId"]: (item["providerId"], item["runtimeId"])
+        for item in body["eligibleProviderProfiles"]
+    }
+    assert set(eligible) == admitted
+    assert all(
+        eligible[row.profile_id] == (row.provider_id, row.runtime_id)
+        for row in rows
+        if row.profile_id in admitted
+    )
+    assert {
+        item["profileId"]: [
+            (reason["code"], reason["message"]) for reason in item["gateReasons"]
+        ]
+        for item in body["ineligibleProviderProfiles"]
+    } == {
+        profile_id: [("compatible_provider_profile_unavailable", message)]
+        for profile_id, message in rejected.items()
+    }
+
+
+def _mm3833_generic_readiness(monkeypatch, document, providers):
+    """Generic readiness for one validated configuration and its providers."""
+
+    from moonmind.omnigent.harness_platform import catalog_service
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "4" * 64,
+        sourceDigest="sha256:" + "5" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.11.0",
+                    "digest": "sha256:" + "3" * 64,
+                },
+                "capabilities": {"integrationMode": "native-server"},
+            }
+        ],
+    )
+    harness = snapshot.harnesses[0]
+    catalog_result = HarnessCatalogSyncResult(
+        snapshot,
+        (
+            classify_harness_trust(
+                harnessId=harness.id,
+                implementation=harness.implementation,
+                trustState=TrustState.core_trusted,
+            ),
+        ),
+        {},
+    )
+
+    class Repository:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, _catalog_ref):
+            return catalog_result
+
+        async def latest(self, _endpoint_ref):
+            return catalog_result
+
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+    monkeypatch.setattr(
+        catalog, "_require_provider_profile_permission", lambda *_: None
+    )
+    monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
+    _set_ready_opencode_image_pair(monkeypatch)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+    document = {
+        **document,
+        "harness": {
+            "id": harness.id,
+            "catalogRef": snapshot.catalogRef,
+            "implementationRef": harness.implementation.implementation_ref(),
+        },
+    }
+    profile_row = SimpleNamespace(
+        profile_id="operator-opencode",
+        active_version=1,
+        visibility="public",
+        owner_id=None,
+    )
+    version = SimpleNamespace(
+        version=1,
+        digest="sha256:" + "8" * 64,
+        document=document,
+        validation_result={"ready": True},
+    )
+
+    class Session:
+        def __init__(self):
+            self._results = iter((_Result([profile_row]), _Result(providers)))
+
+        async def execute(self, _statement):
+            return next(self._results)
+
+        async def scalar(self, _statement):
+            return version
+
+    return document, Session()
+
+
+def _mm3833_generic_provider(profile_id, *, provider_id, runtime_id):
+    return SimpleNamespace(
+        profile_id=profile_id,
+        account_label=profile_id,
+        provider_id=provider_id,
+        runtime_id=runtime_id,
+        enabled=True,
+        auth_state=SimpleNamespace(value="connected"),
+        credential_generation=1,
+        model_catalog_evidence_json={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_mm3833_generic_readiness_offers_only_profiles_admission_accepts(
+    monkeypatch,
+):
+    """A configuration's compatible Profiles match its admission predicate.
+
+    This configuration's only slot accepts ``own-auth``. The credentialless
+    OpenCode profile resolves to the ``none@1`` materializer, which the host
+    class supports but admission rejects, so it must not be offered. Keyed
+    Omnigent and Codex OAuth profiles cannot materialize for this harness.
+    """
+
+    from api_service.services.profile_execution_selection import (
+        configuration_accepts_profile,
+    )
+
+    providers = [
+        _mm3833_generic_provider(
+            "opencode-keyed", provider_id="opencode-go", runtime_id="opencode"
+        ),
+        _mm3833_generic_provider(
+            "opencode-zen-free", provider_id="opencode", runtime_id="opencode"
+        ),
+        _mm3833_generic_provider(
+            "omnigent-keyed", provider_id="anthropic", runtime_id="omnigent"
+        ),
+        _mm3833_generic_provider(
+            "codex-oauth", provider_id="openai", runtime_id="codex_cli"
+        ),
+    ]
+    document, session = _mm3833_generic_readiness(
+        monkeypatch,
+        {
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1",
+                "upstreamSnapshotDigest": "sha256:" + "7" * 64,
+            },
+            "credentialSlots": [
+                {
+                    "id": "primary-model",
+                    "acceptedAuthModels": ["own-auth"],
+                    "acceptedProviderIds": [],
+                }
+            ],
+            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        },
+        providers,
+    )
+
+    readiness = await catalog.get_omnigent_execution_readiness(
+        session=session,
+        current_user=SimpleNamespace(id=None, is_superuser=True),
+    )
+
+    (target,) = readiness.execution_targets
+    offered = {item["profileId"] for item in target.compatible_provider_profiles}
+    admitted = {
+        provider.profile_id
+        for provider in providers
+        if configuration_accepts_profile(document, provider)
+    }
+    assert admitted == {"opencode-keyed"}
+    assert offered == admitted
 
 
 @pytest.mark.parametrize(
