@@ -350,7 +350,7 @@ class _LifecycleFakeService(ClaimCommentFixture):
         # incomplete steering mutation.
         self.add_without_apply: bool = False
 
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, *, repo: str, operations=()):
         self.token_requests.append(repo)
         return "ghs-test", None
 
@@ -1336,7 +1336,7 @@ class _SearchFakeHttpClient:
 
 
 class _SearchFakeService:
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, *, repo: str, operations=()):
         return "ghs-test", None
 
     def _github_headers(self, token: str) -> dict[str, str]:

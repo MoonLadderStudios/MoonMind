@@ -2248,6 +2248,52 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
     assert "steps" not in listed[0]
     assert "annotations" not in listed[0]
 
+async def test_list_templates_exposes_declared_workflow_publish(tmp_path):
+    """Create reads a preset's declared publication before expansion."""
+
+    user_id = uuid4()
+    user_str = str(user_id)
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="breakdown-only",
+                title="Breakdown Only",
+                description="Creates tracker issues only.",
+                scope="personal",
+                scope_ref=user_str,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "step one"}],
+                annotations={"workflowPublish": {"mode": "none"}},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+            await service.create_template(
+                slug="no-policy",
+                title="No Policy",
+                description="Declares no publication.",
+                scope="personal",
+                scope_ref=user_str,
+                tags=[],
+                inputs_schema=[],
+                steps=[{"instructions": "step two"}],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            listed = await service.list_templates(
+                scope="personal",
+                scope_ref=user_str,
+                user_id=user_id,
+            )
+
+    by_slug = {item["slug"]: item for item in listed}
+    assert by_slug["breakdown-only"]["workflowPublish"] == {"mode": "none"}
+    assert "workflowPublish" not in by_slug["no-policy"]
+    assert "annotations" not in by_slug["breakdown-only"]
+
 async def test_save_from_workflow_marks_favorite_and_recent(tmp_path):
     user_id = uuid4()
     user_str = str(user_id)

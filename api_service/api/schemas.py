@@ -350,6 +350,11 @@ class PresetSummarySchema(BaseModel):
     ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
     defaults: dict[str, Any] = Field(default_factory=dict)
     release_status: str = Field("draft", alias="releaseStatus")
+    workflow_publish: Optional[dict[str, Any]] = Field(
+        None,
+        alias="workflowPublish",
+        description="Workflow publication the preset declares, when it declares one",
+    )
 
 class PresetListResponseSchema(BaseModel):
     """Envelope for template list responses."""

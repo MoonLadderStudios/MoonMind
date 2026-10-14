@@ -156,8 +156,11 @@ def test_migration_chains_off_current_head(migration):
     assert len(migration.revision) <= 32
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
-    assert tuple(ScriptDirectory.from_config(config).get_heads()) == (
-        migration.revision,
+    assert (
+        ScriptDirectory.from_config(config)
+        .get_revision("394_default_conn_issues_grant")
+        .down_revision
+        == migration.revision
     )
 
 

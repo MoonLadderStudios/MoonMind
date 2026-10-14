@@ -18,6 +18,20 @@ class _Execution:
         self.reads = 0
         self.preset: dict[str, Any] = {}
         self.submissions: list[Any] = []
+        self.agent_profiles = [
+            [
+                {
+                    "profileId": "managed-default",
+                    "state": "active",
+                    "defaultForRuntime": True,
+                    "activeVersion": 1,
+                    "versions": [{"version": 1, "validationResult": {"ready": True}}],
+                }
+            ]
+        ]
+        self.agent_profile_reads = 0
+        self.submission_profile_reads: list[int] = []
+        self.admission_status = 201
 
     def next(self) -> dict[str, Any]:
         status = self.statuses[min(self.reads, len(self.statuses) - 1)]
@@ -42,7 +56,13 @@ def api_server():
             self.wfile.write(payload)
 
         def do_GET(self):
-            if self.path.startswith("/api/executions/"):
+            if self.path == "/api/omnigent/agent-profiles":
+                index = min(
+                    execution.agent_profile_reads, len(execution.agent_profiles) - 1
+                )
+                execution.agent_profile_reads += 1
+                self._send(200, execution.agent_profiles[index])
+            elif self.path.startswith("/api/executions/"):
                 self._send(200, execution.next())
             elif self.path.startswith("/api/presets/"):
                 self._send(200, execution.preset)
@@ -60,7 +80,13 @@ def api_server():
                 self._send(202, execution.next())
             elif self.path == "/api/executions":
                 execution.submissions.append(json.loads(body))
-                self._send(201, {"workflowId": "mm:journey", "runId": "run-1"})
+                execution.submission_profile_reads.append(execution.agent_profile_reads)
+                if execution.admission_status == 201:
+                    self._send(201, {"workflowId": "mm:journey", "runId": "run-1"})
+                else:
+                    self._send(
+                        execution.admission_status, {"detail": "admission refused"}
+                    )
             else:
                 self._send(201, {})
 
@@ -146,9 +172,88 @@ def test_populate_submits_the_workflow_create_task_envelope(api_server, tmp_path
         assert selection not in selections
 
 
-def test_pre_upgrade_populate_saves_work_the_old_release_accepts(
-    api_server, tmp_path
+def test_populate_waits_for_default_active_version_readiness(
+    api_server, tmp_path, monkeypatch
 ):
+    base, execution = api_server
+    ready = execution.agent_profiles[0]
+    pending = json.loads(json.dumps(ready))
+    # A ready historical version cannot establish the active version's readiness.
+    pending[0]["activeVersion"] = 2
+    pending[0]["versions"].append({"version": 2, "validationResult": {"ready": False}})
+    execution.agent_profiles = [[], pending, ready]
+    execution.statuses = [{"status": "failed", "summary": "stop after admission"}]
+    monkeypatch.setattr(journey.time, "sleep", lambda _seconds: None)
+
+    code = journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--timeout",
+            "20",
+        ]
+    )
+
+    assert code == 1  # The admitted workflow failure still fails the journey.
+    assert execution.submission_profile_reads == [3, 3]
+    assert execution.submissions[0] == execution.submissions[1]
+
+
+@pytest.mark.parametrize(
+    "unready",
+    [
+        {"defaultForRuntime": False},
+        {"state": "draft"},
+        {"activeVersion": None},
+        {"versions": [{"version": 1}]},
+    ],
+)
+def test_populate_fails_without_a_ready_default_and_never_submits(
+    api_server, tmp_path, monkeypatch, capsys, unready
+):
+    base, execution = api_server
+    execution.agent_profiles[0][0].update(unready)
+    execution.statuses = [{"status": "failed", "summary": "must not be submitted"}]
+    clock = [0.0]
+    monkeypatch.setattr(journey.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        journey.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+    code = journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--timeout",
+            "5",
+        ]
+    )
+
+    assert code == 1
+    assert execution.submissions == []
+    assert "default Agent Profile did not become ready" in capsys.readouterr().err
+
+
+def test_populate_still_fails_on_admission_rejection(api_server, tmp_path, capsys):
+    base, execution = api_server
+    execution.admission_status = 409
+
+    code = journey.main(
+        ["populate", "--api-base", base, "--state-file", str(tmp_path / "state.json")]
+    )
+
+    assert code == 1
+    assert len(execution.submissions) == 1
+    assert "HTTP 409" in capsys.readouterr().err
+
+
+def test_pre_upgrade_populate_saves_work_the_old_release_accepts(api_server, tmp_path):
     """The upgrade journey saves work on the release it upgrades from, so it
     submits that release's own UserWorkflow request, not the candidate's."""
 
@@ -182,6 +287,7 @@ def test_pre_upgrade_populate_saves_work_the_old_release_accepts(
     assert first["schedule"]["mode"] == "once"
     assert first["idempotencyKey"].startswith("single-user-journey-before-upgrade-")
     assert "type" not in first and "payload" not in first
+    assert execution.agent_profile_reads == 0
 
 
 FUTURE = "2999-01-01T00:00:00+00:00"
@@ -398,9 +504,7 @@ def test_latest_startup_outcome_wins(tmp_path):
     assert state["conversion"]["outcome"] == "published"
 
 
-def test_api_bypasses_egress_proxy_for_loopback(
-    api_server, tmp_path, monkeypatch
-):
+def test_api_bypasses_egress_proxy_for_loopback(api_server, tmp_path, monkeypatch):
     """The disposable journey always targets the local stack directly.
 
     Container-job environments export an egress proxy; routing loopback
@@ -435,7 +539,10 @@ class _Operations:
                 "repairCommand": "./tools/update-moonmind.sh",
             }
         }
-        self.execution: dict[str, Any] = {"workflowId": "mm:legacy", "status": "canceled"}
+        self.execution: dict[str, Any] = {
+            "workflowId": "mm:legacy",
+            "status": "canceled",
+        }
         self.controller: dict[str, Any] = {
             "installed": False,
             "reachable": False,
@@ -698,7 +805,11 @@ def test_new_workflow_backed_update_after_the_controller_fails(
     operations_api, tmp_path, capsys
 ):
     base, operations = operations_api
-    revived = {**_history_row("RUNNING"), "id": "depupd_run2", "runDetailUrl": "/workflows/mm:new"}
+    revived = {
+        **_history_row("RUNNING"),
+        "id": "depupd_run2",
+        "runDetailUrl": "/workflows/mm:new",
+    }
     _installed(operations, _controller_row(), revived, _history_row())
     state_file = tmp_path / "state.json"
     _dashboard_controller_state(state_file)

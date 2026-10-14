@@ -683,7 +683,7 @@ class OmnigentWorkspaceMaterializer:
         repository_owner_ref: str,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
-        """Clone the requested repository branch into a fresh sandbox dir.
+        """Clone the requested (or remote default) branch into a fresh sandbox dir.
 
         Only a repository source — or a content source with an admitted
         repository base — clones. The directory is created only inside
@@ -701,8 +701,10 @@ class OmnigentWorkspaceMaterializer:
             candidate.mkdir(mode=0o700, parents=True, exist_ok=True)
             return
 
+        # An omitted branch clones the remote's advertised default through
+        # the same admitted transport instead of assuming a branch name.
         branch = source.repository_branch or ""
-        if not source.repository_ref or not branch or len(branch) > 400:
+        if not source.repository_ref or len(branch) > 400:
             raise HarnessPlatformError(
                 "sandbox workspace preparation needs a GitHub repository and safe branch ref",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
@@ -907,7 +909,11 @@ def build_daemon_git_clone_argv(
         'env -i PATH="$PATH" HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 '
         "GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "
     )
-    script = 'set -eu; umask 077; git check-ref-format --branch "$1" >/dev/null; '
+    # An empty branch omits ``--branch`` so Git checks out the remote HEAD.
+    script = (
+        "set -eu; umask 077; "
+        'if [ -n "$1" ]; then git check-ref-format --branch "$1" >/dev/null; fi; '
+    )
     helper_option = ""
     credential_environment = ""
     if authenticated:
@@ -935,7 +941,7 @@ def build_daemon_git_clone_argv(
         "-c credential.helper= -c credential.useHttpPath=true -c http.extraHeader= "
         + helper_option
         + "clone "
-        '--branch "$1" --single-branch -- "$2" "$3"; '
+        '${1:+--branch "$1"} --single-branch -- "$2" "$3"; '
         'git -C "$3" config --local user.name "$4"; '
         'git -C "$3" config --local user.email "$5"'
     )

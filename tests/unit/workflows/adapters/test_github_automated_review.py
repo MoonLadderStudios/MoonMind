@@ -12,6 +12,9 @@ import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
 
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
+
 _REPO = "MoonLadderStudios/MoonMind"
 _HEAD = "abc1234abc1234abc1234abc1234abc1234abc12"
 _OLD_HEAD = "0000000000000000000000000000000000000000"

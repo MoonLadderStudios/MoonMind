@@ -337,31 +337,53 @@ The existing deployment-control worker is a submission/observation adapter where
 
 ### 11.2 Standalone controller project
 
-The portable host command checks the controller's advertised journal-transition
-method before submission. When needed, it extracts the existing stdlib
-bootstrap from an observed installed application image or the staged target,
-without requiring a healthy API or worker or changing the host checkout.
+The default portable host command refreshes an idle controller from the selected
+release before submission, even when its journal-transition method is already
+advertised. Method support admits the interface; it does not keep an older
+implementation installed indefinitely. The command extracts the existing stdlib
+bootstrap from the staged target, falling back to an observed installed
+application image when a rollback target lacks that lifecycle, without
+requiring a healthy API or worker or changing the host checkout.
 Bootstrap uses the application image's packaged `deploy/controller` source;
 it does not depend on a separately published controller image. The recorded
-Compose project, mounts, network and credentials remain in place. Replacement
-holds the controller's stack lock, refuses any open operation, and verifies
-the supported method before submission continues. A rollback prefers the
-installed source image so an old target need not contain newer repair code.
+Compose project, mounts, network and credentials remain in place. The controller
+uses the selected repair source image independently of the application target,
+so a rollback does not reinstall a controller that lacks the needed lifecycle.
+Replacement holds the controller's stack lock and verifies the supported method before
+submission continues. A capable controller with open work retains ownership;
+the host observes that operation or receives its existing busy refusal. The
+host runs bootstrap in a temporary trusted image container with the existing
+Docker socket and writable controller state, on the installation's private
+controller network. This keeps root-owned records and locks readable to the
+lifecycle owner without requiring host privilege changes. Its repository and
+state binds reuse the installed Compose sources; temporary bootstrap files use
+the lifecycle's bind adapter, with Linux paths inside the helper container.
+If the identity file is lost, bootstrap first recovers the existing project,
+port, target and network from that same Compose installation without replacing
+the controller or changing its work. The recovered metadata stays readable to
+the host, and endpoint discovery then continues through ordinary refresh.
+Native Compose
+recreation leaves an unchanged controller running. An explicitly selected
+controller retains its release choice; missing journal support still requires
+the existing prerequisite.
 
-An advertised method does not prove the installed controller can apply a
-newer release: a controller defect fixed in the requested release would
-otherwise block that fix's own installation. The installed controller always
-applies first. When its operation fails, the host entrypoint and the
-deployment-control submitter give the requested release's controller one
-attempt: `bootstrap.py ensure --prefer-requested` refreshes the controller to
-the requested image under the same lock and open-operation refusal, and
-reports `refreshed: false` only when the live controller container already
-runs that image (an interrupted refresh that rewrote only its Compose file is
-reconciled). Only a refreshed controller earns a Retry of the same operation,
-confirmed by its new attempt group before the submitter asks again;
-otherwise the original failure stands beside the refresh diagnostic. The API cannot run the bootstrap owner, so a
-Settings Operations submission that fails this way recovers through the host
-update command or a workflow-submitted update.
+The controller prepared by that prerequisite or default refresh owns the first
+application attempt. An advertised method cannot prove it will apply a release
+whose controller fixes a defect. After a failed operation, a default local host
+selection or deployment-control submission gives the requested release's
+controller one attempt: `bootstrap.py ensure --prefer-requested` refreshes to
+the requested image under the same lock and open-operation refusal. The default
+host uses the same privileged helper and installed bind authority for this
+repair. An explicitly selected host endpoint or secret keeps its controller
+release after failure as well.
+
+The refresh reports `refreshed: false` only when the live controller container
+already runs that image; an interrupted refresh that rewrote only its Compose
+file is reconciled. Only a confirmed change earns a Retry of the same operation,
+whose new attempt group is observed before an uncertain retry is resubmitted.
+Otherwise the original failure stands beside the refresh diagnostic. The API
+cannot run bootstrap, so a failed Settings Operations submission recovers
+through the host command or a workflow-submitted update.
 
 An already-installed old API/controller may reach the new target's
 `--omnigent-select` callback without running either updated submission client.
@@ -430,6 +452,16 @@ This qualifies the process/data transition; the existing controller journey
 separately qualifies the current API/dashboard submission and observation
 boundary. Neither journey proves automatic bootstrap through a historical API
 binary that predates the prerequisite.
+
+That job also runs `tests/integration/host_update/test_controller_refresh.py`
+against the candidate image. A disposable controller advertises journal
+support and writes root-owned operation records. The host's actual image
+export and temporary bootstrap container refresh it over its private network,
+recovering a missing identity before endpoint discovery while preserving its
+configured identity, credential and original failure record. Repeating the
+refresh keeps the same controller container; an open operation prevents a
+different requested image from replacing its capable owner. This exercises
+the host refresh boundary independently of application service recreation.
 
 The reliability shards run
 `tests/integration/reliability/test_interrupted_step_replacement_journey.py`
