@@ -1102,8 +1102,13 @@ def _attempt_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("successor_second", [0, 1])
+@pytest.mark.parametrize("remote_advanced", [False, True])
 async def test_successor_attempt_reconciles_predecessor_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    successor_second: int,
+    remote_advanced: bool,
 ) -> None:
     """A successor Step Execution republishes the same logical candidate."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -1156,11 +1161,37 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     publisher._run = record  # type: ignore[method-assign]
     # The predecessor's push lands, then its host is lost before the
     # acknowledgment reaches the workflow.
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:01:00+00:00")
     lost = await publisher.publish_request_workspace(
         request=first,
         current_workflow_id="workflow-4627",
         current_step_execution_id=first.step_execution.step_execution_id,
     )
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(
+            f"GIT_{prefix}_DATE",
+            f"2026-01-01T00:01:{successor_second:02d}+00:00",
+        )
+    if remote_advanced:
+        # Even identical bytes do not authorize replacing another actor's
+        # later commit. Its distinct parent must remain on the remote branch.
+        peer = tmp_path / "peer"
+        git("clone", str(origin), str(peer), cwd=tmp_path)
+        git("checkout", lost["push_branch"], cwd=peer)
+        git("commit", "--allow-empty", "-m", "peer progress", cwd=peer)
+        git("push", "origin", lost["push_branch"], cwd=peer)
+        peer_head = git("rev-parse", "HEAD", cwd=peer)
+        with pytest.raises(RuntimeError, match="not a fast-forward"):
+            await publisher.publish_request_workspace(
+                request=second,
+                current_workflow_id="workflow-4627",
+                current_step_execution_id=second.step_execution.step_execution_id,
+            )
+        assert git("rev-parse", lost["push_branch"], cwd=origin) == peer_head
+        assert (second_workspace / "work.txt").read_text() == "completed work\n"
+        assert len(pushes) == 1
+        return
     successor = await publisher.publish_request_workspace(
         request=second,
         current_workflow_id="workflow-4627",
@@ -1168,6 +1199,7 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     )
 
     assert successor["push_branch"] == lost["push_branch"]
+    assert successor["push_head_sha"] == lost["push_head_sha"]
     assert (
         successor["pull_request_url"] == "https://github.com/example/repository/pull/7"
     )
