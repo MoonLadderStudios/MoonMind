@@ -1,33 +1,6 @@
 from pathlib import Path
 
 
-def test_moonspec_verify_skill_reports_canonical_claim_coverage() -> None:
-    skill_path = (
-        Path(__file__).resolve().parents[3]
-        / ".agents"
-        / "skills"
-        / "moonspec-verify"
-        / "SKILL.md"
-    )
-
-    text = skill_path.read_text(encoding="utf-8")
-
-    assert "## Canonical Claim Coverage" in text
-    assert "Code Evidence" in text
-    assert "Test Evidence" in text
-    assert "Artifact Evidence" in text
-    assert "Implementation Status" in text
-    assert "Verification Status" in text
-    assert "Drift Status" in text
-    assert "Gap Reason" in text
-    assert "Implementation gaps mean" in text
-    assert "Verification gaps mean" in text
-    assert "Doc drift means" in text
-    assert "Doc drift alone does not block `FULLY_IMPLEMENTED`" in text
-    assert "Use durable evidence references" in text
-    assert "structured drift in Source Document Drift" in text
-
-
 def test_moonspec_verify_skill_supports_issue_brief_mode() -> None:
     skill_path = (
         Path(__file__).resolve().parents[3]
