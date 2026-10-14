@@ -625,7 +625,6 @@ class OmnigentWorkspacePublicationService:
             env: Mapping[str, str] | None = None,
             **_kwargs: Any,
         ) -> SimpleNamespace:
-            del cwd
             authored = [str(part) for part in command]
             remote_read = authored[:2] in (["git", "fetch"], ["git", "ls-remote"])
             if authored and authored[0] == "git":
@@ -633,7 +632,7 @@ class OmnigentWorkspacePublicationService:
                     "-c",
                     f"safe.directory={safe_workspace}",
                     "-C",
-                    str(safe_workspace),
+                    str((cwd or safe_workspace).resolve()),
                 ]
             selected_env = build_github_token_git_environment(
                 token,
