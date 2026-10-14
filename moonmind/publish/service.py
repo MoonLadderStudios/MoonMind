@@ -447,7 +447,16 @@ class PublishService:
                     cwd=repo_dir,
                     check=False,
                 )
-                if getattr(ancestry, "returncode", 1) != 0:
+                if getattr(
+                    ancestry, "returncode", 1
+                ) != 0 and not await self._adopt_recreated_remote_head(
+                    repo_dir=repo_dir,
+                    run_command=run_command,
+                    branch_name=branch_name,
+                    remote_sha=remote_sha,
+                    push_env=push_env,
+                    token=token,
+                ):
                     raise RuntimeError(
                         "publication branch is not a fast-forward of the remote head"
                     )
@@ -781,6 +790,58 @@ class PublishService:
             body=body,
             token=token,
         )
+
+    async def _adopt_recreated_remote_head(
+        self,
+        *,
+        repo_dir: Path,
+        run_command: CommandRunner,
+        branch_name: str,
+        remote_sha: str,
+        push_env: dict[str, str],
+        token: str,
+    ) -> bool:
+        """Adopt a remote tip that is the same candidate recreated at another time.
+
+        A successor attempt recommits the saved work, so its commit differs from
+        the predecessor's pushed commit only in timestamps. When the remote tip
+        has the same tree and parents, it is that same publication and becomes
+        the local branch; any other content is a foreign commit and is refused.
+        """
+
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", remote_sha):
+            return False
+        fetched = await run_command(
+            [self._git_binary, "fetch", "--no-tags", "origin", remote_sha],
+            cwd=repo_dir,
+            check=False,
+            env=push_env,
+            redaction_values=(token,) if token else (),
+        )
+        if getattr(fetched, "returncode", 1) != 0:
+            return False
+
+        async def tree_and_parents(revision: str) -> str | None:
+            result = await run_command(
+                [self._git_binary, "show", "-s", "--format=%T %P", revision],
+                cwd=repo_dir,
+                check=False,
+            )
+            if getattr(result, "returncode", 1) != 0:
+                return None
+            return str(result.stdout or "").strip() or None
+
+        remote_shape = await tree_and_parents(remote_sha)
+        if remote_shape is None or remote_shape != await tree_and_parents(
+            branch_name
+        ):
+            return False
+        # Same tree, so the index and worktree already match the adopted tip.
+        await run_command(
+            [self._git_binary, "reset", "--soft", remote_sha],
+            cwd=repo_dir,
+        )
+        return True
 
     async def _scan_git_push_before_publish(
         self,
