@@ -139,7 +139,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "defaultEffort" in config["system"]
     assert "defaultModelByRuntime" in config["system"]
     assert "defaultEffortByRuntime" in config["system"]
-    assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
+    assert "workerRuntimeEnv" not in config["system"]
     assert config["system"]["supportedRuntimes"] == [
         "omnigent",
         "codex_cli",
@@ -243,30 +243,42 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
         "image/webp",
     ]
 
-def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
+def test_build_runtime_config_default_matches_omitted_submission(monkeypatch) -> None:
+    """The form preselects what an omitted CLI/API runtime would select.
+
+    A worker process's runtime env is not an authoring default: the form
+    submits its displayed runtime as authored, so a different preselection
+    would send the same request to a different Backend by caller.
+    """
+
+    from moonmind.workflows.executions.runtime_target_selection import (
+        AuthoringSurface,
+        resolve_runtime_target_selection,
+    )
+
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude_code")
     monkeypatch.setenv("MOONMIND_CLAUDE_MODEL", "claude-test-model")
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     config = dashboard_view_model.build_runtime_config("/workflows")
-    assert config["system"]["defaultRuntime"] == "claude_code"
-    assert config["system"]["defaultModel"] == "claude-test-model"
-    assert config["system"]["defaultEffort"] == ""
+    assert config["system"]["defaultRuntime"] == resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        workflow_settings=settings.workflow,
+        record_metrics=False,
+    ).runtime_id
+    assert config["system"]["defaultRuntime"] == "omnigent"
     assert config["system"]["defaultModelByRuntime"]["claude_code"] == (
         "claude-test-model"
     )
-    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.delenv("MOONMIND_CLAUDE_MODEL", raising=False)
 
-def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
-    # The alias 'claude' is normalized to 'claude_code' internally, but since
-    # 'claude' is not in supportedRuntimes (now 'claude_code' is), it will
-    # fall back to the settings-configured default (codex_cli) rather than 'claude'.
-    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "claude_code")
+def test_build_runtime_config_uses_claude_from_runtime_override(monkeypatch) -> None:
     monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    config = dashboard_view_model.build_runtime_config("/workflows")
+    config = dashboard_view_model.build_runtime_config(
+        "/workflows", default_runtime_override="claude_code"
+    )
 
     assert config["system"]["supportedRuntimes"] == [
         "omnigent",

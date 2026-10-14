@@ -139,7 +139,7 @@ BOUNDED_LABEL_VALUES: dict[str, frozenset[str]] = {
         {"generic_omnigent", "legacy_profile_bound_omnigent", "direct_compatibility"}
     ),
     "selection_source": frozenset(
-        {"authored", "rollout_default", "recorded", "configured_default"}
+        {"authored", "profile", "rollout_default", "recorded", "configured_default"}
     ),
     "rollout_state": frozenset(
         {

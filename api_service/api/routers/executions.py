@@ -8739,6 +8739,24 @@ async def _load_provider_profile_for_runtime(
         ) from exc
 
 
+async def _profile_route_runtime(
+    *,
+    session: Any,
+    user: Any,
+    provider_profile: Any,
+    authored_runtime: object,
+) -> str | None:
+    """Return the selected Profile's route when no runtime was authored."""
+
+    if authored_runtime or provider_profile is None:
+        return None
+    from api_service.services.profile_execution_selection import (
+        profile_route_runtime,
+    )
+
+    return await profile_route_runtime(session, user, provider_profile)
+
+
 async def _load_default_provider_profile_for_runtime(
     *,
     session: Any,
@@ -9840,6 +9858,63 @@ def _apply_goal_schedule_metadata(
         task_payload["taskTemplate"]["presetDigest"] = preset_digest
 
 
+async def _preset_expansion_target_runtime(
+    *,
+    task_payload: Mapping[str, Any],
+    request_payload: Mapping[str, Any],
+    session: Any,
+    user: Any,
+) -> str:
+    """Resolve the runtime preset steps inherit, as Workflow Create will.
+
+    Preset expansion is an authoring surface: it resolves through the one
+    shared selection boundary (MoonLadderStudios/MoonMind#3833), never from
+    ``settings.workflow.default_runtime`` directly, and an omitted runtime
+    follows the selected Profile's route so expanded steps cannot disagree
+    with the admitted task.
+    """
+
+    runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+    authored_runtime = (
+        (request_payload.get("targetRuntime") or runtime_payload.get("mode"))
+        if runtime_payload.get("authored") is not False
+        else None
+    )
+    provider_profile = None
+    raw_profile_id = str(
+        runtime_payload.get("providerProfileRef")
+        or runtime_payload.get("profileId")
+        or runtime_payload.get("providerProfile")
+        or task_payload.get("providerProfileRef")
+        or task_payload.get("profileId")
+        or task_payload.get("providerProfile")
+        or request_payload.get("providerProfileRef")
+        or request_payload.get("profileId")
+        or request_payload.get("providerProfile")
+        or ""
+    ).strip()
+    if raw_profile_id and not authored_runtime and session is not None:
+        provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=None,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
+        )
+    return resolve_runtime_target_selection(
+        surface=AuthoringSurface.preset_expansion,
+        requested_runtime=authored_runtime,
+        profile_runtime=await _profile_route_runtime(
+            session=session,
+            user=user,
+            provider_profile=provider_profile,
+            authored_runtime=authored_runtime,
+        ),
+        workflow_settings=settings.workflow,
+        # The admission that follows records the selection; this is its preview.
+        record_metrics=False,
+    ).runtime_id
+
+
 async def _expand_goal_preset_for_workflow_submission(
     *,
     task_payload: dict[str, Any],
@@ -9847,6 +9922,12 @@ async def _expand_goal_preset_for_workflow_submission(
     session: Any,
     user: Any,
 ) -> None:
+    target_runtime = await _preset_expansion_target_runtime(
+        task_payload=task_payload,
+        request_payload=request_payload,
+        session=session,
+        user=user,
+    )
     if has_unexpanded_task_template({"workflow": task_payload}):
         from api_service.services.presets.catalog import (
             PresetNotFoundError,
@@ -9877,7 +9958,7 @@ async def _expand_goal_preset_for_workflow_submission(
                 initial_parameters={
                     "workflow": task_payload,
                     "repository": request_payload.get("repository"),
-                    "targetRuntime": request_payload.get("targetRuntime"),
+                    "targetRuntime": target_runtime,
                 },
                 allow_goal_schedule=False,
                 user_id=getattr(user, "id", None),
@@ -9934,22 +10015,6 @@ async def _expand_goal_preset_for_workflow_submission(
     if repository:
         context["repository"] = repository
         context["repo"] = repository
-    runtime_payload = (
-        task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
-    )
-    # Goal-preset expansion is an authoring surface: it resolves its default
-    # through the one shared selection and admission boundary
-    # (MoonLadderStudios/MoonMind#3833 required work 4), never from
-    # ``settings.workflow.default_runtime`` directly, so an active rollback
-    # control cannot produce a different default here than on Workflow Create.
-    target_runtime = (
-        request_payload.get("targetRuntime")
-        or runtime_payload.get("mode")
-        or resolve_runtime_target_selection(
-            surface=AuthoringSurface.preset_expansion,
-            workflow_settings=settings.workflow,
-        ).runtime_id
-    )
     if isinstance(target_runtime, str) and target_runtime.strip():
         context["targetRuntime"] = target_runtime.strip()
 
@@ -12449,23 +12514,14 @@ async def _create_execution_from_workflow_request(
     # switches never influence this path; the bounded direct-retirement cutoff
     # and the code-owned retirement class remain the only admission authorities
     # besides the shared policy.
-    if not authored_runtime and _provider_profile is not None:
-        # Profile selection is execution authority even when the advanced
-        # runtime control was untouched. Use the same route as inventory; an
-        # unready or pinned Omnigent configuration must never fall back direct.
-        from api_service.services.profile_execution_selection import (
-            load_execution_configurations,
-            profile_has_native_inventory_route,
-        )
-
-        configurations = await load_execution_configurations(
-            session, user, [_provider_profile]
-        )
-        authored_runtime = (
-            _provider_profile.runtime_id
-            if profile_has_native_inventory_route(_provider_profile, configurations)
-            else "omnigent"
-        )
+    # Profile selection is execution authority even when the advanced runtime
+    # control was untouched; it is recorded as Profile-derived, not authored.
+    profile_runtime = await _profile_route_runtime(
+        session=session,
+        user=user,
+        provider_profile=_provider_profile,
+        authored_runtime=authored_runtime,
+    )
     try:
         new_work_selection = resolve_new_work_selection(
             surface=(
@@ -12474,6 +12530,7 @@ async def _create_execution_from_workflow_request(
                 else AuthoringSurface.workflow_create
             ),
             authored_runtime=authored_runtime,
+            profile_runtime=profile_runtime,
             workflow_settings=settings.workflow,
         )
         raw_target_runtime = new_work_selection.runtime_id
@@ -13258,10 +13315,51 @@ async def _resolve_recurring_runtime_metadata(
                 normalized_preview = validated_step_runtime.get("tierPreview")
                 if isinstance(normalized_preview, Mapping):
                     normalized_step_tier_previews[index] = dict(normalized_preview)
+    runtime_was_authored = runtime_payload.get("authored") is not False
     authored_runtime = (
-        request_payload.get("targetRuntime")
-        or parameter_payload.get("targetRuntime")
-        or runtime_payload.get("mode")
+        (
+            request_payload.get("targetRuntime")
+            or parameter_payload.get("targetRuntime")
+            or runtime_payload.get("mode")
+        )
+        if runtime_was_authored
+        else None
+    )
+    raw_profile_id = None
+    for candidate_profile_id in (
+        runtime_payload.get("providerProfileRef"),
+        runtime_payload.get("profileId"),
+        runtime_payload.get("providerProfile"),
+        runtime_payload.get("executionProfileRef"),
+        task_payload.get("providerProfileRef"),
+        task_payload.get("profileId"),
+        task_payload.get("providerProfile"),
+        parameter_payload.get("providerProfileRef"),
+        parameter_payload.get("profileId"),
+        parameter_payload.get("providerProfile"),
+        request_payload.get("providerProfileRef"),
+        request_payload.get("profileId"),
+        request_payload.get("providerProfile"),
+    ):
+        if candidate_profile_id is None:
+            continue
+        normalized_profile_id = str(candidate_profile_id).strip()
+        if normalized_profile_id:
+            raw_profile_id = normalized_profile_id
+            break
+    provider_profile = None
+    if raw_profile_id:
+        provider_profile = await _load_provider_profile_for_runtime(
+            session=session,
+            profile_id=raw_profile_id,
+            selected_runtime=None,
+            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
+        )
+    profile_runtime = await _profile_route_runtime(
+        session=session,
+        user=None,
+        provider_profile=provider_profile,
+        authored_runtime=authored_runtime,
     )
     # MoonLadderStudios/MoonMind#3931: the recurring-schedule surface resolves
     # its unauthored default through the one shared boundary as Workflow
@@ -13270,6 +13368,7 @@ async def _resolve_recurring_runtime_metadata(
         new_work_selection = resolve_new_work_selection(
             surface=AuthoringSurface.schedule,
             authored_runtime=authored_runtime,
+            profile_runtime=profile_runtime,
             workflow_settings=settings.workflow,
         )
         raw_target_runtime = new_work_selection.runtime_id
@@ -13324,28 +13423,6 @@ async def _resolve_recurring_runtime_metadata(
                     f"payload.workflow.steps[{index}].runtime.mode: {exc}"
                 ) from exc
 
-    raw_profile_id = None
-    for candidate_profile_id in (
-        runtime_payload.get("providerProfileRef"),
-        runtime_payload.get("profileId"),
-        runtime_payload.get("providerProfile"),
-        runtime_payload.get("executionProfileRef"),
-        task_payload.get("providerProfileRef"),
-        task_payload.get("profileId"),
-        task_payload.get("providerProfile"),
-        parameter_payload.get("providerProfileRef"),
-        parameter_payload.get("profileId"),
-        parameter_payload.get("providerProfile"),
-        request_payload.get("providerProfileRef"),
-        request_payload.get("profileId"),
-        request_payload.get("providerProfile"),
-    ):
-        if candidate_profile_id is None:
-            continue
-        normalized_profile_id = str(candidate_profile_id).strip()
-        if normalized_profile_id:
-            raw_profile_id = normalized_profile_id
-            break
     raw_requested_model: str | None = runtime_payload.get("model") or None
     if raw_requested_model is None:
         raw_requested_model = parameter_payload.get(
@@ -13354,13 +13431,11 @@ async def _resolve_recurring_runtime_metadata(
     if raw_requested_model is not None:
         raw_requested_model = str(raw_requested_model)
 
-    provider_profile = None
-    if raw_profile_id:
-        provider_profile = await _load_provider_profile_for_runtime(
-            session=session,
+    if provider_profile is not None:
+        _require_provider_profile_runtime(
+            profile=provider_profile,
             profile_id=raw_profile_id,
             selected_runtime=canonical_target_runtime,
-            not_found_message=f"Provider profile not found: {raw_profile_id!r}.",
         )
     elif _runtime_model_tier(runtime_payload) is not None:
         provider_profile = await _load_default_provider_profile_for_runtime(
