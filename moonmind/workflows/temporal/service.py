@@ -2910,8 +2910,16 @@ class TemporalExecutionService:
                 "The admitted source inputs are unavailable; retry when Temporal history is readable"
             ) from exc
         parameters = admitted.get("initial_parameters")
+        # An ownerless schedule starts as the system principal, not a user
+        # named "system". Preserve that original ownerless start contract.
+        expected_user_id = (
+            ""
+            if projection.owner_type is TemporalExecutionOwnerType.SYSTEM
+            and projection.owner_id == "system"
+            else str(projection.owner_id or "")
+        )
         if (
-            str(admitted.get("owner_user_id") or "") != str(projection.owner_id or "")
+            str(admitted.get("owner_user_id") or "") != expected_user_id
             or admitted.get("workflow_type") != projection.workflow_type.value
             or not isinstance(parameters, Mapping)
         ):
