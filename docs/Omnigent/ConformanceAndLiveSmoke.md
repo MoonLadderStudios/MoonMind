@@ -1,19 +1,19 @@
 # Omnigent Conformance and Live Smoke
 
 **Document Class:** Canonical declarative  
-**Status:** Desired verification policy with existing executable consumers still requiring migration  
-**Updated:** 2026-09-21  
+**Status:** Current ordinary/strict certification boundary with remaining verification and migration work separately owned\
+**Updated:** 2026-10-14\
 **Authority:** Verification scope and evidence for the shared Omnigent runtime, native interaction, and recovery. Runtime selection and action authority stay with their providing modules.
 
 Related: [AGENTS.md](../../AGENTS.md), [Primary Runtime Provider Strategy](PrimaryRuntimeProviderStrategy.md), [runtime selection and transition](RuntimeProviderRollout.md), [Workflow Remediation](../Workflows/WorkflowRemediation.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), [review and continuation](../Workflows/StepReviewGateSystem.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
 
 Verification must demonstrate the behavior claimed without becoming a second orchestration platform or an unrelated source of production outages. Reuse existing tests, runners, reports, and actual module owners. A useful small fix does not wait for every harness, optional host mode, provider account, or full release matrix.
 
-This document revises the earlier blanket exact-combination and protected-runner obligations. It does not disable current enforcement or claim that the revised runtime behavior is implemented. The [earlier full contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/ConformanceAndLiveSmoke.md) remains available for exact historical case IDs, report fields, and operational details while their real consumers still need them. Change those consumers coherently, preserving meaningful security and recorded evidence. Until that migration lands, `docs/Omnigent/ContractOwnership.md`, `docs/Omnigent/README.md`, and `docs/Omnigent/RuntimeProviderRollout.md` remain authoritative for current behavior; read this document as the desired target, not as permission to remove gates those documents still require.
+Ordinary certificate-independent admission is implemented by #4560 at the existing settings, evidence resolver, and execution-plan boundaries. Explicit strict certification, historical report decoding, and live-run publication retain their actual validators and integrity requirements. The [earlier full contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/ConformanceAndLiveSmoke.md) remains available for historical case IDs, report fields, and operational details; it does not reinstate certificates as ordinary admission prerequisites. [Runtime selection](RuntimeProviderRollout.md) owns surviving selection controls. Security, credential, capability, and action-authority checks remain with their providing modules, independent of optional certification observations.
 
 ## Existing owners and current baseline
 
-At reviewed main `6fdaab848e8f9fd9c5279ea36186482cab05733d`, the shared-host conformance module explicitly contains pure inventory/validation logic and pending live rows. The remediation matrix distinguishes action delivery from repair and keeps autonomous mutation closed. Those are implemented foundations, not full product verification or an instruction to create more catalogs.
+The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, and the harness-platform planner/execution-plan loader distinguish ordinary admission from explicitly selected strict certification. Ordinary plans can truthfully record an uncertified tier. The shared-host conformance module retains inventory/validation logic and pending live rows; the remediation matrix separates optional runtime observations from strict v1 certification. Action delivery remains distinct from repair and autonomous mutation stays closed. These are source-level implemented boundaries, not a claim that every live journey or deployed migration has passed.
 
 | Responsibility | Existing owner to reuse |
 | --- | --- |

@@ -3,7 +3,7 @@
 **Status:** Canonical desired state; implementation and deployment evidence remain separate  
 **Document Class:** System / Product Architecture  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-30  
+**Last updated:** 2026-10-14\
 **Authority:** Long-term agent-backend direction under reliability-first simplification
 
 ## Related documents
@@ -14,7 +14,7 @@
 
 Omnigent is the destination for one agent-backend lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
-This strategy revises the earlier exact-combination promotion and staged-retirement requirements. The staged-retirement machinery (removal stages, retirement criteria, drain census, and removal plans) has been removed (#3932); retirement is now class-based new-admission control with owner-specific removal checks, described in `OmnigentModuleArchitecture.md` §5. This strategy does not claim that the exact-combination promotion code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists. Until the owning migrations land, `README.md` exact-qualification rules, `ContractOwnership.md` per-combination assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
+This strategy revises the earlier exact-combination promotion and staged-retirement requirements. The staged-retirement machinery (removal stages, retirement criteria, drain census, and removal plans) has been removed (#3932); retirement is now class-based new-admission control with owner-specific removal checks, described in `OmnigentModuleArchitecture.md` §5. New-work admission no longer reads Codex phase switches (#3931), and ordinary admission is certificate independent (#4560). Explicit strict certification and surviving selection/rollout controls remain implemented; [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence) and [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration) own those boundaries. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for historical interpretation, without restoring superseded requirements. Further simplification in this strategy is a target, not a claim that remaining controls or deployed migrations have already been removed.
 
 ## 1. Decision
 

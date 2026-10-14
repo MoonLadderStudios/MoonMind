@@ -31,7 +31,7 @@ work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 | 12 | Lifecycle reconciler transition contract | `OmnigentLifecycleReconciler.md` |
 | 13 | Control-plane aggregates, concurrency/fencing, telemetry/timeline | `ControlPlaneAggregates.md`, `ControlPlaneConcurrencyAndFencing.md`, `OmnigentSemanticTelemetryAndTimeline.md` |
 | 14 | Versioned rollout states, canary, rollback, migration status | `RuntimeProviderRollout.md` |
-| 15 | Codex exact support rows, cutover phases, remediation matrix | `CodexSupportAndCutover.md` |
+| 15 | Codex support evidence, historical cutover phases, optional remediation observations and strict certification | `CodexSupportAndCutover.md` |
 | 16 | Codex create-to-host wire contract | `CodexCreateToHostContract.md` |
 | 17 | Codex product-path reconciliation | `NormalCodexProductPathReconciliation.md` |
 | 18 | Conformance tiers and live-smoke boundaries | `ConformanceAndLiveSmoke.md` |
@@ -67,11 +67,14 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 - Run-owned vs profile-owned credential cleanup: never collapsed into one
   "delete credentials" instruction (`SharedHostImage.md` §4).
 - `CodexSupportAndCutover.md` vs `RuntimeProviderRollout.md`: the former owns
-  Codex exact rows and cutover phases; the latter owns the versioned rollout
-  mechanism for every combination.
+  Codex evidence and historical phase interpretation; the latter owns the
+  surviving selection/rollout controls and identifies retired configuration.
 - `CodexCreateToHostContract.md` vs
   `NormalCodexProductPathReconciliation.md`: the former owns the wire contract;
-  the latter owns the reconciliation. Both are test-pinned and keep their text.
+  the latter owns the reconciliation. Preserve executable wire behavior and
+  supported product outcomes through their implementation tests. Update prose
+  when its providing implementation changes; wording is not a tested contract
+  or a permanent obligation to retain superseded machinery.
 
 ## Per-file disposition
 
@@ -80,7 +83,7 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 | `README.md` | Module entrypoint (new, #3962) | Current |
 | `ContractOwnership.md` | Ownership map (new, #3962) | Current |
 | `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion evidence-gated (#3832–#3834). Per-combination assignments below remain authoritative for current behavior until the owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target. Retirement (#3835, #3932) is class-based new-admission control only: removing a retained path deletes its code and row while the surviving owner's replay, historical-read, cleanup, and credential checks keep passing (`OmnigentModuleArchitecture.md` §5.2) |
-| `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; does not remove the implemented per-combination controls by itself |
+| `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; ordinary certificate-independent admission is implemented (#4560), while surviving selection controls remain code-owned |
 | `OmnigentHostOAuth.md` | Owner: materializer mechanisms; §§10–11 point to `SharedHostImage.md` | Current desired state |
 | `OpenCodeHost.md` | Owner: OpenCode runtime contract; §§1–3, 6 point to `SharedHostImage.md` | Current |
 | `OmnigentBridge.md` | Owner: transport and native UI contract | Design with open questions (§21); #3635 |
@@ -89,8 +92,8 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 | `OmnigentHarnessPlatformDesign.md` | Owner: target harness-platform model | Proposed (target, not shipped) |
 | `RuntimeProviderRollout.md` | Owner: rollout mechanism | Implemented mechanism; promotion per combination |
 | `CodexSupportAndCutover.md` | Owner: Codex rows, phases, remediation matrix | Exact evidence pending; #3518, #3563, #3564, #3622, #3626 |
-| `CodexCreateToHostContract.md` | Owner: create-to-host wire contract (test-pinned) | Accepted; #3449 |
-| `NormalCodexProductPathReconciliation.md` | Owner: product-path reconciliation (test-pinned) | Accepted; #3565 |
+| `CodexCreateToHostContract.md` | Owner: create-to-host wire contract | Accepted; #3449; executable consumers own behavior coverage |
+| `NormalCodexProductPathReconciliation.md` | Owner: product-path reconciliation | Accepted; #3565; executable consumers own behavior coverage |
 | `AgentProfiles.md` | Owner: Profile identities | #3517 |
 | `CanonicalTurnCommandBoundary.md` | Owner: turn-command boundary | #3707 |
 | `OmnigentLifecycleReconciler.md` | Owner: transition contract | Accepted; #3702 |

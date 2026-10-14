@@ -3,7 +3,7 @@
 **Status:** Desired-state simplification with an implemented legacy contract still in use  
 **Document Class:** Module Contract Specification  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-30  
+**Last updated:** 2026-10-14\
 **Authority:** Agent backend selection and bounded transition under the primary-backend strategy; not a permanent promotion platform
 
 ## Related documents
@@ -14,7 +14,7 @@
 
 Use one existing selection/admission boundary and the deployment's installed agent backend. Preserve the operator's meaningful harness, Provider Profile, model/cost/privacy, source, and publication choices. Do not maintain parallel Codex phases, qualification toggles, per-combination canaries, rollback controls, and independent schedule pins as permanent authorities for the same choice.
 
-`moonmind/omnigent/runtime_provider_rollout.py` still implements the earlier policy at reviewed main `6fdaab848e8f9fd9c5279ea36186482cab05733d`. Its fields, states, and existing consumers must be migrated coherently rather than ignored. This document revises the target and retains enough compatibility context to interpret that implementation. It does not change executable behavior or authorize deployment. The [earlier complete contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/RuntimeProviderRollout.md) remains available for precise historical questions.
+`moonmind/omnigent/runtime_provider_rollout.py` still owns versioned selection rules, qualification/enabled switches, cohorts, and rollback controls. New-work admission already bypasses the retired Codex phase switches (#3931), and ordinary admission no longer requires historical certificates (#4560). Remaining controls must be changed with their actual consumers. This document distinguishes those implemented changes from the desired simplification and retained historical interpretation; it does not authorize deployment. The [earlier complete contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/RuntimeProviderRollout.md) remains available for precise historical questions.
 
 ## 1. Identity: exact combinations
 
@@ -134,7 +134,9 @@ Use existing logs and operation records for basic diagnosis. No LLM, metrics exp
 
 ## 12. Configuration
 
-The reviewed deployment still exposes the legacy Codex phase/deployed-phase fields and the runtime-provider rollout, rollback, cohort, and qualified/enabled inputs. These are active implementation inputs until coherently migrated, not the desired first-run form.
+The runtime-provider rollout, rollback, cohort, and qualified/enabled inputs remain active in `runtime_provider_rollout.py` and the shipped Compose/template configuration. Preserve explicit safety stops. Ordinary versus strict certification is selected by `MOONMIND_OMNIGENT_EVIDENCE_POLICY`: omitted, blank, or `either` is certificate independent; explicit `protected` or `deployment` retains strict evidence validation, as described in [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
+
+`MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` and `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` are retired new-work inputs, absent from `.env-template` and `docker-compose.yaml`. `moonmind/workflows/executions/new_work_runtime.py` resolves Create and schedule admission through the shared selection owner without reading either field. Its direct-retirement cutoff and class-based new-admission checks remain enforced. `moonmind/omnigent/cutover.py` retains phase parsing and `effective_phase` for the earlier evidence contract and its tests; `tools/build_codex_omnigent_cutover_evidence.py` still builds historical cutover evidence. These helpers do not make phase fields current deployment requirements or authorize restoring a second default-selection gate.
 
 #3941 and the runtime-transition owner remove duplication from actual Compose, shell, and application consumers. Keep bootstrap values at the deployment boundary, Preferences in the existing Settings resolver, and Secrets/Profiles separate. Do not move database connectivity into the database or invent a required value the installation can derive.
 

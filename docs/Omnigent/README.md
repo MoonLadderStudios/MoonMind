@@ -3,7 +3,7 @@
 **Document Class:** Module entrypoint
 **Status:** Current
 **Owners:** MoonMind Platform
-**Last updated:** 2026-09-07
+**Last updated:** 2026-10-14
 **Authority:** Short architecture/operator entrypoint for the Omnigent module. Each contract below has one surviving owner; this page routes, it does not restate.
 **Issue:** [MoonLadderStudios/MoonMind#3962](https://github.com/MoonLadderStudios/MoonMind/issues/3962).
 
@@ -35,26 +35,32 @@ interchangeable responsibilities.
 
 - A shared image never authorizes every installed runtime. Each Host Class
   declares only its own harness, runtime pack, and materializers.
-- The generic Codex combination is `disabled` until its exact protected-live
-  evidence passes and the qualification flag promotes it (see
-  `RuntimeProviderRollout.md`); selection before qualification fails closed and
-  never falls back to another runtime, profile, or host mode.
+- The generic Codex row starts `disabled` with
+  `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false`. Its surviving enablement
+  and default-promotion rules are owned by `RuntimeProviderRollout.md` and
+  `codex_cutover_drain.py`: a true switch permits promotion when no linked
+  qualification is declared; a declared linked qualification must match the
+  selected dimensions. An unavailable explicit selection never falls back to
+  another runtime, profile, or host mode.
 - Generic Claude Code has no profile-bound Omnigent realizer, so it is admitted
   as an explicit choice by default: selecting a connected Anthropic OAuth
   Provider Profile needs no manual toggle. Image, policy, inventory, credential
   readiness, and exact-host attestation still gate each launch, and
   `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` stops new admission without
   falling back.
-- "Supported" means repository evidence or a protected live artifact proves the
-  exact combination (image digest, harness, pack, materializer, model, policy,
-  realizer). Code presence alone is "implemented" or "unverified".
+- Admission and certification are distinct. Ordinary admission (omitted,
+  blank, or `MOONMIND_OMNIGENT_EVIDENCE_POLICY=either`) does not require a
+  historical certificate and can record an uncertified tier. Explicit
+  `protected` or `deployment` retains strict certification. Evidence identifies
+  the actual combination and operations observed; code presence alone does not
+  certify a live journey. See `ConformanceAndLiveSmoke.md`.
 - Direct Codex / direct Claude paths remain labeled compatibility paths until
   their retirement rows close.
 
-> Transition note: the exact-combination qualification rules above describe the
-> currently implemented contract. `PrimaryRuntimeProviderStrategy.md` revises
-> them as a desired target; until the owning migrations land, this page stays
-> authoritative for current behavior.
+The current ordinary/strict distinction is implemented by #4560. Remaining
+selection controls and compatibility paths are separate from the desired
+simplification in `PrimaryRuntimeProviderStrategy.md`; this entrypoint does
+not declare their migration or a deployment complete.
 
 ## Status vocabulary
 
@@ -65,7 +71,7 @@ interchangeable responsibilities.
 | installed | Binary present in the image; not support. |
 | admitted | A plan selected it through the shared selection boundary. |
 | qualified | Exact-combination evidence passed for this deployment. |
-| selected-by-default | A qualified combination promoted per combination by rollout policy. |
+| selected-by-default | A target selected by the surviving rollout policy; not proof of live certification. |
 
 ## Contract owners
 
