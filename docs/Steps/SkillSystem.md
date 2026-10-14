@@ -1,52 +1,29 @@
 # Skill System
 
-**Document Class:** Canonical declarative
-**Viewpoint:** Module Architecture View
-Status: Desired State
-Owners: MoonMind Engineering
-Last Updated: 2026-08-18
-Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
-Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `AGENTS.md`
+Covers: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
+Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/WorkflowConsoleArchitecture.md`
 
 ---
 
 ## 1. Purpose
 
-This document defines the desired-state MoonMind **Agent Skill System**.
+This document describes the MoonMind **Agent Skill System**: what a Skill is
+and how it differs from a Tool, how Skill steps are authored and validated, how
+skill sources are stored, merged, and resolved into immutable snapshots, how
+managed and external runtimes receive those snapshots, and how `.agents/skills`
+and `.agents/skills/local` are used.
 
-It is the canonical document for:
-
-1. what a MoonMind Skill is,
-2. how Skills differ from Tools,
-3. how Skill steps are authored and validated,
-4. how reusable agent skill definitions are stored and evidenced,
-5. how built-in, deployment, repo, and local skill sources are merged,
-6. how workflow and step skill intent resolves into immutable snapshots,
-7. how runtimes receive those snapshots,
-8. how `.agents/skills` and `.agents/skills/local` are used,
-9. how runtime skill injection works for managed and external agents.
-
-This document consolidates the design previously split between:
-
-- `docs/Steps/SkillSystem.md`
-- `docs/Steps/SkillInjection.md`
-
-`docs/Steps/StepTypes.md` remains the canonical document for the product-facing Step Type taxonomy. This document defines what the `skill` Step Type means for agent skills.
-
-This document does **not** define:
-
-1. executable Tool contracts,
-2. plan DAG semantics,
-3. Preset management and expansion,
-4. generic artifact storage internals,
-5. provider-profile or auth semantics,
-6. runtime launch internals except for the skill materialization boundary.
-
-Use `docs/Workflows/SkillAndPlanContracts.md` for executable tools and plan execution. Use `docs/Steps/StepTypes.md` for the Step Type authoring model. Use `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` for `MoonMind.AgentRun`.
+`docs/Steps/StepTypes.md` describes the product-facing Step Type taxonomy; this
+document describes what the `skill` Step Type means for agent skills. Executable
+Tool contracts and plan execution are in `docs/Workflows/SkillAndPlanContracts.md`,
+and `MoonMind.AgentRun` is in
+`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`. Preset expansion,
+artifact storage internals, provider-profile/auth semantics, and runtime launch
+internals beyond the skill materialization boundary are out of scope.
 
 ---
 
-## 2. Desired-State Summary
+## 2. Summary
 
 MoonMind has three user-facing Step Types:
 
@@ -58,21 +35,17 @@ Preset -> insert a reusable authoring template that expands into concrete steps
 
 A **Tool** is a typed executable operation. A **Skill** is agent-facing behavior, instruction, and runtime context used for open-ended work. A **Preset** is an authoring template.
 
-The desired-state skill model is:
-
-1. Skills are not a subtype of Tool.
-2. Skill steps are executable Step Types, but they execute by launching or configuring an agent runtime, not by invoking a `ToolDefinition`.
-3. Agent skill definitions are named data with content-addressed evidence, not Temporal activity contracts.
-4. A Skill step may use Tools internally, but those Tools are governed capabilities available to the agent, not the Skill itself.
-5. MoonMind supports built-in, deployment-stored, repo-checked-in, and local-only agent skill sources.
-6. At run or step start, MoonMind resolves skill intent into an immutable `ResolvedSkillSet`.
-7. Workflows and runtime requests carry compact refs to resolved skill snapshots, not large skill bodies.
-8. Managed runtimes receive a compact activation summary inline and a full read-only active skill bundle at the materialized `visiblePath`; `.agents/skills` is used only as a safe compatibility alias.
-9. Runtime adapters consume the resolved snapshot; they must not rediscover, broaden, or re-resolve Skills during execution.
-10. `.agents/skills/local` remains a local-only overlay input convention, not the active runtime projection.
-11. A native host is selected from trusted resolved-skill evidence, never from
-    canonical skill name or publish mode alone, and is valid only when it
-    executes the exact portable semantic entrypoint from that resolved content.
+Skills are not a subtype of Tool. Skill steps execute by launching or
+configuring an agent runtime, not by invoking a `ToolDefinition`; they may use
+Tools internally as governed capabilities. At run or step start, MoonMind
+resolves skill intent from built-in, deployment, repo, and local sources into
+an immutable `ResolvedSkillSet`, and workflows carry compact refs to it. Managed
+runtimes receive a compact activation summary inline plus a full read-only
+active bundle at the materialized `visiblePath`, and runtime adapters do not
+rediscover, broaden, or re-resolve Skills during execution. A native host is
+selected from trusted resolved-skill evidence, never from canonical skill name
+or publish mode alone, and is valid only when it executes the exact portable
+semantic entrypoint from that resolved content.
 
 ### Native implementation contracts
 
@@ -80,8 +53,8 @@ Skills may declare a portable semantic implementation contract and supported
 hosts independently of their publish metadata. The resolved entry preserves the
 winning source, content ref, digest, contract, supported hosts, and native-host
 policy. A native binding may supply execution substrate, but the resolved Skill
-bundle remains the sole semantic authority. The binding must execute a portable
-entrypoint from that exact resolved content; it must not reproduce the Skill's
+bundle remains the sole semantic authority. The binding executes a portable
+entrypoint from that exact resolved content and does not reproduce the Skill's
 data collection, classification, ordering, retry, remediation, or completion
 logic in MoonMind code.
 
@@ -92,283 +65,116 @@ process supervision, durable scheduling, timeout and cancellation enforcement,
 approval enforcement, log and artifact transport, and validation or publication
 of the Skill's declared terminal evidence. Durability is not permission to move
 semantic decisions out of the Skill. A Temporal workflow may durably invoke the
-same portable entrypoint at Activity boundaries; it may not become a second
-implementation of that entrypoint.
+same portable entrypoint at Activity boundaries without becoming a second
+implementation of it.
 
 Later-precedence repo or local content with the same skill name remains different
 content and receives no built-in native privileges by name. When a compatible
 binding cannot execute the exact resolved implementation, the runtime records an
 explicit portable-host decision or rejects the step before launch with a policy
-diagnostic. It must not substitute other Skill content or a parallel built-in
+diagnostic. It does not substitute other Skill content or a parallel built-in
 implementation.
 
-Native-binding review must answer both questions before implementation:
-
-1. Which irreducibly native capability is being supplied?
-2. Which portable semantic entrypoint from the resolved Skill is executed?
-
-If either answer is missing, the binding is invalid. Cross-host conformance tests
-may add defense in depth, but matching tests do not authorize duplicated semantic
-implementations.
+A valid native binding can name both the irreducibly native capability it
+supplies and the portable semantic entrypoint from the resolved Skill that it
+executes. Cross-host conformance tests add defense in depth, but matching tests
+do not make duplicated semantic implementations acceptable.
 
 ---
 
-## 3. Canonical Terminology
+## 3. Terminology
 
-### 3.1 Step Type
-
-A product-facing discriminator for how a step is configured.
-
-Canonical values:
-
-```text
-tool | skill | preset
-```
-
-Every authored step has exactly one Step Type.
-
-### 3.2 Tool
-
-A typed, schema-backed, policy-checked operation MoonMind can run directly.
-
-Examples:
-
-- `jira.transition_issue`
-- `github.create_pull_request`
-- `repo.apply_patch`
-- `sandbox.run_tests`
-- `deployment.update_compose_stack`
-
-A Tool is represented by a `ToolDefinition` and is executed through the tool execution system.
-
-### 3.3 Tool Step
-
-A step with `type: "tool"`.
-
-A Tool step runs a selected `ToolDefinition` with validated inputs.
-
-A Tool step is appropriate when the work is explicit, bounded, and can be expressed as a known operation.
-
-### 3.4 Skill
-
-A reusable agent-facing behavior, instruction bundle, execution mode, or operating procedure.
-
-Examples:
-
-- Code Implementation
-- Jira Triage
-- PR Review Fixer
-- MoonMind Docs Writer
-- Repo Coding Conventions
-- Unreal C++ Review Checklist
-- Python Test Fixer
-
-A Skill is not a `ToolDefinition`.
-
-### 3.5 Skill Step
-
-A step with `type: "skill"`.
-
-A Skill step asks an agent to perform open-ended work using a selected Skill, instructions, context, runtime settings, and allowed Tools.
-
-A Skill step may compile into an `AgentExecutionRequest`, a managed runtime session, or another agent-runtime plan node. It does not compile into a direct Tool invocation merely because the word "skill" appears in the step.
-
-### 3.6 AgentSkillDefinition
-
-The deployment-catalog representation of a reusable Skill.
-
-An `AgentSkillDefinition` is named instruction data. It may contain:
-
-- instructions,
-- operating rules,
-- prompt fragments,
-- workspace guidance,
-- input schema for Skill-step configuration,
-- output expectations,
-- runtime compatibility metadata,
-- tool-allowance hints,
-- examples, templates, or supporting files.
-
-An `AgentSkillDefinition` is not an executable Temporal Tool.
-
-### 3.7 AgentSkillContent
-
-An immutable content-addressed revision of an `AgentSkillDefinition`.
-
-Editing Skill content creates new content evidence, represented by `content_ref`
-and `content_digest`. The Skill remains selected by name.
-
-### 3.8 SkillSet
-
-A named collection of Skills or selection rules.
-
-Examples:
-
-- `deployment-default`
-- `docs-writer`
-- `python-repo`
-- `unreal-cpp`
-- `jira-triage`
-
-### 3.9 ResolvedSkillSet
-
-The immutable, exact set of Skill names and content evidence selected for a specific run or step after all policy, precedence, inheritance, and override rules have been applied.
-
-### 3.10 RuntimeCommandSelection
-
-A runtime-native command selected inside an agent runtime step.
-
-Example:
-
-- `review`
-
-A runtime command is not:
-
-- a Tool,
-- a Skill,
-- an `AgentSkillDefinition`,
-- a `SkillSet`,
-- a member of a `ResolvedSkillSet`.
-
-Runtime commands belong to the agent-runtime execution contract and are validated by the owning runtime adapter.
-
-### 3.11 Preset
-
-A reusable authoring template that expands into Tool and/or Skill steps.
-
-A Preset is not normally executable at runtime. Preset expansion must produce concrete executable steps before submission unless a future linked-preset mode is explicitly introduced.
-
----
+- **Step Type** — the product-facing discriminator for how a step is
+  configured: `tool | skill | preset`. Every authored step has exactly one.
+- **Tool** — a typed, schema-backed, policy-checked operation MoonMind can run
+  directly (for example `jira.transition_issue`, `repo.apply_patch`,
+  `sandbox.run_tests`), represented by a `ToolDefinition` and executed through
+  the tool execution system.
+- **Tool step** — a step with `type: "tool"` that runs a selected
+  `ToolDefinition` with validated inputs. It fits work that is explicit,
+  bounded, and expressible as a known operation.
+- **Skill** — a reusable agent-facing behavior, instruction bundle, execution
+  mode, or operating procedure (for example Code Implementation, Jira Triage,
+  Repo Coding Conventions). A Skill is not a `ToolDefinition`.
+- **Skill step** — a step with `type: "skill"` that asks an agent to perform
+  open-ended work using a selected Skill, instructions, context, runtime
+  settings, and allowed Tools. It compiles into an `AgentExecutionRequest`, a
+  managed runtime session, or another agent-runtime plan node, never into a
+  direct Tool invocation merely because the word "skill" appears.
+- **AgentSkillDefinition** — the deployment-catalog representation of a
+  reusable Skill: named instruction data such as instructions, operating rules,
+  prompt fragments, input schema, output expectations, runtime compatibility
+  metadata, tool-allowance hints, and supporting files. It is not an executable
+  Temporal Tool.
+- **AgentSkillContent** — an immutable content-addressed revision of a
+  definition, evidenced by `content_ref` and `content_digest`. The Skill is
+  still selected by name.
+- **SkillSet** — a named collection of Skills or selection rules (for example
+  `deployment-default`, `python-repo`).
+- **ResolvedSkillSet** — the immutable, exact set of Skill names and content
+  evidence selected for a run or step after policy, precedence, inheritance,
+  and overrides are applied.
+- **Runtime command** — a runtime-native command such as `review` selected
+  inside an agent runtime step. It belongs to the agent-runtime execution
+  contract, is validated by the owning runtime adapter, and is never a Tool,
+  Skill, SkillSet, or member of a `ResolvedSkillSet`.
+- **Preset** — a reusable authoring template that expands into concrete Tool
+  and/or Skill steps before submission; it is not executable at runtime.
 
 ## 4. Separation Rules
 
-The following rules are fixed.
+A Skill step may use Tools internally, but Tools are allowed capabilities, not
+children of the Skill definition. A Tool step is not a Skill step merely
+because it invokes an LLM or agent-related activity, a Skill step is not
+resolved from the executable Tool registry, and runtime adapters do not treat
+runtime commands as Skills.
 
-1. **Tool** means typed executable operation.
-2. **Skill** means agent-facing behavior or instruction data.
-3. **Skill Step** means an executable agentic step selected by the user.
-4. **AgentSkillDefinition** means named skill data in the skill catalog.
-5. **Runtime command** means adapter-owned runtime behavior, not a Skill.
-6. **Preset** means authoring template, not hidden runtime work.
-7. A Skill step may use Tools internally, but Tools are allowed capabilities, not children of the Skill definition.
-8. A Tool step must not masquerade as a Skill step merely because it invokes an LLM or agent-related activity.
-9. A Skill step must not be resolved from the executable Tool registry.
-10. A runtime adapter must not treat runtime commands as Skills or include them in a `ResolvedSkillSet`.
+### 4.1 Compatibility terminology
 
-### 4.1 Legacy terminology
-
-Older contracts may contain compatibility terms such as:
-
-- `tool.type = "skill"`
-- `SkillDefinition` as a legacy alias for `ToolDefinition`
-- `SkillInvocation` as a legacy alias for `Step`
-- `selectedSkill`
-- `selectedSkillArgs`
-
-These are compatibility terms only.
-
-New authoring surfaces, docs, and API contracts should use:
-
-- `ToolDefinition` for executable tools,
-- `AgentSkillDefinition` for agent skills,
-- `type: "tool"` for Tool steps,
-- `type: "skill"` for Skill steps,
-- `runtimeSelection.kind = "agent_skill"` only where an internal runtime-selection adapter needs that shape.
+Some contracts still contain older terms: `tool.type = "skill"`,
+`SkillDefinition` as an alias for `ToolDefinition`, `SkillInvocation` as an
+alias for `Step`, `selectedSkill`, and `selectedSkillArgs`. Authoring surfaces,
+docs, and API contracts use `ToolDefinition` for executable tools,
+`AgentSkillDefinition` for agent skills, `type: "tool"` / `type: "skill"` for
+steps, and `runtimeSelection.kind = "agent_skill"` only where an internal
+runtime-selection adapter needs that shape.
 
 ---
 
 ## 5. Core Invariants
 
-1. Agent skills are first-class MoonMind data.
-2. Agent skills are not executable Tool contracts.
-3. Skill steps are first-class executable Step Types.
-4. Skill steps execute through agent-runtime orchestration, not through the Tool registry.
-5. The deployment-backed skill catalog is the authoritative managed storage model.
-6. Repo and local folders may contribute skill inputs, but they are not the only source of truth.
-7. Every run or step uses an immutable `ResolvedSkillSet` when Skill content participates.
-8. Workflows carry refs to resolved snapshots, not large skill bodies.
-9. Runtime adapters own final materialization for their runtime, but must preserve the resolved snapshot.
-10. Managed runtimes see the active selected skill set at the materialized `visiblePath`; `.agents/skills` remains the repo-authored source path and optional safe alias.
-11. `.agents/skills/local` is the local-only overlay input path.
-12. MoonMind must not mutate checked-in skill files in place during runtime materialization.
-13. Reruns reuse the original resolved snapshot by default.
-14. Explicit re-resolution is a separate operator action.
-15. Skill bodies must not be used as a secret store.
-16. Local-only Skills must not bypass deployment policy.
+1. Agent skills are first-class MoonMind data, not executable Tool contracts.
+2. Skill steps are first-class executable Step Types that run through agent-runtime orchestration, not the Tool registry.
+3. The deployment-backed skill catalog is the authoritative managed storage model; repo and local folders contribute inputs but are not the only source of truth.
+4. Every run or step uses an immutable `ResolvedSkillSet` when Skill content participates, and workflows carry refs to it, not large skill bodies.
+5. Runtime adapters own final materialization for their runtime while preserving the resolved snapshot.
+6. Managed runtimes see the active selected skill set at the materialized `visiblePath`; `.agents/skills` remains the repo-authored source path and optional safe alias, and `.agents/skills/local` is the local-only overlay input path.
+7. MoonMind does not mutate checked-in skill files in place during runtime materialization (§12.3 notes one exception).
+8. Reruns reuse the original resolved snapshot by default; re-resolution is a separate operator action.
+9. Skill bodies are not a secret store.
+10. Local-only Skills are subject to deployment policy like any other source.
 
 ---
 
 ## 6. Skill Sources
 
-MoonMind supports these agent skill sources.
+- **Built-in Skills** ship with MoonMind releases and cover common workflows,
+  baseline guidance, and starter defaults. They may be imported into the
+  deployment catalog or treated as a read-only source during resolution.
+- **Deployment-stored Skills** are the primary managed source of truth, used
+  for deployment-wide conventions and centrally reviewed reusable Skills. Each
+  has immutable content evidence and stable provenance.
+- **Repo checked-in Skills** live under `.agents/skills` and carry
+  repo-specific guidance that travels with the repository. They are resolution
+  inputs, not mutable runtime state.
+- **Repo local-only Skills** live under `.agents/skills/local` for
+  developer-specific overlays and experiments. They are excluded from version
+  control by default and participate only if deployment policy allows them.
 
-### 6.1 Built-in Skills
+### 6.1 Explicit Workflow and Step Selectors
 
-Built-in Skills ship with MoonMind.
-
-They are useful for:
-
-- common workflows,
-- baseline project guidance,
-- built-in workflow patterns,
-- starter deployment defaults,
-- runtime-specific first-run guidance.
-
-Built-in Skills ship with MoonMind releases and may be imported into the deployment catalog or treated as a read-only source during resolution.
-
-### 6.2 Deployment-Stored Skills
-
-Deployment-stored Skills are the primary managed source of truth.
-
-They are useful for:
-
-- organization-wide conventions,
-- deployment-specific operating instructions,
-- centrally reviewed reusable Skills,
-- shared governance and auditability.
-
-A deployment-stored Skill has immutable content evidence and stable provenance.
-
-### 6.3 Repo Checked-In Skills
-
-A repository may define checked-in Skills under documented repo conventions.
-
-The canonical repo-facing path is:
-
-```text
-.agents/skills
-```
-
-Repo checked-in Skills are useful for:
-
-- repo-specific contribution guidance,
-- stable project conventions,
-- instructions intended to travel with the repository.
-
-Repo checked-in Skills are resolution inputs. They are not mutable runtime state.
-
-### 6.4 Repo Local-Only Skills
-
-A repository may define local-only Skills under:
-
-```text
-.agents/skills/local
-```
-
-Local-only Skills are useful for:
-
-- developer-specific overlays,
-- local experiments,
-- non-version-controlled mirrors,
-- migration from older local-only skill flows.
-
-Local-only Skills are excluded from version control by default and may participate only if deployment policy allows them.
-
-### 6.5 Explicit Workflow and Step Selectors
-
-A workflow execution or step may explicitly include or exclude Skills or SkillSets.
-
-Explicit selectors express execution intent and participate in resolution before runtime launch.
+A workflow execution or step may explicitly include or exclude Skills or
+SkillSets; these selectors participate in resolution before runtime launch.
 Selectors identify Skills by canonical skill name only. They do not carry semantic skill versions; resolved content refs and digests provide the evidence for the exact instruction content used.
 
 ---
@@ -387,189 +193,52 @@ When multiple sources provide candidate Skills, MoonMind resolves them in this o
 
 Later layers may override earlier layers where policy allows.
 
-### 7.2 Collision Rules
+### 7.2 Collisions and Policy
 
-When more than one source provides a Skill with the same canonical name:
+A later-precedence source may override an earlier one by canonical name, and
+the snapshot records the winning source and content evidence. If two
+candidates at the same precedence level conflict with no deterministic
+tie-breaker, resolution fails. Candidates from a source kind that policy
+forbids are excluded before precedence applies.
 
-1. a later-precedence source may override an earlier source by name;
-2. the resolved snapshot must record the winning source and content evidence;
-3. if two candidates at the same precedence level conflict and no deterministic tie-breaker exists, resolution fails;
-4. selectors identify Skills by canonical name only;
-5. if policy forbids a source kind, candidates from that source are excluded before precedence applies.
-
-### 7.3 Policy Gates
-
-Deployments may restrict:
-
-1. whether repo Skills are allowed,
-2. whether local-only Skills are allowed,
-3. which built-in or deployment Skills are eligible,
-4. whether step-level overrides are permitted,
-5. whether local-only Skills may shadow deployment-managed Skills,
-6. which Skills are allowed for which runtimes,
-7. which Tools a Skill step may make available to the agent,
-8. whether a Skill may be used in unattended or high-autonomy modes.
-
-Policy is enforced during resolution and validation, not after runtime launch.
+Deployments may restrict whether repo or local-only Skills are allowed, which
+built-in or deployment Skills are eligible, whether step-level overrides are
+permitted, whether local-only Skills may shadow deployment-managed ones, which
+Skills are allowed per runtime, which Tools a Skill step may expose, and
+whether a Skill may be used in unattended or high-autonomy modes. Policy is
+enforced during resolution and validation, not after runtime launch.
 
 ---
 
 ## 8. Data Model
 
-Concrete storage schemas may vary, but the logical model must preserve these contracts.
+The Pydantic models in `moonmind/schemas/agent_skill_models.py` are the
+authoritative shapes. Logically:
 
-### 8.1 AgentSkillDefinition
-
-Represents the stable identity of a Skill.
-
-Suggested fields:
-
-```ts
-type AgentSkillDefinition = {
-  name: string;
-  title: string;
-  description?: string;
-  source_kind: "builtin" | "deployment" | "repo" | "local";
-  visibility: "system" | "deployment" | "repo" | "local";
-  enabled: boolean;
-  skill_kind?: "instruction_bundle" | "agent_behavior";
-  input_schema_ref?: string;
-  output_contract_ref?: string;
-  default_supported_runtimes?: string[];
-  default_allowed_tools?: string[];
-  created_at: string;
-  updated_at: string;
-};
-```
-
-`skill_kind` is descriptive, not a dispatch mechanism. Even an `agent_behavior` Skill is not a `ToolDefinition`.
-
-### 8.2 AgentSkillContent
-
-Represents immutable Skill content evidence.
-
-Suggested fields:
-
-```ts
-type AgentSkillContent = {
-  name: string;
-  content_ref: string;
-  content_digest: string;
-  format: "skill_md" | "markdown_bundle" | "json_manifest" | "mixed_bundle";
-  supported_runtimes?: string[];
-  metadata?: Record<string, unknown>;
-  created_at: string;
-  created_by?: string;
-};
-```
-
-Rules:
-
-1. content refs and digests are immutable evidence;
-2. editing content creates a new content ref and digest;
-3. large bodies live in artifact/blob storage;
-4. workflow history carries refs, not bodies.
-
-### 8.3 SkillSet
-
-Represents a named collection or selection surface.
-
-Suggested fields:
-
-```ts
-type SkillSet = {
-  skill_set_id: string;
-  name: string;
-  scope: "system" | "deployment" | "repo" | "task" | "step";
-  description?: string;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string;
-};
-```
-
-### 8.4 SkillSetEntry
-
-Represents one selection entry inside a `SkillSet`.
-
-Suggested fields:
-
-```ts
-type SkillSetEntry = {
-  skill_set_id: string;
-  selector_type: "include" | "exclude" | "condition";
-  skill_name?: string;
-  order?: number;
-  conditions?: Record<string, unknown>;
-};
-```
-
-### 8.5 ResolvedSkillSet
-
-Represents the immutable Skill snapshot used by a specific run or step.
-
-Suggested fields:
-
-```ts
-type ResolvedSkillSet = {
-  snapshot_id: string;
-  deployment_id: string;
-  task_id?: string;
-  step_id?: string;
-  resolved_at: string;
-  skills: ResolvedSkillEntry[];
-  manifest_ref: string;
-  source_trace_ref?: string;
-  resolution_inputs_ref?: string;
-  policy_summary?: Record<string, unknown>;
-};
-```
-
-### 8.6 ResolvedSkillEntry
-
-Suggested fields:
-
-```ts
-type ResolvedSkillEntry = {
-  name: string;
-  source_kind: "builtin" | "deployment" | "repo" | "local";
-  content_ref: string;
-  content_digest: string;
-  visible_path?: string;
-  supported_runtimes?: string[];
-};
-```
-
-### 8.7 RuntimeSkillMaterialization
-
-Represents the runtime-facing rendering of a resolved snapshot.
-
-Suggested fields:
-
-```ts
-type RuntimeSkillMaterialization = {
-  runtime_id: string;
-  snapshot_id: string;
-  materialization_mode: "prompt_bundled" | "workspace_mounted" | "hybrid" | "retrieval";
-  visible_path?: string;
-  backing_path?: string;
-  manifest_ref?: string;
-  prompt_index_ref?: string;
-  retrieval_manifest_ref?: string;
-  read_only?: boolean;
-  metadata?: Record<string, unknown>;
-};
-```
+- **AgentSkillDefinition** — stable identity: name, title, description,
+  source kind (`builtin`, `deployment`, `repo`, `local`), enabled flag,
+  input/output contract refs, and default runtime and tool hints. A descriptive
+  `skill_kind` is not a dispatch mechanism.
+- **AgentSkillContent** — immutable `content_ref`, `content_digest`, and
+  format; large bodies live in artifact/blob storage.
+- **SkillSet** — include, exclude, or conditional selection entries at system,
+  deployment, repo, task, or step scope.
+- **ResolvedSkillSet** — `snapshot_id`, `resolved_at`, selected
+  `ResolvedSkillEntry` list, `manifest_ref`, source trace, resolution inputs,
+  and policy summary.
+- **ResolvedSkillEntry** — skill name, format, content ref and digest,
+  provenance, required Skills and capabilities, publication and side-effect
+  metadata, terminal and implementation contracts, and selection reason.
+- **RuntimeSkillMaterialization** — runtime id, materialization mode (§13),
+  workspace paths, and prompt-index or retrieval manifest refs.
 
 ---
 
 ## 9. Skill Step Authoring Contract
 
-### 9.1 Desired Shape
+### 9.1 Shape
 
-The user-facing desired shape follows the Step Type model.
-
-Illustrative shape:
+Illustrative Skill step:
 
 ```json
 {
@@ -580,19 +249,13 @@ Illustrative shape:
     "id": "code.implementation",
     "inputs": {
       "repository": "MoonLadderStudios/MoonMind",
-      "issueKey": "MM-123",
+      "issueKey": "PROJ-123",
       "instructions": "Implement the issue and prepare a pull request."
     },
     "skillSets": ["deployment-default", "repo-default"],
-    "include": [
-      { "name": "repo-coding-conventions" }
-    ],
+    "include": [{ "name": "repo-coding-conventions" }],
     "exclude": ["legacy-reviewer"],
-    "allowedTools": [
-      "repo.apply_patch",
-      "sandbox.run_tests",
-      "github.create_pull_request"
-    ],
+    "allowedTools": ["repo.apply_patch", "sandbox.run_tests"],
     "runtime": {
       "mode": "codex_cli",
       "materializationMode": "hybrid"
@@ -601,26 +264,17 @@ Illustrative shape:
 }
 ```
 
-The exact API may split selectors into `step.skill`, `step.agentSkills`, or another nested field. The semantic requirements are fixed:
-
-1. the step is `type: "skill"`;
-2. the selected Skill is not resolved from the Tool registry;
-3. Skill inputs validate against the Skill contract;
-4. Skill content selection resolves through the Agent Skill System;
-5. allowed Tools are governed separately from Skill identity;
-6. runtime preferences are validated against runtime compatibility and policy.
+Whatever the exact field nesting, Skill inputs validate against the Skill
+contract, content selection resolves through the Agent Skill System (not the
+Tool registry), allowed Tools are governed separately from Skill identity, and
+runtime preferences are validated against compatibility and policy.
 
 ### 9.2 Skill Step vs Agent Skill Bundle
 
-A Skill step may select:
-
-1. one primary `AgentSkillDefinition`,
-2. one or more supporting SkillSets,
-3. explicit included Skills,
-4. explicit excluded Skills,
-5. runtime and Tool policy.
-
-The selected primary Skill describes agent behavior. The resolved snapshot describes the exact instruction bundles and supporting content made active for the runtime.
+A Skill step may select one primary `AgentSkillDefinition`, supporting
+SkillSets, explicit includes and excludes, and runtime and Tool policy. The
+primary Skill describes agent behavior; the resolved snapshot describes the
+exact instruction bundles and supporting content made active for the runtime.
 
 ### 9.2.1 Required Supporting Skills
 
@@ -632,277 +286,149 @@ metadata:
   required-skills: "fix-comments fix-ci fix-merge-conflicts"
 ```
 
-Rules:
-
-1. `metadata.required-skills` is a whitespace-delimited string.
-2. Values must be valid Agent Skills names.
-3. Resolution expands these requirements transitively before runtime launch.
-4. Required Skills remain independently callable top-level Skills.
-5. If a required Skill is missing, forbidden by policy, or explicitly excluded,
-   resolution fails before runtime launch.
-6. Runtime adapters must not rediscover or broaden required Skills after launch.
+The value is a whitespace-delimited list of valid Agent Skills names.
+Resolution expands requirements transitively before runtime launch, and fails
+before launch if a required Skill is missing, forbidden by policy, or explicitly
+excluded. Required Skills remain independently callable top-level Skills.
 
 ### 9.3 Workflow-level Skill Intent
 
-A workflow execution may define baseline Skill intent inherited by Skill steps (carried on the `task` payload node until the hard switch renames it).
+A workflow execution may define baseline Skill intent inherited by Skill steps,
+carried on the `task` payload node as `task.skills` with the same `sets`,
+`include`, `exclude`, and `materializationMode` fields as step-level selection.
 
-Illustrative shape:
+### 9.4 Inheritance and Validation
 
-```json
-{
-  "task": {
-    "skills": {
-      "sets": ["deployment-default"],
-      "include": [
-        { "name": "moonmind-doc-writer" }
-      ],
-      "exclude": [],
-      "materializationMode": "hybrid"
-    }
-  }
-}
-```
+`task.skills` defines the workflow-wide baseline. `step.skill` may add,
+override, or exclude workflow-level intent, and a step with no step-level
+selectors inherits the baseline. A step may opt out of inherited optional
+Skills where policy allows; policy may also require mandatory Skills that
+cannot be excluded.
 
-### 9.4 Inheritance Rules
-
-1. `task.skills` defines the workflow-wide baseline.
-2. `step.skill` may add, override, or exclude workflow-level skill intent.
-3. A step may explicitly opt out of inherited optional Skills where policy allows.
-4. Absent step-level selectors means the step inherits the workflow baseline.
-5. Step-level selection identifies Skills by canonical name only.
-6. Policy may require mandatory Skills that cannot be excluded.
-
-### 9.5 Validation Rules
-
-A Skill step is valid only when:
-
-1. the selected Skill exists or can be resolved by documented `auto` semantics;
-2. requested Skill names can be resolved;
-3. Skill inputs validate against the Skill's input contract;
-4. the target runtime is compatible;
-5. required repository, project, or artifact context is present;
-6. selected Tools are allowed and available;
-7. approval and autonomy settings are enforceable;
-8. policy allows the selected source kinds;
-9. resolution can produce an immutable `ResolvedSkillSet`.
+A Skill step is valid only when the selected Skill and requested names
+resolve, inputs validate against the Skill's input contract, the target runtime
+is compatible, required repository/project/artifact context is present,
+selected Tools are allowed and available, approval and autonomy settings are
+enforceable, policy allows the selected source kinds, and resolution can
+produce an immutable `ResolvedSkillSet`.
 
 ---
 
 ## 10. Resolution Lifecycle
 
-### 10.1 Resolution Timing
+### 10.1 Timing and Algorithm
 
-Skill resolution happens before runtime launch.
+Skill resolution happens before runtime launch: at workflow submission, during
+step preparation, or in a dedicated resolution activity. Workflow code does not
+resolve large Skill bodies inline, because those bodies would then enter
+workflow history.
 
-Resolution may happen:
+Resolution collects workflow- and step-level selectors, identifies the target
+runtime and execution mode, loads deployment policy and the allowed source
+kinds, loads candidates from built-in, deployment, repo, and local sources,
+applies precedence and collision rules, validates runtime compatibility and
+Tool policy, records the selected content refs and digests, writes a resolved
+manifest artifact (and a compact prompt index when needed), and returns a
+compact `ResolvedSkillSet` ref.
 
-1. at workflow submission,
-2. during step preparation,
-3. in a dedicated resolution activity.
+### 10.2 Failure Behavior
 
-Workflow code must not resolve large Skill bodies inline.
-
-### 10.2 Resolution Algorithm
-
-Canonical flow:
-
-1. collect workflow-level and step-level Skill selectors;
-2. identify target runtime and execution mode;
-3. load deployment policy;
-4. determine allowed source kinds;
-5. load candidate Skills from built-in, deployment, repo, and local sources;
-6. apply source precedence and collision rules;
-7. validate runtime compatibility;
-8. validate allowed Tool policy;
-9. record selected Skill content refs and digests;
-10. write a resolved manifest artifact;
-11. write a compact prompt index when needed;
-12. return a compact `ResolvedSkillSet` ref.
-
-### 10.3 Failure Behavior
-
-Resolution fails before runtime launch when:
-
-1. a required Skill is missing;
-2. a requested Skill name cannot be resolved;
-3. collisions cannot be resolved deterministically;
-4. policy forbids a requested source or override;
-5. a Skill is incompatible with the runtime and no allowed fallback exists;
-6. required source content cannot be read;
-7. a Skill body or manifest digest does not match;
-8. a selected Tool is not allowed for the Skill step.
+Resolution fails before runtime launch when a required or requested Skill
+cannot be resolved, collisions cannot be resolved deterministically, policy
+forbids a requested source or override, a Skill is incompatible with the
+runtime and no allowed fallback exists, source content cannot be read, a body
+or manifest digest does not match, or a selected Tool is not allowed for the
+Skill step.
 
 Checked-in skill sources are plain files. Externally sourced skills (for
 example the MoonSpec bundle) are vendored into `.agents/skills` as real files
 by their sync tool, so resolution never depends on submodule checkout state or
-filesystem symlink support. Resolution must fail with an actionable error when
+filesystem symlink support. Resolution fails with an actionable error when
 required source content cannot be read.
 
-### 10.4 Provenance
+### 10.3 Provenance
 
-The resolved snapshot must record enough provenance to answer:
-
-1. which Skills were selected,
-2. which content refs and digests were selected,
-3. where each Skill came from,
-4. which selectors influenced the result,
-5. which policies allowed or denied candidates,
-6. which Skills were inherited,
-7. which Skills were excluded,
-8. which runtime materialization mode was selected.
+The resolved snapshot records which Skills and content evidence were selected,
+where each came from, which selectors and policies influenced the result,
+which Skills were inherited or excluded, and which materialization mode was
+selected.
 
 ---
 
 ## 11. Content Evidence, Immutability, and Replay
 
-### 11.1 Skill Content Immutability
+Agent Skill content refs and digests are immutable; changing content creates
+new evidence under the same canonical Skill name. A `ResolvedSkillSet` is also
+immutable: a run or step carries an exact snapshot ref, retries and
+continue-as-new reuse it, reruns reuse the original by default, and
+re-resolution is explicit and creates a new snapshot.
 
-Agent Skill content refs and digests are immutable.
-
-Changing Skill content creates new content evidence under the same canonical Skill name.
-
-### 11.2 Snapshot Immutability
-
-A `ResolvedSkillSet` is immutable.
-
-Rules:
-
-1. a run or step carries an exact resolved snapshot ref;
-2. retries reuse the same snapshot;
-3. reruns reuse the original snapshot by default;
-4. re-resolution is explicit and creates a new snapshot;
-5. continue-as-new preserves the existing snapshot unless explicitly changed.
-
-### 11.3 Artifact Discipline
-
-These must live in artifacts or equivalent blob storage:
-
-- full Skill bodies,
-- large Skill bundles,
-- resolved manifests,
-- prompt indexes,
-- source traces,
-- materialization bundles.
-
-Workflow history carries compact refs and bounded metadata only.
+Full Skill bodies, large bundles, resolved manifests, prompt indexes, source
+traces, and materialization bundles live in artifacts or equivalent blob
+storage. Workflow history carries compact refs and bounded metadata only.
 
 ---
 
 ## 12. Workspace Path Policy
 
-### 12.1 Canonical Visible Path
+### 12.1 Visible Path
 
-For managed runtimes, the active resolved Skill set is visible at:
+For managed runtimes, the active resolved Skill set is visible at the
+materialized `visiblePath`, a MoonMind-owned run-scoped directory.
+`.agents/skills` is the repo-authored source path and, when it can be installed
+safely, a compatibility alias for the active set (§14.4).
 
-```text
-.agents/skills
-```
+### 12.2 Local Overlay and Active Set
 
-This path is the stable runtime-facing interface.
+`.agents/skills/local` is a local-only source input, not the active runtime
+projection. The runtime-visible active tree is a projection of the resolved active snapshot, not a mutable merge of checked-in repo folders.
 
-### 12.2 Local Overlay Path
+### 12.3 Mutation Rule
 
-The local-only overlay input path is:
+MoonMind does not rewrite checked-in user-authored Skill files in place during run materialization. Repo Skill folders are inputs to resolution; the runtime active tree is produced from the resolved snapshot.
 
-```text
-.agents/skills/local
-```
-
-It is used for local-only source input, not the active runtime projection.
-
-### 12.3 Active-Set Rule
-
-The runtime-visible `.agents/skills` tree is a projection of the resolved active snapshot.
-
-It is not a mutable merge of checked-in repo folders.
-
-### 12.4 Mutation Rule
-
-MoonMind must not rewrite checked-in user-authored Skill files in place during run materialization.
-
-Repo Skill folders are inputs to resolution. The runtime active tree is produced from the resolved snapshot.
+One exception exists in `moonmind/services/skill_materialization.py`: when the
+workspace already has a repo-authored `.agents/skills` directory, the
+materializer adds a `_shared` support entry (symlink or copy) inside it if one
+is not already present.
 
 ---
 
 ## 13. Runtime Materialization Modes
 
-The Agent Skill System supports multiple conceptual delivery modes because runtimes differ.
+The system supports several delivery modes because runtimes differ:
 
-### 13.1 `prompt_bundled`
-
-Skill content or compact summaries are included directly in the runtime instruction payload.
-
-Best for:
-
-- small Skill sets,
-- external agents without filesystem access,
-- providers with simple prompt-only execution.
-
-### 13.2 `workspace_mounted`
-
-Full Skill content is materialized into workspace files.
-
-Best for:
-
-- managed coding runtimes,
-- larger Skill bundles,
-- file-aware agents.
-
-### 13.3 `hybrid`
-
-A compact activation summary or prompt index is supplied inline, while full Skill content is available on disk.
-
-This is the default for managed coding runtimes.
-
-### 13.4 `retrieval`
-
-The runtime receives a manifest or helper path for on-demand retrieval.
-
-This is forward-compatible for large catalogs or advanced adapters, but it is not the default managed-runtime path.
+| Mode | Delivery | Fits |
+| --- | --- | --- |
+| `prompt_bundled` | Skill content or compact summaries inline in the instruction payload | small Skill sets, external agents without filesystem access, prompt-only providers |
+| `workspace_mounted` | full Skill content materialized into workspace files | managed coding runtimes, larger bundles, file-aware agents |
+| `hybrid` | compact activation summary or prompt index inline, full content on disk | **default** for managed coding runtimes |
+| `retrieval` | a manifest or helper path for on-demand retrieval | large catalogs or advanced adapters; not the default |
 
 ---
 
-## 14. Canonical Managed Runtime Injection Model
+## 14. Managed Runtime Injection Model
 
-For managed coding runtimes, MoonMind uses one canonical injection model:
-
-```text
-compact activation summary inline
-+
-read-only full active Skill bundle projected at .agents/skills
-+
-run-scoped MoonMind-owned backing store
-```
+For managed coding runtimes, MoonMind uses one injection model: a compact
+activation summary inline, plus a read-only full active Skill bundle at the
+materialized `visiblePath`, backed by a run-scoped MoonMind-owned store.
 
 ### 14.1 Managed Runtime Sequence
 
-Before execution begins, MoonMind must:
-
-1. resolve Skill intent into an immutable `ResolvedSkillSet`;
-2. materialize the full active Skill bundle into a run-scoped backing store;
-3. project that backing store at `.agents/skills`;
-4. include a compact activation summary in the runtime instructions;
-5. launch the runtime with refs to the resolved snapshot and materialization metadata.
+Before execution begins, MoonMind resolves Skill intent into an immutable
+`ResolvedSkillSet`, materializes the full active bundle into a run-scoped
+backing store, exposes it at the materialized `visiblePath` (aliased at
+`.agents/skills` when safe), includes a compact activation summary in the
+runtime instructions, and launches the runtime with refs to the snapshot and
+materialization metadata.
 
 ### 14.2 Active Backing Store
 
-The backing store is MoonMind-owned, run-scoped, and corresponds exactly to one resolved snapshot.
-
-Representative path:
-
-```text
-/work/agent_jobs/<job_id>/runtime/skills_active/<snapshot_id>/
-```
-
-The exact path is implementation-specific.
-
-Rules:
-
-1. the backing store must be run-scoped;
-2. it must be owned by MoonMind, not repo authors;
-3. it should be read-only to the runtime where practical;
-4. it must correspond exactly to one resolved snapshot;
-5. it must contain only selected Skills and MoonMind-owned metadata.
+The backing store is MoonMind-owned (not repo-author-owned), run-scoped,
+read-only to the runtime where practical, corresponds exactly to one resolved
+snapshot, and contains only the selected Skills and MoonMind-owned metadata. A
+representative path is
+`/work/agent_jobs/<job_id>/runtime/skills_active/<snapshot_id>/`.
 
 Snapshot IDs and resolved Skill names are single filesystem components, never
 paths. Artifact admission and materialization reject empty, dot, traversal,
@@ -913,7 +439,7 @@ symlinked directory parents rather than following them outside the run root.
 
 ### 14.3 Runtime-Visible Shape
 
-The runtime-visible tree should look like:
+The active tree looks like:
 
 ```text
 .agents/
@@ -927,42 +453,26 @@ The runtime-visible tree should look like:
       SKILL.md
 ```
 
-Rules:
-
-1. `SKILL.md` remains the primary Skill entrypoint.
-2. `_manifest.json` is MoonMind-owned metadata.
-3. only selected Skills appear in the active tree.
-4. unselected repo Skills must not appear.
-5. a single-Skill run still projects the full active root.
+`SKILL.md` is the primary Skill entrypoint and `_manifest.json` is
+MoonMind-owned metadata. Only selected Skills appear; unselected repo Skills do
+not. A single-Skill run still projects the full active root.
 
 ### 14.4 Projection Mechanics
 
 MoonMind materializes the active backing store in a MoonMind-owned run-scoped
 path. It may expose that store at `.agents/skills` only when doing so cannot
 mask repo-authored skill source files. Otherwise the runtime activation summary
-must point to the actual run-scoped active path.
-
-- bind mount,
-- symlink,
-- overlay view,
-- copy-on-write staging,
-- adapter-specific projection.
-
-The mechanism is not the contract.
-
-The contract is:
-
-1. the runtime sees the active Skill set at the materialized `visiblePath`;
-2. the content corresponds exactly to the resolved snapshot;
-3. the runtime is not expected to discover Skills anywhere else;
-4. `.agents/skills` is an optional compatibility alias, not the authoritative
-   active path;
-5. projection must fail before runtime launch if a requested alias cannot be
-   installed safely.
+points to the actual run-scoped active path. The mechanism (bind mount,
+symlink, overlay view, copy-on-write staging, or adapter-specific projection)
+is not the contract. The contract is that the runtime sees exactly the resolved
+snapshot at the materialized `visiblePath` and is not expected to discover
+Skills anywhere else; `.agents/skills` is an optional compatibility alias, and
+projection fails before runtime launch if a requested alias cannot be installed
+safely.
 
 #### 14.4.1 Projection Strategy Order
 
-Managed runtime adapters should choose the first projection strategy that preserves
+Managed runtime adapters choose the first projection strategy that preserves
 the publishable repository workspace without changing checked-in Skill source
 files:
 
@@ -980,31 +490,21 @@ files:
    is absent, already a MoonMind-owned projection link, or the workspace is an
    explicitly disposable non-publishing clone.
 5. **Transactional preserve-and-link fallback**: this is a disposable-workspace
-   fallback only. It is not the normal managed runtime path. If ever selected,
-   it must create a projection lease, restore the original tree in a `finally`
-   path before verification, publish, or workflow completion, and exclude
-   projection-only changes.
+   fallback only, not the normal managed runtime path. It creates a projection
+   lease, moves the source only after active materialization succeeds, restores
+   the original tree in a `finally` path before verification, publish, or
+   workflow completion, and excludes projection-only changes from publication.
 
-Adapters must not replace a tracked or repo-authored `.agents/skills` directory
-with a symlink in the publishable checkout as the normal projection mechanism.
-Any transient fallback must be treated as runtime state, not user-authored work.
-That means the fallback cannot be installed before active materialization is
-known-good, cannot leave the checkout damaged on failure, and cannot publish
-deletion or symlink changes for repo Skill sources.
+Adapters do not replace a tracked or repo-authored `.agents/skills` directory
+with a symlink in the publishable checkout, because that would publish deletion
+or symlink changes for repo Skill sources. Any transient fallback is runtime
+state, not user-authored work.
 
 ### 14.5 Inline Activation Summary
 
-Every managed runtime Skill step should include a compact activation block.
-
-Required contents:
-
-1. active Skill names,
-2. actual materialized `visiblePath`,
-3. first-read hints,
-4. hard rules that must be applied immediately,
-5. optional selected Tool or autonomy constraints.
-
-Example:
+Every managed runtime Skill step includes a compact activation block naming the
+active Skills, the actual materialized `visiblePath`, first-read hints, hard
+rules to apply immediately, and optional Tool or autonomy constraints. Example:
 
 ```text
 Active MoonMind skills for this step:
@@ -1016,31 +516,25 @@ Read /work/agent_jobs/job_123/runtime/skills_active/rss_123/code-implementation/
 
 Hard rules:
 - do not broaden scope beyond the requested issue
-- prefer the smallest safe change
-- keep full skill bodies on disk; do not duplicate them in responses
 ```
 
 The activation summary is not a duplicate full-body Skill bundle. It protects the
 immutable active snapshot and its helper selection, not repository source from
 requested authoring. Agents may read and edit checked-in Skill source when the
 task requires it, following the repository's source and projection ownership.
-Materialization must preserve those sources, and source edits do not replace the
-snapshot used by the current run. Externally owned bundles still require their
-own publication authority; a consumer PR must not reference an unpublished
+Materialization preserves those sources, and source edits do not replace the
+snapshot used by the current run. Externally owned bundles still need their own
+publication authority, so a consumer change does not reference an unpublished
 submodule commit.
 
 ### 14.6 Active Manifest
 
-Each active projection includes `_manifest.json`.
-
-Suggested fields:
+Each active projection includes `_manifest.json`, for example:
 
 ```json
 {
   "snapshot_id": "rss_123",
-  "resolved_at": "2026-04-29T00:00:00Z",
   "visible_path": "/work/agent_jobs/job_123/runtime/skills_active/rss_123",
-  "backing_path": "/work/agent_jobs/job_123/runtime/skills_active/rss_123",
   "read_only": true,
   "skills": [
     {
@@ -1049,43 +543,26 @@ Suggested fields:
       "content_ref": "art:sha256:...",
       "content_digest": "sha256:..."
     }
-  ],
-  "source_summary": {
-    "deployment": 1,
-    "repo": 1,
-    "local": 0
-  }
+  ]
 }
 ```
 
-The manifest is for observability and adapter introspection. The agent should primarily read `SKILL.md`.
+The manifest is for observability and adapter introspection; the agent primarily reads `SKILL.md`.
 
 ### 14.7 Collision Policy
 
 MoonMind owns the runtime-visible active `visiblePath` for the duration of the run.
 
 A collision exists when MoonMind cannot safely expose the active root through a
-requested compatibility alias such as `.agents/skills`.
-
-Examples:
-
-- `.agents` exists as a file;
-- `.agents/skills` exists as a file;
-- `.agents/skills` is a directory that cannot be masked through the runtime
-  namespace, staged outside the publishable checkout, or otherwise projected
-  without mutating repo-authored source files;
-- a stale symlink points to an incompatible backing store;
-- adapter or filesystem restrictions prevent projection.
-
-A checked-in `.agents/skills` directory is not by itself a business-logic
-failure. It is a normal source-input shape. It becomes a projection collision
-only if the selected adapter has no safe way to make the runtime see the active
-snapshot at `.agents/skills` without mutating that checked-in directory in the
+requested compatibility alias such as `.agents/skills`. A checked-in
+`.agents/skills` directory is not by itself a collision; it is a normal
+source-input shape, and becomes one only if the selected adapter has no safe
+way to expose the active snapshot without mutating that directory in the
 publishable workspace.
 
 #### 14.7.1 Collision Decision Table
 
-| Existing path | Desired handling | Terminal? |
+| Existing path | Handling | Terminal? |
 | --- | --- | --- |
 | `.agents` missing | Create adapter parent and project active root. | No |
 | `.agents` is a directory and `.agents/skills` missing | Project active root. | No |
@@ -1097,175 +574,78 @@ publishable workspace.
 | `.agents/skills` is an external or unknown symlink | Replace only if ownership can be proven; otherwise fail before runtime launch. | Conditional |
 | Filesystem or adapter cannot mount, overlay, stage, or link safely | Fail before runtime launch with actionable diagnostics. | Yes |
 
-Preferred behavior:
+Projection failures report the conflicting path, conflicting object kind,
+attempted projection action, selected strategy, and remediation guidance.
 
-1. materialize the active set outside the repo;
-2. expose it at `.agents/skills` only when the alias is absent or proven MoonMind-owned;
-3. avoid mutating checked-in Skill sources;
-4. fail before runtime launch if projection cannot be installed safely.
+#### 14.7.2 Invariants Checked Before Launch
 
-Projection failures must include:
+Beyond the contract in §14.4: repo-authored Skill input directories are not
+lost or published as deletions or symlinks (a transient preserve-and-link
+fallback keeps a run-scoped preserved copy, restores on projection failure, and
+is excluded from publication); the runtime is never pointed at an alternate
+visible path as a silent fallback; and the projection decision and any
+collision remediation are recorded in runtime metadata or diagnostics.
 
-- conflicting path,
-- conflicting object kind,
-- attempted projection action,
-- remediation guidance.
-
-#### 14.7.2 Hard Invariants
-
-Projection must satisfy all of these invariants before the runtime starts:
-
-1. `.agents/skills` as seen by the agent resolves to the active backing store.
-2. the visible active tree contains only the selected Skills and MoonMind-owned
-   metadata.
-3. repo-authored Skill input directories are not lost, published as deletions,
-   or published as symlinks. Any transient preserve-and-link fallback must keep
-   a run-scoped preserved copy, restore on projection failure, and be excluded
-   from publication as runtime state.
-4. the runtime is not instructed to read an alternate visible path as a silent
-   fallback.
-5. the projection decision and any collision remediation are recorded in runtime
-   metadata or diagnostics.
-6. the projection the runtime receives is verified inside the runtime, not only
-   on the worker that materialized it. A container runtime can be attached to a
-   directory that exists and is readable yet holds none of the projection, so
-   the runtime-side check reads `_manifest.json`, and a failed check names which
-   invariant failed rather than reporting one undifferentiated error.
+The projection is verified inside the runtime, not only on the worker that
+materialized it, because a container runtime can be attached to a directory
+that exists and is readable yet holds none of the projection. The
+runtime-side check reads `_manifest.json`, and a failed check names which
+invariant failed rather than reporting one undifferentiated error.
 
 ### 14.8 Adapter Responsibilities
 
-A managed runtime adapter must:
-
-1. consume a pinned resolved snapshot ref;
-2. materialize the active backing store exactly once per snapshot where practical;
-3. expose the active set at `.agents/skills`;
-4. inject the activation summary;
-5. avoid re-resolving Skill sources;
-6. avoid adding unselected Skills;
-7. avoid rewriting checked-in Skill inputs;
-8. preserve snapshot identity in logs, artifacts, and observability metadata.
-
-A managed runtime adapter must not:
-
-1. scan the repo for additional Skills during execution;
-2. silently fall back to a different visible path;
-3. treat runtime commands as Skills;
-4. mutate the active bundle as a way of changing policy.
-
-### 14.9 Robust Implementation Plan
-
-The managed-runtime implementation should enforce this plan:
-
-1. **Resolve and snapshot first**: resolution may read repo and local Skill
-   sources according to policy, then writes an immutable `ResolvedSkillSet` or
-   snapshot ref. Runtime projection must consume this snapshot and must not
-   rescan the repo.
-2. **Materialize outside the repo**: write selected Skill bundles and
-   `_manifest.json` under a run-scoped backing store such as
-   `/work/agent_jobs/<job_id>/runtime/skills_active/<snapshot_id>/`.
-3. **Plan projection before launch**: inspect `.agents`, `.agents/skills`, and
-   adapter capabilities. Decide whether to use runtime namespace projection,
-   isolated execution workspace, or symlink projection.
-4. **Protect publishable checkouts**: if `.agents/skills` is repo-authored or
-   tracked, prefer runtime namespace projection or a staging workspace. If an
-   adapter must use transactional preserve-and-link in a managed job checkout,
-   it must move the source only after active materialization succeeds, restore
-   it on projection failure, and prevent projection churn from being published.
-5. **Fail early when no safe projection exists**: hard collisions must stop
-   before runtime launch and report path, object kind, attempted action,
-   selected strategy, and remediation guidance.
-6. **Inject compact instructions**: the instruction payload names active Skills,
-   says full content is under `.agents/skills`, and gives first-read hints
-   without embedding full Skill bodies.
-7. **Verify the actual runtime view**: before submitting the turn, adapter
-   boundary tests and runtime preflight checks should confirm the agent-visible
-   `.agents/skills/_manifest.json` matches the supplied snapshot.
-8. **Publish only workflow changes**: publication logic must exclude runtime
-   projection artifacts and must not commit changes caused only by Skill
-   projection.
+A managed runtime adapter consumes a pinned resolved snapshot ref, materializes
+the active backing store once per snapshot where practical, exposes it at the
+`visiblePath`, injects the activation summary, and preserves snapshot identity
+in logs, artifacts, and observability metadata. It does not scan the repo for
+additional Skills during execution, re-resolve sources, add unselected Skills,
+silently fall back to a different visible path, treat runtime commands as
+Skills, or mutate the active bundle as a way of changing policy. Publication
+excludes runtime projection artifacts, so changes caused only by Skill
+projection are never committed.
 
 ---
 
 ## 15. External Agent Skill Delivery
 
-External agents may not have the same filesystem semantics as managed runtimes.
-
-They may receive resolved Skill context through:
-
-1. compact prompt bundles,
-2. uploaded bundle artifacts,
-3. presigned manifest or bundle URLs,
-4. provider-specific translated representations,
-5. compact summaries plus retrieval links where supported.
-
-External adapters must still:
-
-1. consume the immutable resolved snapshot;
-2. avoid re-resolving sources;
-3. preserve provenance;
-4. avoid broadening the selected Skill set;
-5. keep full Skill bodies out of workflow history;
-6. map delivery metadata into canonical `AgentExecutionRequest` fields or adapter metadata.
+External agents may lack managed-runtime filesystem semantics, so they receive
+resolved Skill context through compact prompt bundles, uploaded bundle
+artifacts, presigned manifest or bundle URLs, provider-specific translations,
+or summaries plus retrieval links. External adapters still consume the
+immutable resolved snapshot without re-resolving or broadening it, preserve
+provenance, keep full Skill bodies out of workflow history, and map delivery
+metadata into canonical `AgentExecutionRequest` fields or adapter metadata.
 
 ---
 
 ## 16. Interaction with `MoonMind.AgentRun`
 
-A Skill step that requires true agent execution compiles into an agent runtime execution path.
-
-The desired flow is:
-
-1. `MoonMind.UserWorkflow` owns workflow-level orchestration and step order.
-2. Skill resolution happens before runtime launch.
-3. The parent workflow passes compact refs into the agent-run path.
-4. `MoonMind.AgentRun` consumes an `AgentExecutionRequest`.
-5. The runtime adapter materializes or translates the resolved snapshot.
-6. The agent runtime receives a stable Skill view.
-7. Final outputs are stored as artifacts and structured results.
-
-Suggested `AgentExecutionRequest` extension fields:
-
-```ts
-type SkillContextFields = {
-  resolved_skillset_ref?: string;
-  skill_materialization_mode?: "prompt_bundled" | "workspace_mounted" | "hybrid" | "retrieval";
-  skill_prompt_index_ref?: string;
-  skill_manifest_ref?: string;
-  skill_policy_summary?: Record<string, unknown>;
-};
-```
-
-`MoonMind.AgentRun` must not independently re-resolve Skill sources.
+A Skill step that requires true agent execution compiles into an agent runtime
+execution path. `MoonMind.UserWorkflow` owns orchestration and step order and
+resolves Skills before launch; it passes compact refs to `MoonMind.AgentRun`,
+which consumes an `AgentExecutionRequest`; the runtime adapter materializes or
+translates the snapshot so the agent sees a stable Skill view; final outputs are
+stored as artifacts and structured results. The request carries skill context as refs (resolved skill set, materialization
+mode, prompt index, manifest, policy summary). `MoonMind.AgentRun` does not
+independently re-resolve Skill sources.
 
 ---
 
 ## 17. Tool Access Inside Skill Steps
 
-A Skill step may need Tools to complete work.
-
-Examples:
-
-- read issue details,
-- apply patches,
-- run tests,
-- create a pull request,
-- post a Jira comment.
-
-Tool access inside a Skill step is governed separately from Skill identity.
-
-Rules:
-
-1. Skill selection does not automatically grant all Tools.
-2. Allowed Tools must be declared, inherited, or policy-derived.
-3. Tool use remains subject to authorization, worker capability, security, and approval rules.
-4. A Tool invoked by an agent is still a Tool.
-5. Tool outputs remain Tool outputs and artifact refs.
-6. Agent decisions about which Tool to use belong to the Skill step/runtime policy, not to the Tool registry.
+A Skill step may need Tools (read issue details, apply patches, run tests,
+create a pull request). Tool access is governed separately from Skill identity:
+selecting a Skill does not grant all Tools; allowed Tools are declared,
+inherited, or policy-derived; and Tool use remains subject to authorization,
+worker capability, security, and approval rules. A Tool invoked by an agent is
+still a Tool with ordinary Tool outputs and artifact refs, and the choice of
+which Tool to use belongs to the Skill step/runtime policy, not the Tool
+registry.
 
 Skill side-effect metadata may contribute a normalized Required Capability
 without becoming an authorization grant itself. Specifically,
 `sideEffect.kind: enqueue_children` derives `execution.fanout` during backend
-normalization. Policy must authorize and materialize the scoped runtime
+normalization. Policy authorizes and materializes the scoped runtime
 capability before launch; the Skill author and operator do not manage a separate
 permission checkbox. See
 [Required Capabilities](../Workflows/RequiredCapabilities.md#75-executionfanout).
@@ -1296,8 +676,8 @@ never receive inferred broader permissions. Retained work remains available.
 Generic Omnigent plans compose the selected resolved Skill metadata and authored
 action declarations through this same canonical reader before freezing
 collaboration authority. At credential use, the current agent's required actions
-must remain within that frozen snapshot; the current connection and assignment
-must still admit its full operation set. Source reads, trusted native review,
+have to remain within that frozen snapshot, and the current connection and
+assignment have to still admit its full operation set. Source reads, trusted native review,
 and publisher destination operations retain their distinct roles. Conflicting
 workspace and runtime repository projections fail before credentials or host
 mutation; equivalent GitHub slug/URL spellings retain one canonical target for
@@ -1308,217 +688,37 @@ preflight and publication.
 
 ## 18. Security and Trust
 
-### 18.1 Untrusted Content
-
-Repo and local-only Skills are potentially untrusted input.
-
-MoonMind must not assume Skill content is safe because it lives in a workspace.
-
-### 18.2 Secret Handling
-
-Skill bodies must not contain secrets.
-
-MoonMind must not:
-
-1. encourage secret storage in Skills,
-2. log full Skill bodies by default,
-3. materialize raw credentials into Skill manifests,
-4. pass secrets through Skill content for convenience.
-
-### 18.3 Policy Enforcement
-
-Deployments may require or restrict:
-
-1. source kinds,
-2. specific Skills,
-3. specific SkillSets,
-4. runtimes,
-5. Tool availability,
-6. approval modes,
-7. autonomy levels,
-8. local-only overlays.
-
-### 18.4 Read-Only Active Bundles
-
-Managed runtime active bundles should be read-only where practical.
-
-The runtime must not mutate the active Skill bundle to change policy or record state.
+Repo and local-only Skills are potentially untrusted input; living in a
+workspace does not make Skill content safe. Skill bodies are not a place for
+secrets: MoonMind does not log full Skill bodies by default, materialize raw
+credentials into Skill manifests, or pass secrets through Skill content.
+Deployment policy gates Skills as described in §7.2. Managed runtime active
+bundles are read-only where practical, and the active bundle is not a place to
+change policy or record state.
 
 ---
 
 ## 19. Observability and Dashboard
 
-The dashboard should treat Skill context as first-class execution context.
-
-### 19.1 Submit-Time Visibility
-
-Operators should be able to see or select:
-
-1. primary Skill,
-2. SkillSets,
-3. explicit includes and excludes,
-4. materialization mode,
-5. whether repo overlays are enabled,
-6. whether local overlays are enabled,
-7. Tool availability for Skill steps,
-8. runtime compatibility warnings.
-
-### 19.2 Detail-Page Visibility
-
-Workflow and step detail should show:
-
-1. selected Skill step identity,
-2. resolved snapshot ID,
-3. selected Skill names and content evidence,
-4. source provenance,
-5. materialization mode,
-6. active visible path,
-7. backing store summary where relevant,
-8. activation summary,
-9. manifest or prompt-index artifact links,
-10. projection failures.
-
-### 19.3 Debug Visibility
-
-Advanced views may expose:
-
-1. raw `resolved_skillset_ref`,
-2. raw manifest refs,
-3. source traces,
-4. policy summaries,
-5. materialization metadata,
-6. adapter-specific compatibility links.
+The dashboard treats Skill context as first-class execution context. At submit
+time, operators can see or select the primary Skill, SkillSets, explicit
+includes and excludes, materialization mode, whether repo and local overlays
+are enabled, Tool availability, and runtime compatibility warnings. Workflow and
+step detail shows the Skill step identity, resolved snapshot ID, selected
+Skill names and content evidence, source provenance, materialization mode,
+active visible path, backing store summary, activation summary, manifest or
+prompt-index artifact links, and projection failures. Advanced views may expose
+raw `resolved_skillset_ref` and manifest refs, source traces, policy summaries,
+materialization metadata, and adapter-specific compatibility links.
 
 ---
 
 ## 20. Schedule, Rerun, and Replay Semantics
 
-### 20.1 Scheduled Work
-
-Scheduled work should store Skill intent at schedule creation.
-
-When a scheduled run starts, MoonMind resolves the actual `ResolvedSkillSet` unless the schedule explicitly carries a resolved snapshot ref.
-
-Snapshot reuse at schedule creation is an explicit mode, not the silent default.
-
-### 20.2 Reruns
-
-Default rerun behavior:
-
-1. reuse the original `ResolvedSkillSet`;
-2. do not silently re-resolve "latest" Skills;
-3. require explicit operator intent for re-resolution.
-
-### 20.3 Retries and Continue-as-New
-
-Retries and continue-as-new preserve the same resolved snapshot unless a new resolution action is explicitly requested.
-
----
-
-## 21. Validation and Test Requirements
-
-Minimum validation coverage:
-
-1. Skill step validates against Skill contract and runtime compatibility.
-2. Tool step and Skill step cannot be mixed in one step payload.
-3. Runtime commands cannot be added to `ResolvedSkillSet`.
-4. Missing required Skill fails before runtime launch.
-5. Forbidden source kind fails during resolution.
-6. Unknown Skill name fails during resolution.
-7. Local-only Skill use is policy-gated.
-8. Selected Tools in a Skill step are policy-gated.
-9. Rerun uses original snapshot by default.
-
-Minimum managed-runtime materialization coverage:
-
-1. one-Skill active projection at `.agents/skills`;
-2. multi-Skill active projection at `.agents/skills`;
-3. only selected Skills appear in the active projection;
-4. `_manifest.json` is present and matches the resolved snapshot;
-5. checked-in `.agents/skills` can be an input without being rewritten;
-6. `.agents/skills/local` remains an input overlay, not the active projection;
-7. incompatible `.agents` or `.agents/skills` fails before runtime launch;
-8. activation summary is included inline;
-9. full Skill bodies are on disk or artifact-backed storage, not duplicated inline;
-10. retries and reruns preserve snapshot identity.
-
----
-
-## 22. Documentation Boundaries and Cleanup
-
-This document should be the single canonical desired-state document for the Agent Skill System.
-
-Recommended doc cleanup:
-
-1. Keep this document at `docs/Steps/SkillSystem.md`.
-2. Replace `docs/Steps/SkillInjection.md` with a short redirect or remove it after references are updated.
-3. Keep `docs/Steps/StepTypes.md` as the canonical Step Type taxonomy.
-4. Keep `docs/Workflows/SkillAndPlanContracts.md` as the canonical Tool and Plan contract document.
-5. Update `SkillAndPlanContracts.md` to clearly mark `tool.type = "skill"` as legacy/internal terminology, not the product-facing Skill Step.
-6. Update any docs that say "Skill is a Tool" to instead say "Skill step may use Tools; Skills are agent-facing behavior/data."
-7. Put rollout work items, migration checklists, and implementation status in tracking artifacts under `docs/tmp/`, not in this canonical desired-state doc.
-
-Suggested redirect text for `docs/Steps/SkillInjection.md`:
-
-```markdown
-# Skill Injection
-
-Status: Superseded
-
-The desired-state skill injection contract has moved into
-`docs/Steps/SkillSystem.md`.
-
-Use `docs/Steps/SkillSystem.md` for:
-- runtime skill materialization,
-- `.agents/skills` path policy,
-- activation summaries,
-- active backing-store projection,
-- managed and external runtime skill delivery.
-
-This file is retained only for historical reference and should not be updated
-with new design decisions.
-```
-
----
-
-## 23. Locked Decisions
-
-1. Skills are separate from Tools.
-2. Skill steps are first-class executable Step Types.
-3. Agent skills are named instruction data with content-addressed evidence, not `ToolDefinition`s.
-4. Skill steps execute through agent-runtime orchestration, not direct Tool registry dispatch.
-5. A Skill step may use Tools internally under policy.
-6. Runtime commands are not Skills.
-7. Presets expand into concrete Tool and Skill steps before execution by default.
-8. The deployment-backed skill catalog is the authoritative managed storage model.
-9. Repo and local folders are valid inputs, not mutable runtime state.
-10. Every run or step uses an immutable `ResolvedSkillSet`.
-11. Workflows carry compact refs, not full Skill bodies.
-12. Managed runtimes use compact inline activation plus full active bundle on disk.
-13. `.agents/skills` is the canonical managed-runtime visible path.
-14. `.agents/skills/local` is the local-only overlay input path.
-15. MoonMind must not mutate checked-in Skill files during runtime materialization.
-16. Runtimes must not re-resolve or broaden Skills during execution.
-17. Reruns reuse the original resolved snapshot by default.
-18. Explicit re-resolution creates a new snapshot.
-19. Full Skill bodies, manifests, prompt indexes, and materialization bundles live outside workflow history.
-20. The dashboard surfaces Skill selection, resolution, provenance, and materialization as first-class execution context.
-
----
-
-## 24. Summary
-
-MoonMind should treat Skills as a first-class agent behavior and instruction system, distinct from typed executable Tools.
-
-The desired model is:
-
-1. users author Tool, Skill, or Preset steps;
-2. Skill steps select agent-facing behavior and context;
-3. reusable agent Skills are stored as named data with content-addressed evidence;
-4. workflow and step selectors resolve into immutable snapshots;
-5. managed runtimes receive compact activation instructions plus a full active bundle at `.agents/skills`;
-6. external runtimes receive equivalent snapshot-derived context through provider-compatible delivery;
-7. Tools remain governed operations that Skill steps may use under policy;
-8. provenance, replayability, auditability, and path semantics remain stable across runs.
-
-This gives MoonMind one declarative desired-state skill design without continuing to split core behavior across separate control-plane and injection documents.
+Scheduled work stores Skill intent at schedule creation and resolves the actual
+`ResolvedSkillSet` when each run starts, unless the schedule explicitly carries
+a resolved snapshot ref; snapshot reuse is an explicit mode, not the silent
+default. Reruns reuse the original `ResolvedSkillSet` and do not silently
+re-resolve "latest" Skills; re-resolution requires explicit operator intent.
+Retries and continue-as-new preserve the same snapshot unless a new resolution
+is explicitly requested.

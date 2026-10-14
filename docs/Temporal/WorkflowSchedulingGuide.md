@@ -1,7 +1,5 @@
 # Workflow Scheduling Guide
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 **Status:** Active
 **Owner:** MoonMind Platform
 **Last Updated:** 2026-03-30
@@ -191,7 +189,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 
 ### 5.1 Concept
 
-A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.UserWorkflow` workflow. (`MoonMind.ManifestIngest` was retired by MoonLadderStudios/MoonMind#4192: new launches are rejected; old rows stay readable as replay/drain evidence.)
+A one-time execution starts a single Temporal workflow and runs it through to completion. This is the standard path for ad-hoc workflow executions — the user submits a request and MoonMind starts a `MoonMind.UserWorkflow` workflow. (New `MoonMind.ManifestIngest` launches are rejected; old rows stay readable as replay/drain evidence.)
 
 ### 5.2 Backend: Starting a One-Time Workflow
 
@@ -226,7 +224,7 @@ POST /api/executions
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `workflowType` | `string` | Yes | `MoonMind.UserWorkflow` (`MoonMind.ManifestIngest` retired by #4192 and rejected) |
+| `workflowType` | `string` | Yes | `MoonMind.UserWorkflow` (`MoonMind.ManifestIngest` is rejected) |
 | `title` | `string` | No | Human-readable title for the execution |
 | `inputArtifactRef` | `string` | No | Reference to input artifact containing instructions |
 | `planArtifactRef` | `string` | No | Pre-computed plan artifact |

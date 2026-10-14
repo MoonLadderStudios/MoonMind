@@ -302,7 +302,7 @@ Key workflow roles include:
 - `MoonMind.ProviderProfileManager`: capacity and cooldown coordination;
 - `MoonMind.OAuthSession`: interactive authentication orchestration;
 - `MoonMind.ManagedSessionReconcile`: bounded session reconciliation;
-- merge automation workflows (`MoonMind.MergeAutomation`; manifest ingest retired by MoonLadderStudios/MoonMind#4192 — old rows readable as replay/drain evidence only).
+- merge automation workflows (`MoonMind.MergeAutomation`). There is no manifest-ingest workflow; existing manifest-ingest rows are readable only as replay/drain evidence.
 
 ### 4.2 Workflow versus Activity authority
 

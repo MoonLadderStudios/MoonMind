@@ -42,27 +42,15 @@ _CONTROLLER_REFRESH_PREFIX = "MOONMIND_CONTROLLER_REFRESH="
 
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
-_MAX_PUBLISHED_ANCESTOR_SEARCH = 20
 
-# Bounded wait for the fetched tip's in-flight image publish, tried before
-# selection falls back to a published ancestor so the exact requested commit
-# still wins when its publish is merely late. ~10 minutes covers normal
-# publish latency.
-_PULL_RETRY_INTERVAL_SECONDS = 30
-_PULL_RETRY_MAX_ATTEMPTS = 20
+# The update installs whatever the publish workflow last pushed to this
+# channel. It never selects, waits for, or verifies a particular commit.
+_RELEASE_CHANNEL = "latest"
 
 _URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
 )
-
-
-class DockerPullError(RuntimeError):
-    """A `docker pull` failure with a classified cause for retry decisions."""
-
-    def __init__(self, message, category):
-        super().__init__(message)
-        self.category = category
 
 
 class ControllerUnreachableError(RuntimeError):
@@ -137,10 +125,8 @@ _PULL_HINTS = {
         "with an account that can read the release repository and retry."
     ),
     "unpublished": (
-        "Hint: the fetched commit has no published image yet; check the "
-        "image publish workflow for that SHA, wait for it to publish, then "
-        "retry. Never substitute `latest` for the pinned sha-<commit> image; "
-        "for local development use --local-build instead."
+        "Hint: there is no published image under this tag; check the "
+        "--image-repository value and the image publish workflow, then retry."
     ),
 }
 
@@ -177,78 +163,13 @@ def run(args, *, cwd, env=None):
             message += f"\n{hint}"
         # Docker/Git diagnostics can contain registry or remote credentials,
         # so only the redacted form above is reported.
-        if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
-            raise DockerPullError(
-                message, _classify_pull_failure(combined.lower())
-            ) from None
-        raise RuntimeError(message)
+        raise RuntimeError(message) from None
     return (getattr(result, "stdout", "") or "").strip()
-
-
-def _select_release_image(*, repo, branch, tip_revision, image_repository):
-    """Select the newest published image on the fetched branch history.
-
-    The fetched tip is preferred: an unpublished pull failure means its publish
-    workflow is still running, so the tip is retried for a bounded interval
-    before selection falls back to its newest published first-parent ancestor.
-    Commits are immutable, so waiting cannot change which artifact a candidate
-    names. Auth, daemon and unknown failures propagate immediately instead of
-    masking a broken registry as an unpublished release.
-
-    Returns the selected ``(revision, image, skipped_unpublished)``.
-    """
-    try:
-        candidates = run(
-            [
-                "git",
-                "rev-list",
-                "--first-parent",
-                "-n",
-                str(_MAX_PUBLISHED_ANCESTOR_SEARCH),
-                tip_revision,
-            ],
-            cwd=repo,
-        ).split()
-    except RuntimeError:
-        candidates = []
-    if tip_revision not in candidates:
-        candidates = [tip_revision, *candidates]
-    skipped = []
-    last_error = None
-    for candidate in candidates:
-        image = f"{image_repository}:sha-{candidate}"
-        # Only the tip can still be publishing; older ancestors have settled.
-        attempts = _PULL_RETRY_MAX_ATTEMPTS if candidate == tip_revision else 1
-        for attempt in range(1, attempts + 1):
-            try:
-                run(["docker", "pull", image], cwd=repo)
-                return candidate, image, skipped
-            except DockerPullError as exc:
-                if exc.category != "unpublished":
-                    raise
-                last_error = exc
-            if attempt < attempts:
-                print(
-                    f"Published image {image} not yet available "
-                    f"(attempt {attempt}/{attempts}); waiting "
-                    f"{_PULL_RETRY_INTERVAL_SECONDS}s for the image publish "
-                    "workflow...",
-                    flush=True,
-                )
-                _sleep(_PULL_RETRY_INTERVAL_SECONDS)
-        skipped.append(candidate)
-    raise RuntimeError(
-        f"Published image {image_repository}:sha-{tip_revision} for "
-        f"origin/{branch} revision {tip_revision} is unavailable; checked "
-        f"{len(candidates)} commit(s) ({', '.join(skipped)}) with no published "
-        f"image; {last_error}"
-    ) from last_error
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--branch", default="main")
     parser.add_argument("--compose-project")
     parser.add_argument(
         "--operator-url",
@@ -321,47 +242,33 @@ def main(argv=None):
             )
             return 0
     else:
-        run(["git", "check-ref-format", "--branch", args.branch], cwd=repo)
+        image = f"{args.image_repository}:{_RELEASE_CHANNEL}"
         if args.dry_run:
             print(
                 json.dumps(
                     {
-                        "action": "qualify_and_promote_immutable_release",
+                        "action": "update_to_latest",
                         "repository": str(repo),
-                        "branch": args.branch,
                         "checkoutMutation": False,
-                        "imageSource": args.image_repository + ":sha-<fetched-commit>",
+                        "imageSource": image,
                     }
                 )
             )
             return 0
-        run(["git", "fetch", "origin", args.branch], cwd=repo)
-        tip_revision = run(
-            ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
-        )
-        revision, image, skipped_unpublished = _select_release_image(
-            repo=repo,
-            branch=args.branch,
-            tip_revision=tip_revision,
-            image_repository=args.image_repository,
-        )
-        if revision != tip_revision:
-            print(
-                f"Tip revision {tip_revision[:12]} has no published image yet; "
-                f"using newest published ancestor {revision[:12]} "
-                f"(skipped {len(skipped_unpublished)} unpublished commit(s))",
-                flush=True,
-            )
+        run(["docker", "pull", image], cwd=repo)
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
-        if (
-            observed.get("Config", {})
-            .get("Labels", {})
-            .get("org.opencontainers.image.revision")
-            != revision
-        ):
-            raise ValueError(
-                "The selected image does not contain the fetched source revision"
-            )
+        # The revision label only reports what `latest` was built from; it is
+        # never compared against the checkout or a branch.
+        revision = (
+            (observed.get("Config") or {}).get("Labels") or {}
+        ).get("org.opencontainers.image.revision") or ""
+        print(
+            f"Updating to {image}"
+            + (f" (built from {revision[:12]})" if revision else ""),
+            flush=True,
+        )
+        # Every service is recreated from the one image this pull resolved, so
+        # a publish that lands mid-update cannot split the stack.
         digests = [
             value
             for value in observed.get("RepoDigests", [])
@@ -369,7 +276,7 @@ def main(argv=None):
         ]
         if len(digests) != 1:
             raise ValueError(
-                "The selected image has no unique immutable repository digest"
+                f"The pulled {image} has no unique repository digest"
             )
         rendered = json.loads(
             run(["docker", "compose", "config", "--format", "json"], cwd=repo)
@@ -384,11 +291,8 @@ def main(argv=None):
                 "reference": digests[0].split("@", 1)[1],
             },
             "sourceRevision": revision,
-            "reason": "Update to selected branch snapshot",
+            "reason": "Update to latest",
         }
-        if revision != tip_revision:
-            inputs["requestedTipRevision"] = tip_revision
-            inputs["skippedUnpublishedRevisions"] = list(skipped_unpublished)
         record = {
             "repo": str(repo),
             "project": project,

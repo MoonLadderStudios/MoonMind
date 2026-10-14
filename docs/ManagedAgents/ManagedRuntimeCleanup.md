@@ -331,7 +331,7 @@ only copy of the work (`locally_retained_but_unsaved`). The janitor classifies
 it `protected_unsaved`, including in its rescan and under the claims lock,
 until the marker's `retainUntil`. That bound is fixed when the failure is first
 recorded, using `SAVED_WORK_UNSAVED_LOCAL_RETENTION` from the saved-work
-retention owner (#4017), and repeated failures do not extend it. A later
+retention owner, and repeated failures do not extend it. A later
 successful save clears the marker and returns the workspace to ordinary
 retention. If the marker cannot be written, cleanup stays pending instead of
 releasing anything.

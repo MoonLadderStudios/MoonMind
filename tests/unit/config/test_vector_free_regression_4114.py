@@ -750,7 +750,6 @@ def test_no_live_manifest_product_imports() -> None:
     )
     allowed_name_res = (
         re.compile(r"manifest_ingest_drain"),
-        re.compile(r"qdrant_cutover_rehearsal"),
         re.compile(r"test_vector_free_regression_4114"),
         re.compile(r"test_manifest_retirement_qualification_4193"),
         re.compile(r"test_manifest_ingest_drain"),

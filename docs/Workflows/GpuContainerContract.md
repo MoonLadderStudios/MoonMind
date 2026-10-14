@@ -7,7 +7,7 @@
 **Authority:** Target semantics for caller-supplied GPU containers on MoonMind's container boundaries
 **Owning Surface:** moonmind/workloads/, moonmind/schemas/container_job_models.py
 **Related Docs:** [Skill and Plan Contracts](SkillAndPlanContracts.md), [Workflow Architecture](WorkflowArchitecture.md)
-**Related Implementation:** `moonmind/workloads/gpu.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/schemas/container_job_models.py`, `moonmind/workflows/temporal/container_job_backend.py` (MoonLadderStudios/MoonMind#3777, MoonLadderStudios/MoonMind#3779)
+**Related Implementation:** `moonmind/workloads/gpu.py`, `moonmind/workloads/docker_launcher.py`, `moonmind/schemas/container_job_models.py`, `moonmind/workflows/temporal/container_job_backend.py`
 
 MoonMind executes a caller-supplied NVIDIA GPU container through the same
 container boundaries it uses for every other container. The GPU is a resource
@@ -70,7 +70,7 @@ artifact interpretation are carried across unmodified.
 | `resources.gpu` | `spec.resources.gpu` | The identical `WorkloadGpuRequest`; no translation |
 | `image` | `spec.image` | Unchanged caller-owned reference |
 | `command` / `entrypoint` | `spec.command` / `spec.entrypoint` | Unchanged argv |
-| `repoDir` / `artifactsDir` / `scratchDir` (absolute host paths) | `spec.workspaceRef` (a logical #3147 locator) plus `spec.workdir` | The caller stops naming host paths; the workspace is mounted at `/workspace` |
+| `repoDir` / `artifactsDir` / `scratchDir` (absolute host paths) | `spec.workspaceRef` (a logical workspace locator) plus `spec.workdir` | The caller stops naming host paths; the workspace is mounted at `/workspace` |
 | `declaredOutputs` (class to relative path) | `spec.outputs` (name and `relativePath`) | Same relative paths, resolved under the job workspace |
 | `cacheMounts` (named volume plus target) | `spec.caches` (`cacheRef` plus target) | The deployment owns the volume; the caller names an approved cache ref |
 | `envOverrides` | `spec.environment` | Sensitive values move to `secretRef` |

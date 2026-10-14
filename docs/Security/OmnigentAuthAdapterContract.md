@@ -9,16 +9,11 @@
 **Authority:** Predecessor application-account adapter reference for code and
 releases that still use its identity and session mechanisms. The
 [single-user application model](../MoonMindArchitecture.md#single-user-application-model)
-governs the target architecture. This reference records the interfaces qualified
-under MoonLadderStudios/MoonMind#4118 (parent epic #4116, depends on
-#4117, plan coverage K2 in `../tmp/KeycloakRemovalPlan.md`).
+governs the target architecture. This reference records the qualified interfaces.
 **Owning Surface:** `moonmind/security/omnigent_auth_qualification.py`,
 conformance fixtures in `tests/unit/security/test_omnigent_auth_qualification_4118.py`
 **Related Docs:** [AuthenticationContracts.md](./AuthenticationContracts.md)
-(predecessor modes, identity, session, and error semantics),
-[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal;
-starting evidence only), [KeycloakRemovalQualification-4118.md](../tmp/KeycloakRemovalQualification-4118.md)
-(pin, artifact identities, and test results for this qualification)
+(predecessor modes, identity, session, and error semantics)
 
 > [!IMPORTANT]
 > This adapter's application-account target is superseded by the
@@ -36,9 +31,6 @@ starting evidence only), [KeycloakRemovalQualification-4118.md](../tmp/KeycloakR
 > runtime-token separation, and in-flight work remain governed by their owning
 > contracts. Reusable signing or verification primitives may survive for those
 > purposes without retaining this application-account adapter.
->
-> Rollout sequencing and qualification evidence remain in issues, `docs/tmp/`,
-> or run-local artifacts.
 
 ---
 
@@ -117,8 +109,7 @@ before any MoonMind session is minted:
 The `AsyncAccountStore` protocol is async-safe: no synchronous remote
 database work blocks the API event loop, and no parallel account/admin
 tables are initialized. Production wiring uses existing MoonMind
-transactions and profile authority through adapters (K3/K4 own the
-concrete wiring). Password hashes must be qualified argon2; missing or
+transactions and profile authority through adapters. Password hashes must be qualified argon2; missing or
 foreign hashes take the controlled enrollment/reset path, never a
 silent compatibility assumption.
 

@@ -5,10 +5,6 @@ Document Class: System / Feature Design View
 Owners: MoonMind Platform
 Last updated: 2026-08-18
 
-**Issue:** [MoonLadderStudios/MoonMind#3703](https://github.com/MoonLadderStudios/MoonMind/issues/3703) ([Omnigent control plane 2/11]).
-
-**Implementation tracking:** rollout notes and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not in this canonical design document.
-
 ## Related docs
 
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
@@ -20,8 +16,8 @@ carries Workflow/run/Step/AgentRun identity, request idempotency, provider
 session and host identity, Provider Profile and host-lease authority, chat-binding
 identity, session lifecycle status, first-message submission state, and broad
 mutable metadata. This conflates one logical provider session with every
-request, turn, continuation, and cleanup attempt against it. #3685 documents a
-production shape where seven bridge rows and chat bindings pointed at one
+request, turn, continuation, and cleanup attempt against it. In one observed
+production shape, seven bridge rows and chat bindings pointed at one
 provider session, and a newer continuation row could become terminal and
 supersede the real canonical chat authority while the provider session was still
 active.
@@ -97,6 +93,5 @@ repeat apply produce the same plan and leave the same rows.
 ## Non-goals
 
 - The dedicated session Temporal workflow.
-- The native Omnigent SPA work owned by #3685.
-- Deleting legacy tables or code before the migration/rollout issue authorizes
-  retirement.
+- The native Omnigent SPA work.
+- Deleting legacy tables or code.

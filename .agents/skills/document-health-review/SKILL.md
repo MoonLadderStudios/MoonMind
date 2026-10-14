@@ -204,7 +204,7 @@ When the repository carries `docs/DocumentationArchitecture.md`, report the foll
 - `imperative_leakage`: migration, rollout, checklist, or status content is the primary framing of a canonical doc.
 - `unverifiable_claim`: a canonical fact cannot be supported by repository evidence or cited owning docs.
 
-If the finding implies broad cleanup across multiple documents, recommend a bounded improvement plan under `docs/tmp/` instead of direct canonical edits.
+If the finding implies broad cleanup across multiple documents, recommend a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) instead of direct canonical edits.
 
 ### D. Strategy simplification
 
@@ -278,7 +278,7 @@ Reference docs in target directory:
 Required reference updates:
 ```
 
-If a document is temporary or obsolete, recommend `docs/tmp/` (or `Docs/tmp/`), an `archive/` location, or deletion depending on the repo convention. In MoonMind, migration/rollout/MoonSpec execution notes belong under `docs/tmp/`, never as the main framing of a canonical doc.
+If a document is temporary or obsolete, recommend deletion; git history keeps it. In MoonMind, migration, rollout, and execution notes belong in PR descriptions or gitignored run artifacts, never in `docs/`.
 
 ## Non-Goals
 
@@ -299,7 +299,7 @@ mapping cleanly to code
 risk
 ```
 
-Some may surface incidentally when needed to answer a selected question (for example, "this reads like a temporary plan and should move to docs/tmp"), but never run a full classification process for them. The authority, metadata, and rationale checks required by section C / C.1 are the bounded exception: analyzing claim ownership, metadata completeness, and embedded rationale there does not open a general ownership or rationale review. Keep this skill narrower than a general high-level review: do not run roadmap, matrix, or game-design-document reviews unless the user configures such a document as canonical for the repo.
+Some may surface incidentally when needed to answer a selected question (for example, "this reads like a temporary plan and should be removed from docs/"), but never run a full classification process for them. The authority, metadata, and rationale checks required by section C / C.1 are the bounded exception: analyzing claim ownership, metadata completeness, and embedded rationale there does not open a general ownership or rationale review. Keep this skill narrower than a general high-level review: do not run roadmap, matrix, or game-design-document reviews unless the user configures such a document as canonical for the repo.
 
 ## Canonical Reference Discovery
 

@@ -151,13 +151,13 @@ Update acceptance only establishes `accepted`: request, acceptance,
 safe-point completion, and unavailable/partial outcomes are distinct, and
 acceptance counts must not be upgraded into safe-point evidence.
 
-- Durable per-target operation-result tracking (retries across restarts,
-  long-lived outcome records beyond the audit row) continues in #3953. This
-  document describes today's fan-out and its partial/unknown limits:
+- There is no durable per-target operation-result tracking (retries across
+  restarts, long-lived outcome records beyond the audit row). This document
+  describes the current fan-out and its partial/unknown limits:
   enumeration covers only running `MoonMind.UserWorkflow` executions, server
   Batch Operations are not used, and Update acceptance never proves a safe
   paused state.
 - The per-workflow-type Pause/Resume/Query protocol table lives in
   `WorkflowTypeCatalogAndLifecycle.md` §6.2.
 - Queue/worker inventory derivation lives in
-  `ActivityCatalogAndWorkerTopology.md` §4 (generated catalogs in #3959).
+  `ActivityCatalogAndWorkerTopology.md` §4 and the generated catalogs.

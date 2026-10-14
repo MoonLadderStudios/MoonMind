@@ -52,7 +52,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-align",
             "moonspec-implement",
             "moonspec-verify",
-            "moonspec-doc-reconcile",
         ]
         seeded_step_titles = [step["title"] for step in template.steps]
         assert "Classify request and resume point" not in seeded_step_titles
@@ -158,10 +157,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "moonspec-verify" in jira_orchestrate_steps
         assert jira_orchestrate_steps[-1] == "jira-issue-updater"
         assert "moonspec-assess" in jira_orchestrate_steps
-        assert len(jira_orchestrate_steps) == 15
+        assert len(jira_orchestrate_steps) == 14
         assert jira_orchestrate_steps.count("moonspec-implement") == 1
         assert jira_orchestrate_steps.count("moonspec-verify") == 1
-        assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
         jira_orchestrate_titles = [
             step["title"] for step in jira_orchestrate_template.steps
         ]
@@ -214,33 +212,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             (step.get("annotations") or {}).get("moonSpecRemediationAttempt")
             for step in jira_orchestrate_template.steps
         )
-        doc_reconcile_step = next(
-            step
-            for step in jira_orchestrate_template.steps
-            if step["title"] == "Reconcile declarative docs"
-        )
-        assert doc_reconcile_step["skill"]["id"] == "moonspec-doc-reconcile"
-        assert doc_reconcile_step["annotations"] == {
-            "jiraOrchestrateRole": "doc-reconciliation"
-        }
-        assert "FULLY_IMPLEMENTED" in doc_reconcile_step["instructions"]
-        assert "starting authority candidate" in doc_reconcile_step["instructions"]
-        assert "authority ladder and module-owned contract policy" in doc_reconcile_step[
-            "instructions"
-        ]
-        assert "owning canonical doc may be different" in doc_reconcile_step[
-            "instructions"
-        ]
-        assert "ownership is ambiguous" in doc_reconcile_step["instructions"]
-        assert "updated, noUpdateRequired, escalated" in doc_reconcile_step[
-            "instructions"
-        ]
-        assert "artifacts/jira-orchestrate-doc-reconcile.json" in doc_reconcile_step[
-            "instructions"
-        ]
-        doc_reconcile_index = jira_orchestrate_template.steps.index(
-            doc_reconcile_step
-        )
         pr_step = next(
             step
             for step in jira_orchestrate_template.steps
@@ -248,10 +219,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert (
             jira_orchestrate_template.steps.index(pr_step)
-            == doc_reconcile_index + 1
+            == jira_orchestrate_template.steps.index(remediation_step) + 1
         )
         assert "pull request" in pr_step["instructions"]
-        assert "doc reconciliation outcome" in pr_step["instructions"]
         assert "controlling moonspec-verify" in pr_step["instructions"]
         assert "parent workflow must use the pull request URL" in pr_step["instructions"]
         assert "explicit PR-publication step" in pr_step["instructions"]
@@ -261,7 +231,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "canonical sources" in pr_step["instructions"]
         assert "temporary artifacts consulted" in pr_step["instructions"]
         assert "claim coverage" in pr_step["instructions"]
-        assert "reconciliation outcomes" in pr_step["instructions"]
         assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
         code_review_step = next(
             step
@@ -297,7 +266,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         ]
         assert "Verify completion" not in no_verify_orchestrate_titles
         assert "Remediation loop controller" not in no_verify_orchestrate_titles
-        assert "Reconcile declarative docs" not in no_verify_orchestrate_titles
         assert "moonspec-verify" not in no_verify_orchestrate_skill_ids
         assert "Implement the task breakdown" in no_verify_orchestrate_titles
         assert "Create pull request" in no_verify_orchestrate_titles
@@ -840,7 +808,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert doc_author_template.steps[0]["type"] == "skill"
         assert doc_author_template.steps[0]["skill"]["id"] == "document-author"
         assert "Do not create spec.md" in doc_author_template.steps[0]["instructions"]
-        assert "docs/tmp/" in doc_author_template.steps[0]["instructions"]
 
         result = await session.execute(
             select(Preset)

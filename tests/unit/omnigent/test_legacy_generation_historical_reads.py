@@ -40,7 +40,7 @@ CLAUDE_COMPAT_PROFILE = "moonmind.claude_direct_compat.v1"
 PROFILE_BOUND_REALIZER = "codex-profile-bound@1"
 GENERIC_REALIZER = "generic-omnigent-host@1"
 
-# The launch modules a removal stage eventually deletes. Historical reads must
+# The launch modules that are eventually deleted. Historical reads must
 # not depend on any of them.
 LEGACY_LAUNCH_MODULES = (
     "moonmind.omnigent.oauth_host_runtime",
@@ -365,7 +365,7 @@ async def test_historical_projection_protects_provider_and_credential_authority(
 async def test_reads_do_not_import_legacy_launch_modules(
     store, launch_code_unavailable
 ) -> None:
-    """The read path must not pull in launch code that a removal stage deletes."""
+    """The read path must not pull in launch code that is eventually deleted."""
 
     bridge_session_id = await _seed_profile_bound(store)
     page = await store.list_event_page(bridge_session_id, after=0, limit=100)

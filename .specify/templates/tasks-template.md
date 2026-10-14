@@ -151,7 +151,6 @@ Examples of foundational tasks (include only what the story truly depends on):
 - [ ] TXXX Security hardening for CLAIM-003 in src/[location]/[file].py
 - [ ] TXXX Run quickstart.md validation (No source claim applies: validation task)
 - [ ] TXXX Run `/moonspec.verify` to validate the final implementation against the original feature request and Source Packet claims (No source claim applies: validation task)
-- [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/ (No source claim applies: documentation reconciliation task)
 
 ---
 

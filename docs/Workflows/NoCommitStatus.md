@@ -138,7 +138,7 @@ Colors and coarse groupings remain owned by WorkflowStatusColorSemantics. A succ
 
 ## 9. Backward compatibility
 
-MM-1073 established the canonical no_commit/NO_COMMIT model; MM-1082 bounds remaining alias quarantine and repair.
+`no_commit`/`NO_COMMIT` is the canonical model. Legacy aliases are quarantined to the bounded readers below:
 
 ```text
 LEGACY_WORKFLOW_STATE_ALIASES:

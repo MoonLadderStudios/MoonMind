@@ -6,12 +6,10 @@
 **Last Updated:** 2026-09-07
 
 > [!NOTE]
-> This document defines the desired-state per-run governance report contract
-> (MoonMind#3969, child of #3930). It is a declarative contract for what one
-> inspectable report per run contains, where each field comes from, and what
-> the report explicitly does not claim. Rollout and backlog notes live under
-> `docs/tmp/` or in gitignored local-only handoffs, not as migration
-> checklists in this file.
+> This document defines the desired-state per-run governance report contract.
+> It is a declarative contract for what one inspectable report per run
+> contains, where each field comes from, and what the report explicitly does
+> not claim.
 
 ## 1. Summary
 
@@ -82,7 +80,7 @@ interpretable after host removal or profile rotation: they reference evidence
 as observed at the cutoff, expose no current credentials, and never claim
 unresolved cleanup succeeded.
 
-Current availability (MoonMind#3930): when the workflow records its terminal
+Current availability: when the workflow records its terminal
 state (`TemporalExecutionService.record_terminal_state`), the execution service
 (`_attach_terminal_governance_report`) finalizes the report without a store and
 keeps only a summary block (report id, status, generation status, evidence

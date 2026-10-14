@@ -1,8 +1,5 @@
 # Omnigent fault-injection provider and model-based reliability suite
 
-Source issue: MoonLadderStudios/MoonMind#3709
-([Omnigent control plane 8/11]).
-
 This document describes the desired state of the programmable fault-injection
 provider and the model-based reliability suite that proves Omnigent lifecycle
 invariants under dropped, duplicated, delayed, reordered, ambiguous, and
@@ -181,13 +178,13 @@ replay corpus.
   - **Exact-image** — `tools/omnigent_faultlab/image_smoke.py` runs a bounded
     deterministic fault matrix. The faultlab harness is test-only tooling under
     `tools/` and is absent from the production `moonmind` package and deployable
-    image (MoonLadderStudios/MoonMind#3958). The `omnigent-fault-image-smoke`
+    image. The `omnigent-fault-image-smoke`
     workflow mounts only the checkout's `tools/` at `/src/tools` and runs
     `python -m tools.omnigent_faultlab.image_smoke` *inside* the deployable API
     and worker images with `PYTHONPATH=/app:/src` — production modules resolve
     from the image's own `/app` install while the harness resolves from the
     mount (`tools/run_omnigent_fault_image_smoke.py` is only a local wrapper) —
-    so image authority drift (#3694) fails the smoke. The image is the
+    so image authority drift fails the smoke. The image is the
     dispatched `app_image` or the `MOONMIND_APP_IMAGE` repository variable;
     without either, the workflow pins the digest of the app image published
     for the checked-out commit (`sha-<commit>`), waiting a bounded time for an

@@ -68,7 +68,7 @@ HISTORY_TAIL_SCAN_LIMIT = 200
 # genuinely spent and an operator decides.
 RECOVERY_OWNER = "provider-profile-manager-recovery"
 RECOVERY_RUNBOOK = (
-    "docs/Security/ProviderProfiles.md#119-wedged-singleton-recovery-4363"
+    "docs/Security/ProviderProfiles.md#97-wedged-singleton-recovery"
 )
 
 # Visibility query that enumerates the manager singletons without touching

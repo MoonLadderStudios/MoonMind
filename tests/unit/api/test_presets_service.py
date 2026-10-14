@@ -3083,7 +3083,6 @@ async def test_seed_catalog_includes_document_author_preset(tmp_path):
             assert "docs/Workflows/" in step["instructions"]
             assert "MM-931 from MM-927" in step["instructions"]
             assert "Do not create spec.md" in step["instructions"]
-            assert "docs/tmp/" in step["instructions"]
 
 async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,
@@ -3412,7 +3411,6 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "moonspec-implement",
                 "moonspec-verify",
                 "auto",
-                "moonspec-doc-reconcile",
                 "auto",
                 "jira-issue-updater",
             ]
@@ -3431,7 +3429,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 context={},
             )
 
-            assert len(expanded["steps"]) == 15
+            assert len(expanded["steps"]) == 14
             assert expanded["steps"][0]["title"] == "Check Jira blockers before implementation"
             assert expanded["steps"][0]["type"] == "tool"
             assert expanded["steps"][0]["tool"]["id"] == "jira.check_blockers"
@@ -3496,61 +3494,41 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert expanded["steps"][11]["annotations"]["remediationLoop"][
                 "remediationTool"
             ]["inputs"]["selectedSkill"] == "moonspec-implement"
-            assert expanded["steps"][12]["title"] == "Reconcile declarative docs"
+            assert expanded["steps"][12]["title"] == "Create pull request"
             assert expanded["steps"][12]["annotations"] == {
-                "jiraOrchestrateRole": "doc-reconciliation"
-            }
-            assert expanded["steps"][12]["skill"]["id"] == "moonspec-doc-reconcile"
-            assert "FULLY_IMPLEMENTED" in expanded["steps"][12]["instructions"]
-            assert "no_update_required" in expanded["steps"][12]["instructions"]
-            assert "Source Document Drift" in expanded["steps"][12]["instructions"]
-            assert "artifacts/jira-orchestrate-doc-reconcile.json" in expanded[
-                "steps"
-            ][12]["instructions"]
-            assert "Escalation does not block pull request creation" in expanded[
-                "steps"
-            ][12]["instructions"]
-            assert "Do not commit, push, or create a pull request" in expanded[
-                "steps"
-            ][12]["instructions"]
-            assert expanded["steps"][13]["title"] == "Create pull request"
-            assert expanded["steps"][13]["annotations"] == {
                 "jiraOrchestrateRole": "pull-request-handoff"
             }
-            assert "controlling moonspec-verify" in expanded["steps"][13][
+            assert "controlling moonspec-verify" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "pull request title must include MM-328" in expanded["steps"][13][
+            assert "pull request title must include MM-328" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "parent workflow must use the pull request URL" in expanded["steps"][13][
+            assert "parent workflow must use the pull request URL" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "explicit PR-publication step" in expanded["steps"][13][
+            assert "explicit PR-publication step" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "controlling instruction for this step only" in expanded["steps"][13][
+            assert "controlling instruction for this step only" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "merge automation" in expanded["steps"][13]["instructions"]
-            assert "non-draft pull request" in expanded["steps"][13]["instructions"]
-            assert "isDraft value is false" in expanded["steps"][13]["instructions"]
-            assert "confirmed non-draft" in expanded["steps"][13]["instructions"]
-            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][13][
+            assert "merge automation" in expanded["steps"][12]["instructions"]
+            assert "non-draft pull request" in expanded["steps"][12]["instructions"]
+            assert "isDraft value is false" in expanded["steps"][12]["instructions"]
+            assert "confirmed non-draft" in expanded["steps"][12]["instructions"]
+            assert "artifacts/jira-orchestrate-pr.json" in expanded["steps"][12][
                 "instructions"
             ]
-            assert "doc reconciliation outcome" in expanded["steps"][13][
-                "instructions"
-            ]
-            assert expanded["steps"][14]["skill"]["id"] == "jira-issue-updater"
-            assert expanded["steps"][14]["annotations"] == {
+            assert expanded["steps"][13]["skill"]["id"] == "jira-issue-updater"
+            assert expanded["steps"][13]["annotations"] == {
                 "jiraOrchestrateRole": "code-review-handoff"
             }
-            assert "pull_request_url" in expanded["steps"][14]["instructions"]
-            assert "stop without changing Jira" in expanded["steps"][14][
+            assert "pull_request_url" in expanded["steps"][13]["instructions"]
+            assert "stop without changing Jira" in expanded["steps"][13][
                 "instructions"
             ]
-            assert "status Review" in expanded["steps"][14]["instructions"]
+            assert "status Review" in expanded["steps"][13]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]
@@ -4032,7 +4010,6 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "Implement the task breakdown",
         "Verify completion",
         "Remediation loop controller",
-        "Reconcile declarative docs",
         "Create pull request",
         "Finalize GitHub issue status",
     ]
@@ -4056,8 +4033,8 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "mode": "start",
         "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
     }
-    assert expanded["steps"][15]["tool"]["id"] == "github.update_issue_status"
-    assert expanded["steps"][15]["tool"]["inputs"] == {
+    assert expanded["steps"][14]["tool"]["id"] == "github.update_issue_status"
+    assert expanded["steps"][14]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "mode": "finalize_after_pr_or_done",
@@ -4075,21 +4052,14 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "var/artifacts/moonspec-verify/github-issue-orchestrate.json"
     )
     assert expanded["steps"][13]["annotations"] == {
-        "jiraOrchestrateRole": "doc-reconciliation"
-    }
-    assert expanded["steps"][14]["annotations"] == {
         "jiraOrchestrateRole": "pull-request-handoff"
     }
-    assert expanded["steps"][15]["annotations"] == {
+    assert expanded["steps"][14]["annotations"] == {
         "jiraOrchestrateRole": "code-review-handoff"
     }
-    assert "If the latest verdict is not FULLY_IMPLEMENTED" in expanded["steps"][13][
-        "instructions"
-    ]
     assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
-        14
+        13
     ]["instructions"]
-    assert "skip doc reconciliation" in expanded["steps"][13]["instructions"]
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-orchestrate",
         "issue-implement-assessment",
@@ -4437,15 +4407,13 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 "moonspec-align",
                 "moonspec-implement",
                 "moonspec-verify",
-                "moonspec-doc-reconcile",
             ]
             step_titles = [step["title"] for step in template.steps]
             assert (
                 "Return orchestration report and defer publish actions"
                 not in step_titles
             )
-            assert step_titles[-2] == "Verify completion"
-            assert step_titles[-1] == "Reconcile declarative docs"
+            assert step_titles[-1] == "Verify completion"
             template_payload = await service.get_template(
                 slug="moonspec-orchestrate",
                 scope="global",
@@ -4485,7 +4453,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 context={},
             )
 
-            assert len(expanded["steps"]) == 8
+            assert len(expanded["steps"]) == 7
             assert (
                 expanded["appliedTemplate"]["inputs"]["orchestration_mode"]
                 == "runtime"
@@ -4494,17 +4462,8 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert "runtime implementation workflow" in expanded["steps"][0][
                 "instructions"
             ]
-            assert expanded["steps"][-2]["title"] == "Verify completion"
-            assert "moonspec-verify" == expanded["steps"][-2]["skill"]["id"]
-            assert expanded["steps"][-1]["title"] == "Reconcile declarative docs"
-            assert "moonspec-doc-reconcile" == expanded["steps"][-1]["skill"]["id"]
-            assert "at least one canonical source candidate exists" in expanded[
-                "steps"
-            ][-1]["instructions"]
-            assert "orchestration step provides a source design path under docs/" in expanded[
-                "steps"
-            ][-1]["instructions"]
-            assert "no_update_required" in expanded["steps"][-1]["instructions"]
+            assert expanded["steps"][-1]["title"] == "Verify completion"
+            assert "moonspec-verify" == expanded["steps"][-1]["skill"]["id"]
             assert all(
                 step["title"] != "Return orchestration report and defer publish actions"
                 for step in expanded["steps"]
@@ -4529,9 +4488,9 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 },
                 context={},
             )
-            assert "source design path: docs/Designs/RuntimeTypes.md" in expanded_with_source_design[
-                "steps"
-            ][-1]["instructions"]
+            assert "Source design path (optional): docs/Designs/RuntimeTypes.md" in (
+                expanded_with_source_design["steps"][0]["instructions"]
+            )
 
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"

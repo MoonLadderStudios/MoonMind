@@ -242,19 +242,24 @@ Quickstart guidance:
 
 ## Agent Context
 
-After Phase 1 artifacts are generated and `plan.md` is updated, run the agent context update script:
+Keep feature technology and status in `plan.md`. Routine planning must not change
+lasting repository guidance. The agent context script is a no-op by default.
+
+Only when the user explicitly requests a lasting guidance edit, run:
 
 ```bash
-.specify/scripts/bash/update-agent-context.sh __AGENT__
+.specify/scripts/bash/update-agent-context.sh --write __AGENT__
 ```
 
-Replace `__AGENT__` with the active integration key when known. If unknown, run the script without an agent argument so it updates existing agent files.
+Replace `__AGENT__` with the active integration key when known. If unknown, omit
+the agent argument to update existing agent files. The `--write` flag records the
+explicit request; it is not a routine planning prerequisite.
 
-The script should:
-
-- Parse the current `plan.md`
-- Add only new technology from the current plan
-- Preserve manual additions between managed markers
+An authorized update must preserve manual additions, symlink targets and existing
+file permissions. The script never creates or updates `AGENTS.md` from plan data, including through
+an alias. Any explicitly requested repository-policy edit belongs in a separate,
+intentional guidance change; a plan template cannot supply that policy. Report any update failure rather than claiming the
+context was recorded.
 
 ## Stop Point
 

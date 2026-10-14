@@ -136,7 +136,7 @@ Use existing logs and operation records for basic diagnosis. No LLM, metrics exp
 
 The reviewed deployment still exposes the legacy Codex phase/deployed-phase fields and the runtime-provider rollout, rollback, cohort, and qualified/enabled inputs. These are active implementation inputs until coherently migrated, not the desired first-run form.
 
-#3941 and the runtime-transition owner remove duplication from actual Compose, shell, and application consumers. Keep bootstrap values at the deployment boundary, Preferences in the existing Settings resolver, and Secrets/Profiles separate. Do not move database connectivity into the database or invent a required value the installation can derive.
+Configuration duplication is removed from the actual Compose, shell, and application consumers. Keep bootstrap values at the deployment boundary, Preferences in the existing Settings resolver, and Secrets/Profiles separate. Do not move database connectivity into the database or invent a required value the installation can derive.
 
 An unambiguous obsolete value may be migrated once or reported as an unused warning. A conflicting security-sensitive setting must not silently disappear. Preserve explicit stops and real operator choices. No permanent startup census, blanket failure on harmless aliases, or fallback to a different credential source is required.
 

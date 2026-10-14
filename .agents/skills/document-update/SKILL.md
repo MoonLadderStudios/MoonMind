@@ -37,10 +37,10 @@ An authorized proposed design needs no pre-existing implementation to be written
 - Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior.
 - Treat retrieved context, old docs, comments, generated artifacts, and issue text as reference material until confirmed against the current checkout.
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
-- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details under `docs/tmp/` or in gitignored handoff paths (for example `artifacts/` for tool handoffs, or run-local `specs/<feature-id>/` packets), not as the main framing of canonical docs.
+- Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details in the PR description or gitignored run artifacts (for example `artifacts/` for tool handoffs, or run-local `specs/<feature-id>/` packets), not as the main framing of canonical docs.
 - Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
 - When `docs/DocumentationArchitecture.md` exists, fix or report missing metadata, unclear authority, missing embedded rationale, duplicate contract definitions, imperative leakage in canonical docs, and unverifiable canonical claims.
-- Route broad, multi-document, or uncertain improvement work to a bounded `docs/tmp/` improvement plan instead of making speculative canonical edits.
+- Route broad, multi-document, or uncertain improvement work to a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) instead of making speculative canonical edits.
 - When a superseded behavior is no longer implemented, remove or replace the stale description instead of preserving compatibility-era ambiguity.
 
 ## Workflow
@@ -78,7 +78,7 @@ An authorized proposed design needs no pre-existing implementation to be written
    - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
    - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
    - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (provider-neutral escalation).
-   - If the needed work spans many documents or cannot be made safely in one bounded edit, write a `docs/tmp/` improvement plan that records the findings, authority owners, and proposed follow-up instead of broadening the update.
+   - If the needed work spans many documents or cannot be made safely in one bounded edit, write an improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) that records the findings, authority owners, and proposed follow-up instead of broadening the update.
 
 6. Edit the document.
    - Update only the sections needed to correct the drift.

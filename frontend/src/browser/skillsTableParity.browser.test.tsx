@@ -1,4 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
+
+import { DashboardApp } from '../entrypoints/dashboard-app';
+import { navigateTo } from '../lib/navigation';
+import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 
 import '../styles/dashboard.css';
 
@@ -11,97 +16,35 @@ import '../styles/dashboard.css';
 // invariants are asserted against computed styles and bounding boxes in a real
 // browser (Chromium and Firefox via `npm run ui:test:browser`).
 //
-// The harness mirrors the production chrome rendered by
-// `frontend/src/entrypoints/skills.tsx` (CollectionWorkspace with
-// `skills-catalog-page` + `skills-catalog-primary`) and `DataTable`
-// (`.data-table-slab` > `table.data-table` with sticky headers). The default
-// browser viewport is 1280x800, which satisfies the issue's desktop check
-// above the 1181px navigation breakpoint. Tailwind's `px-4`/`sm:px-6` primary
-// padding is replicated with an explicit inline padding: at this viewport the
-// `sm:` variant applies, so the primary carries 1.5rem of horizontal padding
-// and `--skills-table-bleed` resolves to the same 1.5rem.
+// Render the production dashboard router and pages with bounded read-model
+// fixtures. Capture Workflow dividers before navigating to Skills in the same
+// shell, viewport and theme; no copied table markup or synthetic padding.
 
 const LONG_DESCRIPTION =
   'A very long description that must wrap inside the description column instead of stretching the table past the viewport. '.repeat(
     6,
   );
 
-function skillsMarkup(): string {
-  return `
-    <div class="collection-workspace collection-workspace--single skills-page skills-catalog-page" data-collection="skill">
-      <div
-        class="collection-workspace__primary skills-catalog-primary"
-        aria-label="Skills catalog"
-        style="padding-left: 1.5rem; padding-right: 1.5rem;"
-      >
-        <div class="data-table-slab" data-layout="table" data-density="comfortable" data-sticky="on" data-responsive="off">
-          <table class="data-table" aria-label="Skills catalog">
-            <thead>
-              <tr>
-                <th scope="col" data-align="left" data-column-key="skill" style="width: var(--workflow-list-column-workflow-width);">Skill</th>
-                <th scope="col" data-align="left" data-column-key="description">Description</th>
-                <th scope="col" data-align="left" data-column-key="source">Source</th>
-                <th scope="col" data-align="left" data-column-key="inputs">Inputs</th>
-                <th scope="col" data-align="left" data-column-key="content">Content</th>
-                <th scope="col" data-align="right" data-column-key="actions">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td data-align="left" data-column-key="skill">
-                  <a class="skills-catalog-title-link" href="/skills/pr-resolver">
-                    <span class="skills-catalog-title">PR Resolver</span>
-                    <span class="skills-catalog-id">pr-resolver</span>
-                  </a>
-                </td>
-                <td data-align="left" data-column-key="description">Resolves pull requests.</td>
-                <td data-align="left" data-column-key="source">File</td>
-                <td data-align="left" data-column-key="inputs">Structured inputs</td>
-                <td data-align="left" data-column-key="content">Markdown</td>
-                <td class="data-table__row-actions" data-align="right" data-column-key="actions"><a href="/skills/pr-resolver">Open</a></td>
-              </tr>
-              <tr>
-                <td data-align="left" data-column-key="skill">
-                  <a class="skills-catalog-title-link" href="/skills/long-skill">
-                    <span class="skills-catalog-title">A very long skill label that keeps going and going and going</span>
-                    <span class="skills-catalog-id">a-very-long-skill-name-that-keeps-going-and-going</span>
-                  </a>
-                </td>
-                <td data-align="left" data-column-key="description">${LONG_DESCRIPTION}</td>
-                <td data-align="left" data-column-key="source">File</td>
-                <td data-align="left" data-column-key="inputs">—</td>
-                <td data-align="left" data-column-key="content">Markdown</td>
-                <td class="data-table__row-actions" data-align="right" data-column-key="actions"><a href="/skills/long-skill">Open</a></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>`;
-}
-
-// Workflow reference slice: the divider treatment the Skills table must match
-// (`.workflow-list-data-slab .queue-table-wrapper td` draws
-// `var(--workflow-list-divider-color)`). The reference cell is read only for
-// its computed divider color, but the wrapper bleeds edge to edge by design
-// (width 100% + 2x `--workflow-list-slab-bleed-inline` with matching negative
-// margins), which assumes a padded panel ancestor like production provides.
-// Host it with that same 1rem inset so the scaffolding never spills past the
-// viewport and pollutes the document-overflow assertions below.
-function workflowReferenceMarkup(): string {
-  return `
-    <div style="padding-left: 1rem; padding-right: 1rem;">
-      <div class="workflow-list-data-slab">
-        <div class="queue-table-wrapper">
-          <table>
-            <tbody>
-              <tr><td data-workflow-divider-reference="true">reference</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>`;
-}
+const skills = {
+  legacyItems: [
+    { id: 'pr-resolver', label: 'PR Resolver', description: 'Resolves pull requests.',
+      hasInputSchema: true, source: { kind: 'file' }, markdown: '# PR Resolver' },
+    { id: 'long-skill', label: 'A very long skill label that keeps going and going and going',
+      description: LONG_DESCRIPTION, source: { kind: 'file' }, markdown: '# Long Skill' },
+  ],
+};
+const uiInfo = {
+  app: 'moonmind', apiBase: '/api',
+  features: { skills: true, workflowList: true, workflowLiveUpdates: false },
+  limits: {}, endpoints: {}, settingsPermissions: [],
+  dashboardConfig: {
+    pollIntervalsMs: { list: 60_000, detail: 60_000 },
+    features: { temporalDashboard: { listEnabled: true } },
+  },
+};
+let fetchSpy: MockInstance;
+let cleanupRender: (() => void) | null = null;
+let referenceDividers: Record<'light' | 'dark', string>;
 
 let container: HTMLElement;
 
@@ -118,8 +61,8 @@ function queries() {
   const bodyCells = Array.from(
     container.querySelectorAll<HTMLElement>('.skills-catalog-page .data-table tbody td'),
   );
-  const referenceCell = container.querySelector<HTMLElement>('[data-workflow-divider-reference]')!;
-  return { primary, slab, table, headerCells, bodyRows, bodyCells, referenceCell };
+  const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  return { primary, slab, table, headerCells, bodyRows, bodyCells, referenceDivider: referenceDividers[theme] };
 }
 
 function bleedPx(primary: HTMLElement): number {
@@ -138,17 +81,51 @@ function alphaOf(color: string): number | null {
   return match[1] === undefined ? 1 : Number.parseFloat(match[1]);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await page.viewport(1280, 800);
   document.body.style.margin = '0';
   document.documentElement.classList.remove('dark');
-  container = document.createElement('div');
-  container.innerHTML = `${skillsMarkup()}${workflowReferenceMarkup()}`;
-  document.body.appendChild(container);
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/workflows');
+  fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), window.location.origin);
+    const json = (value: unknown) => new Response(JSON.stringify(value), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (url.pathname === '/api/ui/info') return json(uiInfo);
+    if (url.pathname.startsWith('/api/v1/provider-profiles')) return json([]);
+    if (url.pathname === '/api/workflows/skills') return json(skills);
+    if (url.pathname === '/api/executions') return json({ items: [{
+      taskId: 'parity-workflow', workflowId: 'parity-workflow', title: 'Workflow reference',
+      source: 'temporal', status: 'completed', state: 'completed',
+      createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:01:00Z',
+    }], nextPageToken: null });
+    return json({ items: [] });
+  });
+  const rendered = renderWithClient(<DashboardApp payload={{ page: 'dashboard', apiBase: '/api' }} />);
+  cleanupRender = rendered.unmount;
+  container = rendered.container;
+  await screen.findByRole('link', { name: 'Workflow reference' });
+  const referenceCell = container.querySelector<HTMLElement>('.queue-table-wrapper tbody td')!;
+  const light = getComputedStyle(referenceCell).borderBottomColor;
+  document.documentElement.classList.add('dark');
+  const dark = getComputedStyle(referenceCell).borderBottomColor;
+  referenceDividers = { light, dark };
+  document.documentElement.classList.remove('dark');
+  navigateTo('/skills');
+  await screen.findByText('PR Resolver');
 });
 
-afterEach(() => {
-  container.remove();
+afterEach(async () => {
+  cleanupRender?.();
+  cleanupRender = null;
+  fetchSpy.mockRestore();
   document.documentElement.classList.remove('dark');
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/');
+  await page.viewport(1280, 800);
 });
 
 describe('skills table visual parity (MoonMind#3346)', () => {
@@ -188,10 +165,9 @@ describe('skills table visual parity (MoonMind#3346)', () => {
     },
   );
 
-  it('draws row dividers and the header rule with the shared workflow list token', () => {
-    const { bodyCells, headerCells, referenceCell } = queries();
-
-    const expectedDivider = getComputedStyle(referenceCell).borderBottomColor;
+  it.each(['light', 'dark'] as const)('matches the real Workflow row dividers and header rule in the %s theme', (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    const { bodyCells, headerCells, referenceDivider: expectedDivider } = queries();
     expect(expectedDivider).not.toBe('rgba(0, 0, 0, 0)');
 
     // Every Skills body cell divider resolves to the same computed color as
@@ -205,6 +181,16 @@ describe('skills table visual parity (MoonMind#3346)', () => {
     const headerShadow = getComputedStyle(headerCells[0]!).boxShadow;
     expect(headerShadow).not.toBe('none');
     expect(headerShadow.replace(/\s+/g, ' ')).toContain(expectedDivider.replace(/\s+/g, ' '));
+  });
+
+  it.each(['light', 'dark'] as const)('keeps readable row hover feedback in the %s theme', async (theme) => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    const { bodyRows, bodyCells, table } = queries();
+    await userEvent.hover(bodyRows[0]!);
+    await waitFor(() => expect(alphaOf(getComputedStyle(bodyRows[0]!).backgroundColor)).toBeGreaterThan(0));
+    expect(getComputedStyle(table).opacity).toBe('1');
+    expect(alphaOf(getComputedStyle(bodyCells[0]!).color)).toBe(1);
+    await userEvent.hover(screen.getByRole('link', { name: 'MoonMind workflows' }));
   });
 
   it('extends header and divider edges to the collection-content boundary without document overflow', () => {
@@ -249,20 +235,26 @@ describe('skills table visual parity (MoonMind#3346)', () => {
     expect(bodyCells.length).toBeGreaterThan(0);
   });
 
-  it('keeps long names wrapped with no document overflow at a smaller desktop width', () => {
-    // Emulate an ordinary smaller desktop/tablet primary width, left-aligned
-    // so catalog spill extends into empty viewport instead of centering
-    // slack. The table is not responsive, so the description column must wrap
-    // rather than push the document wider than the viewport.
-    const { primary } = queries();
-    primary.style.maxWidth = '700px';
+  it('keeps long descriptions and controls usable with table-local scrolling on a narrow viewport', async () => {
+    await page.viewport(390, 844);
+    const { slab } = queries();
+    await waitFor(() => expect(slab.clientWidth).toBeLessThan(390));
 
     const descriptionCell = container.querySelector<HTMLElement>(
       'td[data-column-key="description"]',
     )!;
     expect(getComputedStyle(descriptionCell).overflowWrap).toBe('anywhere');
+    expect(slab.scrollWidth).toBeGreaterThan(slab.clientWidth);
+    expect(getComputedStyle(slab).overflowX).toBe('auto');
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
       document.documentElement.clientWidth + 1,
     );
+    const open = within(slab).getByRole('link', { name: 'Open skill PR Resolver' });
+    within(slab).getByRole('link', { name: /^PR Resolver/ }).focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(open);
+    expect(getComputedStyle(open).opacity).toBe('1');
+    expect(getComputedStyle(open).outlineStyle).not.toBe('none');
+
   });
 });

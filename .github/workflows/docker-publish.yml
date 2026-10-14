@@ -159,6 +159,11 @@ jobs:
     needs:
       - metadata
       - build
+    # Serialize the main-tip check and tagging so two publishes cannot
+    # interleave and leave `latest` on the older build.
+    concurrency:
+      group: app-image-latest
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -181,13 +186,26 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Create manifest list and push
+        id: manifest
         working-directory: /tmp/digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ${{ needs.metadata.outputs.image_name }}
+          VERSION_TAG: ${{ needs.metadata.outputs.version_tag }}
         run: |
-          IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
-          docker buildx imagetools create \
-            -t "${IMAGE_NAME}:${{ needs.metadata.outputs.version_tag }}" \
-            -t "${IMAGE_NAME}:sha-${{ github.sha }}" \
-            -t "${IMAGE_NAME}:latest" \
+          TAGS=(-t "${IMAGE_NAME}:${VERSION_TAG}" -t "${IMAGE_NAME}:sha-${GITHUB_SHA}")
+          # `latest` is what host updates install, so only a build of the
+          # current main tip may move it: a manual dispatch from another
+          # branch, or an older main build finishing late, must not.
+          MAIN_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${MAIN_HEAD}" = "${GITHUB_SHA}" ]; then
+            TAGS+=(-t "${IMAGE_NAME}:latest")
+            echo "moved_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "moved_latest=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Not moving latest: ${GITHUB_SHA} on ${GITHUB_REF} is not the main tip (${MAIN_HEAD})"
+          fi
+          docker buildx imagetools create "${TAGS[@]}" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
 
       - name: Inspect image and write build summary
@@ -195,10 +213,10 @@ jobs:
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
           VERSION="${{ needs.metadata.outputs.version_tag }}"
 
-          docker buildx imagetools inspect "${IMAGE_NAME}:latest"
-          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}')"
+          docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" --format '{{.Manifest.Digest}}')"
           if [ -z "${DIGEST}" ]; then
-            echo "::error::App image ${IMAGE_NAME}:latest is not published" >&2
+            echo "::error::App image ${IMAGE_NAME}:${VERSION} is not published" >&2
             exit 1
           fi
 
@@ -208,7 +226,11 @@ jobs:
             echo "### App image published"
             echo ""
             echo "- Version tag: \`${IMAGE_NAME}:${VERSION}\`"
-            echo "- Current build channel: \`${IMAGE_NAME}:latest\`"
+            if [ "${{ steps.manifest.outputs.moved_latest }}" = "true" ]; then
+              echo "- Moved \`${IMAGE_NAME}:latest\` to this build"
+            else
+              echo "- \`${IMAGE_NAME}:latest\` not moved: this build is not the current main tip"
+            fi
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
             echo ""

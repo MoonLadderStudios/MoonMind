@@ -93,7 +93,7 @@ Tools represent explicit bounded operations such as fetching/transitioning an is
   "type": "tool",
   "tool": {
     "name": "jira.transition_issue",
-    "inputs": {"issueKey": "MM-123", "targetStatus": "In Progress"}
+    "inputs": {"issueKey": "PROJ-123", "targetStatus": "In Progress"}
   }
 }
 ```
@@ -113,7 +113,7 @@ Task inputs include instructions, issue/artifact references, constraints, verifi
   "type": "skill",
   "skill": {
     "name": "code.implementation",
-    "inputs": {"issueKey": "MM-123", "instructions": "Implement the issue."}
+    "inputs": {"issueKey": "PROJ-123", "instructions": "Implement the issue."}
   }
 }
 ```
@@ -139,7 +139,7 @@ Presets select known reusable compositions, including Jira/GitHub implementation
   "type": "preset",
   "preset": {
     "slug": "jira-orchestrate",
-    "inputs": {"jira_issue": {"key": "MM-123"}}
+    "inputs": {"jira_issue": {"key": "PROJ-123"}}
   },
   "expansionState": "not_expanded"
 }
@@ -287,7 +287,7 @@ Authored, defaulted, bound, and derived values remain distinguishable. Equal his
 
 ## 16. Migration Guidance
 
-Compatibility is limited to known old inputs/histories with explicit readers, original digest/replay interpretation, and removal conditions. New writers use one Step Type and one workflow context. They do not keep old override aliases as permanent escape hatches. Detailed migration phases belong in issues or `docs/tmp/`, not this declarative specification.
+Compatibility is limited to known old inputs/histories with explicit readers, original digest/replay interpretation, and removal conditions. New writers use one Step Type and one workflow context. They do not keep old override aliases as permanent escape hatches.
 
 ## 17. Non-Goals
 

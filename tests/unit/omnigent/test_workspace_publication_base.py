@@ -1155,12 +1155,17 @@ async def test_successor_attempt_reconciles_predecessor_publication(
 
     publisher._run = record  # type: ignore[method-assign]
     # The predecessor's push lands, then its host is lost before the
-    # acknowledgment reaches the workflow.
+    # acknowledgment reaches the workflow. The successor runs later, so the
+    # commit it recreates from the same saved work has a different timestamp.
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:00:00Z")
     lost = await publisher.publish_request_workspace(
         request=first,
         current_workflow_id="workflow-4627",
         current_step_execution_id=first.step_execution.step_execution_id,
     )
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:05:00Z")
     successor = await publisher.publish_request_workspace(
         request=second,
         current_workflow_id="workflow-4627",
@@ -1200,3 +1205,128 @@ async def test_successor_attempt_reconciles_predecessor_publication(
         current_step_execution_id=other.step_execution.step_execution_id,
     )
     assert distinct["push_branch"] != lost["push_branch"]
+
+
+@pytest.mark.asyncio
+async def test_successor_with_different_saved_work_never_replaces_published_tip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a recreated copy of the same candidate reconciles; other content is refused."""
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                resolved=True, pr_url="https://github.com/example/repository/pull/7"
+            )
+        ),
+    )
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    git("init", "--initial-branch=main", cwd=source)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "main", cwd=source)
+
+    first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    first_workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(first_workspace), cwd=tmp_path)
+    (first_workspace / "work.txt").write_text("completed work\n")
+    second, second_workspace = _attempt_request(tmp_path, ordinal=2)
+    second_workspace.parent.mkdir(parents=True)
+    shutil.copytree(first_workspace, second_workspace, symlinks=True)
+    (second_workspace / "work.txt").write_text("different work\n")
+
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    lost = await publisher.publish_request_workspace(
+        request=first,
+        current_workflow_id="workflow-4627",
+        current_step_execution_id=first.step_execution.step_execution_id,
+    )
+    with pytest.raises(Exception, match="not a fast-forward of the remote head"):
+        await publisher.publish_request_workspace(
+            request=second,
+            current_workflow_id="workflow-4627",
+            current_step_execution_id=second.step_execution.step_execution_id,
+        )
+    assert (
+        git("show", f"{lost['push_branch']}:work.txt", cwd=origin) == "completed work"
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_content_from_another_author_is_not_adopted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A foreign commit with identical tree and parents is still a concurrent update."""
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.GitHubService.resolve_pull_request_selector",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                resolved=True, pr_url="https://github.com/example/repository/pull/7"
+            )
+        ),
+    )
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    git("init", "--initial-branch=main", cwd=source)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "main", cwd=source)
+
+    first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    first_workspace.parent.mkdir(parents=True)
+    git("clone", str(origin), str(first_workspace), cwd=tmp_path)
+    (first_workspace / "work.txt").write_text("completed work\n")
+    second, second_workspace = _attempt_request(tmp_path, ordinal=2)
+    second_workspace.parent.mkdir(parents=True)
+    shutil.copytree(first_workspace, second_workspace, symlinks=True)
+
+    publisher = OmnigentWorkspacePublicationService(tmp_path)
+    lost = await publisher.publish_request_workspace(
+        request=first,
+        current_workflow_id="workflow-4627",
+        current_step_execution_id=first.step_execution.step_execution_id,
+    )
+    branch = lost["push_branch"]
+    # Another actor replaces the tip with the same tree and parent under a
+    # different authorship.
+    tree = git("rev-parse", f"{branch}^{{tree}}", cwd=origin)
+    parent = git("rev-parse", f"{branch}^", cwd=origin)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Someone Else")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "someone@example.invalid")
+    foreign = git("commit-tree", tree, "-p", parent, "-m", "foreign", cwd=origin)
+    git("update-ref", f"refs/heads/{branch}", foreign, cwd=origin)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+
+    with pytest.raises(Exception, match="not a fast-forward of the remote head"):
+        await publisher.publish_request_workspace(
+            request=second,
+            current_workflow_id="workflow-4627",
+            current_step_execution_id=second.step_execution.step_execution_id,
+        )
+    assert git("rev-parse", f"refs/heads/{branch}", cwd=origin) == foreign

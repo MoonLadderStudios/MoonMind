@@ -6,7 +6,6 @@
 #   - docs/**/*.md, excluding:
 #       docs/tmp/**                                  (migration/rollout notes)
 #       docs/ReleaseNotes/**                         (historical)
-#       docs/Temporal/WorkflowLanguageHardSwitchPlan.md (defines the banned terms)
 #   - README.md
 #   - AGENTS.md (CLAUDE.md / GEMINI.md are symlinks to it)
 #   - .agents/skills/**/*.md
@@ -28,9 +27,8 @@
 #   - Reserved qualified terms (Temporal Task, Workflow Task, Activity Task,
 #     Task Queue, Jira task, Codex provider task) do not overlap the banned
 #     patterns above, so no reserved-term allowlisting is needed yet.
-#   - This is a docs/instruction-scope gate only. WP9 extends enforcement to code scope
-#     (taskId/task_id product fields, /tasks routes, OpenAPI surfaces) per
-#     docs/Temporal/WorkflowLanguageHardSwitchPlan.md section 18.
+#   - This is a docs/instruction-scope gate only; code-scope fields and routes
+#     are covered by tools/verify_workflow_terminology.py.
 #   - Multi-line constructs (a banned phrase split across a hard line wrap)
 #     are not detected; matching is per physical line after code stripping.
 
@@ -50,9 +48,7 @@ EXCLUDED_PREFIXES = (
     "docs/tmp/",
     "docs/ReleaseNotes/",
 )
-EXCLUDED_FILES = {
-    "docs/Temporal/WorkflowLanguageHardSwitchPlan.md",
-}
+EXCLUDED_FILES: set[str] = set()
 
 BANNED = [
     # (label, compiled pattern)
@@ -123,8 +119,9 @@ if findings:
     for f in findings:
         print(f"  {f}")
     print(
-        "\nSee docs/Temporal/WorkflowLanguageHardSwitchPlan.md (sections 1, 5, 18) "
-        "for the reserved-term and replacement rules."
+        "\nUse 'workflow' for the product concept. 'Task' remains correct only in "
+        "reserved qualified terms: Temporal Task, Workflow Task, Activity Task, "
+        "Task Queue, Jira task, and Codex provider task."
     )
     sys.exit(1)
 

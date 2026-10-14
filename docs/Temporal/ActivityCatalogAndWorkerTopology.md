@@ -1,8 +1,6 @@
 # Activity Catalog and Worker Topology
 
-Status: Implemented in core runtime (catalog live; some target-state families still pending)
-Last updated: 2026-08-04
-Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
+Scope: Describes MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
 ## Related docs
 
@@ -28,7 +26,7 @@ This document standardizes:
 - which worker fleet owns which activity family
 - the routing and timeout/retry model for those activities
 - the contract boundary between workflow code and activity implementations
-- the current implemented catalog and the target-state additions that are still pending
+- the implemented catalog
 
 This document covers the **Temporal-managed worker model** only.
 
@@ -37,8 +35,9 @@ This document covers the **Temporal-managed worker model** only.
 Every fleet is constructed from one immutable `WorkerSpec`. For the workflow
 fleet, the same class and activity tuples drive the Temporal SDK `Worker`,
 startup logs, `/readyz`, diagnostics, tests, and the registry fingerprint.
-Operator-facing workflow type lists are derived from those executable classes;
-an independent advertised string catalog is forbidden.
+Operator-facing workflow type lists are derived from those executable classes
+rather than from a separately maintained string catalog, so the advertised list
+cannot drift from what the worker actually registered.
 
 `/healthz` proves only that the process event loop is responsive. `/readyz`
 remains unavailable until configuration and the executable specification are
@@ -57,12 +56,13 @@ startup/readiness failure rather than a runtime workflow-task failure. The
 capability-routed `mm.tool.execute` alias and the separately registered
 workflow-fleet helper are explicit ownership exceptions.
 
-The workflow fleet remains Temporal-only. It receives no repository mutation,
-GitHub credential, sandbox, local-git, or agent-runtime capabilities.
+The workflow fleet is not granted repository mutation, sandbox, local-git, or
+agent-runtime capabilities; §5.1 describes the database and credential exposure
+it does have.
 
 Production workers load code and the resolved release manifest from one
 immutable image. Build identity is a content digest; source revision is separate
-provenance. Source overlays belong in `docker-compose.development.yaml`. A
+provenance. Source overlays live in `docker-compose.development.yaml`. A
 development freshness scan runs off the event loop with one in-flight scan and
 bounded cached evidence. Unknown or stale evidence makes readiness unavailable;
 it does not block liveness or Temporal progress. Supervisors reuse each child's
@@ -72,7 +72,7 @@ During startup routing convergence, transient Temporal overload, unavailable,
 and deadline errors use the existing bounded startup retry loop while pollers
 remain running. Each retry observes server state before another handoff; if a
 previous handoff applied but its confirmation failed, ordinary workflow traffic
-must still pass verification before readiness is reported. Exhausted retries and
+still has to pass verification before readiness is reported. Exhausted retries and
 non-retryable errors retain their original diagnostics and fail startup.
 The workflow group's Compose health check allows a three-minute startup grace
 period for the old-poller expiry window and transient recovery. It continues to
@@ -82,10 +82,9 @@ steady-state interval and failure threshold.
 `release.inspect` is registered on every affected worker queue and verifies the
 installed content digest. Startup promotion waits for Temporal to register all
 candidate queues. Then, before routing moves, it admits a pinned cross-queue
-canary on every Activity queue the target registered. It re-reads the
-registrations after each canary, so a fleet that registers during the check is
-also covered. After promotion, ordinary
-verification checks each workflow queue against its own worker only. Work that
+canary on every Activity queue the target registered, re-reading the
+registrations after each canary so a fleet that registers during the check is
+also covered. After promotion, ordinary verification checks each workflow queue against its own worker only. Work that
 was waiting now reaches the target fleets. That includes a deployment update's
 own supervising Activity on the single-slot deployment-control fleet, which
 waits for this readiness, so a later probe of that queue could never start.
@@ -93,7 +92,7 @@ waits for this readiness, so a later probe of that queue could never start.
 storage maintenance. It resumes durable updater owners and retires temporary
 cohorts only after verifying their authority and server drainage evidence. Other
 storage maintenance failures cannot starve this owner. Full promotion and
-retention semantics belong to [Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
+retention semantics are described in [Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
 
 ---
 
@@ -109,7 +108,7 @@ retention semantics belong to [Docker Compose Deployment Update System](../Steps
  - managed runtime supervision
  - provider-profile coordination support
  - review support
- - future agent skill resolution and materialization
+ - agent skill resolution and materialization
 
 2. Define worker fleets with clear:
  - capability boundaries
@@ -141,7 +140,7 @@ This document does **not** define:
 
 ### 3.1 Determinism boundary
 
-Workflow code must remain deterministic. Any nondeterminism belongs in Activities, including:
+Workflow code stays deterministic so Temporal can replay it. Nondeterminism lives in Activities, including:
 
 - network calls
 - filesystem access
@@ -191,7 +190,7 @@ Activities do **not** upsert Search Attributes or workflow memo state directly. 
 
 ### 3.7 Continue-As-New awareness
 
-Activities must not assume a stable Temporal `run_id` across the entire logical lifetime of a workflow. `correlation_id` is the durable business identifier across Continue-As-New boundaries.
+Activities do not assume a stable Temporal `run_id` across the entire logical lifetime of a workflow. `correlation_id` is the durable business identifier across Continue-As-New boundaries.
 
 ---
 
@@ -204,9 +203,8 @@ Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly a
 Queue names below are routing addresses, not deployment units. A queue name,
 a worker instance (poller), a process, a container, and an enabled deployment
 profile are different things: multiple queues can share one process, and
-multiple replicas can serve one queue. Do not maintain an independent
-numerical total elsewhere; the authoritative inventory is derived from the
-production registries and resolved settings (see #3959).
+multiple replicas can serve one queue. The authoritative inventory is what the
+production registries and resolved settings produce.
 
 ### Workflow task queues
 
@@ -231,14 +229,10 @@ production registries and resolved settings (see #3959).
 
 The workflow poll topology (`get_workflow_poll_task_queues()` in
 `activity_catalog.py`: default start queue, the replay queue, and the
-merge-automation queue) is wider
-than the drain/fan-out scope (`_MOONMIND_TASK_QUEUES` in `client.py`), which
-covers only drain metrics and batch Pause/Resume fan-out. The intended
-contract derives the inventory from production registries and resolved
-settings through #3959 (generated catalogs); until that lands, the list above
-is hand-maintained against `client.py`, `config/settings.py`, and
-`workflow_registry.py` and must not be copied into a second numerical total
-elsewhere.
+merge-automation queue) is wider than the drain/fan-out scope
+(`_MOONMIND_TASK_QUEUES` in `client.py`). The lists above follow `client.py`,
+`config/settings.py`, and `workflow_registry.py`; quoting a separate queue
+count elsewhere invites drift.
 
 ## 4.2 Queue policy
 
@@ -275,90 +269,72 @@ The workflow fleet is primarily for workflow code. It may also host **small help
 Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`;
 see the generated routing table in
 [`WorkflowTypeCatalogGenerated.md`](./WorkflowTypeCatalogGenerated.md#workflow-queue-handler-routing)
-for the mechanical current-lane versus historical-only split):
+for the current-lane versus historical-only split):
 
 - immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
-- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
+- checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — registered for replay/in-flight compatibility of older histories; no new calls route there.
 
-New-write routing, retained compatibility, and the final topology are
-distinct states:
+### Checkpoint persistence routing
 
-- **New writes** schedule `checkpoint_branch.turn.*` on the artifacts fleet
-  (`mm.activity.artifacts`) behind the `checkpoint-branch-artifact-fleet-v1`
-  patch marker. The catalog (`activity_catalog.py`) and the artifacts worker
-  binding (`activity_runtime.py`) own that route.
-- **Retained compatibility** keeps the same handler implementations
-  registered on the workflow fleet only so pre-cutover histories recorded
-  without a queue override can replay and drain. Fixture replay proves
-  history compatibility, not deployed drainage.
-- **Final topology** removes the workflow-queue persistence registration,
-  its dead dependency injection, and now-unneeded permissions only after
-  old consumers have a verified disposition. Queue separation is not privilege separation: the retained handlers still share the workflow
-  worker process and its I/O authority until that removal lands.
+New `checkpoint_branch.turn.*` calls are scheduled on the artifacts fleet
+(`mm.activity.artifacts`) behind the `checkpoint-branch-artifact-fleet-v1`
+patch marker; the catalog (`activity_catalog.py`) and the artifacts worker
+binding (`activity_runtime.py`) own that route. The same handler
+implementations stay registered on the workflow fleet so that older histories
+recorded without a queue override can replay and drain. Fixture replay proves
+history compatibility, not that a deployment has drained.
 
-Removal is owned by the drain gate in
+The workflow-fleet registration is retired through the drain gate in
 `moonmind/gates/checkpoint_compat_drain.py`
 (`evaluate_checkpoint_compat_drain_observations`, contract
 `checkpoint-branch-artifact-fleet-drain-v1`), which reuses the canonical
-`evaluate_worker_drain` predicate (`outstanding == 0` → safe to remove).
-`TemporalExecutionService.observe_checkpoint_compat_drain` collects the
-observations for the deployment it is connected to: it lists
+`evaluate_worker_drain` predicate (`outstanding == 0` means safe to remove).
+`TemporalExecutionService.observe_checkpoint_compat_drain` collects
+observations for the connected deployment: it lists
 `MoonMind.CheckpointBranchTurn` executions through Visibility and scans each
 history for `checkpoint_branch.turn.*` persistence scheduled on a queue other
 than `mm.activity.artifacts`. A missing patch marker alone is not a consumer,
 because new runs record the marker at their first persistence call. Drained
-means all three observed dimensions are zero:
+means all three dimensions are zero:
 
-- open pre-cutover histories: running turns that scheduled persistence on
-  the old route;
-- pending old-queue tasks: those turns' persistence activities still
-  unclosed on the old route;
+- open older histories: running turns that scheduled persistence on the old
+  route;
+- pending old-queue tasks: those turns' persistence activities still unclosed
+  on the old route;
 - supported resets: closed old-route turns that Visibility still returns
   (within namespace retention), because resetting one replays onto the old
   route.
 
 A failed listing or unreadable history reports that dimension as `None`
-(unknown); unknown dimensions retain compat and are named in
+(unknown); unknown dimensions keep the compat registration and are named in
 `blocking_dimensions`. `render_checkpoint_compat_drain_report` renders the
-probe definitions and the removal checklist for a collected verdict. Fixture
-replay (`test_checkpoint_queue_replay.py`) is history-compatibility evidence,
-not deployed drainage.
+probe definitions and removal steps for a collected verdict.
 
-Repository tests prove the collector against time-skipping Temporal
-histories (`test_drain_observation_*` in `test_checkpoint_compat_drain_3949.py`).
-They do not observe any deployment. Running the collector against the
-deployment being changed, and removing the registration if it reports zero,
-is separately owned deployment work and has not been performed. Until it is,
-the compat registration stays, and its removal condition is the observed
-all-zero verdict.
+### Actual process permission boundary
 
-### Actual process permission boundary (consolidated topology)
-
-Until the drain gate above releases the compat registration, the workflow
-worker process intentionally carries database and artifact-retention
-authority (`async_session_maker`, `CheckpointBranchService`, retained
-artifact refs in `workflows/checkpoint_branch_turn.py`) because the
-retained handlers execute old persistence tasks in that process. The four
-`agent_run.py` metadata helpers do not reference that authority: AST/import
-inspection finds no database, credential, Docker or artifact-storage names,
-and in-process tests run the helpers with database I/O monkeypatched to fail.
-These are source and in-process checks, not process confinement.
+While the compat registration exists, the workflow worker process carries
+database and artifact-retention authority (`async_session_maker`,
+`CheckpointBranchService`, retained artifact refs in
+`workflows/checkpoint_branch_turn.py`) because the retained handlers execute
+old persistence tasks in that process. Queue separation is therefore not
+privilege separation. The four `agent_run.py` metadata helpers do not
+reference that authority; this is established by source inspection and
+in-process tests, not by process confinement.
 
 Effective container rights come from `docker-compose.yaml`. Both
 `temporal-worker-workflow` and `temporal-worker-artifacts` load the operator
 `.env` through `env_file`, so any credential placed there (including provider
 keys) reaches both processes; queue separation is not credential separation,
 and no per-fleet least-privilege claim is made. Neither worker mounts the
-Docker socket. Both workers join only `control-plane-network`, which reaches
-Temporal, Postgres, MinIO and the API and is not internal (outbound network
-access is not confined); neither joins the internal `docker-proxy-network`,
-so neither can reach the Docker API proxy. The workflow worker's `agent_workspaces:/work/agent_jobs`
-mount is not a checkpoint-compat right: the workflow side of
-`MoonMind.AgentRun` (`ManagedAgentAdapter`, `CodexSessionAdapter`) saves and
-loads `ManagedRunStore` records under `/work/agent_jobs/managed_runs`, so the
-mount stays with that consumer. The artifacts worker mounts no agent
-workspaces.
+Docker socket. Both join only `control-plane-network`, which reaches Temporal,
+Postgres, MinIO and the API and does not confine outbound access; neither
+joins the internal `docker-proxy-network`, so neither can reach the Docker API
+proxy. The workflow worker's `agent_workspaces:/work/agent_jobs` mount exists
+because the workflow side of `MoonMind.AgentRun` (`ManagedAgentAdapter`,
+`CodexSessionAdapter`) saves and loads `ManagedRunStore` records under
+`/work/agent_jobs/managed_runs`, not for checkpoint compatibility. The
+artifacts worker mounts no agent workspaces.
 
 Capability inventory (workflow fleet, from source inspection):
 
@@ -373,47 +349,9 @@ Capability inventory (workflow fleet, from source inspection):
 | `checkpoint_branch.turn.persist_terminal` | yes (`lock` + `finalize`) | yes (artifact retention + result/diagnostics writes) |
 | `checkpoint_branch.turn.persist_terminal_rejection` | yes | yes (rejection row terminalization) |
 
-Executed workflow-to-worker evidence lives in
-`tests/integration/workflows/temporal/test_checkpoint_branch_turn_fleet_3949.py`
-(required CI, `integration_ci`). Its artifacts worker registers the handlers
-returned by `build_worker_activity_bindings(fleet="artifacts")`, exactly as
-worker startup resolves them; the workflow queue registers no
-`checkpoint_branch.turn.*` handler. Only external effects are doubles (the
-AgentRun child, sandbox workspace capture, and checkpoint-artifact
-construction for the fixture's seeded checkpoint), and an activity
-interceptor observes deliveries and injects faults without replacing a
-handler. The journeys assert the serving queue, timeouts, retry budget and
-durable row state for success, provider failure, cancellation, transient
-terminal retry and terminal rejection. Cancellation covers both the observed
-running-state handoff and the original activity-entry boundary, with the same
-terminal-state and history-replay assertions. The activity-entry case uses the
-SDK-selected, image-cached CLI dev server because the time-skipping server
-can reject cancellation racing activity completion with `ACTIVITY_UNKNOWN`
-([upstream issue](https://github.com/temporalio/sdk-java/issues/2391)); the
-post-handoff case and other journeys retain time skipping. One journey bounds
-the artifacts worker's slots and holds one slot with an unfinished `mark_running`: the
-workflow worker still processes the cancellation, the canceled terminal
-persists through the free slot, and the late running handoff cannot reopen
-the canceled turn (`mark_turn_running` leaves terminal turns unchanged).
-The same module separately exercises overlapping PostgreSQL transactions:
-terminal persistence holds the branch/turn locks while a running claim waits,
-then both cancellation and saved-success commits remain intact after that
-claim resumes. The running claim reuses `lock_turn_execution` so the terminal
-check refreshes cached rows under the same branch-then-turn lock order.
-Duplicate/divergent terminal deliveries, stale claims and database outages
-are direct-handler checks in that module, separate from its worker journeys.
-The stdlib decision rehearsals (`test_checkpoint_drain_saturation_3949.py`
-and the gate-level rehearsal in `test_checkpoint_compat_drain_3949.py`)
-remain decision-level checks, not execution evidence.
-
-This registration is the current state, not the intended end state. The
-intended least-privilege boundary keeps the workflow fleet Temporal-only with
-no artifact, provider-mutation, or runtime-supervision I/O; whether
-checkpoint persistence belongs beside deterministic workflows is the
-implementation concern tracked in #3949. Do not read the registration above
-as approval for broad workflow-fleet I/O.
-
-This is a narrow exception, not a second general-purpose activity plane.
+The design intent is a Temporal-only workflow fleet with no artifact,
+provider-mutation, or runtime-supervision I/O; the checkpoint registration is a
+compatibility exception, not a second general-purpose activity plane.
 
 ---
 
@@ -446,8 +384,9 @@ files, resolved into immutable snapshots) and executable tool contracts
 (`tool.type = "skill"` invocations dispatched through the tool router) remain
 different concepts. Native workflow/activity infrastructure provides execution
 substrate only — resolution, materialization, scheduling, artifacts, and
-approvals — and must not reimplement Skill semantics such as data collection,
-classification, or completion rules.
+approvals — and does not reimplement Skill semantics such as data collection,
+classification, or completion rules, so that a skill behaves the same wherever
+it runs.
 
 ---
 
@@ -597,8 +536,8 @@ Current implemented activities:
 Worker queue: `mm.activity.artifacts`
 
 These are support activities used by workflow and manager orchestration. They are not part of the end-user skill or agent contract surface.
-`provider_profile.reset_manager` remains registered only for replay compatibility
-and performs non-destructive ensure/recovery; it never terminates the lease
+`provider_profile.reset_manager` remains registered for replay compatibility
+and performs non-destructive ensure/recovery; it does not terminate the lease
 authority workflow.
 
 ## 8.6 OAuth session activities (`oauth_session.*`)
@@ -738,7 +677,7 @@ always-on container is required.
 `agent_runtime.publish_artifacts` should return a canonical-result-compatible enriched payload that can be materialized as `AgentRunResult`.
 
 Temporal workers also keep `agent_runtime.ensure_docker_sidecar` registered as a
-non-retryable rejection for durable pre-cutover histories. It is not a supported
+non-retryable rejection so that older durable histories that scheduled it fail cleanly. It is not a supported
 capability and cannot create a daemon, socket, graph volume, or container.
 
 `agent_runtime.capture_workspace_checkpoint` accepts only a typed managed-runtime
@@ -748,18 +687,18 @@ storage. Capture support does not imply restore support or Resume eligibility.
 
 `agent_runtime.launch` is an internal launch/support activity rather than a public canonical runtime contract in the same sense as `status` and `fetch_result`.
 
-The session-oriented activities are remote-session contracts. They must delegate through a session controller or adapter boundary and must not fall back to the worker-local managed runtime launcher/process loop.
+The session-oriented activities are remote-session contracts. They delegate through a session controller or adapter boundary and do not fall back to the worker-local managed runtime launcher/process loop.
 
 `agent_runtime.restore_workspace_checkpoint` is the `codex_cli` cold-restore data plane. It runs only on `mm.activity.agent_runtime`, verifies checkpoint, archive, manifest, repository base, path containment, and restored entries before atomically activating a new managed workspace, and persists compact restoration evidence. A launch carrying a restoration requirement is rejected unless the destination is `ready` and its checkpoint and capability digest match.
 
-The session-oriented activity surface is intended to become runtime-neutral at the workflow boundary, but the live activity/controller path currently admits Codex CLI only. Runtime-specific protocol details remain behind the session adapter/controller boundary. The current container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code must add a Claude-specific session adapter/controller before carrying `runtimeFamily = "claude_code"` or recording `runtimeId = "claude_code"` through this activity surface.
+The session-oriented activity surface is runtime-neutral in shape, but the live activity/controller path admits Codex CLI only. Runtime-specific protocol details stay behind the session adapter/controller boundary; the container transport uses the Codex App Server-compatible remote-session protocol for the Codex binding. Claude Code has no session adapter/controller on this surface, so `runtimeFamily = "claude_code"` is not carried through it.
 
 `agent_runtime.prepare_turn_instructions` is replay-visible when scheduled by
 `MoonMind.AgentRun`. Moving it before or after session launch/status activities,
 or before or after `agent_runtime.send_turn`, changes Temporal command order.
-Such changes must be guarded by Temporal patch/version markers or Worker
+Such changes are guarded by Temporal patch/version markers or Worker
 Versioning so in-flight histories keep their recorded order while new histories
-use the current order. Activity retry cannot repair a workflow-task
+use the current order, because activity retry cannot repair a workflow-task
 nondeterminism caused by an unguarded order change.
 
 ## 8.10 Review activities
@@ -780,44 +719,25 @@ Purpose: resolve portable instruction bundles into immutable snapshots and
 materialize those snapshots for runtime consumption. Workflows consume refs,
 not inline skill content.
 
-Actually registered and wired operations (five; verified against
-`agent_skills_activities.py`, `activity_catalog.py`, and
-`activity_runtime.py` — not by catalog membership alone):
+Five operations are registered and bound (`agent_skills_activities.py`,
+`activity_catalog.py`, `activity_runtime.py`):
 
-| Activity | Owning contract (`schemas/agent_skill_models.py`) | Production wiring | Remaining gap |
-|---|---|---|---|
-| `agent_skill.resolve` | `SkillSelector` → `ResolvedSkillSet`; persists file-backed content and the resolved manifest via the artifact dependency | Catalog entry (agent-runtime fleet); runtime binding `("agent_skills", "resolve_skills")`; called from `MoonMind.UserWorkflow` (`workflows/run.py` resolves the selector per node) | On-demand injection path below is still gated; resolve callers pass `allow_repo_skills=False, allow_local_skills=False` |
-| `agent_skill.query_on_demand` | `SkillsOnDemandQueryRequest` → `SkillsOnDemandQueryResult` via `SkillsOnDemandService`, gated on `settings.workflow.skills_on_demand_enabled` | Catalog entry; runtime binding present | No production workflow caller; behavior verified by unit tests only, not through a production boundary |
-| `agent_skill.request_on_demand` | `SkillsOnDemandRequest` → `SkillsOnDemandRequestResult` via the same gate | Catalog entry; runtime binding present | Same as above |
-| `agent_skill.build_prompt_index` | `ResolvedSkillSet` → prompt-injectable string | Catalog entry; runtime binding present | No production workflow caller; current body renders refs/metadata, not full prompt bundles |
-| `agent_skill.materialize` | `(ResolvedSkillSet, runtime_id, mode, workspace_root)` → `RuntimeSkillMaterialization` via `AgentSkillMaterializer` | Catalog entry; runtime binding present | No production workflow caller; per-runtime materialization through a production boundary is unverified |
+| Activity | Owning contract (`schemas/agent_skill_models.py`) | Production wiring |
+|---|---|---|
+| `agent_skill.resolve` | `SkillSelector` → `ResolvedSkillSet`; persists file-backed content and the resolved manifest via the artifact dependency | Called from `MoonMind.UserWorkflow` (`workflows/run.py` resolves the selector per node); callers pass `allow_repo_skills=False, allow_local_skills=False` |
+| `agent_skill.query_on_demand` | `SkillsOnDemandQueryRequest` → `SkillsOnDemandQueryResult` via `SkillsOnDemandService`, gated on `settings.workflow.skills_on_demand_enabled` | Bound; no production workflow caller |
+| `agent_skill.request_on_demand` | `SkillsOnDemandRequest` → `SkillsOnDemandRequestResult` via the same gate | Bound; no production workflow caller |
+| `agent_skill.build_prompt_index` | `ResolvedSkillSet` → prompt-injectable string (renders refs/metadata, not full prompt bundles) | Bound; no production workflow caller |
+| `agent_skill.materialize` | `(ResolvedSkillSet, runtime_id, mode, workspace_root)` → `RuntimeSkillMaterialization` via `AgentSkillMaterializer` | Bound; no production workflow caller |
 
-Do not describe this family as "future": the operations above are registered
-and bound. Do not describe it as fully supported either: only `resolve` has a
-production workflow caller, and resolve/materialize/on-demand injection must
-be verified through production boundaries before any "supported" claim. The
-'supported' bar is a workflow-boundary test exercising the real invocation
-shape, not catalog membership or helper unit tests.
-
-The intended contract keeps executable tool contracts and portable
-instruction bundles distinct and requires per-operation
-production-boundary verification; the table above records current wiring
-vs gaps.
+Only `resolve` has a production workflow caller; the others are exercised by
+unit tests rather than through a production workflow boundary. Resolution
+semantics stay centralized, materialization may vary by runtime, and
+workflows consume refs, not inline skill content.
 
 ---
 
-## 9. Retired target-state note (resolved by §8.11)
-
-The `agent_skill.*` family was previously listed here as future work. It is
-now documented as implemented-but-partially-wired in §8.11 (five registered
-operations; only `agent_skill.resolve` has a production workflow caller). The
-general rules below still apply: resolution semantics stay centralized,
-materialization may vary by runtime, and workflows consume refs, not inline
-skill content.
-
-## 9.1 (reserved)
-
----
+## 10. Routing rules---
 
 ## 10. Routing rules
 
@@ -900,7 +820,7 @@ Rules:
 - artifact writes remain naturally retry-safe through integrity checks
 - external starts must not create duplicate jobs on retry
 - managed launches must not create duplicate runtime executions on retry
-- `agent_skill.materialize` must be safe under retry and must not mutate checked-in source trees in place. Known gap: when the workspace already contains a repo-authored `.agents/skills` directory, `AgentSkillMaterializer._project_builtin_support_directory()` still projects the `_shared` support directory into that repo-owned path, so the current implementation does not fully enforce the non-mutation invariant yet.
+- `agent_skill.materialize` is intended to be retry-safe without mutating checked-in source trees. One exception exists: when the workspace already contains a repo-authored `.agents/skills` directory, `AgentSkillMaterializer._project_builtin_support_directory()` adds a `_shared` support entry (symlink or copy) inside that repo-owned path if one is not already present.
 
 ---
 
@@ -1006,8 +926,8 @@ If using OpenTelemetry:
  - ensure workflows do not depend on provider-shaped payloads
  - ensure metadata carries provider-specific details without breaking canonical top-level schemas
 
-6. **Traceability gate**
- - catalog changes must stay aligned with runtime code, docs, and tests
+6. **Catalog/handler alignment**
+ - startup validates that catalog routes and runtime handlers match (§1)
 
 ---
 
@@ -1019,7 +939,7 @@ Deferred. Start with one `mm.activity.llm` queue. Split only when operational is
 
 ### 15.2 Priority lanes
 
-Deferred for v1. Throughput control comes from concurrency and rate limiting, not queue ordering guarantees.
+Deferred. Throughput control comes from concurrency and rate limiting, not queue ordering guarantees.
 
 ### 15.3 Search Attributes from activities
 
@@ -1027,10 +947,9 @@ Disallowed. Workflows own visibility state.
 
 ### 15.4 Workflow fleet helper activities
 
-Allowed only as a narrow exception. Current registration: the seven handlers
-listed in §5.1 (four adapter/metadata helpers plus three
-replay-compatibility checkpoint handlers). The intended boundary stays
-least-privilege; see #3949 for the checkpoint-persistence question.
+Allowed only as a narrow exception. Current registration: the handlers listed
+in §5.1 (the release probe, four adapter/metadata helpers, and three
+replay-compatibility checkpoint handlers).
 
 ### 15.5 Canonical runtime contract enforcement
 
@@ -1040,32 +959,13 @@ Decided. The activity boundary, not workflow code, owns normalization into `Agen
 
 ## 16. Summary
 
-MoonMind’s Temporal activity topology is organized around a small number of capability-based fleets:
-
-- workflow
-- artifacts
-- llm
-- sandbox
-- integrations
-- agent_runtime
-
-The catalog is already live for:
-
-- artifact lifecycle
-- planning
-- executable tool dispatch
-- sandbox work
-- provider integrations
-- provider-profile support
-- OAuth session support
-- managed runtime supervision
-- review gates
-
-The key architectural rule for current and future work is:
+MoonMind’s Temporal activity topology is organized around a small number of
+capability-based fleets (workflow, artifacts, llm, sandbox, integrations,
+agent_runtime). The key architectural rules are:
 
 - **Activities own side effects**
 - **The catalog owns routing**
 - **Canonical runtime contracts cross the workflow boundary**
-- **Workflow code should not perform provider-specific coercion**
+- **Workflow code does not perform provider-specific coercion**
 
 That keeps MoonMind’s Temporal model easier to reason about, easier to test, and easier to evolve without regressions.

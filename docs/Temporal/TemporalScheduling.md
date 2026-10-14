@@ -10,7 +10,7 @@
 **Owning Surface:** RecurringWorkflowDefinition, RecurringWorkflowsService, and Temporal scheduling adapter
 **Related Implementation:** `api_service/services/recurring_workflows_service.py`, `api_service/api/routers/recurring_workflows.py`, and `TemporalClientAdapter`.
 
-Implementation sequencing and rollout evidence belong in issues or `docs/tmp/`, not this canonical specification. New authoring semantics here describe the target, not support claimed for current deployed API/worker versions.
+New authoring semantics here describe the target, not support claimed for current deployed API/worker versions.
 
 ## 1. Purpose
 
@@ -131,7 +131,7 @@ Catchup, manual triggers, and backfills use the approved definition and fresh oc
 
 ### 5.7 Target resolution
 
-The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow uses its normal input contract. (`MoonMind.ManifestIngest` recurring targets were retired by MoonLadderStudios/MoonMind#4192: new targets are rejected; old definitions stay readable as replay/drain evidence.) Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
+The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow uses its normal input contract. (New `MoonMind.ManifestIngest` recurring targets are rejected; old definitions stay readable as replay/drain evidence.) Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
 New recurring definitions and target-changing edits reject explicit `rag` or
 `followUpRetrieval` requirements in `target.initialParameters` and its `task`
@@ -258,9 +258,9 @@ flowchart TD
 
 ## 10. Scheduling implementation notes
 
-Implementation sequencing, cutover and migration work, exact adapter support, and qualification evidence belong in existing issues or `docs/tmp/`. A saved definition or rendered form is not proof that the runtime honors its publication policy.
+A saved definition or rendered form is not proof that the runtime honors its publication policy.
 
-### 10.1 Single-user operation (#4351)
+### 10.1 Single-user operation
 
 Recurring schedules are instance resources: the admitted operator creates,
 inspects, and controls every definition without a human-owner lookup. New

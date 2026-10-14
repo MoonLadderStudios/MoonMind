@@ -1,18 +1,15 @@
 # Workflow Context Assembly — Managed Session Context
 
-> **Retirement note (MoonLadderStudios/MoonMind#4192):** the native
-> Manifest/RAG ingestion product — manifest registry and ingest pipeline,
-> RAG retrieval execution (embedding + vector search + context injection),
-> and the `/retrieval` query API — is removed. This document now describes
-> authorized explicit context assembly only (explicit attachments, artifact
+> **Scope note:** MoonMind has no native Manifest/RAG ingestion product —
+> no manifest registry or ingest pipeline, no RAG retrieval execution
+> (embedding + vector search + context injection), and no `/retrieval` query
+> API. This document describes authorized explicit context assembly only (explicit attachments, artifact
 > refs, scoped workspace access, skill snapshots). Historical
 > retrieval-injection details below remain readable as evidence; they are
-> not live capabilities. The removal disposition (including deleted guides
-> `LlamaIndexManifestSystem.md` and `ManifestIngestDesign.md`) lives in
-> `../tmp/ManifestRemovalResidual-4192.md`.
+> not live capabilities.
 
-Omnigent [policy snapshots](../Omnigent/PolicyAuthority.md) no longer carry
-retrieval scope or budgets (MoonLadderStudios/MoonMind#4103); versions that
+Omnigent [policy snapshots](../Omnigent/PolicyAuthority.md) do not carry
+retrieval scope or budgets; versions that
 recorded a `rag` section remain readable as history.
 
 **Status:** Implemented
@@ -68,8 +65,7 @@ This document does **not** define:
 
 - semantic search over a managed vector index (retired),
 - embedding-model configuration or collection administration (retired),
-- the retired manifest ingest pipeline (removed by #4192; see the
-  retirement note above),
+- a manifest ingest pipeline (none exists; see the scope note above),
 - the full managed-session contract,
 - the full Provider Profile schema,
 - raw secret backend behavior,

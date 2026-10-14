@@ -15,8 +15,7 @@ explains when only one plane has sufficient recovery evidence.
 **Status:** Accepted  
 **Owners:** MoonMind Platform  
 **Last updated:** 2026-07-22  
-**Authority:** Product selection, Workflow Create compilation, and acceptance contract for Codex via Omnigent  
-**Traceability:** MoonLadderStudios/MoonMind#3449
+**Authority:** Product selection, Workflow Create compilation, and acceptance contract for Codex via Omnigent
 
 ## 1. Product identity and authority
 

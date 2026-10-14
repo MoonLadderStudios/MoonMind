@@ -24,14 +24,6 @@ def test_updater_reports_storage_failure_without_a_traceback(tmp_path: Path) -> 
     dirname = shutil.which("dirname")
     assert dirname is not None
     (fake_bin / "dirname").symlink_to(dirname)
-    revision = "a" * 40
-    git = fake_bin / "git"
-    git.write_text(
-        f"#!{bash}\n"
-        'printf "git %s\\n" "$*" >> "$COMMAND_LOG"\n'
-        f'case "$1" in rev-parse|rev-list) printf "%s\\n" "{revision}";; esac\n'
-    )
-    git.chmod(0o755)
     docker = fake_bin / "docker"
     docker.write_text(
         f"#!{bash}\n"
@@ -56,11 +48,11 @@ def test_updater_reports_storage_failure_without_a_traceback(tmp_path: Path) -> 
     assert "Traceback" not in result.stderr
     assert "Docker storage is not writable" in result.stderr
     assert "read-only file system" in result.stderr
-    assert f"sha-{revision}" in result.stderr
+    assert "moonmind:latest" in result.stderr
     assert "recorded release job" not in result.stderr
     assert not (tmp_path / "deploy/state/release-submissions").exists()
     assert commands.read_text().splitlines()[-1] == (
-        f"docker pull ghcr.io/moonladderstudios/moonmind:sha-{revision}"
+        "docker pull ghcr.io/moonladderstudios/moonmind:latest"
     )
 
 

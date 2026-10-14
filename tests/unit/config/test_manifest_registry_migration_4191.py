@@ -383,11 +383,6 @@ def test_both_historical_entry_contracts_stay_supported() -> None:
     from api_service.db.models import TemporalWorkflowType
 
     assert WORKFLOW_ENTRY_BY_TYPE[TemporalWorkflowType.MANIFEST_INGEST] == "manifest"
-    from tools.qdrant_cutover_rehearsal import historical_manifest_entries
-
-    entries = historical_manifest_entries()
-    kinds = {entry["entry"] for entry in entries}
-    assert kinds == {"manifest_ref", "manifestArtifactRef"}
 
 
 def test_lineage_fallback_survives_registry_removal() -> None:
@@ -455,11 +450,6 @@ def test_sanitized_evidence_supply_contract() -> None:
     assert MANIFEST_REGISTRY_MIGRATION_CONTRACT == (
         "manifest-registry-migration-4191-v1"
     )
-    doc = REPO_ROOT / "docs/tmp/ManifestRegistryDisposition-4191.md"
-    assert doc.exists()
-    text = doc.read_text(encoding="utf-8")
-    assert "manifest_registry_migration_4191" in text
-    assert "manifest_registry_export_4191" in text
 
 
 def test_sanitized_supply_package_is_durable_and_secret_free() -> None:

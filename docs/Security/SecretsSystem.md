@@ -2,8 +2,6 @@
 
 **Document Class:** Canonical declarative
 **Viewpoint:** Cross-Cutting Concept
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 Status: **Design Draft**
 Owners: MoonMind Engineering
 Last Updated: 2026-08-18
@@ -11,7 +9,6 @@ Last Updated: 2026-08-18
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
 > It is a declarative contract for how secrets are referenced, stored, resolved, materialized, and audited.
-> Phase sequencing, migration work, and implementation checklists belong in `docs/tmp/`.
 
 ---
 
@@ -89,7 +86,7 @@ Binary attachments, terminal input, and browser automation are outside the nativ
 
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content. Disabled-mode passthrough carries the original payload in `original_content` / `original_bundle` only; audit evidence must use the `audit_metadata()` projection (decision, policy ref, finding categories/locations, sanitized diagnostics), which never includes raw payloads. Finding locations and previews are bounded and secret-safe.
 
-Verified boundary matrix (MoonMind#809): PR/issue comments via `JiraToolService.add_comment` (`scan_outbound_text`, explicit mode), provider follow-up messages via `JulesClient.send_message` and the `jules_send_message` / `answer_question` activities (operator settings), operator workflow messages via the Temporal service `SendMessage` path (operator settings), native queued/steered messages via `scan_native_outbound` (digest plus idempotency binding through the shared `canonical_outbound_digest`), notification/publish payloads and git push bundles via `scan_outbound_bundle` plus `push_scan_coverage_error` fail-closed truncation handling. Boundary proof lives in `tests/unit/security/test_outbound_boundaries_809.py` alongside `test_outbound_scan.py`, `test_push_scan_truncation_809.py`, and `test_native_outbound_scan.py`. Non-native senders recompute `canonical_outbound_digest` over the exact outbound payload before each side effect and never reuse an earlier allow after mutation, retry, or route change.
+Verified boundary matrix: PR/issue comments via `JiraToolService.add_comment` (`scan_outbound_text`, explicit mode), provider follow-up messages via `JulesClient.send_message` and the `jules_send_message` / `answer_question` activities (operator settings), operator workflow messages via the Temporal service `SendMessage` path (operator settings), native queued/steered messages via `scan_native_outbound` (digest plus idempotency binding through the shared `canonical_outbound_digest`), notification/publish payloads and git push bundles via `scan_outbound_bundle` plus `push_scan_coverage_error` fail-closed truncation handling. Boundary proof lives in `tests/unit/security/test_outbound_boundaries_809.py` alongside `test_outbound_scan.py`, `test_push_scan_truncation_809.py`, and `test_native_outbound_scan.py`. Non-native senders recompute `canonical_outbound_digest` over the exact outbound payload before each side effect and never reuse an earlier allow after mutation, retry, or route change.
 
 ---
 
@@ -476,7 +473,7 @@ Provider Profiles and runtime launches should fail explicitly when a referenced 
 
 The system should make it possible to rotate secrets without rewriting durable provider-profile contracts when the reference identity remains the same.
 
-### 12.0 Atomic rotation, revisions, and invalidation (#4006)
+### 12.0 Atomic rotation, revisions, and invalidation
 
 One transaction owns each secret mutation: activation, binding-revision
 bookkeeping, and metadata-only audit/outbox records commit together, and no
@@ -512,7 +509,7 @@ around a caller-owned transaction.
   identities across scopes.
 
 Connection-policy revalidation against the live host record is owned by the
-repository-reference integration (the follow-up to #4005); rotation accepts
+repository-reference integration; rotation accepts
 the agreed `expected_policy_revision` binding, records it in audit/outbox
 evidence, and requires explicit re-admission on ownership change.
 

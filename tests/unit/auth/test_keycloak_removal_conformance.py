@@ -1,7 +1,6 @@
 """Required end-to-end authentication conformance coverage (#4128).
 
-MoonLadderStudios/MoonMind#4128 (parent #4116; plan K1/K4/K5 in
-``docs/tmp/KeycloakRemovalPlan.md``): prove the supported authentication
+MoonLadderStudios/MoonMind#4128 (parent #4116): prove the supported authentication
 journey and negative authority matrix in required CI without Keycloak or
 external credentials.
 

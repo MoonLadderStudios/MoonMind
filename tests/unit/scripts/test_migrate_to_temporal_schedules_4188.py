@@ -74,11 +74,3 @@ def test_retired_definitions_skip_before_schedule_creation() -> None:
     assert "continue" in source[guard_pos:create_pos]
 
 
-def test_producer_ledger_covers_migration_disposition() -> None:
-    """The MR1 caller ledger maps the migration path to this test."""
-    ledger = (
-        REPO_ROOT / "docs" / "tmp" / "ManifestProducerLedger-4188.md"
-    ).read_text(encoding="utf-8")
-    assert "migrate_to_temporal_schedules" in ledger
-    assert "manifest_run" in ledger
-    assert "test_migrate_to_temporal_schedules_4188" in ledger

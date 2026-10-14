@@ -1,7 +1,7 @@
 """Generic OIDC advanced identity source (MoonLadderStudios/MoonMind#4124).
 
-Parent: #4116. Depends on #4118, #4119, #4120, #4121. Plan coverage: K3/K4
-advanced modes in ``docs/tmp/KeycloakRemovalPlan.md``.
+Parent: #4116. Depends on #4118, #4119, #4120, #4121. Covers
+advanced modes.
 
 Portable, runtime-neutral capability: authorization-code + PKCE login,
 single-use transaction-bound state/nonce, exact redirect validation, and

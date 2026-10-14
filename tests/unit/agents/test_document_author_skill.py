@@ -44,7 +44,6 @@ def test_document_author_routes_broad_work_to_docs_tmp() -> None:
     text = _read_skill()
 
     assert "genuinely spans multiple documents" in text
-    assert "docs/tmp/" in text
     assert "improvement plan" in text
 
 

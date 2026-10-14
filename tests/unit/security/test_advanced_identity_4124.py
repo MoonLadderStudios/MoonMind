@@ -1,8 +1,7 @@
 """Advanced identity coverage: generic OIDC + trusted proxy (#4124).
 
 MoonLadderStudios/MoonMind#4124 (parent #4116; depends on #4118, #4119,
-#4120, #4121). Plan coverage: advanced modes, K3 and K4 in
-``docs/tmp/KeycloakRemovalPlan.md``.
+#4120, #4121). Covers advanced modes.
 
 Hermetic by design: a local OIDC fixture (symmetric JWKS, fake transport)
 and trusted-proxy fixtures exercise the production library
