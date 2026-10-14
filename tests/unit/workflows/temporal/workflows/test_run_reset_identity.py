@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -33,7 +34,10 @@ async def test_recorded_policy_retains_remediation_child_identity(
     expected_run: str,
 ) -> None:
     now = datetime(2026, 9, 6, tzinfo=UTC)
-    info = SimpleNamespace(workflow_id="workflow", run_id=current_run)
+    info = SimpleNamespace(
+        workflow_id="workflow", run_id=current_run,
+        task_queue=settings.temporal.user_workflow_v2_task_queue,
+    )
     monkeypatch.setattr(run_module.workflow, "info", lambda: info)
     monkeypatch.setattr(run_module.workflow, "now", lambda: now)
     envelope = compile_resilience_policy(

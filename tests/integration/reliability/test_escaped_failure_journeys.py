@@ -3256,8 +3256,10 @@ async def test_nested_yield_attempts_remain_non_terminal(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+@pytest.mark.parametrize("publication_contract", [False, True], ids=["retained-queue", "admitted-queue"])
 async def test_nested_yield_continuation_replays_through_production_agent_run_route(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recover: bool,
+    publication_contract: bool,
 ) -> None:
     """MoonLadderStudios/MoonMind#3145 continuation journey across the agent route.
 
@@ -3275,10 +3277,12 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
     # AgentRun evaluates terminal evidence and drives continuation outside a live
     # Temporal event loop here; enable the continuation patch gates and provide a
     # workflow info stub so the production helper runs in-process.
+    queue_suffix = ".publication-v1" if publication_contract else ""
     workflow_info = SimpleNamespace(
         namespace="default",
         workflow_id="reliability-3145:agent:node-1",
         run_id="reliability-3145-run",
+        task_queue=settings.temporal.user_workflow_v2_task_queue + queue_suffix,
         search_attributes={},
         parent=None,
     )
@@ -3395,8 +3399,8 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
     # evaluation uses the isolated control lane. Both are production queues
     # polled by the same agent-runtime fleet, never per-test task queues.
     assert routed_queues == {
-        settings.temporal.activity_agent_runtime_task_queue,
-        settings.temporal.activity_agent_runtime_control_task_queue,
+        settings.temporal.activity_agent_runtime_task_queue + queue_suffix,
+        settings.temporal.activity_agent_runtime_control_task_queue + queue_suffix,
     }
     expected_turns = 1 if recover else expected["continuationCount"]
     assert len(turns) == expected_turns
@@ -3668,6 +3672,7 @@ async def test_omnigent_auto_run_resolves_empty_skill_projection(
         namespace="default",
         workflow_id=manifest["incidentWorkflowId"],
         run_id=manifest["incidentRunId"],
+        task_queue=settings.temporal.user_workflow_v2_task_queue,
         parent=None,
         search_attributes={},
     )
@@ -6035,6 +6040,7 @@ async def test_resolved_pr_resolver_contract_owns_durable_continuation(
         namespace="default",
         workflow_id=manifest["incidentWorkflowId"],
         run_id=manifest["incidentRunId"],
+        task_queue=settings.temporal.user_workflow_v2_task_queue,
         parent=parent_info,
         search_attributes={},
     )
