@@ -1,7 +1,5 @@
 # Temporal Platform Foundation
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 **Project:** MoonMind
 **Doc type:** System architecture / platform foundation
 **Status:** Draft (implementation-oriented)
@@ -352,6 +350,6 @@ The Temporal Platform Foundation is "done" when:
 5. Worker fleets are polling their configured workflow and activity task queues directly.
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged.
 7. SQL visibility schema upgrade path rehearsed in pre-rollout validation.
-8. Core workflow catalog (`MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.MergeAutomation`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable. (`MoonMind.ManifestIngest` retired by MoonLadderStudios/MoonMind#4192: old rows readable as replay/drain evidence only.)
+8. Core workflow catalog (`MoonMind.UserWorkflow`, `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.MergeAutomation`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`) registered and schedulable. (`MoonMind.ManifestIngest` is not registered; old rows are readable as replay/drain evidence only.)
 9. Canonical Search Attributes (`mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`) registered and verified in Visibility queries.
 10. Provider-profile coordination workflows running for managed runtimes that require them.

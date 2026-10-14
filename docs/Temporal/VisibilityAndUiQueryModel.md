@@ -87,7 +87,7 @@ MoonMind currently registers 21 custom Search Attributes in the Temporal namespa
 | `mm_target_runtime` | KeywordList | API/workflow start path; workflow repair | One-item list containing canonical runtime id for filtering/facets. |
 | `mm_target_skill` | KeywordList | API/workflow start path; workflow repair | One-item list containing primary skill id/slug/name for filtering/facets. |
 | `mm_title` | KeywordList | Workflow start/lifecycle logic | Tokenized title word search. Must be materialized before relying on title search. |
-| `mm_provider_profile` | Text | API/workflow start path; workflow upsert when a launch resolves the Provider Profile | Recorded Provider Profile membership: opaque state and hashed-ID tokens for Workflows list filters/facets ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). Not sortable. |
+| `mm_provider_profile` | Text | API/workflow start path; workflow upsert when a launch resolves the Provider Profile | Recorded Provider Profile membership: opaque state and hashed-ID tokens for Workflows list filters/facets ([Workflows List §7.3](../UI/WorkflowsListPage.md#72-how-the-projection-is-recorded)). Not sortable. |
 | `mm_has_dependencies` | Bool | Dependency lifecycle | Dependency presence signal. Re-evaluate if unused by production queries. |
 | `mm_dependency_count` | Int | Dependency lifecycle | Bounded dependency count. Re-evaluate if unused by production queries. |
 | `SessionEpoch` | Int | Managed session workflows | Managed-session clear/reset/epoch correlation. |

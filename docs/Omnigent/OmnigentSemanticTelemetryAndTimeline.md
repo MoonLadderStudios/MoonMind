@@ -5,10 +5,6 @@ Document Class: System / Feature Design View
 Owners: MoonMind Platform
 Last updated: 2026-08-19
 
-**Issue:** [MoonLadderStudios/MoonMind#3708](https://github.com/MoonLadderStudios/MoonMind/issues/3708) ([Omnigent control plane 7/11]).
-
-**Implementation tracking:** rollout notes and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not in this canonical design document.
-
 ## Related docs
 
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md) — the durable aggregates this telemetry and timeline project.
@@ -72,7 +68,7 @@ Low-cardinality metric families live in
 `moonmind/omnigent/control_plane/metrics.py`; the concurrency *conflict* counters
 (revision/fencing conflicts, duplicate-command suppression, delivery-unknown
 created/reconciled, stale observation retained, cleanup-claim conflicts) remain
-in `telemetry.py` (#3704) and are not duplicated. The added families cover:
+in `telemetry.py` and are not duplicated. The added families cover:
 
 - **Reconciliation:** decisions by decision/reason class, convergence latency,
   repeated no-progress decisions, quarantined ambiguity, snapshot-recovered

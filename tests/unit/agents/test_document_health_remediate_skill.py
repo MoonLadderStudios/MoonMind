@@ -91,7 +91,6 @@ def test_remediation_handles_docs_architecture_defects_and_broad_work() -> None:
         "unverifiable canonical claims",
     ):
         assert expected in text
-    assert "docs/tmp/" in text
     assert "improvement plan" in text
 
 

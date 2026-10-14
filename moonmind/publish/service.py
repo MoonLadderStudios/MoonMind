@@ -447,71 +447,19 @@ class PublishService:
                     cwd=repo_dir,
                     check=False,
                 )
-                if getattr(ancestry, "returncode", 1) != 0:
-                    reconciled = False
-                    if (
-                        commit_created
-                        and publication_branch_name is None
-                        and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", remote_sha)
-                    ):
-                        # A restored pre-publication save can recreate the same
-                        # generated candidate with a different commit timestamp.
-                        # Reuse the observed original, never replace its history.
-                        await run_command(
-                            [
-                                self._git_binary,
-                                "fetch",
-                                "--no-tags",
-                                "origin",
-                                f"refs/heads/{branch_name}",
-                            ],
-                            cwd=repo_dir,
-                            env=push_env,
-                            redaction_values=(token,) if token else (),
-                        )
-                        fetched = await run_command(
-                            [self._git_binary, "rev-parse", "FETCH_HEAD"],
-                            cwd=repo_dir,
-                        )
-                        if str(fetched.stdout or "").strip() == remote_sha:
-                            candidate = await run_command(
-                                [
-                                    self._git_binary,
-                                    "show",
-                                    "--no-patch",
-                                    "--format=%T%n%P%n%an%n%ae%n%cn%n%ce%n%B",
-                                    "HEAD",
-                                ],
-                                cwd=repo_dir,
-                            )
-                            original = await run_command(
-                                [
-                                    self._git_binary,
-                                    "show",
-                                    "--no-patch",
-                                    "--format=%T%n%P%n%an%n%ae%n%cn%n%ce%n%B",
-                                    remote_sha,
-                                ],
-                                cwd=repo_dir,
-                            )
-                            candidate_identity = str(candidate.stdout or "").strip()
-                            original_identity = str(original.stdout or "").strip()
-                            if (
-                                candidate_identity
-                                and candidate_identity == original_identity
-                            ):
-                                # Tree, parents, author/committer identities and
-                                # publication message agree; dates may vary.
-                                # A concurrent same-tree descendant still fails.
-                                await run_command(
-                                    [self._git_binary, "reset", "--soft", remote_sha],
-                                    cwd=repo_dir,
-                                )
-                                reconciled = True
-                    if not reconciled:
-                        raise RuntimeError(
-                            "publication branch is not a fast-forward of the remote head"
-                        )
+                if getattr(
+                    ancestry, "returncode", 1
+                ) != 0 and not await self._adopt_recreated_remote_head(
+                    repo_dir=repo_dir,
+                    run_command=run_command,
+                    branch_name=branch_name,
+                    remote_sha=remote_sha,
+                    push_env=push_env,
+                    token=token,
+                ):
+                    raise RuntimeError(
+                        "publication branch is not a fast-forward of the remote head"
+                    )
 
         async def run_dependency_git(
             *args: str, cwd: Path = repo_dir, network: bool = False
@@ -842,6 +790,65 @@ class PublishService:
             body=body,
             token=token,
         )
+
+    async def _adopt_recreated_remote_head(
+        self,
+        *,
+        repo_dir: Path,
+        run_command: CommandRunner,
+        branch_name: str,
+        remote_sha: str,
+        push_env: dict[str, str],
+        token: str,
+    ) -> bool:
+        """Adopt a remote tip that is the same candidate recreated at another time.
+
+        A successor attempt recommits the saved work, so its commit differs from
+        the predecessor's pushed commit only in timestamps. When the remote tip
+        matches in everything but those timestamps (tree, parents, author,
+        committer, and message), it is that same publication and becomes the
+        local branch; any other commit is a concurrent update and is refused.
+        """
+
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", remote_sha):
+            return False
+        fetched = await run_command(
+            [self._git_binary, "fetch", "--no-tags", "origin", remote_sha],
+            cwd=repo_dir,
+            check=False,
+            env=push_env,
+            redaction_values=(token,) if token else (),
+        )
+        if getattr(fetched, "returncode", 1) != 0:
+            return False
+
+        async def identity_without_dates(revision: str) -> str | None:
+            result = await run_command(
+                [
+                    self._git_binary,
+                    "show",
+                    "-s",
+                    "--format=%T %P%n%an <%ae>%n%cn <%ce>%n%B",
+                    revision,
+                ],
+                cwd=repo_dir,
+                check=False,
+            )
+            if getattr(result, "returncode", 1) != 0:
+                return None
+            return str(result.stdout or "").strip() or None
+
+        remote_identity = await identity_without_dates(remote_sha)
+        if remote_identity is None or remote_identity != await identity_without_dates(
+            branch_name
+        ):
+            return False
+        # Same tree, so the index and worktree already match the adopted tip.
+        await run_command(
+            [self._git_binary, "reset", "--soft", remote_sha],
+            cwd=repo_dir,
+        )
+        return True
 
     async def _scan_git_push_before_publish(
         self,

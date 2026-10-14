@@ -2,7 +2,6 @@
 
 **Contract version:** `moonmind.codex-omnigent-cutover/v1`
 **Support-matrix version:** `codex-omnigent-support-matrix/v1`
-**Source:** MoonLadderStudios/MoonMind#3518; protected-row binding MoonLadderStudios/MoonMind#3564 (observations from MoonLadderStudios/MoonMind#3563)
 
 This owns Codex support evidence and retained cutover diagnostic contracts;
 selection and retirement controls stay with their providing code owners.
@@ -24,7 +23,7 @@ diagnostic/evidence phases, and strict operator remediation matrix. The versione
 promotes every combination (states, canary, rollback, migration status) is
 owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 
-> MoonLadderStudios/MoonMind#3931: ordinary new work (Workflow Create,
+> Ordinary new work (Workflow Create,
 > schedule create) resolves through the one shared runtime-target selection
 > boundary (`moonmind.workflows.executions.new_work_runtime`), not through
 > `MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` /
@@ -55,8 +54,8 @@ owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 The retained v1 cutover evidence and diagnostic projection use the numbered
 phase vocabulary below. These original meanings decode existing observations;
 they no longer select current Create or schedule defaults. New-work selection
-uses the shared rollout boundary without these phase fields (#3931), and
-ordinary admission is certificate independent (#4560); see
+uses the shared rollout boundary without these phase fields, and
+ordinary admission is certificate independent; see
 [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration) and
 [Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
 
@@ -110,8 +109,8 @@ evidence refs. It also remains compile-time blocked by
 `DIRECT_LAUNCH_REMOVAL_VERSION` until the cohesive retirement change removes
 those paths and enables its absence guards; protected-live evidence alone
 cannot authorize removal. The single deployment-owned retirement cutoff
-`MOONMIND_CODEX_DIRECT_RETIRED_AT` (MoonLadderStudios/MoonMind#3931,
-`moonmind.omnigent.codex_cutover_drain`) closes the direct lane to new work
+`MOONMIND_CODEX_DIRECT_RETIRED_AT`
+(`moonmind.omnigent.codex_cutover_drain`) closes the direct lane to new work
 once its instant passes, regardless of phase; unset preserves the usable path
 until its qualified replacement is available. The bounded drain procedure in
 the same module inventories schedules, queued starts, open parent/child
@@ -164,7 +163,7 @@ under which it may be observed; `REQUIRED_MATRIX_ROWS` is its ordered row-ID
 projection. Row ownership is fixed by this catalog, never by a caller-supplied
 list.
 
-Protected-live owners (MoonLadderStudios/MoonMind#3563) publish one passing
+Protected-live owners publish one passing
 `moonmind.codex-omnigent-cutover-artifact/v2` document for each required
 evidence kind. Every artifact declares a `producerVersion` and a `rows` array
 of observed-evidence objects; each object carries the owned `row`, `hostMode`,
@@ -225,7 +224,7 @@ and architecture already recorded there.
 | Cancellation, timeout, failure, cleanup, janitor | static/on-demand | implemented; live support pending | `tests/integration/omnigent/test_execute_fake_server.py`, `tests/unit/omnigent/test_oauth_host_janitor.py`; live lifecycle artifact required |
 | Checkpoint capture, reattach, cold restore, branches | external-state plus workspace evidence | partially implemented; unsupported as a complete matrix | [`CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md); capture/restore/branch live evidence required |
 | Operator/autonomous remediation | policy-bound actions | ordinary capability checks; live qualification separately unverified; autonomous gate closed | Existing action/admission/verification owners in [`WorkflowRemediation.md`](../Workflows/WorkflowRemediation.md) and [`RemediationVerificationCadence.md`](../Workflows/RemediationVerificationCadence.md); optional live observations and retained strict v1 certification in `moonmind.omnigent.remediation_matrix` |
-| Initial/follow-up RAG | none; native retrieval retired (MoonLadderStudios/MoonMind#4103) | retired; explicit `rag`/`followUpRetrieval` requests are rejected before launch | `tests/unit/config/test_vector_free_regression_4114.py`; the row stays in the protected v1 catalog (`moonmind/omnigent/cutover.py`) until its release owner retires it |
+| Initial/follow-up RAG | none; native retrieval is not provided | retired; explicit `rag`/`followUpRetrieval` requests are rejected before launch | `tests/unit/config/test_vector_free_regression_4114.py`; the row stays in the protected v1 catalog (`moonmind/omnigent/cutover.py`) until its release owner retires it |
 | Persistent policy and agent-profile UI | immutable selected versions | partial; unsupported as a complete matrix | persisted policy/profile UI and snapshot evidence required |
 | Enforced egress | host/runtime boundary | partial; unsupported | enforcement and denial evidence required; declarations alone do not qualify |
 | Architecture and images | `linux/amd64`; digest-pinned server/host | amd64 evidence contract implemented; other architectures unsupported until proven | `moonmind/omnigent/conformance.py`; each supported architecture requires immutable-image live evidence |
@@ -287,7 +286,7 @@ immutable `images`, `profileVersion`/`profileSha256`, `launchPolicyVersion`,
 schema version, content type, generated time, byte bound, and SHA-256 digest.
 Mutating rows additionally record `actionDelivery.status` and,
 **as a separate field**, `repairVerification.outcome`: action delivery and
-target repair are never the same column (MoonLadderStudios/MoonMind#3622). The
+target repair are never the same column. The
 `uiJourney` must assert the browser-originated normal Create path
 (`browserOriginated`, `importedPinnedRemediationDraft`, `normalCreateRequest`,
 `validatedPolicyProfileFields`, `workflowDetailFollowThrough`) and must carry no

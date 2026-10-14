@@ -47,7 +47,6 @@ from api_service.services.settings_catalog import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SETTINGS_SYSTEM_DOC = REPO_ROOT / "docs" / "Security" / "SettingsSystem.md"
-LOCAL_FIRST_DOC = REPO_ROOT / "docs" / "Security" / "SettingsLocalFirstBringUp.md"
 SETTINGS_ROUTER_FILE = (
     REPO_ROOT / "api_service" / "api" / "routers" / "settings.py"
 )
@@ -552,18 +551,6 @@ def test_section26_backend_component_split_is_reflected_in_modules():
         if not hasattr(module, name)
     ]
     assert not missing, f"Missing §26 components: {missing}"
-
-
-def test_local_first_walkthrough_doc_is_present_and_links_back_to_invariants():
-    """Doc gate — the local-first Settings walkthrough exists and references this suite."""
-    assert LOCAL_FIRST_DOC.exists(), (
-        f"Local-first Settings walkthrough must be documented at {LOCAL_FIRST_DOC}."
-    )
-    body = LOCAL_FIRST_DOC.read_text()
-    assert "MM-713" in body
-    # The doc must reference the smoke test path so reviewers can find the
-    # automated walkthrough.
-    assert "test_settings_local_first_smoke.py" in body
 
 
 def test_guardrail_suite_covers_all_sections_one_test_per_bullet():

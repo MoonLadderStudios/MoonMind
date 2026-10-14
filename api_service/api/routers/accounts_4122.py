@@ -1,7 +1,6 @@
 """Built-in accounts HTTP boundary (MoonLadderStudios/MoonMind#4122).
 
-Parent: #4116. Depends on #4118/#4119/#4120/#4121. Plan coverage: K3
-account lifecycle in ``docs/tmp/KeycloakRemovalPlan.md``; declarative
+Parent: #4116. Depends on #4118/#4119/#4120/#4121. Declarative
 target in ``docs/Security/AuthenticationContracts.md`` §7.
 
 This router is the request-level surface over the already-landed #4122

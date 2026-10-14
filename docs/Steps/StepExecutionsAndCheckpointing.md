@@ -1,1129 +1,286 @@
 # Step Executions and Checkpointing
 
-Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-09-12
-Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
+Covers: semantic step reattempts, checkpointed side-effect policy, gated iteration, the failed-step recovery primitive, autonomous story loops
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
-
-## Plane-aware checkpoints
-
-Policy callers select session state, workspace state, or both. Session evidence
-supports reattach or cold-session decisions; workspace evidence supports repository
-continuation and must satisfy the artifact contract, digest, and boundary map in the
-frozen workspace capability. A session `external_state_ref` never represents files,
-git metadata, generated tests, or uncommitted changes. Omnigent workspace boundaries
-therefore use MoonMind `worktree_archive` checkpoints and
-`workspace.apply_checkpoint`, while replay consumes the recorded capability snapshot
-instead of performing a mutable registry lookup. The workflow derives that snapshot
-from its selected runtime before launch. Authored node inputs and step result
-`runtimeCapabilities` fields cannot override it or supply checkpoint Activity
-bindings. Retained histories keep their recorded decisions behind Temporal patch
-markers.
 
 ---
 
 ## 1. Purpose
 
-This document defines the desired-state MoonMind model for repeating work safely.
-
-MoonMind workflow executions often need more than one pass. An implementation step may fail tests, a verifier may report `ADDITIONAL_WORK_NEEDED`, a pull request resolver may need another repair attempt, an autonomous story loop may need a fresh agent context, or an operator may resume a failed workflow execution from the last failed step.
-
-All of those cases depend on the same primitive:
+MoonMind workflow executions often need more than one pass: an implementation step fails tests, a verifier reports `ADDITIONAL_WORK_NEEDED`, a pull request resolver needs another repair, an autonomous story loop needs a fresh agent context, or an operator resumes a failed execution from its failed step. All of these rest on one primitive:
 
 > Re-execute a logical step as a new attempt while explicitly controlling which previous side effects are preserved, restored, ignored, invalidated, promoted, or superseded.
 
-This document defines that primitive as **Step Executions with Checkpointing**.
-
-It is canonical for:
-
-1. semantic re-execution of a logical step;
-2. per-attempt identity, lineage, context, artifacts, checks, and disposition;
-3. workspace, git, artifact, memory, retrieval, and external side-effect policy;
-4. gated iteration loops such as `implement -> verify -> remediate -> verify`;
-5. the shared foundation used by failed-step recovery and autonomous PRD/story/quality-gate loops.
-
-This document does **not** redefine:
-
-1. product-facing Step Types;
-2. executable Tool contracts;
-3. generic artifact storage internals;
-4. Temporal Activity retry policy;
-5. provider-specific runtime launch internals;
-6. full run-history product UI.
-
-Use `docs/Steps/StepTypes.md` for the user-facing step taxonomy. Step Executions are execution-plane records, not authoring steps and not Step Types. Use `docs/Temporal/StepLedgerAndProgressModel.md` for the operator-facing step ledger shape. Use `docs/Workflows/WorkflowArchitecture.md` and `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md` for workflow start, new-run, and failed-step recovery semantics.
+This document describes that primitive — **Step Executions with Checkpointing** — and the gated iteration and recovery behavior built on it. Step Executions are execution-plane records, not authoring steps or Step Types (`docs/Steps/StepTypes.md`). The operator-facing ledger lives in `docs/Temporal/StepLedgerAndProgressModel.md`; start, new-run, and recovery semantics live in `docs/Workflows/WorkflowArchitecture.md` and `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`. Activity retry policy, artifact storage internals, and provider launch internals are out of scope.
 
 ---
 
 ## 2. Layering and Source of Truth
 
-A MoonMind plan contains **logical steps**. A logical step may have one or more **Step Executions**.
+A plan contains **logical steps**; each may have several **Step Executions** (for example, attempt 1 fails a quality gate, attempt 2 fails integration evidence, attempt 3 passes and is accepted).
 
-```text
-Logical Step: implement-story-S004
-  Attempt 1: failed quality gate
-  Attempt 2: failed integration evidence
-  Attempt 3: passed and accepted
-```
+| Layer | Authority |
+| --- | --- |
+| Resolved plan artifact | Planned steps, order, dependencies, tool/skill descriptors |
+| Workflow state | Live compact step/attempt state, loop state, budgets, child refs |
+| Step ledger query | Read projection of workflow state for operators |
+| Step execution manifest artifact | Immutable full evidence for one attempt |
+| Checkpoint artifact/read model | Evidence needed to restore or validate a step boundary |
+| Git/repo state | Accepted code once committed/published |
+| App DB projection | Repairable read model only |
 
-The execution-plane source-of-truth model is layered.
+Attempt evidence is append-only, and workflow state carries compact refs and bounded summaries so histories stay small and replayable. The ledger shows the latest attempt by default; history is reachable through manifest refs. App DB projections sit downstream of workflow state, artifact linkage, and git state, so they never invent step or attempt truth.
 
-| Layer | Role | Authority |
-| --- | --- | --- |
-| Resolved plan artifact | Planned logical steps, order, dependencies, titles, tool/skill descriptors | Authoritative planned structure |
-| Workflow state | Current/latest compact step and attempt state, active loop state, budgets, child refs | Authoritative live state |
-| Step ledger query | Operator-facing current step rows, latest attempt refs, checks, preserved provenance | Read projection of workflow state |
-| Step execution manifest artifact | Immutable full attempt evidence: context, outputs, diffs, gates, retrieval, memory proposals, side-effect classification | Authoritative attempt evidence |
-| Checkpoint artifact/read model | Durable state needed to restore or validate step boundaries | Authoritative recovery evidence |
-| Git/repo state | Accepted code changes, branch state, commits, PR refs | Authoritative accepted code state when committed/published |
-| Derived app DB projection | Fast UI/API reads, degraded reads, optional attempt list | Repairable read model only |
-
-Rules:
-
-1. Attempt evidence is append-only.
-2. Workflow state carries compact refs and bounded summaries, not large payloads.
-3. The step ledger may show only the latest/current attempt by default.
-4. Attempt history is available through expanded API/UI surfaces using step execution manifest refs.
-5. App DB projections must be downstream of workflow state, artifact linkage, and git state. They must not invent step or attempt truth.
-
-Canonical step execution manifest content type (`STEP_EXECUTION_MANIFEST_CONTENT_TYPE`):
-
-```text
-application/vnd.moonmind.step-execution+json;version=1
-```
-
-Canonical checkpoint content type (`STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE`):
-
-```text
-application/vnd.moonmind.step-execution-checkpoint+json;version=1
-```
-
-These are the only two step-execution evidence content types. Older spellings such as `step-checkpoint` or `step-resume-checkpoint` are superseded and must not appear in new writers, docs, or fixtures.
+The two evidence content types are `application/vnd.moonmind.step-execution+json;version=1` (`STEP_EXECUTION_MANIFEST_CONTENT_TYPE`) and `application/vnd.moonmind.step-execution-checkpoint+json;version=1` (`STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE`).
 
 ### 2.1 Manifest vs checkpoint
 
-The manifest and the checkpoint are **separate artifacts with separate roles**:
+The **manifest** is the complete immutable evidence of one semantic execution — identity, lineage, context refs, outputs, checks, side effects, disposition — written at start and at terminal classification and read by attempt history and audits. The **checkpoint** is the minimal durable evidence needed to restore or validate state at one boundary, consumed by workspace policy application, Step Re-execution, and RecoverFromFailedStep.
 
-| Artifact | Role | Written when | Consumed by |
-| --- | --- | --- | --- |
-| Step execution manifest | Complete immutable evidence of one semantic execution: identity, lineage, context refs, outputs, checks, side effects, disposition | At execution start and at terminal classification | Operator/API attempt history, audits, gap diagnosis |
-| Step execution checkpoint | Minimal durable evidence needed to restore or validate state at one boundary | At checkpoint boundaries (section 9.1) | Workspace policy application, Step Re-execution, RecoverFromFailedStep |
+The manifest references checkpoints (`workspace.checkpointBeforeRef`, `workspace.checkpointAfterRef`); checkpoints never embed manifests. Recovery requires a valid checkpoint, so a manifest without checkpoints is evidence only and cannot satisfy a policy that demands restorable state.
 
-The manifest references checkpoints by ref (`workspace.checkpointBeforeRef`, `workspace.checkpointAfterRef`); checkpoints never embed manifests. Recovery requires a valid checkpoint, not a manifest. A manifest without checkpoints is evidence-only and cannot satisfy a workspace policy that demands restorable state.
+### 2.2 Plane-aware checkpoints
 
-### 2.2 Durable checkpoint capture and reads
+Policy callers select session state, workspace state, or both. Session evidence supports reattach or cold-session decisions; workspace evidence supports repository continuation and must satisfy the artifact contract, digest, and boundary map in the frozen workspace capability. A session `external_state_ref` never represents files, git metadata, or uncommitted changes, so Omnigent workspace boundaries use MoonMind `worktree_archive` checkpoints and `workspace.apply_checkpoint`.
 
-Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`,
-and `artifact://art_...`) to the durable URI representation used by Omnigent
-checkpoint identities. They preserve captured artifact bytes and compute evidence
-digests from those bytes. A bare first-message SHA-256 receives its typed prefix;
-malformed or unavailable capture retains a negative recovery-capability projection.
-Structured plan references retain their artifact ID and SHA-256 rather than a
-string representation of the reference object.
+The workflow derives the runtime capability snapshot from its selected runtime before launch, and replay consumes the recorded snapshot rather than a mutable registry lookup, keeping replay deterministic. Authored node inputs and step result `runtimeCapabilities` fields cannot override it or supply checkpoint Activity bindings. Retained histories keep their recorded decisions behind Temporal patch markers.
 
-New checkpoint and workspace artifacts link to the actual Temporal Activity's
-workflow and run. Reads carry that trusted workflow scope through the existing
-artifact authorization policy. Caller-supplied capture identities cannot select a
-different workflow or run. Checkpoint discovery includes the owning run's step
-ledger, preserves declared boundaries and attempt ordinals, and rejects a ledger
-from another execution. The live ledger read is bounded and best-effort: a missing
-Temporal history or unavailable connection retains checkpoints already persisted
-in the execution's memo, parameters, or finish summary. An available but mismatched
-or malformed ledger remains an error. Recovery compares artifact reference aliases
-while still requiring source membership and completed artifact metadata.
+### 2.3 Durable capture and reads
 
-Recovery and claim release still require their original input, plan, integrity,
-capability, side-effect, and cleanup evidence. These representation adapters do not
-repair historical evidence or supply implementation-verification proof.
+Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`, `artifact://art_...`) to the durable URI form of Omnigent checkpoint identities, preserve captured bytes, and compute digests from those bytes. Malformed or unavailable capture keeps a negative recovery-capability projection.
+
+New checkpoint and workspace artifacts link to the actual Activity's workflow and run, and reads carry that trusted scope through normal artifact authorization, so caller-supplied identities cannot select another workflow or run. Checkpoint discovery reads the owning run's step ledger and rejects a ledger from another execution. That live read is best-effort: if Temporal history is unavailable it falls back to checkpoints already persisted in the memo, parameters, or finish summary, while a mismatched or malformed ledger remains an error. These adapters never repair historical evidence; recovery still requires its original input, plan, integrity, capability, side-effect, and cleanup evidence.
 
 ---
 
-## 3. Desired-State Summary
+## 3. Terminology
 
-Each Step Execution has its own:
-
-1. attempt identity;
-2. optional cross-run lineage identity;
-3. reason for execution;
-4. prepared input snapshot;
-5. immutable context bundle;
-6. workspace and git baseline;
-7. agent child workflow or tool activity refs;
-8. artifact refs;
-9. quality checks and gate verdicts;
-10. side-effect classification and disposition;
-11. downstream invalidation effects;
-12. terminal status and terminal disposition.
-
-Repeating a step must never be implicit. Before launching a new attempt, MoonMind must know:
-
-1. which logical step is being repeated;
-2. which previous attempt caused the repeat;
-3. what input and context the new attempt sees;
-4. what workspace state the new attempt starts from;
-5. which artifacts are evidence only;
-6. which artifacts are reused as inputs;
-7. what retrieval and memory context is visible;
-8. which side effects are preserved, discarded, invalidated, or promoted;
-9. what idempotency keys guard side effects;
-10. what budget and stop rule applies.
-
-A passing attempt may advance the logical step only after workflow-owned gates accept the result. Agent self-assessment alone is not sufficient.
-
----
-
-## 4. Terminology
-
-| Term | Desired meaning |
-| --- | --- |
-| **Logical Step** | Stable plan-node unit of work identified by `logicalStepId`. |
-| **Step Execution** | One semantic execution of a logical step. Run-scoped executions are scoped to `(workflowId, runId, logicalStepId, executionOrdinal)`. |
-| **Execution Ordinal** | The semantic execution number within one `(workflowId, runId, logicalStepId)` scope. |
-| **Lineage Execution Ordinal** | Optional cross-run continuation ordinal used for UI/provenance, such as “recovered execution 2” when a linked recovery execution starts run-scoped execution 1. |
-| **Retry** | Low-level re-run of the same idempotent Activity or provider call within the same Step Execution. |
-| **Step Re-execution** | Semantic re-execution of the same logical step as a new Step Execution. |
-| **RecoverFromFailedStep** | Product recovery action that creates a linked follow-up Workflow Execution and starts new work by creating a new Step Execution at the failed logical step. |
-| **Checkpoint** | Durable evidence sufficient to restore or validate state at a step boundary. |
-| **Context Bundle** | Immutable Step Execution-specific artifact describing instructions, prepared inputs, retrieval, memory, prior evidence, runtime-visible refs, and policy. |
-| **Workspace Policy** | Explicit rule controlling the workspace or git state used to start the next Step Execution. |
-| **Disposition** | The Step Execution's side-effect outcome, such as accepted, candidate, discarded, superseded, blocked, or needs human. |
-| **Gate** | Structured verification step whose verdict controls whether work advances, repeats, stops, or requires human attention. |
-| **Preserved Step** | A completed prior step imported into a resumed execution as provenance and reusable output refs, not freshly executed work. |
-| **Invalidated Step** | A downstream step whose prior output is no longer valid because an upstream accepted output changed. |
-
-The terms must remain distinct:
+- **Logical Step** — stable plan node identified by `logicalStepId`.
+- **Step Execution** — one semantic execution, keyed by `(workflowId, runId, logicalStepId, executionOrdinal)`.
+- **Lineage Execution Ordinal** — optional cross-run ordinal for display, such as "recovered execution 2" when a recovery run starts local execution 1.
+- **Checkpoint** — durable evidence sufficient to restore or validate state at a step boundary.
+- **Context Bundle** — immutable per-execution artifact describing instructions, inputs, retrieval, memory, prior evidence, and policy.
+- **Workspace Policy** — explicit rule for the workspace/git state the next execution starts from.
+- **Gate** — structured verification whose verdict decides whether work advances, repeats, stops, or needs attention.
+- **Preserved Step** — a completed prior step imported into a recovery execution as provenance and reusable output refs.
+- **Invalidated Step** — a downstream step whose output is stale because an upstream accepted output changed.
 
 ```text
 retry                 = same Step Execution, transient or idempotent operation retry
 step re-execution     = new Step Execution, same logical step
-recover failed step   = linked Workflow Execution that begins by creating a new Step Execution at the failed step
+recover failed step   = linked Workflow Execution that begins with a new Step Execution at the failed step
 ```
 
-Where payloads must label the operation explicitly, the canonical tokens are `retry`, `reexecute`, and `recover` (`StepExecutionSemanticOperation`).
-
-Broad Temporal workflow retries are not a substitute for Step Executions when work may mutate a repository or external system.
+Payloads label these `retry`, `reexecute`, and `recover` (`StepExecutionSemanticOperation`). Broad Temporal workflow retries do not substitute for Step Executions when work may mutate a repository or external system, because a blind replay cannot account for effects already applied.
 
 ---
 
-## 5. Core Invariants
+## 4. Core Invariants
 
-1. Logical step identity is stable within the resolved plan.
-2. Run-scoped Step Execution identity is explicit and monotonically increasing per `(workflowId, runId, logicalStepId)`.
-3. Cross-run lineage is optional provenance and must not replace run-scoped Step Execution identity.
-4. A new semantic execution of a logical step must create a new Step Execution.
-5. Large Step Execution content must stay in artifacts; workflow state carries compact refs only.
-6. Step Execution evidence is append-only.
-7. A repeated Step Execution must declare its source execution, reason, and workspace policy before execution begins.
-8. The context bundle is immutable once the Step Execution starts and must be digest-addressed.
-9. Side effects must be classified before the workflow advances.
-10. Failed Step Execution artifacts are retained as evidence even when their workspace changes are discarded.
-11. A logical implementation step is not completed until its accepted output is a committed/published code ref, an accepted artifact output, or an explicit accepted no-change disposition.
-12. Passing a gate is the only normal path from repeated implementation work to publication or external handoff.
-13. Publication, Jira movement, merge automation, and other external handoff steps must be gated by structured workflow state, not only by agent self-discipline.
-14. Downstream steps that depend on changed upstream Step Execution outputs must be invalidated or revalidated before reuse.
-15. Resume must not silently degrade to full rerun if checkpoint validation or restoration fails.
-16. Runtime adapters may execute work, but MoonMind owns Step Execution identity, checkpoint policy, durable evidence refs, and final advancement decisions.
-17. New Step Execution and checkpoint contracts that affect Temporal payloads must preserve in-flight compatibility or use an explicit versioned cutover plan.
-18. Every Checkpoint Branch turn is a new server-owned Step Execution. The
-    caller supplies branch intent only; MoonMind allocates execution and runtime
-    identities before the corresponding side effects.
-19. A continued or forked Checkpoint Branch turn pins the exact accepted output
-    checkpoint and Step Execution of its recorded parent turn. Replays reuse the
-    persisted identities and never create another semantic execution.
+1. Logical step identity is stable within the resolved plan; run-scoped execution ordinals increase monotonically per `(workflowId, runId, logicalStepId)`, and cross-run lineage never replaces them.
+2. Every new semantic execution creates a new Step Execution, which declares its source execution, reason, and workspace policy before it begins.
+3. The context bundle is digest-addressed and immutable once execution starts.
+4. Evidence is append-only, large content stays in artifacts, and failed-attempt artifacts are kept even when their workspace changes are discarded.
+5. Side effects are classified before the workflow advances.
+6. An implementation step completes only with a committed/published code ref, an accepted artifact output, or an explicit accepted no-change disposition.
+7. Publication, Jira movement, merge automation, and other handoffs are gated by structured workflow state, not agent self-assessment, because an agent can report success it has not verified.
+8. Downstream steps that consumed a changed upstream output are invalidated or revalidated before reuse.
+9. Resume never silently degrades to a full rerun when checkpoint validation or restoration fails.
+10. Runtime adapters execute work; MoonMind owns execution identity, checkpoint policy, evidence refs, and advancement.
+11. Every Checkpoint Branch turn is a new server-owned Step Execution: the caller supplies intent and MoonMind allocates identities before side effects. A continued or forked turn pins its parent turn's accepted output checkpoint and Step Execution, and replays reuse persisted identities rather than creating another execution.
 
-### 5.1 Conformance gate for MM-822+ changes
+### 4.1 Conformance harness
 
-Every remaining MM-822+ Step Execution PR must use the conformance harness as the permanent validation gate before merge readiness is claimed. The PR checklist must record that the conformance suite was run with both commands:
-
-```bash
-python -m moonmind.workflows.temporal.step_execution_conformance
-pytest tests/unit/workflows/temporal/test_step_executions.py tests/unit/workflows/temporal/test_step_checkpoints.py tests/integration/workflows/temporal/test_step_execution_manifest_evidence.py -q
-```
-
-If the PR does not require fixture changes, the checklist must instead include an explicit note explaining why no fixture update was needed.
-
-Later Step Execution phases may be mentioned here only as fixture extension triggers for the conformance gate. They are not Phase 1 implementation scope. A later phase must extend or explicitly review conformance fixtures when it introduces or changes:
-
-1. checkpoint capture artifact;
-2. checkpoint-backed Resume;
-3. typed gate result;
-4. context bundle or retrieval manifest;
-5. provider-profile lease side effect;
-6. Docker or skill-projection blocked environment.
-
-The conformance gate must keep fail-closed degraded-input coverage for old manifest rows, old checkpoint rows, old gate verdict strings, legacy `stateCheckpointRef`-only rows, future or unknown gate verdicts, and future or unknown checkpoint policy values. Degraded or invalid data must produce a typed fail-closed validation result rather than crashing replay or silently passing.
-
-Compact manifest, checkpoint, gate, API, checklist, and projection surfaces must remain artifact-backed or ref-only with bounded summaries. They must not inline raw stdout, raw stderr, raw diffs, raw logs, provider payloads, credentials, or credential-like values.
-
-Manifest writer consolidation is completed by PR #2454 through `_record_step_execution_manifest(...)` and `STEP_EXECUTION_MANIFEST_CONTENT_TYPE`. Phase 1 must not revive stale WP1 manifest writer consolidation work from `docs/tmp/StepExecutionsCheckpointingGapPlan.md`.
-
-Later checkpoint substrate, checkpoint-backed Resume, workspace policy, terminal side-effect, typed gate, context, memory, UI, autonomous-loop, and final-doc phases remain out of scope for this Phase 1 gate except as the fixture extension triggers listed above.
+`moonmind.workflows.temporal.step_execution_conformance` runs fixture cases over the manifest, checkpoint, and gate contracts, alongside `tests/unit/workflows/temporal/test_step_executions.py`, `tests/unit/workflows/temporal/test_step_checkpoints.py`, and `tests/integration/workflows/temporal/test_step_execution_manifest_evidence.py`. Its degraded-input fixtures — old manifest and checkpoint rows, old gate verdict strings, legacy `stateCheckpointRef`-only rows, and future or unknown gate verdicts and checkpoint policy values — must each produce a typed fail-closed result rather than crashing replay or silently passing. The fixtures are extended when a change touches the checkpoint capture artifact, checkpoint-backed Resume, typed gate result, context bundle or retrieval manifest, provider-profile lease side effect, or Docker or skill-projection blocked environment. Manifest, checkpoint, gate, API, and projection surfaces stay artifact-backed or ref-only with bounded summaries; they never inline raw stdout, stderr, diffs, logs, provider payloads, or credentials.
 
 ---
 
-## 6. Identity, Lineage, and Idempotency
+## 5. Identity, Lineage, and Idempotency
 
-### 6.1 Run-scoped Step Execution identity
-
-The authoritative run-scoped key for a Step Execution is:
-
-```text
-(workflowId, runId, logicalStepId, executionOrdinal)
-```
-
-`executionOrdinal` is local to the current Temporal run of the current workflow execution.
-
-Representative deterministic identifiers:
+### 5.1 Run-scoped identity
 
 ```text
 stepExecutionId   = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}
 childWorkflowId   = {workflowId}:agent:{logicalStepId}:execution:{executionOrdinal}
-checkpointId      = {workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}:checkpoint:{boundary}
+checkpointId      = {stepExecutionId}:checkpoint:{boundary}
 artifactLinkScope = step:{logicalStepId}:execution:{executionOrdinal}
 ```
 
-`stepExecutionId` and `checkpointId` are validated identities: a manifest or checkpoint whose ID does not match its identity fields must be rejected at the model boundary, not repaired downstream.
+A manifest or checkpoint whose ID does not match its identity fields is rejected at the model boundary rather than repaired downstream. Identifiers exposed externally are sanitized or hashed as needed.
 
-If these identifiers are exposed to external systems, sanitize or hash fields as needed to avoid leaking sensitive workflow details.
+### 5.2 Cross-run lineage
 
-### 6.2 Cross-run lineage
+A recovery execution usually starts the failed step at local ordinal `1`, carrying a `lineage` object (`reason`, `sourceWorkflowId`, `sourceRunId`, `sourceLogicalStepId`, `sourceExecutionOrdinal`, `lineageExecutionOrdinal`, `relationship = recover_from_failed_step`). The UI can render "Step 3 — resumed attempt 2, local attempt 1 in this run". The local key remains authoritative, and both source ids are pinned so lineage cannot drift.
 
-Failed-step recovery creates a new linked follow-up execution. In the recovery execution, the first newly executed failed step usually starts at run-scoped execution ordinal `1`, because it is a new `(workflowId, runId, logicalStepId)` scope.
+`lineage.source*` and `preservedFrom.*` are deliberately distinct: the first lives on a **newly executed** Step Execution and points at the attempt that caused it; the second lives on a **preserved step row** and points at the execution whose accepted output is reused (section 12).
 
-For operator clarity, the recovered Step Execution may also carry lineage:
+### 5.3 Idempotency keys
 
-```json
-{
-  "executionOrdinal": 1,
-  "executionScope": "run",
-  "lineage": {
-    "reason": "recover_from_failed_step",
-    "sourceWorkflowId": "mm:source",
-    "sourceRunId": "source-run-id",
-    "sourceLogicalStepId": "implement-story-S004",
-    "sourceExecutionOrdinal": 1,
-    "lineageExecutionOrdinal": 2,
-    "relationship": "recover_from_failed_step"
-  }
-}
-```
-
-UI may render this as:
-
-```text
-Step 3 — resumed attempt 2, local attempt 1 in this run
-```
-
-Rules:
-
-1. Local attempt identity remains the durable storage key.
-2. Lineage identity is provenance and display metadata.
-3. Resume must pin both source `workflowId` and source `runId` so lineage cannot drift when the source logical execution changes later.
-4. The `lineage.source*` prefix and the `preservedFrom.*` prefix are intentionally distinct and must not be mixed: `lineage.source*` lives on a **newly executed** Step Execution and points at the attempt that caused it; `preservedFrom.*` lives on a **preserved step row** imported into a recovery execution and points at the execution whose accepted output is being reused (see section 14 and `docs/Temporal/StepLedgerAndProgressModel.md`).
-
-### 6.3 Idempotency keys
-
-All side-effecting Activities participating in an attempt must accept or derive stable idempotency keys.
-
-Canonical key shape — the step execution ID plus an operation suffix:
-
-```text
-{workflowId}:{runId}:{logicalStepId}:execution:{executionOrdinal}:{operation}
-```
-
-Examples:
-
-| Operation | Key |
-| --- | --- |
-| Create step execution manifest | `{stepExecutionId}:manifest` |
-| Capture workspace checkpoint | `{stepExecutionId}:checkpoint:{boundary}` |
-| Launch managed AgentRun | `{stepExecutionId}:agent-run` |
-| Run quality gate | `{stepExecutionId}:gate:{gateName}` |
-| Commit accepted changes | `{stepExecutionId}:commit` |
-| Create PR | `{stepExecutionId}:publish-pr` |
-| Jira transition | `{stepExecutionId}:jira-transition:{targetStatus}` |
-
-The operation suffix must be non-empty; key builders must reject blank operations rather than emitting a bare identity key.
-
-Retries may log Temporal activity attempt numbers, but activity attempt numbers must not be the primary business idempotency key.
+Side-effecting Activities derive keys as `{stepExecutionId}:{operation}` — for example `:manifest`, `:checkpoint:{boundary}`, `:agent-run`, `:gate:{gateName}`, `:commit`, `:publish-pr`, `:jira-transition:{targetStatus}`. Builders reject a blank operation. Temporal activity attempt numbers may be logged but are not business keys, because they reset across semantic attempts and recovery runs.
 
 ---
 
-## 7. Step Execution Manifest Contract
+## 6. Step Execution Manifest
 
-A Step Execution manifest is an immutable artifact-backed record of one semantic execution. The workflow keeps only a compact projection of this record.
+The manifest model lives in `moonmind/schemas/step_execution_models.py`; the workflow keeps only a compact projection. It is written at start (status `executing`, or `blocked` with `terminalDisposition = "blocked"` when workspace-policy launch validation rejects the attempt) and at terminal classification. Each write is a new immutable artifact under the same identity, and the ledger tracks the latest ref and ref history. All writes go through `_record_step_execution_manifest(...)` in `moonmind/workflows/temporal/workflows/run.py`, so one identity never has competing manifests.
 
-Manifest evidence is written at least twice per Step Execution: once at start (status `executing`, or `blocked` with `terminalDisposition = "blocked"` when workspace-policy launch validation rejects the attempt) and once at terminal classification (terminal status plus terminal disposition, git effect, output refs, checks, and dependency effects). Each write is a new immutable manifest artifact under the same step execution identity and `manifest` idempotency key scope; the step ledger tracks the latest ref and the ref history. There must be exactly one manifest write path in the workflow; parallel manifest builders for the same identity are a contract violation.
+Fields cover identity and lineage; reason, status, and terminal disposition; input (task snapshot, plan ref and digest, prepared inputs); context (bundle ref and digest, builder version, retrieval and memory manifests); workspace (baseline, policy, before/after checkpoint refs); execution (kind, child workflow/run, runtime id, runtime context policy); output refs; checks; side effects (git, external, artifacts, memory, retrieval); dependency effects; and budget.
 
-Representative shape:
+**Reasons** are bounded metadata: `initial_execution`, `quality_gate_failed`, `tests_failed`, `runtime_recovered`, `recover_from_failed_step`, `remediation_context`, `operator_requested`, `dependency_invalidated`, `policy_revalidation`. Rich explanation belongs in artifacts.
 
-```json
-{
-  "schemaVersion": "v1",
-  "stepExecutionId": "mm:wf:run-1:implement-story-S004:execution:3",
-  "workflowId": "mm:wf",
-  "runId": "temporal-run-id",
-  "logicalStepId": "implement-story-S004",
-  "executionOrdinal": 3,
-  "executionScope": "run",
-  "lineage": {
-    "sourceWorkflowId": "mm:wf",
-    "sourceRunId": "temporal-run-id",
-    "sourceLogicalStepId": "implement-story-S004",
-    "sourceExecutionOrdinal": 2,
-    "lineageExecutionOrdinal": 3
-  },
-  "reason": "quality_gate_failed",
-  "status": "executing",
-  "terminalDisposition": null,
-  "startedAt": "2026-05-16T18:00:00Z",
-  "updatedAt": "2026-05-16T18:02:30Z",
-  "input": {
-    "taskInputSnapshotRef": "art_task_snapshot",
-    "planRef": "art_plan",
-    "planDigest": "sha256:...",
-    "inputSnapshotRef": "art_input_snapshot",
-    "preparedInputRefs": ["art_prepared_context"]
-  },
-  "context": {
-    "contextBundleRef": "art_step_execution_context",
-    "contextBundleDigest": "sha256:...",
-    "builderVersion": "step-context-builder-v1",
-    "retrievalManifestRef": "art_retrieval_manifest",
-    "memoryManifestRef": "art_memory_manifest"
-  },
-  "workspace": {
-    "baseline": {
-      "kind": "git_commit",
-      "commit": "abc123"
-    },
-    "policy": "continue_from_previous_execution",
-    "checkpointBeforeRef": "art_workspace_before_execution",
-    "checkpointAfterRef": null
-  },
-  "execution": {
-    "kind": "agent_run",
-    "childWorkflowId": "mm:wf:agent:implement-story-S004:execution-3",
-    "childRunId": "child-run-id",
-    "runtimeId": "codex_cli",
-    "runtimeContextPolicy": "fresh_agent_run"
-  },
-  "outputs": {
-    "summaryRef": null,
-    "agentResultRef": null,
-    "stdoutRef": null,
-    "stderrRef": null,
-    "diagnosticsRef": null,
-    "diffRef": null,
-    "patchRef": null
-  },
-  "checks": [],
-  "sideEffects": {
-    "git": {
-      "disposition": "pending"
-    },
-    "external": [],
-    "artifacts": [],
-    "memory": [],
-    "retrieval": []
-  },
-  "dependencyEffects": {
-    "invalidatedLogicalStepIds": [],
-    "preservedOutputRefs": []
-  },
-  "budget": {
-    "executionLimit": 3,
-    "executionOrdinalInLoop": 2,
-    "remainingExecutions": 1,
-    "additionalStopDimension": {
-      "type": "consecutive_no_progress_attempts",
-      "limit": 2,
-      "consumed": 0,
-      "remaining": 2,
-      "exhausted": false
-    }
-  }
-}
-```
+**Statuses**: `pending`, `preparing`, `executing`, `checking`, `completed`, `failed`, `blocked`, `canceled`, `superseded`.
 
-### 7.1 Step Execution reasons
-
-Canonical Step Execution reasons should include:
-
-| Reason | Meaning |
-| --- | --- |
-| `initial_execution` | First Step Execution for a logical step. |
-| `quality_gate_failed` | A structured verifier or gate requested more work. |
-| `tests_failed` | Test, typecheck, build, or lint evidence requires repair. |
-| `runtime_recovered` | Runtime/session failure requires a fresh Step Execution. |
-| `recover_from_failed_step` | A linked recovery execution starts a new Step Execution at the failed step. |
-| `remediation_context` | A remediation action supplied corrective context. |
-| `operator_requested` | An explicit human action requested a Step Re-execution. |
-| `dependency_invalidated` | A prior output changed and forced this step to re-run or revalidate. |
-| `policy_revalidation` | A gate or policy changed and requires revalidation. |
-
-Step Execution reasons must be bounded metadata, not free-form transcripts. Rich explanation belongs in artifacts.
-
-### 7.2 Step Execution statuses
-
-| Status | Meaning |
-| --- | --- |
-| `pending` | Step Execution record exists but execution has not started. |
-| `preparing` | Inputs, context, or workspace are being prepared. |
-| `executing` | Agent/tool execution is active. |
-| `checking` | Quality gates or verification are active. |
-| `completed` | Step Execution completed and required checks passed. |
-| `failed` | Step Execution failed or checks failed. |
-| `blocked` | Step Execution cannot continue without external prerequisites or approval. |
-| `canceled` | Attempt was canceled. |
-| `superseded` | A later attempt replaced this attempt as the current candidate. |
-
-### 7.3 Terminal dispositions
-
-This is the canonical disposition set (`StepExecutionTerminalDisposition`). Section 18 consumes it; it is defined only here.
+**Terminal dispositions** (`StepExecutionTerminalDisposition`):
 
 | Disposition | Meaning |
 | --- | --- |
-| `accepted` | Attempt passed gates and may advance the logical step. |
+| `accepted` | Passed gates; may advance the logical step. |
 | `retryable` | Another attempt is allowed under budget and policy. |
-| `blocked` | Missing prerequisite, credential, infrastructure, or approval prevents progress. |
+| `blocked` | Missing prerequisite, credential, infrastructure, or approval. |
 | `needs_human` | Automated attempts are exhausted or unsafe. |
-| `discarded` | Attempt evidence is retained but workspace effects are not reused. |
-| `superseded` | A later attempt replaced this attempt. |
-| `failed_unrecoverable` | The attempt or gate found a permanent blocker or unsafe condition. |
-| `failed_with_remaining_work` | Automation stopped under budget/stop rules with known remaining work and published evidence. |
+| `discarded` | Evidence kept; workspace effects not reused. |
+| `superseded` | Replaced by a later attempt. |
+| `failed_unrecoverable` | Permanent blocker or unsafe condition. |
+| `failed_with_remaining_work` | Stopped under budget with known remaining work and published evidence. |
 
 ---
 
-## 8. Context Bundle, Retrieval, and Memory Inputs
+## 7. Context, Retrieval, and Memory
 
-The context bundle is the Step Execution-specific input envelope visible to an agent, tool, or verifier. It must be immutable once the Step Execution starts.
+The context bundle is the immutable input envelope an agent, tool, or verifier sees: identity, reason, input and plan refs, the workspace policy and baseline, prior evidence refs (such as the previous gate report and diff), retrieval and memory manifests, runtime and skill selection, and quality gate profile. It holds refs and summaries, never raw credentials or large logs. A digest and builder version let operators diagnose context drift between attempts.
 
-Representative context bundle fields:
+Retrieval inputs are attempt inputs, not ambient state. MoonMind does not ship a native retrieval index; attempts use explicit attachments, artifact refs, and scoped workspace access. The recorded retrieval context shape remains readable so existing attempts keep their evidence.
 
-```json
-{
-  "schemaVersion": "v1",
-  "workflowId": "mm:wf",
-  "runId": "temporal-run-id",
-  "logicalStepId": "implement-story-S004",
-  "executionOrdinal": 3,
-  "reason": "quality_gate_failed",
-  "taskInputSnapshotRef": "art_task_snapshot",
-  "planRef": "art_plan",
-  "planDigest": "sha256:...",
-  "preparedInputRefs": ["art_prepared_context"],
-  "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
-  "workspaceBaseline": {
-    "kind": "git_commit",
-    "commit": "abc123"
-  },
-  "priorEvidenceRefs": ["art_execution_2_gate_report", "art_execution_2_diff"],
-  "retrievalManifestRef": "art_retrieval_manifest_execution_3",
-  "memoryManifestRef": "art_memory_manifest_execution_3",
-  "runtimeSelection": {
-    "runtimeId": "codex_cli",
-    "skillId": "moonmind-story-execution"
-  },
-  "qualityGateProfile": "repo-default"
-}
-```
-
-Rules:
-
-1. The context bundle must not include raw credentials.
-2. The context bundle must carry compact refs and summaries, not large logs or diffs.
-3. The context bundle must include the workspace policy and baseline visible to the attempt.
-4. If two attempts see different retrieval or memory context, that difference must be recorded through the context bundle and manifest refs.
-5. The bundle should include a digest and builder version so operators can diagnose context drift.
-
-### 8.1 Retrieval context
-
-Retrieval inputs must be attempt inputs, not hidden ambient state.
-
-MoonMind no longer ships a native retrieval index (MoonLadderStudios/MoonMind#4103). Current attempts assemble context from explicit attachments, artifact refs, and scoped workspace access. The retrieval context shape below stays readable so attempts recorded before retirement keep their evidence.
-
-Representative recorded retrieval context:
-
-```json
-{
-  "query": "Fix failing finalization-stage Temporal workflow integration evidence",
-  "indexVersion": "rag-index-2026-05-16T12:00:00Z",
-  "retrievedRefs": ["art_previous_failure_summary", "repo_docs_ref"],
-  "retrievalManifestRef": "art_retrieval_manifest_attempt_3"
-}
-```
-
-The retrieval manifest should preserve:
-
-1. retrieval query or selector;
-2. index version;
-3. returned refs and scores where safe;
-4. filters applied;
-5. excluded refs when meaningful;
-6. compact summaries included in the prompt.
-
-### 8.2 Memory effects
-
-Memory side effects must have promotion states.
-
-| State | Meaning |
-| --- | --- |
-| `proposed` | Attempt generated a possible memory update. |
-| `accepted_for_run_context` | Memory is visible to later attempts in the same run. |
-| `applied_to_repo` | Memory was committed or otherwise written to durable repo instructions. |
-| `rejected` | Memory proposal was intentionally not used. |
-| `superseded` | A later proposal replaced this one. |
-
-Failed or abandoned Step Executions must not silently write durable repo memory. Run-local memory may be accepted for later Step Executions when policy allows it, but durable repo instruction changes require explicit policy and normal publication gates.
-
-Representative memory proposal:
-
-```json
-{
-  "id": "mem-S004-A2-001",
-  "kind": "codebase_pattern",
-  "target": "frontend/billing/AGENTS.md",
-  "textRef": "art_memory_proposal_text",
-  "status": "proposed",
-  "sourceExecutionOrdinal": {
-    "workflowId": "mm:wf",
-    "runId": "temporal-run-id",
-    "logicalStepId": "implement-story-S004",
-    "executionOrdinal": 2
-  }
-}
-```
+Memory side effects move through `proposed`, `accepted_for_run_context`, `applied_to_repo`, `rejected`, and `superseded`. Failed or abandoned executions do not write durable repo memory, and durable instruction changes require explicit policy and normal publication gates, so a failed attempt cannot quietly change how future runs behave. Run-local memory may be shared with later attempts when policy allows.
 
 ---
 
-## 9. Checkpoint Contract
+## 8. Checkpoints
 
-Checkpoints are durable artifacts or durable read-model records that make Step Re-executions and RecoverFromFailedStep truthful.
+A checkpoint records enough to restore or validate state at a boundary without parsing logs or reconstructing state from UI projections. It carries its id, kind, boundary, source identity, task input and prepared input refs, `planRef` or `planDigest` (one is required), a workspace section (kind, base commit, patch or archive refs), and step output refs. Inline `stdout`, `stderr`, `diff`, `logs`, `content`, or provider output is rejected at the model boundary, keeping large or binary evidence out of workflow history. Writes are idempotent because Activities and workflow tasks retry.
 
-A checkpoint records enough information to restore or validate state at a boundary without parsing terminal logs or reconstructing state from UI projections.
+### 8.1 Boundaries
 
-Representative checkpoint:
+`StepExecutionCheckpointBoundary`: `after_prepare`, `before_execution` (when a restorable baseline exists), `after_execution`, `after_gate`, `before_publication`, and `before_recovery_restoration`.
 
-```json
-{
-  "schemaVersion": "v1",
-  "checkpointId": "mm:wf:run-1:implement-story-S004:execution:2:checkpoint:after_gate",
-  "checkpointKind": "step_boundary",
-  "boundary": "after_gate",
-  "source": {
-    "workflowId": "mm:wf",
-    "runId": "temporal-run-id",
-    "logicalStepId": "implement-story-S004",
-    "executionOrdinal": 2
-  },
-  "taskInputSnapshotRef": "art_original_task_input",
-  "planRef": "art_plan",
-  "planDigest": "sha256:...",
-  "preparedInputRefs": ["art_prepared_inputs"],
-  "workspace": {
-    "kind": "git_patch",
-    "baseCommit": "abc123",
-    "patchRef": "art_execution_2_patch",
-    "includesUntracked": true,
-    "manifestRef": "art_attempt_2_patch_manifest"
-  },
-  "stepOutputs": {
-    "summaryRef": "art_attempt_2_summary",
-    "agentResultRef": "art_attempt_2_result",
-    "verificationRef": "art_attempt_2_verification"
-  },
-  "createdAt": "2026-05-16T18:05:00Z"
-}
-```
+Adjacent boundaries reuse workspace evidence only within one explicit workspace-mutation generation, and every boundary still gets its own checkpoint. Immediately before preflight or execution can mutate the authoritative workspace, the workflow advances the generation so the next checkpoint captures fresh evidence. Identical checkpoint bytes share a content-addressed blob while keeping per-boundary artifact rows and retention.
 
-Checkpoint refs must remain outside large inline workflow histories when they are large or binary.
+For Omnigent, the canonical writer attaches one versioned `omnigentCheckpoint` object to the Step Execution checkpoint. Capture happens after workspace preparation and before the first message, after each completed turn or step, before controlled drain/reset, before recovery or Checkpoint Branch creation, and during terminal harvest when recoverable state remains; each trigger maps to the nearest canonical boundary rather than an adapter-owned lane. The object keeps four authority planes separate:
 
-Checkpoint contract rules:
+- **Session** — `externalStateRef` and digest, bridge/session/host ids, idempotency key, committed bridge cursor, first-message id and digest, terminal and diagnostics refs.
+- **Workspace** — `WorkspaceLocator`, baseline commit, head/diff/checkpoint refs and digests, branch and publication state.
+- **Host realization** — endpoint, execution profile, launch policy and effective-launch snapshot, Provider Profile, lease and binding refs, capture manifests, patch capability.
+- **Credentials** — reference and generation only, never a credential body, OAuth home, or volume content.
 
-1. A checkpoint must carry `planRef` or `planDigest`; a checkpoint with neither is invalid and must be rejected at the model boundary.
-2. Checkpoints and step outputs must carry refs and bounded summaries only. Inline evidence payloads (raw `stdout`, `stderr`, `diff`, `logs`, `content`, provider output, and similar) are rejected at the model boundary; only `*Ref`/`*Refs` and summary/message fields may carry that information.
+It also pins lineage, immutable instruction/context refs, capture time, and producer version. A capability is `true` only when every evidence class it needs is independently resolvable; partial capture records bounded reason codes and leaves the capability false.
 
-### 9.1 Checkpoint boundaries
+### 8.2 Workspace checkpoint kinds
 
-MoonMind creates or updates checkpoint evidence at these canonical boundaries (`StepExecutionCheckpointBoundary`):
-
-| Boundary | When |
+| Kind | Restore strength |
 | --- | --- |
-| `after_prepare` | After prepare succeeds. |
-| `before_execution` | Before a mutating step execution starts, when a restorable baseline exists. |
-| `after_execution` | After a step execution completes. |
-| `after_gate` | After quality gates complete. |
-| `before_publication` | Before publication or external state transitions. |
-| `before_recovery_restoration` | Before recovery restoration executes any new work. |
+| `git_commit` | Strong for tracked code. |
+| `git_patch` (against a base commit, optional untracked manifest) | Good for candidate work; weaker for binary, submodule, or ignored state. |
+| `worktree_archive` | Stronger for dirty worktrees and untracked files; larger. |
+| `ephemeral_workspace_ref` | Valid only within TTL/reachability. |
+| `external_state_ref` | Adapter-specific; may not support direct restoration. |
 
-Checkpoint writes must be idempotent because Activities and workflow tasks may retry.
+Worktree archives store Git's index as a digested binary patch relative to the saved HEAD, so partially staged files keep both staged and unstaged bytes; index and patch bytes pass the same bounded secret scan as other evidence. A staged-path list without index content cannot authorize reconstruction from worktree bytes.
 
-Adjacent checkpoint boundaries reuse the prior workspace artifact evidence only
-while the workflow remains in the same explicit workspace-mutation generation.
-The workflow still writes a distinct Step Execution checkpoint for every
-boundary. Immediately before preflight or execution can mutate the authoritative
-workspace, it advances the generation; the next checkpoint must capture fresh
-workspace evidence. Independently, identical immutable checkpoint bytes share a
-content-addressed artifact blob while retaining boundary-specific logical
-artifact rows and retention authority.
+Capture and recovery select a child workspace; the shared `temporal_sandbox` store itself is never a capture or replacement target. A selected commit that touches a credential-sensitive path under the shared exclusion policy cannot be exported even with heuristic scanning disabled; capture rejects the bundle rather than rewriting history.
 
-For Omnigent, the canonical writer attaches one versioned `omnigentCheckpoint`
-object to this Step Execution checkpoint. Capture occurs after workspace
-preparation and before the first message, after each completed turn or logical
-step, before controlled drain/reset, before recovery or Checkpoint Branch
-creation, and during terminal harvest when recoverable state remains. These are
-logical lifecycle triggers mapped to the nearest canonical boundary above; they
-do not create an adapter-owned checkpoint lane.
+Resuming finalization validates a surviving directory against saved file digests, HEAD, index, and Git status, because a directory's existence does not prove candidate identity. After cleanup releases provider authority, durable turn receipts can resume verification and publication without another provider turn.
 
-The Omnigent object preserves four separate authority planes:
-
-| Plane | Required evidence |
-| --- | --- |
-| Session | `externalStateRef` and digest, bridge/session/host ids, idempotency key, last committed bridge cursor, first-message id and digest, terminal and diagnostics refs |
-| Workspace | `WorkspaceLocator`, baseline commit, head/diff/checkpoint refs and digests, source/output branch and publication state |
-| Host realization | endpoint, execution profile, launch policy, effective-launch snapshot, Provider Profile, provider/host lease and binding refs, resource/capture manifests and patch capability |
-| Credentials | credential reference and generation only; never a credential body, OAuth home, or copied volume content |
-
-The object also pins workflow, run, logical-step, Step Execution, attempt and
-boundary lineage, immutable instruction/context refs, capture time, producer
-version, and its validation projection. A capability is `true` only when every
-evidence class it requires is independently resolvable. Partial capture records
-bounded reason codes and leaves the affected capability false.
-
-### 9.2 Workspace checkpoint kinds
-
-Supported checkpoint kinds should be explicit.
-
-| Kind | Meaning | Restore strength |
-| --- | --- | --- |
-| `git_commit` | A committed repo state. | Strong for tracked code state. |
-| `git_patch` | Patch artifact against a base commit, optionally including untracked-file manifest. | Good for candidate work; weaker for binary/submodule/ignored-file state. |
-| `worktree_archive` | Archive of a worktree plus manifest. | Stronger for dirty worktrees and untracked files; larger artifact. |
-| `ephemeral_workspace_ref` | Reference to a still-valid managed workspace/container state. | Only valid within TTL/reachability constraints. |
-| `external_state_ref` | Provider-specific state ref for an external delegated runtime. | Adapter-specific; may not support direct restoration. |
-
-Worktree archives preserve Git's index separately from the worktree. The manifest
-references a digested binary index patch relative to the saved HEAD, so partially
-staged files retain both their staged and unstaged bytes. Index blobs and patch
-bytes pass the same bounded secret scan as other exported evidence. Historical
-clean-index manifests remain restorable; a historical staged-path list without
-index content cannot authorize reconstruction from worktree bytes.
-
-Legacy sandbox checkpoint capture and recovery must select a child workspace;
-the shared `temporal_sandbox` store itself is never a capture, copy, or replacement
-target. This containment check does not establish ownership of a sibling workspace.
-
-Selected Git history preserves exact commits. A selected commit that introduces
-or changes a credential-sensitive path under the shared exclusion policy cannot
-be exported, even when heuristic secret scanning is disabled. Capture rejects the
-bundle before upload instead of rewriting history. Runtime-skill overlays and
-temporary-archive exclusions apply to worktree capture; they do not authorize
-rewriting otherwise valid repository history.
-
-Resuming finalization validates a surviving directory against saved file digests,
-HEAD, index content, and the captured Git status before accepting it. A directory's
-existence does not prove candidate identity. Once cleanup has released provider
-authority, durable turn receipts may resume verification and publication without
-another provider turn; any required new continuation remains an explicit unfinished
-phase with its saved checkpoint.
-
-Representative workspace checkpoint:
-
-```json
-{
-  "kind": "worktree_archive",
-  "baseCommit": "abc123",
-  "archiveRef": "art_workspace_tar",
-  "manifestRef": "art_workspace_manifest",
-  "includesIgnoredFiles": false,
-  "createdAt": "2026-05-16T18:05:00Z"
-}
-```
-
-### 9.3 Policy-to-checkpoint requirements
+### 8.3 Policy requirements and validation
 
 | Workspace policy | Minimum checkpoint evidence |
 | --- | --- |
-| `restore_pre_execution` | `git_commit`, `worktree_archive`, or equivalent durable workspace ref from before the Step Execution. |
-| `continue_from_previous_execution` | Valid live workspace ref or after-execution checkpoint. |
-| `apply_previous_execution_diff_to_clean_baseline` | `git_patch` plus base commit, or equivalent patchable diff artifact. |
-| `start_from_last_passed_commit` | Accepted commit SHA or accepted published ref. |
-| `fresh_branch_from_source` | Source repo/ref and branch/worktree creation policy. |
+| `restore_pre_execution` | `git_commit`, `worktree_archive`, or equivalent from before the execution |
+| `continue_from_previous_execution` | Live workspace ref or after-execution checkpoint |
+| `apply_previous_execution_diff_to_clean_baseline` | `git_patch` plus base commit |
+| `start_from_last_passed_commit` | Accepted commit SHA or published ref |
+| `fresh_branch_from_source` | Source repo/ref and branch creation policy |
 
-If the required checkpoint evidence is unavailable, the workflow must reject the policy before launching the next Step Execution.
+Missing evidence rejects the policy before launch. Before a checkpoint starts an attempt or Resume, MoonMind validates source ids, input and plan identity, logical step and attempt provenance, artifact existence and authorization, workspace/branch/commit consistency, kind-to-policy compatibility, and side-effect eligibility. Omnigent restore additionally digest-checks each artifact, checks repository baseline/head compatibility, and requires the current Provider Profile and credential generation to match; provider URLs, local paths, container ids, and provider-native ids are never artifact authority. Session reattach, workspace cold restore, and branch creation are evaluated independently with bounded denial reasons.
 
-### 9.4 Checkpoint validation
+Checkpoint Branch launch runs this validation — plus branch/turn lineage, expected branch-head version, instruction digest, isolated git binding, and stored policy and snapshot checks — before acquiring a lease, mutating a host or repository, creating a session, or posting a message. The source workflow input and outcome stay immutable.
 
-Before a checkpoint can be used to start a new attempt or Resume execution, MoonMind must validate:
-
-1. source `workflowId` and `runId`;
-2. workflow input snapshot identity;
-3. plan identity and digest;
-4. logical step identity;
-5. attempt provenance;
-6. artifact existence and authorization;
-7. workspace, branch, and commit consistency;
-8. checkpoint kind compatibility with the selected workspace policy;
-9. policy eligibility for replaying or preserving side effects.
-
-Omnigent restore validation additionally dereferences and digest-checks each
-required artifact, checks requested workflow/run/step lineage and repository
-baseline/head compatibility, and requires the current Provider Profile and
-credential generation to match. Provider URLs, raw local paths, container ids,
-OAuth volume contents, and provider-native ids are never artifact authority.
-Live session reattach, workspace cold restore, and branch creation are evaluated
-independently and return bounded machine-readable denial reasons.
-
-Checkpoint Branch launch applies this validation before acquiring a Provider
-Profile lease, mutating a host or repository, creating a session, or posting a
-message. It also validates the branch and turn lineage, expected branch-head
-version, immutable instruction ref and digest, isolated git binding, stored
-workspace/runtime policies, profile and launch snapshots, and current policy
-and credential-generation compatibility. The source workflow input and outcome
-remain immutable throughout branch execution.
-
-Validation failures must be typed, not prose. Canonical failure codes (`StepCheckpointValidationFailureCode`):
-
-```text
-source_mismatch, task_input_mismatch, plan_mismatch, step_mismatch,
-execution_mismatch, artifact_missing, artifact_unauthorized,
-artifact_corrupted, workspace_mismatch, checkpoint_kind_incompatible,
-policy_incompatible, invalid_checkpoint
-```
-
-If validation fails, MoonMind must fail explicitly — with the failure code in structured diagnostics — before launching an agent or mutating the workspace.
+Failures are typed (`StepCheckpointValidationFailureCode`: `source_mismatch`, `task_input_mismatch`, `plan_mismatch`, `step_mismatch`, `execution_mismatch`, `artifact_missing`, `artifact_unauthorized`, `artifact_corrupted`, `workspace_mismatch`, `checkpoint_kind_incompatible`, `policy_incompatible`, `invalid_checkpoint`), and MoonMind fails with the code in diagnostics before launching an agent or touching the workspace.
 
 ---
 
-## 10. Workspace and Git Policy
+## 9. Workspace and Git Policy
 
-Repeated coding work is not purely functional. Each attempt may leave a changed workspace.
+Each coding attempt may leave a changed workspace, so a policy is recorded and visible before a repeated attempt launches:
 
-MoonMind must record a workspace policy before launching a repeated attempt.
+- `continue_from_previous_execution` — repair the prior working tree (mostly good diff, failing tests).
+- `restore_pre_execution` — restore the pre-attempt checkpoint (unsafe or messy attempt).
+- `apply_previous_execution_diff_to_clean_baseline` — reset, then apply the prior diff as an explicit patch, keeping useful work without hidden drift.
+- `start_from_last_passed_commit` — start from the latest accepted commit (story loops).
+- `fresh_branch_from_source` — new branch/worktree from the source ref.
 
-Canonical policies:
+Every mutating execution classifies its git effect as `accepted`, `candidate` (useful but ungated; diff retained), `discarded`, `superseded`, or `none`, with baseline/head commits, diff and patch refs, and checkpoint ref. An uncommitted dirty workspace is never accepted, because it cannot be reproduced or published reliably. A logical implementation step completes only with a commit SHA, pushed ref, gate-accepted non-git artifact, or explicit no-change disposition; in story loops a failed attempt yields only a diff artifact and a passing one yields a commit and advancement.
 
-| Policy | Meaning | Typical use |
-| --- | --- | --- |
-| `continue_from_previous_execution` | Keep the prior Step Execution's working tree and ask the next Step Execution to repair it. | Mostly good diff with failing tests. |
-| `restore_pre_execution` | Restore the workspace to the checkpoint from before the failed Step Execution. | Unsafe, messy, or broad failed Step Execution. |
-| `apply_previous_execution_diff_to_clean_baseline` | Reset to a clean baseline, then apply the previous Step Execution diff as an explicit patch artifact. | Preserve useful work while removing hidden drift. |
-| `start_from_last_passed_commit` | Start from the latest committed accepted step state. | Autonomous story loop after a failed story Step Execution. |
-| `fresh_branch_from_source` | Start a new branch/worktree from the source ref. | Full retry or unsafe workspace state. |
+---
 
-The selected policy must be visible in Step Execution metadata and operator diagnostics.
+## 10. Side Effects and Activities
 
-### 10.1 Git effect states
-
-Every mutating Step Execution should classify its git effect.
-
-| Disposition | Meaning |
+| Class | Reattempt posture |
 | --- | --- |
-| `accepted` | Attempt changes are committed or otherwise durable and approved to advance the logical step. |
-| `candidate` | Attempt produced useful changes but did not pass gates. Diff/checkpoint evidence is retained. |
-| `discarded` | Attempt changes are intentionally not carried forward. Evidence remains. |
-| `superseded` | A later attempt replaces this attempt's candidate state. |
-| `none` | Attempt did not produce workspace changes. |
+| `workspace_mutation` | Needs workspace policy and checkpoint evidence. |
+| `artifact_write` | Append-only; retry-safe through idempotent IDs or content hashes. |
+| `external_idempotent` | Allowed when the durable key is stable and repetition is safe. |
+| `external_non_idempotent` | Not repeated in autonomous reattempts without explicit policy. |
+| `publication` | Branch/PR/merge handoff; requires gate-approved state. |
+| `provider_account` | Requires provider-profile policy and release semantics. |
+| `memory_update` | Requires promotion state and policy. |
+| `retrieval_index_update` | No current producer; kept so recorded attempts retain their classification. |
 
-Representative candidate git effect:
+A recorded side effect has a class, operation, idempotency key, target, and disposition. When a non-idempotent effect already occurred, a later attempt accounts for it rather than pretending the step can be reset, and compensation is explicit, idempotent, and observable.
 
-```json
-{
-  "baselineCommit": "abc123",
-  "headCommit": null,
-  "workingTreeDiffRef": "art_diff_attempt_2",
-  "patchRef": "art_patch_attempt_2",
-  "commitCreated": false,
-  "workspaceCheckpointRef": "art_workspace_after_attempt_2",
-  "disposition": "candidate"
-}
-```
-
-Representative accepted git effect:
-
-```json
-{
-  "baselineCommit": "abc123",
-  "headCommit": "def456",
-  "workingTreeDiffRef": "art_diff_attempt_3",
-  "patchRef": "art_patch_attempt_3",
-  "commitCreated": true,
-  "workspaceCheckpointRef": "art_workspace_after_attempt_3",
-  "disposition": "accepted"
-}
-```
-
-MoonMind must not treat an uncommitted dirty workspace as an accepted state.
-
-### 10.2 Accepted output rule
-
-A logical implementation step may be marked `completed` only when its accepted output is one of:
-
-1. a commit SHA;
-2. a pushed branch/ref;
-3. a typed non-git output artifact accepted by gates;
-4. an explicit no-change accepted disposition.
-
-For autonomous coding/story loops, the recommended default is:
-
-```text
-failed or partial attempt -> diff artifact only, no story advancement
-passing attempt           -> commit, accepted git effect, logical step advancement
-```
+`MoonMind.UserWorkflow` orchestrates; Activities own side effects. Workflow code does not read files, run git, inspect artifacts, call providers, or mutate memory, because those are nondeterministic and break replay. Activity results are compact and typed, with large outputs returned as artifact refs. Relevant Activities include `step_checkpoint.create`/`.validate`, `workspace.capture_checkpoint`, `workspace.apply_policy`, `workspace.apply_checkpoint`, `workspace.classify_git_effect`, and `memory.evaluate_proposals`/`.apply_policy`; queues are in `docs/Temporal/ActivityCatalogAndWorkerTopology.md`.
 
 ---
 
-## 11. Side-Effect Classes and External Guardrails
+## 11. Gated Iteration
 
-Every nontrivial attempt should classify side effects before the workflow advances.
-
-Suggested side-effect classes:
-
-| Class | Meaning | Reattempt posture |
-| --- | --- | --- |
-| `workspace_mutation` | Local repo/workspace mutation. | Allowed only with workspace policy and checkpoint evidence. |
-| `artifact_write` | Artifact creation or linkage. | Append-only and retry-safe through idempotent artifact IDs or content hashes. |
-| `external_idempotent` | External mutation guarded by a durable idempotency key. | Allowed when key is stable and operation is safe to repeat. |
-| `external_non_idempotent` | External mutation that cannot safely repeat. | Forbidden in autonomous reattempts unless explicit policy permits. |
-| `publication` | Branch/PR/publish/merge handoff. | Requires gate-approved state. |
-| `provider_account` | Provider profile slot, OAuth, account-level state. | Requires provider-profile policy and cleanup/release semantics. |
-| `memory_update` | Run-local or repo-level memory change. | Requires promotion state and policy. |
-| `retrieval_index_update` | Retired native RAG index mutation or cache update. | No MoonMind producer remains; the class is retained so recorded attempts keep their classification. |
-
-Representative side effect:
-
-```json
-{
-  "class": "external_idempotent",
-  "operation": "jira.add_comment",
-  "idempotencyKey": "mm:wf:run-1:verify:execution:1:jira-comment",
-  "target": "MM-123",
-  "disposition": "accepted"
-}
-```
-
-Rules:
-
-1. Non-idempotent external work must not be hidden inside repeated implementation attempts.
-2. Publication, Jira transitions, merge, deployment, and provider-account actions require gate-approved workflow state.
-3. If a non-idempotent side effect already occurred, a later attempt must account for it explicitly rather than pretending the step can be reset.
-4. External cleanup or compensation must be explicit, idempotent, and observable.
-
----
-
-## 12. Activity Surface and Worker Boundaries
-
-`MoonMind.UserWorkflow` owns orchestration. Activities own side effects. Runtime adapters execute attempts but do not own attempt semantics.
-
-Suggested Activity families for implementation:
-
-| Activity | Role | Typical queue |
-| --- | --- | --- |
-| `step_execution.create_manifest` | Create a step execution manifest artifact shell or deterministic ref. | `mm.activity.artifacts` |
-| `step_execution.write_manifest` | Write/update immutable or append-only attempt evidence. | `mm.activity.artifacts` |
-| `step_execution.record_evidence` | Link runtime outputs, checks, and side-effect refs to attempt evidence. | `mm.activity.artifacts` |
-| `step_checkpoint.create` | Create checkpoint evidence at a boundary. | `mm.activity.sandbox` or `mm.activity.artifacts` depending on content |
-| `step_checkpoint.validate` | Validate checkpoint source, refs, plan digest, and policy compatibility. | `mm.activity.artifacts` / `mm.activity.sandbox` |
-| `workspace.capture_checkpoint` | Capture commit, patch, archive, or workspace ref. | `mm.activity.sandbox` |
-| `workspace.apply_policy` | Apply selected workspace policy before an attempt. | `mm.activity.sandbox` |
-| `workspace.classify_git_effect` | Inspect workspace and produce git disposition metadata. | `mm.activity.sandbox` |
-| `quality_gate.run_profile` | Run typecheck/test/lint/browser/review gates. | `mm.activity.sandbox` / `mm.activity.llm` |
-| `retrieval.build_step_execution_manifest` | Build retrieval manifest for attempt context. | `mm.activity.artifacts` / retrieval worker if added |
-| `memory.evaluate_proposals` | Validate/dedupe/score memory proposals. | `mm.activity.llm` / `mm.activity.artifacts` |
-| `memory.apply_policy` | Promote memory to run context or repo instructions according to policy. | `mm.activity.sandbox` / `mm.activity.artifacts` |
-
-These names are desired-state examples, not a requirement to create every Activity in the first implementation slice.
-
-Rules:
-
-1. Workflow code must not read files, run git, inspect artifacts, call providers, or mutate memory directly.
-2. Activity results crossing workflow boundaries must be compact and typed.
-3. Large outputs must be persisted as artifacts and passed back as refs.
-4. Activities must be idempotent or guarded by idempotency keys derived from attempt identity.
-
----
-
-## 13. Gated Iteration
-
-A gated iteration loop is a workflow-owned repetition policy around one or more logical steps.
-
-Representative flow:
-
-```text
-verify
-while verdict == ADDITIONAL_WORK_NEEDED and budget remains:
-  create new remediation attempt
-  run remediation using latest verification report
-  create new verification attempt
-  verify again
-
-if verdict == FULLY_IMPLEMENTED:
-  continue to publication
-else:
-  stop with remaining work and evidence
-```
-
-The loop belongs to `MoonMind.UserWorkflow`, not only to agent instructions.
-
-Agent instructions may say what to do inside an attempt, but the parent workflow must own:
-
-1. whether another attempt is allowed;
-2. which step or group repeats;
-3. which verdicts pass, retry, fail, or require attention;
-4. which downstream steps are skipped or invalidated when gates fail;
-5. final publication eligibility.
-
-### 13.1 Gate verdict contract
-
-Gate-producing steps should return structured verdicts.
-
-Suggested verdicts:
+A gated loop is workflow-owned repetition: verify; while the verdict is `ADDITIONAL_WORK_NEEDED` and budget remains, run a new remediation attempt with the latest report and a new verification attempt; continue to publication on `FULLY_IMPLEMENTED`, otherwise stop with remaining work and evidence. Agent instructions govern what happens inside an attempt; the parent workflow decides whether another attempt is allowed, what repeats, how verdicts map to outcomes, which downstream steps are skipped or invalidated, and publication eligibility.
 
 | Verdict | Meaning |
 | --- | --- |
-| `FULLY_IMPLEMENTED` | Gate passed and downstream publication may proceed. |
-| `ADDITIONAL_WORK_NEEDED` | More bounded work is required and may be attempted if budget remains. |
-| `NO_DETERMINATION` | Evidence is insufficient. Retry within the review budget only when the missing evidence is recoverable in the current runtime, or the verifier explicitly asks for `reattempt_current_step` (a fresh verifier runtime). |
+| `FULLY_IMPLEMENTED` | Passed; publication may proceed. |
+| `ADDITIONAL_WORK_NEEDED` | More bounded work may be attempted within budget. |
+| `NO_DETERMINATION` | Insufficient evidence; retried only when recoverable in the current runtime or when the verifier asks for `reattempt_current_step`. |
 | `BLOCKED` | External or policy condition prevents progress. |
-| `FAILED_UNRECOVERABLE` | The gate found a permanent blocker or unsafe condition. |
+| `FAILED_UNRECOVERABLE` | Permanent blocker or unsafe condition. |
 
-Representative gate result:
+Gate results also carry confidence, validated and invalidated refs, remaining-work and blocking-evidence refs, `recommendedNextAction`, target step, workspace policy recommendation, and `recoverableInCurrentRuntime`; the workflow branches on these fields rather than prose.
 
-```json
-{
-  "schemaVersion": "v1",
-  "verdict": "ADDITIONAL_WORK_NEEDED",
-  "confidence": "medium",
-  "validatedRefs": {
-    "diffRef": "art_attempt_2_diff",
-    "testReportRef": "art_attempt_2_tests"
-  },
-  "invalidatedRefs": [],
-  "remainingWorkRef": "art_remaining_work",
-  "blockingEvidenceRefs": ["art_verify_report"],
-  "recommendedNextAction": "reattempt_current_step",
-  "targetLogicalStepId": "implement-story-S004",
-  "workspacePolicyRecommendation": "apply_previous_execution_diff_to_clean_baseline",
-  "recoverableInCurrentRuntime": true
-}
-```
+Loops have explicit budgets (attempts, wall-clock time, spend, no-progress attempts, repeated failed commands, policy-denied attempts). Loop manifests record the attempt budget and at least one other stop dimension with limit, consumed, remaining, and exhausted state. On exhaustion MoonMind stops with `needs_human`, `blocked`, or `failed_with_remaining_work` and publishes the latest evidence and recommended next action.
 
-For a passing gate:
+### 11.1 Preset remediation loops
 
-```json
-{
-  "schemaVersion": "v1",
-  "verdict": "FULLY_IMPLEMENTED",
-  "confidence": "high",
-  "validatedRefs": {
-    "commit": "def456",
-    "diffRef": "art_attempt_3_diff",
-    "testReportRef": "art_attempt_3_tests",
-    "browserEvidenceRef": "art_attempt_3_browser"
-  },
-  "invalidatedRefs": [],
-  "recommendedNextAction": "advance"
-}
-```
+Issue Implement, GitHub Issue Orchestrate, and Jira Orchestrate declare one workflow-owned remediation loop (`annotations.remediationLoop`, controller role `moonspec-remediation-loop`, implemented in `moonmind/workflows/temporal/remediation_loop.py`) after their initial read-only verification, rather than open-ended agent instructions or copied repair steps. An initial `FULLY_IMPLEMENTED` materializes no attempt; each admitted attempt materializes one remediation and one read-only verification Step Execution, up to `hardMaxAttempts` (six by default). MoonSpec Orchestrate is a vendored projection ending with a single verification step. The run workflow still routes plans with pre-expanded steps annotated `jiraOrchestrateRole = "moonspec-remediation"` / `"moonspec-verification-gate"`; a plan cannot mix those with a loop declaration.
 
-The parent workflow must branch on structured gate results instead of parsing prose summaries.
+Loop tools are authored as `auto`, a planning-time sentinel meaning "inherit the run's runtime selection": each attempt names the run's resolved runtime, model, effort, and provider profile, so attempts route like the run's authored steps. A loop with no resolved controller runtime fails at admission rather than routing to a substitute.
 
-### 13.2 Budgets and stop rules
+On Omnigent, where each Step Execution starts in a fresh sandbox, post-loop steps restore the verified candidate (the loop head, or the latest implementation archive when no attempt ran). Issue Implement's pull-request handoff restores it directly; the Orchestrate presets run doc reconciliation from it and publish the reconciliation archive, or the candidate when reconciliation left none.
 
-Every autonomous loop must have explicit budgets.
-
-Budget dimensions may include:
-
-1. maximum attempts;
-2. maximum wall-clock time;
-3. maximum provider spend or token estimate;
-4. maximum consecutive no-progress attempts;
-5. maximum failed command repeats;
-6. maximum unsafe or policy-denied attempts.
-
-Step Execution manifests for autonomous loops must record the attempt budget and
-at least one additional non-attempt stop dimension with its limit, consumed
-count, remaining count, and exhausted state.
-
-When a budget is exhausted, MoonMind must stop with a deterministic terminal disposition such as `needs_human`, `blocked`, or `failed_with_remaining_work`. It must publish the latest evidence and recommended next action.
-
-The Issue Implement, GitHub Issue Orchestrate, and Jira Orchestrate presets declare one workflow-owned remediation loop (`annotations.remediationLoop`, controller role `moonspec-remediation-loop`) after their initial read-only verification step instead of an open-ended agent instruction or copied repair/verifier steps. An initial `FULLY_IMPLEMENTED` verdict materializes no attempt. Each admitted attempt materializes exactly one remediation Step Execution and one following read-only verification Step Execution, carrying `issueImplementRole`, `remediationLoopId`, and attempt/maximum-attempt metadata, up to the loop's `hardMaxAttempts` (six by default).
-
-MoonSpec Orchestrate is a vendored MoonSpec projection and still ends with its single verification step. It adopts this loop through the upstream MoonSpec bundle, a `moonspec` submodule pin bump, and `tools/sync_moonspec.py --write`, not a local edit of the projection.
-
-On Omnigent, where each Step Execution starts in a fresh sandbox, the post-loop Steps restore the verified candidate: the loop head, or the latest implementation archive when no attempt ran. The Issue Implement pull-request handoff restores that candidate directly. In the GitHub and Jira Orchestrate presets, doc reconciliation (`jiraOrchestrateRole = "doc-reconciliation"`) continues from that candidate, and the pull-request handoff publishes the completed reconciliation archive, or the verified candidate when reconciliation left none.
-
-Plans resolved before this loop declaration may still contain pre-expanded remediation steps annotated `jiraOrchestrateRole = "moonspec-remediation"` / `"moonspec-verification-gate"` with `moonSpecFinalRemediationGate` on the last verifier. The run workflow keeps routing and skipping those retained plans; a resolved plan may not mix them with a loop declaration.
-
-A workflow-owned remediation loop authors its remediation and verification tools as `auto`, meaning the loop inherits the run's runtime selection. `auto` is a planning-time selection sentinel and never a runtime identity: each materialized attempt names the run's resolved agent runtime and carries that runtime's model, effort, and provider profile, so loop attempts route exactly like the authored steps of the same run. A loop whose controller step carries no resolved runtime fails when an attempt is admitted rather than routing to a substitute runtime or provider adapter.
-
-`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then completes the run and skips downstream promotion and trusted handoff steps. The same draft handoff applies to declared environment-class `BLOCKED` and malformed/degraded `NO_DETERMINATION` outcomes. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed and stop before publication.
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later remediation step remains. Otherwise, in `pr` publish mode, the workflow publishes a draft pull request with `attention_required: true`, completes, and skips downstream promotion such as moving Jira. The same draft handoff applies to environment-class `BLOCKED` and malformed `NO_DETERMINATION`; verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` stop before publication. The draft is a recoverability handoff carrying the latest report, remaining work, and recommended next action — not success evidence.
 
 ---
 
-## 14. Dependency Invalidation and Preserved Output Reuse
+## 12. Dependency Invalidation and Preserved Outputs
 
-A repeated attempt can change the accepted output of a logical step. Downstream steps that consumed the old output may no longer be valid.
+A repeated attempt can change a step's accepted output, so downstream inputs resolve to a specific producing Step Execution rather than an ambiguous "latest". When a newly accepted execution changes semantic outputs, dependent steps become `pending`, `blocked`, `superseded`, or `requires_revalidation`, and the change is recorded as `changedOutputs`, `invalidatedLogicalStepIds`, and `revalidationRequired`. For example, if step 2 replaces API contract v1 with v2, step 3's UI built against v1 must reattempt or revalidate before verification can pass.
 
-Rules:
-
-1. Activity/tool/agent outputs used by downstream steps must be associated with the producing attempt identity.
-2. A downstream input reference should resolve to a specific producing Step Execution output, not ambiguous “latest” output, unless the workflow explicitly refreshes it.
-3. If a new accepted Step Execution changes semantic outputs, downstream steps that depended on old outputs must be marked `pending`, `blocked`, `superseded`, or `requires_revalidation`.
-4. Preserved steps in RecoverFromFailedStep must carry `preservedFrom.workflowId`, `preservedFrom.runId`, `preservedFrom.logicalStepId`, and `preservedFrom.executionOrdinal`.
-5. Preserved step outputs may be reused only when the checkpoint proves they still satisfy downstream contracts.
-6. If a preserved output ref is missing, unauthorized, corrupted, or plan-mismatched, Resume must fail before executing new work.
-7. A gate may validate that downstream outputs are still valid; that validation result must be structured evidence, not prose.
-
-Representative dependency effect:
-
-```json
-{
-  "changedOutputs": [
-    {
-      "logicalStepId": "implement-api",
-      "executionOrdinal": 2,
-      "outputRef": "art_api_contract_v2"
-    }
-  ],
-  "invalidatedLogicalStepIds": ["implement-ui", "verify-integration"],
-  "revalidationRequired": ["verify-integration"]
-}
-```
-
-This rule is required for both failed-step recovery and autonomous story loops. Without it, MoonMind could accidentally present downstream work as valid even though it was built against a superseded upstream attempt.
+Preserved steps in recovery carry `preservedFrom.workflowId`, `.runId`, `.logicalStepId`, and `.executionOrdinal`, and are reused only when the checkpoint proves they still satisfy downstream contracts. A missing, unauthorized, corrupted, or plan-mismatched preserved output fails Resume before new work runs. Without these rules MoonMind could present downstream work as valid when it was built against a superseded upstream attempt.
 
 ---
 
-## 15. RecoverFromFailedStep Relationship
+## 13. RecoverFromFailedStep
 
-Failed-step recovery is one consumer of Step Executions with Checkpointing. This section uses "Resume" as shorthand for the RecoverFromFailedStep action defined in `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`; RecoverFromSelectedStep follows the same rules with an operator-chosen starting step.
-
-Resume does not continue the old failed step in place. Resume creates a linked follow-up execution and starts new work by creating a new local Step Execution for the failed logical step.
-
-Resume attempt properties:
-
-1. `reason = recover_from_failed_step`;
-2. local `attempt` starts in the resumed run scope, usually `1`;
-3. `lineage.sourceExecutionOrdinal` points to the failed attempt in the source run;
-4. `lineage.lineageExecutionOrdinal` may show the cross-run continuation number;
-5. `sourceWorkflowId` and `sourceRunId` are pinned;
-6. completed prior steps are imported as preserved progress from refs;
-7. the workspace is restored from a validated checkpoint;
-8. the failed step is the first newly executed logical step;
-9. later steps execute normally after the failed step succeeds, subject to dependency invalidation rules.
-
-Resume must not:
-
-1. allow silent workflow input edits in the failed-step recovery path;
-2. silently fall back to full rerun;
-3. re-execute preserved prior steps unless a future explicit mode requests it;
-4. ignore missing, corrupted, unauthorized, or inconsistent checkpoint evidence;
-5. conflate local attempt identity with cross-run lineage identity.
-
-Representative Resume step row text:
+"Resume" here means RecoverFromFailedStep (`docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`); RecoverFromSelectedStep follows the same rules from an operator-chosen step. Resume does not continue the failed step in place. It creates a linked execution whose first new work is the failed step as a local Step Execution with `reason = recover_from_failed_step`, pinned source ids, and lineage. Prior completed steps are imported as preserved progress, the workspace comes from a validated checkpoint, and later steps run normally subject to invalidation:
 
 ```text
 Step 1: Prepare repo — completed, preserved from source run
@@ -1131,82 +288,31 @@ Step 2: Implement API — completed, preserved from source run
 Step 3: Run tests — resumed attempt 2, local attempt 1 executing now
 ```
 
----
+Resume does not allow silent input edits, fall back to a full rerun, re-execute preserved steps, ignore bad checkpoint evidence, or conflate local identity with lineage; each would make the recovered run claim progress it cannot prove.
 
-## 16. Managed Runtime Relationship
+### 13.1 Recovery manifest
 
-Managed runtimes execute attempts; MoonMind owns attempt semantics.
+Every failed run emits a recovery manifest (`reports/recovery_manifest.json`, `application/vnd.moonmind.failed-run-recovery+json;version=1`, referenced from the finish summary) before terminal failure is reported. It names the last accepted step, the failed step and ordinal, checkpoint refs by boundary, the validation result (`valid`, `missing`, `corrupted`, `unauthorized`, `incompatible`, `invalid`, `not_evaluated`), side-effect dispositions (`accepted`, `discarded`, `blocked`, `needs_compensation`), and resume allowance with a blocked reason. `resumeAllowed` is true only for a `valid` result with a checkpoint ref; otherwise eligibility falls back to `full_retry` (or `environment_fix`) rather than presenting a rerun as resume. Restore-time re-validation still runs.
 
-For a managed agent runtime attempt, `MoonMind.UserWorkflow` should:
+A workflow-owned check that rejects a step before launch still records it as a failed Step Execution with an allocated ordinal. Otherwise the manifest reports `no_failed_step_execution_to_resume` and the run loses checkpoint recovery even when an earlier accepted attempt captured valid checkpoints. Since such a step captured no workspace, the capability snapshot and checkpoint kind come from the step whose checkpoint is restored, chosen by the same failed-step-then-last-accepted-step rule; mixing steps leaves resume ineligible with `CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING`.
 
-1. create the Step Execution record;
-2. prepare and record the immutable context bundle;
-3. validate and apply the workspace policy;
-4. launch or reuse the appropriate `MoonMind.AgentRun` boundary according to runtime context policy;
-5. pass compact refs and instructions to the runtime;
-6. collect runtime output refs;
-7. run or schedule quality gates;
-8. classify side effects;
-9. update the step ledger projection and step execution manifest.
+### 13.2 Incident reconstruction manifest
 
-An agent may recommend another attempt, but it must not unilaterally create hidden attempts or mutate the attempt ledger.
-
-### 16.1 Runtime context policy
-
-Attempt records should distinguish runtime/session policy from workspace policy.
-
-Representative policy:
-
-```json
-{
-  "runtimeContextPolicy": "fresh_agent_run",
-  "sessionPolicy": {
-    "codex_cli": "new_epoch_per_attempt",
-    "claude_code": "new_process_per_attempt"
-  }
-}
-```
-
-Suggested values:
-
-| Policy | Meaning |
-| --- | --- |
-| `fresh_agent_run` | Start a new `MoonMind.AgentRun` child workflow for the attempt. |
-| `reuse_session_new_epoch` | Reuse a workflow-scoped managed session container but clear/reset to a new epoch before the attempt. |
-| `reuse_session_same_epoch` | Keep session continuity across attempts; should be rare and explicit. |
-| `external_provider_continuation` | Delegate to provider-specific continuation semantics when MoonMind cannot control runtime state directly. |
-
-For managed sessions, Ralph-style clean context should usually mean `fresh_agent_run` plus `reuse_session_new_epoch` or equivalent `clear_session` semantics. Runtime-specific bindings may implement that reset with a new thread, a cleared Claude Code context, or a replacement container when required. External or coordinated agents may have weaker runtime control; in that mode, MoonMind should still record attempt identity, context refs, known side effects, and checkpoint evidence where available. Features that require direct workspace restoration may be unavailable or require a different policy.
+Every failed run also emits `reports/incident_reconstruction.json` (`application/vnd.moonmind.incident-reconstruction+json;version=1`, summarized as `incidentReconstruction`, memo key `incident_reconstruction_ref`), built after and reusing the recovery manifest. It lets an operator see what happened without reading worker internals by correlating the resilience policy ref, provider/profile/credential source and sanitized failure event (raw payloads only behind `rawErrorRef`), failed step and ordinal, progress, workspace change refs, side-effect dispositions and restore candidate, cost attribution and observed usage where reported, trace spans across API, workflow, Activity, provider, and artifact boundaries, and log and artifact refs. A replay-safe trace id derived from workflow/run identity joins these and appears on each step manifest as `traceRef`. Every category is present with a locator or named absent with a reason, and secrets and raw payloads are redacted or artifact-gated.
 
 ---
 
-## 17. Operator and API Surfaces
+## 14. Managed Runtimes
 
-The default workflow detail view should stay simple:
+For a managed agent attempt, `MoonMind.UserWorkflow` creates the Step Execution, prepares the context bundle, applies the workspace policy, launches or reuses `MoonMind.AgentRun` per runtime context policy, collects output refs, runs gates, classifies side effects, and updates ledger and manifest. An agent may recommend another attempt but does not create hidden attempts or edit the ledger.
 
-1. each logical step shows the latest/current attempt;
-2. attempt count is visible;
-3. blocked or failed gate summaries are visible;
-4. the latest evidence refs are accessible;
-5. preserved or resumed provenance is clearly marked.
+`runtimeContextPolicy` (`moonmind/schemas/agent_runtime_models.py`) is separate from workspace policy: `fresh_agent_run` (new child workflow), `reuse_session_new_epoch` (reuse the managed session after resetting it), `reuse_session_same_epoch` (rare, explicit continuity), and `external_provider_continuation` (provider-controlled state). Clean-context loops usually combine `fresh_agent_run` with an epoch reset, implemented by the runtime as a new thread, cleared context, or replacement container. External agents allow weaker control, but MoonMind still records identity, context refs, known side effects, and available checkpoints.
 
-Expanded surfaces should allow operators to inspect attempt history:
+---
 
-1. attempt number;
-2. lineage;
-3. reason;
-4. source attempt;
-5. runtime child refs;
-6. context bundle ref;
-7. workspace policy;
-8. git disposition;
-9. quality gate verdict;
-10. output, diagnostics, and diff refs;
-11. terminal disposition.
+## 15. Operator Surfaces, Security, and Failure Semantics
 
-APIs should expose bounded attempt projections and artifact refs. They must not inline large transcripts, diffs, provider payloads, or verification reports.
-
-Canonical API shape:
+The default detail view shows each step's latest attempt, attempt count, gate summaries, latest evidence, and preserved/resumed provenance. Expanded views and the API expose bounded attempt history and refs, never large transcripts or diffs:
 
 ```http
 GET /api/executions/{workflow_id}/steps
@@ -1214,235 +320,14 @@ GET /api/executions/{workflow_id}/steps/{logical_step_id}/step-executions
 GET /api/executions/{workflow_id}/steps/{logical_step_id}/step-executions/{execution_ordinal}
 ```
 
-The path segment is `step-executions` keyed by `execution_ordinal`; `attempts` is not an API term.
+When a gate fails, the parent workflow skips, blocks, invalidates, or revalidates dependent steps itself rather than relying on a downstream agent to notice.
 
-Representative attempt list response:
-
-```json
-{
-  "workflowId": "mm:wf",
-  "runId": "temporal-run-id",
-  "logicalStepId": "implement-story-S004",
-  "latestStepExecution": 3,
-  "stepExecutions": [
-    {
-      "executionOrdinal": 1,
-      "status": "failed",
-      "reason": "initial_execution",
-      "gitDisposition": "candidate",
-      "gateVerdict": "ADDITIONAL_WORK_NEEDED",
-      "manifestRef": "art_execution_1_manifest"
-    },
-    {
-      "executionOrdinal": 2,
-      "status": "failed",
-      "reason": "tests_failed",
-      "gitDisposition": "candidate",
-      "gateVerdict": "ADDITIONAL_WORK_NEEDED",
-      "manifestRef": "art_execution_2_manifest"
-    },
-    {
-      "executionOrdinal": 3,
-      "status": "completed",
-      "reason": "quality_gate_failed",
-      "gitDisposition": "accepted",
-      "gateVerdict": "FULLY_IMPLEMENTED",
-      "manifestRef": "art_execution_3_manifest"
-    }
-  ]
-}
-```
+Security: bundles, manifests, checkpoints, and memory proposals contain no raw secrets; failed-attempt diagnostics are sanitized before display; artifact refs go through normal authorization; restores stay within the run workspace or approved worktree and reject path traversal; external effects are idempotent or key-guarded; publication, Jira, merge, deployment, and provider-account actions require gate-approved state; and repo and local skill sources are treated as untrusted input.
 
 ---
 
-## 18. Failure and Stop Semantics
+## 16. Versioning and Compatibility
 
-When an attempt fails or a gate requests more work, MoonMind must classify the next state using a terminal disposition from the canonical set in section 7.3.
-
-When a downstream step depends on a passing gate, the parent workflow must skip, block, invalidate, or revalidate that downstream step if the gate fails. Publication and external state transitions must not rely only on the downstream agent noticing the failed gate.
-
-A workflow-owned authority or contract check that rejects a step before its Step Execution launches must still record that step as a failed Step Execution, including allocating its execution ordinal. The failed logical step is the recovery manifest's key evidence: without it the manifest reports `no_failed_step_execution_to_resume`, and a run whose prior accepted attempt captured valid checkpoints loses checkpoint-based recovery even though the workspace evidence exists. A failed row left at ordinal `0` projects as a failed step with zero executions.
-
-A step rejected before launch captured no workspace of its own, so the runtime capability snapshot and checkpoint kind that govern resume belong to the step whose checkpoint the manifest actually restores. Resolve that step with the same failed-step-then-last-accepted-step rule the manifest uses to select its resume refs; selecting the checkpoint from one step and the capability snapshot from another leaves resume ineligible with `CHECKPOINT_CAPABILITY_SNAPSHOT_MISSING`.
-
----
-
-## 19. Security and Side-Effect Guardrails
-
-Step Executions with Checkpointing must preserve MoonMind's security posture.
-
-Rules:
-
-1. Attempt context bundles must not include raw credentials.
-2. Artifact refs must respect normal authorization checks.
-3. Workspace restore operations must be scoped to the run workspace or approved worktree.
-4. External side effects must be idempotent or guarded by durable keys.
-5. Non-idempotent external work must not be reattempted without explicit policy.
-6. Publication, Jira transition, merge, deployment, and provider-account actions require gate-approved state.
-7. Failed attempt logs and diagnostics must be sanitized before display or publication.
-8. Repo and local skill sources remain untrusted input; attempt context must respect skill source policy.
-9. Step execution manifests, context bundles, checkpoints, retrieval manifests, and memory proposals must not contain raw secrets.
-10. Checkpoint restoration must not allow path traversal, unauthorized file materialization, or writes outside approved workspaces.
-
----
-
-## 20. Examples
-
-### 20.1 Jira Orchestrate gated implementation
-
-Desired behavior:
-
-```text
-1. implement story breakdown
-2. verify completion -> ADDITIONAL_WORK_NEEDED
-3. remediate attempt 1
-4. verify remediation attempt 1 -> ADDITIONAL_WORK_NEEDED
-5. remediate attempt 2
-6. verify remediation attempt 2 -> FULLY_IMPLEMENTED
-7. create pull request
-8. move Jira to Code Review
-```
-
-The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
-
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, completes with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft is a recoverability handoff rather than success evidence. Its annotation and the completed-with-attention final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
-
-### 20.2 Failed-step recovery
-
-Desired behavior:
-
-```text
-source run:
-  step 1 completed, local attempt 1
-  step 2 completed, local attempt 1
-  step 3 failed, local attempt 1
-
-resume run:
-  step 1 preserved from source refs
-  step 2 preserved from source refs
-  step 3 local attempt 1 executes from validated checkpoint
-          lineage shows resumed attempt 2
-  step 4 executes normally after step 3 passes
-```
-
-The resumed run does not reconstruct progress from logs and does not silently rerun steps 1 and 2.
-
-#### 20.2.1 Failed-run recovery manifest
-
-Checkpoint-backed recovery is the default failed-run path. Every failed run emits a **recovery manifest** (a durable artifact, `reports/recovery_manifest.json`, plus a compact execution-linked reference carried in the finish summary) **before** terminal failure is reported. The manifest content type is `application/vnd.moonmind.failed-run-recovery+json;version=1`.
-
-The manifest names:
-
-- the **last accepted step** and the **failed logical step** with its **execution ordinal**;
-- the **checkpoint refs** available for resume (ref-only, by boundary);
-- the **checkpoint validation result** (`valid`, `missing`, `corrupted`, `unauthorized`, `incompatible`, `invalid`, or `not_evaluated`);
-- the **side-effect dispositions** classified as `accepted`, `discarded`, `blocked`, or `needs_compensation`;
-- the **resume allowance** and, when resume is not allowed, the **blocked reason**.
-
-The contract is fail-closed: `resumeAllowed` can be true only when checkpoint validation is `valid` and a checkpoint ref is present. A blocked, missing, corrupted, unauthorized, or workspace-policy-incompatible checkpoint can never be silently degraded into a full rerun presented as resume — it is recorded as blocked with the reason, and the manifest's recovery eligibility falls back to `full_retry` (or `environment_fix` for environment/system failures). Restore-time checkpoint re-validation still runs and fails closed when a resume is actually attempted.
-
-#### 20.2.2 Incident reconstruction manifest
-
-Every failed run also emits a single **incident reconstruction manifest** (a durable artifact, `reports/incident_reconstruction.json`, plus a compact execution-linked summary carried in the finish summary as `incidentReconstruction`) **before** terminal failure is reported. It is built after the recovery manifest so it reuses the recovery side-effect dispositions and checkpoint restore candidate rather than recomputing them. The manifest content type is `application/vnd.moonmind.incident-reconstruction+json;version=1`.
-
-The manifest correlates, in one reconstruction path, the evidence an operator needs to answer *what happened* without reading raw worker internals:
-
-- the governing **resilience policy** ref (MM-880);
-- the **provider / profile / credential source** and the sanitized **provider failure event** (MM-882) — structured fields only; raw provider payloads are referenced via `rawErrorRef`, never inlined;
-- the **failed logical step** and its **execution ordinal**;
-- **progress** signals (bounded counts + current step);
-- **workspace changes** (per-step disposition refs);
-- accepted/blocked **side-effect dispositions** and the **checkpoint restore candidate** (linked from the recovery manifest);
-- **cost** — the cost-attribution settings (runtime/model/effort/cost center/budget ref) plus observed token/cost **where available** (`observedAvailable` stays false and the numeric fields stay absent when the runtime did not report usage);
-- **trace spans** across the API, workflow, activity, provider, side-effect, log, artifact, and step-manifest boundaries;
-- the durable **logs** ref and named **artifact** refs.
-
-A stable, replay-safe **correlation (trace) id** — deterministically derived from the workflow/run identity — joins all of this. The same trace id is stamped onto each step-execution manifest as a compact `traceRef` (with a per-step span id), so a step can be correlated to the run's incident reconstruction and to its trace/log slice through one id. The manifest enumerates **every** correlated category: each is either present with a locator or named absent with a reason code, so a failed run never silently omits a category. All large evidence is carried as bounded refs (it is never duplicated into workflow history), and secret-bearing values and raw provider payloads are redacted or artifact-gated. The dashboard/report surfaces link to the durable manifest (memo key `incident_reconstruction_ref`) rather than duplicating its evidence.
-
-### 20.3 Autonomous story loop
-
-Desired behavior:
-
-```text
-story S004 attempt 1:
-  implementation produced candidate diff
-  tests failed
-  diff retained as artifact
-
-story S004 attempt 2:
-  starts with policy apply_previous_execution_diff_to_clean_baseline
-  fixes tests
-  verifier passes
-  changes are committed
-  logical story step is marked passed
-```
-
-The failed attempt remains visible as evidence even though its workspace state is not accepted.
-
-### 20.4 Dependency invalidation
-
-Desired behavior:
-
-```text
-step 2 attempt 1 accepted API contract v1
-step 3 attempt 1 implemented UI against API contract v1
-step 4 verification failed and requested API change
-step 2 attempt 2 accepted API contract v2
-step 3 is invalidated because it consumed API contract v1
-step 3 reattempts or revalidates before step 4 can pass
-```
-
-MoonMind must not preserve step 3 as successful unless a gate proves it remains valid against API contract v2.
-
----
-
-## 21. Non-Goals
-
-This design does not require:
-
-1. infinite autonomous loops;
-2. hiding attempts inside a single agent transcript;
-3. storing large diffs or logs in workflow state;
-4. treating Temporal Activity retries as semantic reattempts;
-5. automatically replaying every possible external side effect;
-6. committing memory proposals from failed attempts directly to the repo;
-7. making failed-step recovery and autonomous loops separate recovery systems;
-8. exposing full immutable attempt history in the default workflow detail view;
-9. forcing every Step Type to use autonomous reattempt semantics.
-
----
-
-## 22. Versioning and Compatibility
-
-Payload-affecting Step Execution and checkpoint changes follow a versioned
-cutover rule: canonical writers fail fast for unsupported values, while
-workflow read/replay boundaries must turn degraded, blank, unknown, or future
-values from already-persisted payloads into typed invalid boundary decisions
-instead of crashing workflow tasks. Additive `v1` fields remain optional or
-default-initialized; incompatible payload changes require a new content-type
-version and an explicit cutover before new writers emit that version.
-
-Rules:
-
-1. Manifest and checkpoint schemas are versioned through their content types (section 2); a writer must never emit a payload it cannot name with a canonical content type.
-2. Enum growth (reasons, statuses, dispositions, boundaries, policies, verdicts, failure codes) is additive within `v1`; readers must map unknown values to typed invalid/degraded decisions, never crash or silently coerce.
-3. Renaming or removing a field, changing identity/key shapes, or changing disposition semantics requires a new content-type version and a cutover in which the old version is deleted, not aliased (Constitution: **Pre-Release Velocity: Delete, Don't Deprecate**).
-4. Replay compatibility: any change to manifest/checkpoint payloads carried through workflow state must include a compatibility or replay-style regression test at the workflow boundary, or documented proof that no in-flight run can carry the old shape.
-
-Non-canonical working notes remain outside this document under `docs/tmp/` per the Constitution's **Canonical Documentation Separates Desired State from Migration Backlog** principle; this document describes only the target contracts.
-
----
-
-## 23. Constitution Alignment
-
-Step Executions with Checkpointing supports MoonMind's core principles:
-
-1. **Orchestrate, Don't Recreate**: agents execute attempts; MoonMind owns orchestration, state, and evidence.
-2. **Own Your Data**: attempt context, outputs, diffs, and checkpoints are operator-controlled artifacts.
-3. **Resilient by Default**: repeated work is explicit, bounded, idempotency-aware, and recoverable.
-4. **Docs-First Development and Traceability**: gates and attempts preserve traceability from requirement to implementation to evidence, anchored in long-lived `docs/` rather than disposable spec packets.
-5. **Continuous Improvement**: failed attempts produce structured evidence and improvement signals rather than disappearing into logs.
-
-The key desired-state rule is simple:
+Schemas are versioned through their content types. Writers fail fast on unsupported values, while read and replay boundaries turn degraded, blank, unknown, or future values from persisted payloads into typed invalid decisions instead of crashing workflow tasks, so in-flight histories stay replayable. Additive `v1` fields are optional or default-initialized and enum growth is additive. Renaming or removing a field, changing identity or key shapes, or changing disposition semantics requires a new content-type version, with the old version removed rather than aliased. Payload changes carried through workflow state are covered by compatibility or replay-style tests at the workflow boundary.
 
 > A repeated step is not the same execution happening again. It is a new attempt with explicit context, checkpoint, side-effect policy, evidence, lineage, and stop rules.

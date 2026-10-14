@@ -1,7 +1,5 @@
 # Workflow Type Catalog and Lifecycle
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 MoonMind’s **Temporal-native** lifecycle contract for Temporal-managed Workflow Executions. MoonMind does not define a separate product entity named Task; this document governs workflow types and execution semantics inside Temporal.
 
 **Status:** Normative (Temporal application layer) 
@@ -63,11 +61,8 @@ The authoritative per-type inventory — exact Temporal type, module/class
 owner, and declared projection role for every current production
 registration — is the generated reference
 `WorkflowTypeCatalogGenerated.md`, produced mechanically from
-`moonmind/workflows/temporal/workflow_registry.py`
-(MoonLadderStudios/MoonMind#3959). Do not duplicate that enumeration here:
-a second handwritten list drifts (it previously listed
-`MoonMind.UserWorkflow` twice and omitted registered operator/excluded
-types). The product root enum `TemporalWorkflowType`
+`moonmind/workflows/temporal/workflow_registry.py`. Do not duplicate that
+enumeration here: a second handwritten list drifts. The product root enum `TemporalWorkflowType`
 (`api_service/db/models.py`) intentionally covers only user-submitted roots;
 it is not the registration inventory.
 
@@ -127,11 +122,10 @@ generated table keeps distinct; they are not a second inventory.
   type: only some workflows accept `Pause` / `Resume`, and acceptance never
   implies a safe paused state (§6.2). Do not infer a universal control
   contract from handler or type names.
-- **Retired types stay out of the catalog.** `MoonMind.ManifestIngest` was
-  retired (MoonLadderStudios/MoonMind#4192): the workflow module, its
-  registration, its Activities, and its lifecycle section are removed. Old
+- **Retired types stay out of the catalog.** `MoonMind.ManifestIngest` has
+  no workflow module, registration, Activities, or lifecycle section. Old
   histories may retain the historical type string as replay evidence; the
-  new release never registers, starts, or updates it.
+  current release never registers, starts, or updates it.
 - **Current routing is not historical routing.** The workflow-queue lane in
   the generated reference separates the current handler lane from
   historical-only handlers retained for pre-cutover histories; module
@@ -377,18 +371,15 @@ Per-workflow-type control surface (verified against handler definitions):
 | `MoonMind.UserWorkflow` (`workflows/run.py`) | `@workflow.update(name="Pause")`, optional payload `{controlGeneration?: int}`; validator rejects invalid generation, in-progress transition, already-paused (no-generation path), or terminal state; forwards to the active `MoonMind.AgentRun` child and rolls back on forward failure | `@workflow.update(name="Resume")`, same payload shape; validator rejects invalid generation, in-progress transition, not-paused-and-not-awaiting-external (no-generation path), or terminal state; forwards to the active child | Yes: returns `{runId, paused, controlGeneration, safePoint, resumed}`; `safePoint` is true only while paused at the safe boundary with no active agent child and no transition in progress | Accepted ≠ paused. Safe-point completion requires a follow-up `control_state` Query on the same run observing `safePoint: true` (see `WorkerPauseSystem.md`) |
 | `MoonMind.AgentRun` (`workflows/agent_run.py`) | `@workflow.update(name="Pause")`, no payload; handler sets the local `_paused` flag; validator rejects already-paused or terminal runs | `@workflow.update(name="Resume")`, no payload; handler clears the flag; validator rejects not-paused or terminal runs | No | Temporal `ACCEPTED` only means the validator admitted the Update; the flag flips on handler completion (returned result). Reached only via parent forwarding or a direct Update; the system quiesce fan-out (`client.py`) does not enumerate this type |
 
-Retired: `MoonMind.ManifestIngest` (`workflows/manifest_ingest.py`, removed by
-MoonLadderStudios/MoonMind#4192) previously accepted unconditional
-`Pause`/`Resume` Updates with no validator and no safe-point notion. The row
-is intentionally absent from the table above: the new release never
-registers, starts, or updates that type.
+`MoonMind.ManifestIngest` is intentionally absent from the table above: the
+current release never registers, starts, or updates that type.
 
 System quiesce (`client.py::_send_update_to_running_workflows`) enumerates
 only `WorkflowType="MoonMind.UserWorkflow"` executions over Visibility, so a
 system pause never assumes every registered workflow type accepts the same
 control. Only `MoonMind.UserWorkflow` executions are enumerated; every other
 registered type is excluded. Partial/unknown outcomes are retained per target; see
-`WorkerPauseSystem.md` and the durable operation-result work in #3953.
+`WorkerPauseSystem.md`.
 
 ### Signal: provider-profile coordination signals
 
@@ -577,11 +568,11 @@ Key notes:
 
 ## 11.2 `MoonMind.ManifestIngest` lifecycle (retired)
 
-MoonLadderStudios/MoonMind#4192 retired the native Manifest product: the
-`MoonMind.ManifestIngest` workflow module, its registration, its Activities
-(`manifest.compile`, `manifest.write_summary`), and this lifecycle are
-removed. Old-release histories may retain the historical type string as
-replay evidence; the new release never registers, starts, or updates it.
+MoonMind has no native Manifest product: there is no `MoonMind.ManifestIngest`
+workflow module, registration, Activities (`manifest.compile`,
+`manifest.write_summary`), or lifecycle. Old-release histories may retain the
+historical type string as replay evidence; the current release never
+registers, starts, or updates it.
 The section number is preserved so surviving cross-references keep resolving.
 
 ## 11.3 `MoonMind.AgentRun` lifecycle

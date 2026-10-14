@@ -9,7 +9,7 @@ Related: [AGENTS.md](../../AGENTS.md), [Primary Runtime Provider Strategy](Prima
 
 Verification must demonstrate the behavior claimed without becoming a second orchestration platform or an unrelated source of production outages. Reuse existing tests, runners, reports, and actual module owners. A useful small fix does not wait for every harness, optional host mode, provider account, or full release matrix.
 
-Ordinary certificate-independent admission is implemented by #4560 at the existing settings, evidence resolver, and execution-plan boundaries. Explicit strict certification, historical report decoding, and live-run publication retain their actual validators and integrity requirements. The [earlier full contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/ConformanceAndLiveSmoke.md) remains available for historical case IDs, report fields, and operational details; it does not reinstate certificates as ordinary admission prerequisites. [Runtime selection](RuntimeProviderRollout.md) owns surviving selection controls. Security, credential, capability, and action-authority checks remain with their providing modules, independent of optional certification observations.
+Ordinary certificate-independent admission is implemented at the existing settings, evidence resolver, and execution-plan boundaries. Explicit strict certification, historical report decoding, and live-run publication retain their actual validators and integrity requirements. The [earlier full contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/ConformanceAndLiveSmoke.md) remains available for historical case IDs, report fields, and operational details; it does not reinstate certificates as ordinary admission prerequisites. [Runtime selection](RuntimeProviderRollout.md) owns surviving selection controls. Security, credential, capability, and action-authority checks remain with their providing modules, independent of optional certification observations.
 
 ## Existing owners and current baseline
 
@@ -21,11 +21,10 @@ The settings owner (`moonmind/omnigent/settings.py`), `evidence_resolver.py`, an
 | Deployable-image behavior | `tools/run_omnigent_exact_artifact_conformance.py` and its current CI job. |
 | Provider-controlled live observations | `tools/run_omnigent_live_conformance.py` and the protected workflow/action-adapter boundary. |
 | Existing aggregate report format | `tools/build_omnigent_conformance_report.py` and the owning schema/validator. |
-| Useful generic runtime verification | #3832, consuming the actual providing feature tests. |
-| Recovery/action verification | #3626 with #3510, #3621, #3622, and #3624. |
-| Shared-provider accounting and release | Existing ProviderProfileManager/lease owners, #3882 and #1089. |
-| Save, restore, and publication | #4014–#4018 and the existing artifact/workspace/publisher owners. |
-| Removal of overlapping selection/retirement gates | #3833, #3931, #3932, and #3925. |
+| Useful generic runtime verification | The actual providing feature tests. |
+| Recovery/action verification | Existing remediation action/verification owners. |
+| Shared-provider accounting and release | Existing ProviderProfileManager/lease owners. |
+| Save, restore, and publication | Existing artifact/workspace/publisher owners. |
 
 These links are not a serial approval pipeline. Completed feature tests can supply evidence to several consumers. A coordinator should not run another copy of every child suite or build a permanent ledger of claim completion.
 
@@ -110,7 +109,7 @@ Choose evidence at the right boundary. The exact-artifact job does not by itself
 
 Current source/settings expose the existing `deployment`, `protected`, and `either` evidence policies; the Compose/template default is `either`. Omitted, blank, or shipped-`either` configuration is ordinary certificate-independent admission: historical certificates are an optional truthful observation, never a prerequisite for ordinary workflows. Explicit `protected` or `deployment` selects strict certification for new admission. The older protected document chain and the `tools/materialize_omnigent_evidence.py` path remain real consumers for strict and diagnostic use. Do not describe all deployments as requiring only the old protected chain, and do not bypass their actual validation because this document changes the target.
 
-#3832 and #3833 coordinated separating incidental certification/readiness coupling at the existing admission/evidence boundary, with #3931 owning redundant runtime-gate removal; MoonLadderStudios/MoonMind#4560 implements the removal for ordinary admission. Preserve explicitly chosen stricter certification policy and current security stops during migration. Do not introduce another compatibility hash, ready-flag service, or automatic policy downgrade.
+Ordinary admission is separated from incidental certification/readiness coupling at the existing admission/evidence boundary. Preserve explicitly chosen stricter certification policy and current security stops during migration. Do not introduce another compatibility hash, ready-flag service, or automatic policy downgrade.
 
 Evidence freshness is meaningful for the claim it qualifies. Expired live evidence cannot be advertised as current certification, but does not by itself prove an installed interface incompatible. Revoked credentials, an unsupported interface, known unsafe behavior, or missing required security enforcement still blocks the affected action. A report outage is neither permission to ignore those conditions nor proof they exist.
 
@@ -128,7 +127,7 @@ A report can identify the exact image and source that ran without imposing exact
 
 ## Completion and delivery
 
-#3832 owns missing generic-runtime evidence, #3626 recovery qualification, and each implementation issue its own behavior. This document does not close their remaining requirements, authorize production operations, or enable autonomous remediation. Required live observations remain visibly pending until actually collected.
+This document does not authorize production operations or enable autonomous remediation. Required live observations remain visibly pending until actually collected.
 
 Document-only changes need review, not unit tests of wording, headings, row counts, or metadata. Preserve tests of actual executable schema, parser, transport, permission, and generator behavior. Update providing documentation with code changes rather than invent a semantic-prose validator.
 

@@ -4,7 +4,6 @@
 **Status:** Accepted target
 **Owner:** MoonMind Dashboard / Platform
 **Audience:** dashboard, backend, workflow authors
-**Implementation tracking:** MoonLadderStudios/MoonMind#424
 
 **Authority:** This document owns the read-only conversational deployment
 overview: UI entry, read capabilities, evidence/freshness contract, model-data
@@ -109,7 +108,7 @@ authorization/projection boundaries
 (`tests/unit/workflows/skills/test_deployment_overview.py`); optional live
 model evaluation is separate and never fabricates successful checks.
 
-Production dispatch travels the existing executable-tool boundary (#973):
+Production dispatch travels the existing executable-tool boundary:
 `moonmind.deployment_overview` (`moonmind/workflows/skills/deployment_tools.py`,
 `mm.tool.execute` / `by_capability` on the deployment-control worker) resolves
 the principal server-side from handler context and routes through

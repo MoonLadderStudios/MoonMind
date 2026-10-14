@@ -1,7 +1,5 @@
 # Temporal Signals System
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 Status: **Design Draft**
 Owners: MoonMind Engineering
 Last Updated: 2026-03-27
@@ -320,7 +318,7 @@ These signals coordinate profile-slot allocation and rate-limit recovery for man
 
 This signal provides parent-visible execution state without requiring polling.
 Slot release is owned by the ProviderProfileManager through verified consumer
-teardown (MoonLadderStudios/MoonMind#1089); AgentRun no longer sends
+teardown; AgentRun does not send
 `profile_assigned` and the parent keeps no defensive release fallback.
 
 Desired-state rule:
@@ -389,7 +387,7 @@ Canonical payload concepts:
 Purpose:
 
 - release a cleanup-requested slot after the designated executing owner proves
-  the exact admitted consumer stopped (MoonLadderStudios/MoonMind#1089). This is
+  the exact admitted consumer stopped. This is
   the only path besides the owner's own `release_slot` that may free a slot
   whose cleanup was requested.
 

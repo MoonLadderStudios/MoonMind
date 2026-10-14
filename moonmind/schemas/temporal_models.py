@@ -47,8 +47,7 @@ from moonmind.utils.logging import redact_sensitive_text
 # advertised catalog: new launches are rejected actionably below and in
 # TemporalExecutionService.create_execution. The TemporalWorkflowType enum
 # member and "manifest" entry mapping are retained read-only so old-release
-# rows stay readable as replay/drain evidence (see
-# docs/tmp/QdrantCutoverRunbook-4115.md); they are not supported for new work.
+# rows stay readable as replay/drain evidence; they are not supported for new work.
 SUPPORTED_WORKFLOW_TYPES = (
     "MoonMind.UserWorkflow",
     "MoonMind.MergeAutomation",

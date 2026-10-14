@@ -1,9 +1,6 @@
 # Docker Backend Service
 
-- **Status:** Desired state
 - **Owners:** MoonMind Platform
-- **Last updated:** 2026-10-06
-- **Document class:** Canonical declarative design
 
 **Related:**
 
@@ -16,223 +13,127 @@
 
 ---
 
-## 1. Purpose and authority
+## 1. Purpose
 
-This document defines MoonMind's desired-state **Docker Backend Service**. The
-service is part of the MoonMind API subsystem. It accepts governed container-job
-requests, records durable job identity, resolves caller-authorized workspaces,
-and dispatches bounded execution against one deployment-selected Docker backend.
+The **Docker Backend Service** is part of the MoonMind API subsystem. It accepts
+governed container-job requests, records durable job identity, resolves
+caller-authorized workspaces, and dispatches bounded execution against one
+deployment-selected Docker backend.
 
-The service is the canonical route for containerized repository work requested
-by:
-
-- Omnigent-hosted sessions;
-- MoonMind managed sessions;
-- workflow tools and skills;
-- the dashboard and HTTP API;
-- authenticated MCP clients.
-
-Examples include .NET tests, MoonMind Python tests, Unreal automation tests,
-JavaScript toolchains, linters, and integration tests.
+It is the route for containerized repository work requested by Omnigent-hosted
+sessions, MoonMind managed sessions, workflow tools and skills, the dashboard and
+HTTP API, and authenticated MCP clients. Examples include .NET tests, MoonMind
+Python tests, Unreal automation tests, JavaScript toolchains, linters, and
+integration tests.
 
 The requesting runtime never receives the Docker socket, a Docker API endpoint,
-`DOCKER_HOST`, or raw daemon authority. It asks MoonMind to execute a typed job.
-The per-session Docker-in-Docker topology is not a supported desired state or
-compatibility path.
+`DOCKER_HOST`, or raw daemon authority; it asks MoonMind to execute a typed job.
+This keeps daemon authority (which is effectively host root) out of agent
+runtimes. Per-session Docker-in-Docker is not a supported topology.
+
+### 1.1 Session authority
 
 Generic Omnigent hosts receive container-job authority only when the admitted
-execution requires `docker`. The host environment binds the existing sandbox
-workspace locator, workflow, Step Execution, runtime, and host lease to the
-session capability. Its bearer is transported on stdin into a read-only capability
-file; only the file selector crosses the host, runner, and harness environment
-boundaries. Missing or unsupported workspace authority fails before launch.
-The host persists non-sensitive correlation and bearer-file selectors in one
-run-owned shell profile used by login shells and the projected `moonmind`
-executable. The admitted `docker` tool binding delivers that executable even when
-the execution does not require `gh`.
+execution requires `docker`. The session capability binds the sandbox workspace
+locator, workflow, Step Execution, runtime, and host lease. Its bearer is passed
+on stdin into a read-only capability file, and only the file selector crosses
+host, runner, and harness environments, so the secret never appears in process
+environments. A run-owned shell profile carries the non-sensitive correlation
+and file selectors for login shells and the projected `moonmind` executable,
+which the `docker` tool binding delivers even when `gh` is not required.
 
-The materialized workspace attachment owns repository access mode. Container-job
-capabilities bind that mode as `workspaceReadOnly`; a read-only repository policy
-or existing-workspace grant therefore remains read-only inside submitted jobs.
-The scoped API applies the signed restriction before persistence, regardless of
-an omitted or false caller value, and the worker enforces it on both bind and
-volume-subpath mounts. A caller may request stricter access but cannot weaken the
-session restriction.
+The materialized workspace attachment owns repository access mode, and
+container-job capabilities bind it as `workspaceReadOnly`. The scoped API applies
+the signed restriction before persistence regardless of the caller's value, and
+the worker enforces it on bind and volume-subpath mounts, so a read-only
+repository stays read-only inside jobs; callers can only make access stricter.
+Capability schema v3 requires this claim, and older capabilities fail closed
+(they need a fresh host lease or session) because they cannot say which access
+policy applies. Already admitted jobs keep their recorded behavior: an omitted
+`spec.workspaceReadOnly` keeps the writable workspace and exact serialized
+request.
 
-Capability schema v3 requires the access claim. Pre-v3 session capabilities fail
-closed and require a fresh host lease or managed session after deployment; they
-cannot authorize a new job using an unknown repository access policy. Already
-admitted job histories retain their recorded behavior: an omitted
-`spec.workspaceReadOnly` preserves the historical writable workspace and exact
-serialized request, while newly scoped read-only jobs persist the restriction.
+### 1.2 Readiness and image lifetime
 
-The selected daemon owns a persistent image store. Pulled and locally provisioned
-images remain reusable by later jobs and workflows until deployment-level image
-retention removes them. Image lifetime is independent of workflow and session
-lifetime.
+The selected daemon owns a persistent image store. Pulled and locally
+provisioned images stay reusable by later jobs and workflows until
+deployment-level retention removes them; image lifetime is independent of
+workflow and session lifetime.
 
-**MoonMind service readiness and optional workload-image readiness are separate.**
+**Service readiness and optional workload-image readiness are separate.**
 Planning admits the `docker` capability from the deployment's enabled, valid
-container-job backend configuration. The planning worker does not require a
-local socket or `DOCKER_HOST`. Endpoint reachability and daemon compatibility
-are checked by the trusted container-job worker before it serves execution.
-Host attestation verifies each mounted tool's read-only mount and executable
-presence, records its pinned-digest drift as advisory evidence, and executes its
-manifest-declared `versionProbe` arguments. The container CLI declares `--help`;
-host adapters preserve that portable probe when materializing tool attachments.
+container-job backend configuration; the planning worker does not need a local
+socket or `DOCKER_HOST`. The trusted container-job worker checks endpoint
+reachability and daemon compatibility before serving execution. Host
+attestation checks each mounted tool's read-only mount, executable, and
+manifest-declared `versionProbe`, recording pinned-digest drift as advisory.
 
-Starting MoonMind must not build, pull, or validate an image merely because a
-future workflow might use it. Image work begins when an admitted job actually
-requires that image, or when an operator explicitly invokes the same provisioner
-to prewarm it.
+Starting MoonMind does not build, pull, or validate an image merely because a
+future workflow might use it. Image work begins when an admitted job needs the
+image, or when an operator explicitly invokes the same provisioner to prewarm
+it. This keeps ordinary startup fast and independent of optional toolchains.
 
 ---
 
 ## 2. Core decisions
 
-1. **MoonMind owns container launches.** Agents request typed container jobs;
-   they do not control a Docker daemon.
-2. **The service is API-owned.** The API authenticates callers, authorizes the
-   request, resolves logical workspaces, creates durable job identity, and
-   exposes status and control surfaces. User authentication follows the one
-   `AUTH_PROVIDER` selector (`accounts` | `oidc` | `header` | explicitly
-   restricted local `disabled`) in
+1. **MoonMind owns container launches.** Agents request typed jobs; they do not
+   control a daemon.
+2. **The service is API-owned.** The API authenticates, authorizes, resolves
+   logical workspaces, creates durable job identity, and exposes status and
+   control. User authentication follows the single `AUTH_PROVIDER` selector in
    [AuthenticationContracts.md](../Security/AuthenticationContracts.md);
-   machine credentials below never become browser credentials.
-3. **Temporal owns long-running execution.** Submission returns a stable job
-   identifier. Pulls and builds never hold an MCP or HTTP request open.
-4. **One configured daemon is the current backend.** The required implementation
-   uses the existing system Docker daemon through MoonMind's configured Docker
-   host or socket proxy.
-5. **Backend selection is deployment-owned.** Callers cannot provide a Docker
-   endpoint. The public job contract is backend-neutral.
-6. **Optional images are acquired on demand.** A missing permitted registry image
-   is pulled by the first job that needs it; later jobs reuse it.
-7. **Deployment-owned local image recipes are provisioned on demand.** A local
-   build is allowed only for a named, operator-configured recipe. Callers cannot
-   submit arbitrary Dockerfiles, build contexts, build arguments, or secrets.
-8. **Compose startup does not prepare test images.** Ordinary `docker compose up`
-   starts MoonMind without building or running a Python-test image and without
-   making an agent-runtime worker depend on such a build.
-9. **Fresh images are reused.** Before a local build, MoonMind inspects the daemon
-   for an image whose recorded build key matches the desired recipe and whose
-   configured refresh deadline has not expired.
-10. **Provisioning is coalesced.** A per-source, per-build-key lock prevents
-    concurrent jobs from pulling or building the same image redundantly.
-11. **Job cleanup never removes shared images.** Container, scratch, network, and
-    temporary credential lifecycles are job-scoped. Image retention is separate.
-12. **Workspaces are logical references.** Callers do not provide daemon-visible
-    host paths. MoonMind resolves an authorized workspace into a mount plan.
-    A workspace locator can never resolve to the entire workspace store, for
-    either bind mounts or volume-subpath mounts. Retained managed-session launch
-    paths must also identify children of their configured workspace root.
-13. **The structured container contract is the normal public interface.** Docker
-    CLI execution remains an explicitly gated internal escape hatch.
-14. **The core remains workload-agnostic.** Toolchain-specific commands and local
-    image recipes live in deployment configuration or thin helpers, not backend
-    branches for Python, .NET, Unreal, Unity, or Node.
-15. **No dedicated MoonMind Docker daemon is required today.** This design does
-    not add a daemon service, daemon pool, or specialized worker pool.
-16. **Artifacts and bounded job records are durable truth.** Daemon-local state is
-    an execution cache, not the system of record.
+   machine credentials never become browser credentials.
+3. **Temporal owns long-running execution**, so pulls and builds never hold an
+   MCP or HTTP request open.
+4. **One deployment-selected daemon is the backend**: the system Docker daemon
+   through the configured Docker host or socket proxy. Callers cannot provide an
+   endpoint, and the job contract is backend-neutral, so switching endpoints is
+   configuration behind the same adapter. No dedicated daemon, daemon pool, or
+   specialized worker pool is needed.
+5. **Images are acquired on demand and reused.** Registry images are pulled by
+   the first job that needs them. Local builds are allowed only for named,
+   deployment-owned recipes, reused while their build key matches and their
+   refresh deadline has not expired, and coalesced under a per-source,
+   per-build-key lock.
+6. **Job cleanup never removes shared images.** Container, scratch, network, and
+   temporary credential lifecycles are job-scoped; image retention is separate.
+7. **Workspaces are logical references.** Callers never provide host paths. A
+   locator never resolves to the entire workspace store, and retained
+   managed-session launch paths identify children of their configured root.
+8. **The core is workload-agnostic.** Toolchain-specific commands and recipes
+   live in deployment configuration or thin helpers, not backend branches.
+9. **Artifacts and bounded job records are durable truth.** Daemon-local state
+   is an execution cache.
+
+Out of scope: a public arbitrary-image build API, caller-supplied build inputs
+or host paths, startup image probes, toolchain-specific worker pools, direct
+Docker access from agents, multiple daemons sharing one data root, Kubernetes
+orchestration, a generic shell service, unowned detached services without a TTL,
+and migrating cached images between daemons.
 
 ---
 
-## 3. Scope and non-goals
+## 3. Terminology
 
-### 3.1 In scope
-
-This document defines:
-
-- API ownership and service boundaries;
-- MCP and HTTP container-job tools;
-- asynchronous lifecycle and terminal states;
-- declarative backend configuration;
-- the current system-Docker backend;
-- logical workspace and artifact resolution;
-- on-demand pulls and deployment-owned local builds;
-- deterministic local-build freshness and cross-workflow reuse;
-- private-registry authorization;
-- mount, network, resource, and cleanup policy;
-- Omnigent and managed-session integration;
-- backend portability without implementing a second backend.
-
-### 3.2 Out of scope
-
-This document does not define:
-
-- a public arbitrary-image build API;
-- caller-supplied Dockerfiles, build contexts, or daemon-visible source paths;
-- an automatic build, pull, or test-image probe on ordinary MoonMind startup;
-- a Docker daemon pool or dedicated MoonMind workload daemon;
-- an Unreal-specific, Python-specific, or .NET-specific worker pool;
-- direct Docker access from an agent runtime;
-- concurrent sharing of one writable Docker data root by multiple daemons;
-- Kubernetes orchestration;
-- a generic shell service;
-- unowned detached services without a TTL;
-- migration of cached images between Docker daemons.
+- **Container job**: One bounded, owned execution against an image, with durable
+  identity, explicit inputs, a finite timeout, and one terminal outcome. It is
+  not a managed session or `MoonMind.AgentRun` unless the image hosts an agent.
+- **Image source**: A deployment-owned rule for making an image available:
+  `registry` (inspect and pull a permitted reference) or `local-build` (inspect
+  and, only when stale or missing, build a named recipe).
+- **Build key**: A digest of the normalized recipe, build arguments, and the
+  content of the declared effective inputs — only files that can affect the
+  target. Source mounted at run time does not invalidate a dependency image.
+- **Fresh image**: A built image that records the desired build key, matches the
+  worker platform, passes the recipe's validation when due, and is within its
+  optional maximum age. A missing image is **cold**, not a startup failure.
+- **Image cache**: The selected daemon's image store, scoped to the daemon rather
+  than to a job, session, or workflow.
 
 ---
 
-## 4. Terminology
-
-### 4.1 Docker Backend Service
-
-The API-owned subsystem that validates, records, dispatches, observes, and
-controls container jobs. It is a MoonMind service boundary, not necessarily a
-separate deployed container.
-
-### 4.2 Container job
-
-One bounded, owned execution request against an image. It has durable identity,
-explicit inputs, a finite timeout, and one terminal outcome. It is not a managed
-session or `MoonMind.AgentRun` unless the image itself hosts a true agent runtime.
-
-### 4.3 Docker backend
-
-Deployment configuration identifying the Docker endpoint used by the service.
-The current backend kind is `docker-engine`.
-
-### 4.4 Image source
-
-A deployment-owned rule for making an image available. Supported source kinds in
-this design are:
-
-- `registry`: inspect and pull a permitted image reference;
-- `local-build`: inspect and, only when stale or missing, build a named local
-  recipe owned by the deployment.
-
-The public container-job request selects an image or an approved image-source
-alias. It never defines a new source.
-
-### 4.5 Build key
-
-A deterministic digest of the normalized local-build recipe, build arguments,
-and the content of the declared effective input set. The input set contains only
-files that can affect the selected target, not the entire repository. Source-only
-changes mounted into the workload at run time do not invalidate a dependency
-image.
-
-### 4.6 Fresh image
-
-A locally built image is fresh when:
-
-1. it records the desired build key;
-2. its platform matches the worker platform;
-3. it passes the recipe's bounded validation command, when validation is due;
-4. its optional deployment-configured maximum age has not expired.
-
-A missing image is **cold**, not a MoonMind startup failure.
-
-### 4.7 Image cache
-
-The selected daemon's image store. Its scope is the backend daemon, not an
-individual job, session, or workflow.
-
----
-
-## 5. Architectural model
+## 4. Architecture
 
 ```text
 Omnigent / managed session / workflow / API client
@@ -263,26 +164,24 @@ Omnigent / managed session / workflow / API client
                  +-- ephemeral owned workload container
 ```
 
-The API owns authentication, authorization, validation, workspace resolution,
-idempotent submission, and public status/control surfaces. It does not execute a
-long pull or build inside the request handler.
+The API handles admission and public status/control but never runs a long pull
+or build in a request handler. Temporal owns state transitions, timeout,
+cancellation, retry, provisioning coordination, artifact publication, and
+cleanup. Only the trusted worker holds the Docker endpoint.
 
-Temporal owns durable state transitions, timeout, cancellation, retry policy,
-image-provisioning coordination, artifact publication, and cleanup coordination.
-
-A trusted MoonMind worker receives the Docker endpoint and executes the resolved
-provisioning and launch plan. The requesting agent never receives that endpoint.
-
-The normal MoonMind startup path checks the API, worker routes, Temporal, the
-configured Docker endpoint, and required authority boundaries. It does not walk
-optional image sources and does not invoke their build or validation commands.
+Code: `api_service/services/container_jobs.py` (service),
+`api_service/api/routers/container_jobs.py` (HTTP),
+`moonmind/schemas/container_job_models.py` (contract and observations),
+`moonmind/workflows/temporal/workflows/container_job.py` and
+`moonmind/workflows/temporal/container_job_backend.py` (execution), and
+`moonmind/config/container_backend_settings.py` (configuration).
 
 ---
 
-## 6. Declarative backend and image-source configuration
+## 5. Backend and image-source configuration
 
-One backend is selected per deployment. Optional local build recipes are named by
-the deployment and remain inaccessible as arbitrary caller input:
+One backend is selected per deployment. Local build recipes are named by the
+deployment and are never caller input:
 
 ```yaml
 dockerBackendService:
@@ -307,35 +206,25 @@ dockerBackendService:
         INSTALL_TEST_DEPS: "true"
       fingerprint:
         mode: declared-effective-inputs
-        inputs:
-          - .dockerignore
-          - api_service/Dockerfile
-          - api_service/docker/**/*
-          - api_service/config.template.toml
-          - pyproject.toml
-          - poetry.lock
-          - README.md
-          - LICENSE
-          - NOTICE
+        inputs: [.dockerignore, api_service/Dockerfile, api_service/docker/**/*,
+                 api_service/config.template.toml, pyproject.toml, poetry.lock,
+                 README.md, LICENSE, NOTICE]
       freshness:
         maxAge: deployment-configured
       validation:
         command: ["python", "-c", "import pytest"]
         networkMode: none
 
-    # Every other image source is declared by the deployment through
-    # MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES, a JSON array of
-    # {"sourceRef", "image", "pullPolicy", "registryCredentialRef"} objects.
-    # registryCredentialRef is optional. MoonMind ships no project
-    # image default of its own.
+    # Other sources come from MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES, a JSON
+    # array of {"sourceRef", "image", "pullPolicy", "registryCredentialRef"}
+    # objects (registryCredentialRef optional).
     <deployment-declared>:
       kind: registry
       from: MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES
       pullPolicy: if-missing
 
-  # Cache sources are declared the same way, through
-  # MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES, a JSON array of
-  # {"cacheRef", "volumeName", "target", "readOnly"} objects.
+  # Cache sources come from MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES, a JSON
+  # array of {"cacheRef", "volumeName", "target", "readOnly"} objects.
   cacheSources:
     <deployment-declared>:
       from: MOONMIND_CONTAINER_BACKEND_CACHE_SOURCES
@@ -346,161 +235,92 @@ dockerBackendService:
     allowRawDockerCli: false
 ```
 
-Rules:
+Behavior:
 
-- unsupported backend or image-source kinds are configuration errors;
-- MoonMind owns exactly one image source, its own `moonmind-python-tests`
-  self-test image, and no cache source at all. Every project image, named
-  volume, and in-container cache path is deployment-declared, so MoonMind's
-  generic surfaces name no consuming project. A caller selects a source by its
-  opaque ref and an undeclared ref fails closed;
-- a declaration that is not a JSON array of objects, omits `sourceRef`/`image`
-  or `cacheRef`, repeats a ref, reuses a MoonMind-reserved ref, names a
-  non-volume, or carries a key outside its documented schema is a configuration
-  error. Every declaration key defaults to the permissive value when omitted, so
-  a misspelled `readOnly` or `pullPolicy` would otherwise weaken the access
-  policy the deployment asked for;
-- a declared cache `target` is validated by the same public request contract a
-  caller's `CacheMount.target` is: one normalized absolute container path whose
-  every segment is non-empty and carries no `..`. The backend selects a declared
-  source by matching the requested target exactly, so a target only the
-  declaration accepts — a bare `/`, a trailing or doubled slash, a space —
-  would be a cache source no valid job could ever select. It fails at
-  configuration time rather than at the launch boundary;
-- each declaration variable is consumed exactly as supplied and is never merged
-  with the compose-derived default, so a deployment that declares an additional
-  source repeats every source it intends to keep;
-- both declarations must reach every process that resolves them. The API admits
-  a request by resolving its `imageSourceRef` before it creates durable job
-  identity, and the agent-runtime worker launches it, so a ref declared only on
-  the worker is rejected as unconfigured before the request reaches Temporal;
-- `resources.shmSize` is caller-owned. It is refused when it exceeds
-  `MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB` (default: the memory ceiling)
-  rather than clamped, so the realized value always matches the request; an
-  omitted value applies `MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB`, which is
-  itself refused at configuration time when it exceeds that ceiling so an
-  omitted request can never launch above the declared maximum;
-- empty or unreachable Docker endpoints fail service readiness;
-- a missing optional image does not fail service or worker readiness;
-- local-build paths are resolved from an operator-owned deployment root, never
-  from caller-provided absolute paths;
-- the declared fingerprint inputs must cover every file that can affect the
-  selected target, and repository tests must pin that relationship;
-- secrets are not accepted as local-build arguments in this contract;
-- callers cannot supply endpoint URLs, socket paths, TLS material, Dockerfiles,
-  build contexts, build arguments, or validation commands;
-- an operator may configure a prebuilt registry image instead of a local recipe;
-- implementing another endpoint is optional and is not part of this design.
+- MoonMind owns exactly one image source (its `moonmind-python-tests` self-test
+  image) and no cache source. Every project image, named volume, and cache path
+  is deployment-declared, so generic surfaces name no consuming project. A caller
+  selects a source by opaque ref, and an undeclared ref fails closed.
+- Unsupported backend or source kinds are configuration errors, as is a
+  declaration that is not a JSON array of objects, omits `sourceRef`/`image` or
+  `cacheRef`, repeats or reuses a reserved ref, names a non-volume, or carries an
+  unknown key. Unknown keys are rejected because omitted keys default to
+  permissive values, so a misspelled `readOnly` or `pullPolicy` would otherwise
+  silently weaken the requested policy.
+- A cache `target` is validated by the same rules as a caller's
+  `CacheMount.target` (one normalized absolute path, no empty or `..`
+  segments). Sources are matched by exact target, so a target only the
+  declaration accepts would be unselectable; it fails at configuration time.
+- Each declaration variable is used exactly as supplied, never merged with the
+  compose-derived default, and must reach both the API (which resolves
+  `imageSourceRef` before creating job identity) and the worker.
+- `resources.shmSize` is caller-owned and refused (not clamped) above
+  `MOONMIND_CONTAINER_BACKEND_MAX_SHM_SIZE_MIB` (default: the memory ceiling), so
+  the realized value matches the request. An omitted value uses
+  `MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB`, which is itself refused at
+  configuration time above that ceiling.
+- Local-build paths resolve from an operator-owned deployment root. Declared
+  fingerprint inputs cover every file that can affect the target, and repository
+  tests pin that relationship. Secrets are not accepted as build arguments.
 
-The Docker execution adapter remains narrow:
+The execution adapter is narrow:
 
 ```python
 class DockerBackendAdapter(Protocol):
     async def inspect_image(self, image: str) -> ImageObservation: ...
-    async def pull_image(
-        self,
-        image: str,
-        auth: RegistryAuth | None,
-    ) -> ImageObservation: ...
-    async def build_image(
-        self,
-        recipe: ResolvedLocalImageRecipe,
-    ) -> ImageObservation: ...
+    async def pull_image(self, image: str, auth: RegistryAuth | None) -> ImageObservation: ...
+    async def build_image(self, recipe: ResolvedLocalImageRecipe) -> ImageObservation: ...
     async def run(self, request: ResolvedContainerJob) -> ContainerExecution: ...
     async def stop(self, container_id: str, grace_seconds: int) -> None: ...
     async def remove(self, container_id: str) -> None: ...
 ```
 
-`build_image` is an internal operation over a deployment-resolved recipe. It is
-not exposed as an agent-facing Docker build tool.
+`build_image` is internal over a deployment-resolved recipe, not an agent-facing
+build tool.
 
 ---
 
-## 7. Agent-facing asynchronous tools
+## 6. Agent-facing asynchronous tools
 
-The normal MCP and HTTP surface is:
+| Tool | Behavior |
+| --- | --- |
+| `container.submit` | Validates and authorizes, creates a durable job, and returns immediately with `jobId`, `status` (`queued`), and `image`. |
+| `container.status` | Bounded snapshot: `queued`, `resolving_workspace`, `waiting_for_capacity`, `acquiring_image`, `building_image`, `starting`, `running`, `succeeded`, `failed`, `timed_out`, `canceled`, or `cleanup_failed`. |
+| `container.logs` | Bounded log pages or durable log refs, never an unbounded daemon stream. Pull and build diagnostics are included without credentials or unrelated daemon state. |
+| `container.artifacts` | Collected output refs and publication diagnostics. |
+| `container.cancel` | Idempotent cancellation; Temporal stops the owned container or build, captures evidence, and cleans up. |
 
-```text
-container.submit
-container.status
-container.logs
-container.artifacts
-container.cancel
-```
+`container.run_docker` (raw Docker CLI) is an explicitly gated internal escape
+hatch, not a normal Omnigent or managed-session MCP tool, and never grants its
+caller daemon access.
 
-### 7.1 `container.submit`
+Both transports call one API-owned `ContainerJobService`; neither executes
+Docker nor waits for completion.
 
-Validates and authorizes a request, creates a durable job, and returns immediately:
-
-```json
-{
-  "jobId": "container-job:01J...",
-  "status": "queued",
-  "image": "mcr.microsoft.com/dotnet/sdk:8.0@sha256:..."
-}
-```
-
-### 7.2 `container.status`
-
-Returns a bounded snapshot such as `queued`, `resolving_workspace`,
-`acquiring_image`, `building_image`, `starting`, `running`, `succeeded`, `failed`,
-`timed_out`, `canceled`, or `cleanup_failed`.
-
-### 7.3 `container.logs`
-
-Returns bounded log pages or durable log references, never an unbounded daemon
-stream in one response. Pull and build diagnostics are included as bounded job
-evidence without exposing credentials or unrelated daemon state.
-
-### 7.4 `container.artifacts`
-
-Returns collected output references and publication diagnostics.
-
-### 7.5 `container.cancel`
-
-Requests idempotent cancellation. Temporal stops the owned container or build,
-captures available evidence, and completes cleanup.
-
-### 7.6 Raw Docker CLI
-
-Docker CLI execution remains an explicitly gated internal escape hatch.
-`container.run_docker` is not a normal Omnigent or managed-session MCP tool and
-never grants its caller direct daemon access.
-
-### 7.7 Transport surface and readiness
-
-Both transports call one API-owned `ContainerJobService`; neither executes Docker
-nor waits for terminal completion.
-
-- HTTP: `POST /api/v1/container-jobs` (submit),
-  `GET /api/v1/container-jobs/{jobId}` (status), `GET .../{jobId}/logs`,
-  `GET .../{jobId}/artifacts`, and `POST .../{jobId}/cancel`. All are
-  authenticated and owner-scoped.
-- MCP: the five `container.*` tools are dispatched to the same service, and
-  `tools/list` advertises them only when the surface is enabled and the backend
-  route is ready.
-- Feature gate: `MOONMIND_CONTAINER_JOBS_ENABLED`. The canonical local Compose
-  deployment enables it by default; non-Compose deployments retain a fail-closed
-  default and must opt in explicitly.
-- The service can be ready while a configured optional image source is cold. A
-  cold local recipe is advertised as provisionable, not unavailable.
+- HTTP: `POST /api/v1/container-jobs`, `GET /api/v1/container-jobs/{jobId}`,
+  `GET .../{jobId}/logs`, `GET .../{jobId}/artifacts`, and
+  `POST .../{jobId}/cancel`, all authenticated and owner-scoped.
+- MCP: the five `container.*` tools go to the same service; `tools/list`
+  advertises them only when the surface is enabled and the backend route is
+  ready.
+- `MOONMIND_CONTAINER_JOBS_ENABLED` gates the surface. The local Compose
+  deployment enables it by default; non-Compose deployments default to off.
+- The service can be ready while an optional source is cold; a cold recipe is
+  advertised as provisionable.
 - Errors use stable machine-readable codes shared by both transports.
 
 ---
 
-## 8. Container-job request contract
+## 7. Request contract
 
-A backend-neutral request is shaped approximately as follows:
+A backend-neutral request looks approximately like this (full model in
+`moonmind/schemas/container_job_models.py`):
 
 ```json
 {
   "image": "registry.example/image@sha256:...",
   "imageSourceRef": null,
-  "workspaceRef": {
-    "kind": "managed_runtime",
-    "runtimeId": "rt_...",
-    "agentRunId": "conv_..."
-  },
+  "workspaceRef": { "kind": "managed_runtime", "runtimeId": "rt_...", "agentRunId": "conv_..." },
   "workdir": "/workspace",
   "command": ["program", "arg1"],
   "entrypoint": [],
@@ -511,11 +331,7 @@ A backend-neutral request is shaped approximately as follows:
     "cpu": "4",
     "memory": "8g",
     "shmSize": "1g",
-    "gpu": {
-      "vendor": "nvidia",
-      "count": "all",
-      "capabilities": ["compute", "utility"]
-    }
+    "gpu": { "vendor": "nvidia", "count": "all", "capabilities": ["compute", "utility"] }
   },
   "timeoutSeconds": 3600,
   "pullPolicy": "if-missing",
@@ -524,499 +340,314 @@ A backend-neutral request is shaped approximately as follows:
 }
 ```
 
-The retained worker `task.container.env` adapter sends the container-create JSON
-through the configured Docker CLI's `system dial-stdio` tunnel. Values, including
-multiline settings, travel through stdin and never enter process arguments or the
-Docker client's environment. The CLI retains deployment-owned connection,
-context, and TLS settings. Unless `DOCKER_API_VERSION` is explicitly set, the
-worker queries the selected daemon's API version through that CLI before sending
-a versioned container-create request. Negotiation, creation, and attachment share the execution deadline;
+A request supplies either a permitted `image` or an approved `imageSourceRef`,
+which resolves to an immutable provisioning plan before execution. The caller
+does not provide a Docker endpoint, a host source path, build inputs, socket or
+data-root mounts, privileged mode, host namespaces, arbitrary devices, or
+ownership-label overrides. MoonMind adds owner, workflow, run, step, session,
+expiration, idempotency, and resolved-image metadata.
+
+`resources.gpu` is the only typed device resource: a supported vendor, a device
+count, and optional bounded driver capabilities, absent for CPU-only jobs. It is
+not device authority; the caller never supplies device paths, runtime sockets,
+Docker flags, or privileged mode. See
+[GPU Container Contract](../Workflows/GpuContainerContract.md).
+
+The worker's `task.container.env` adapter sends the container-create JSON
+through the configured Docker CLI's `system dial-stdio` tunnel. Values,
+including multiline settings, travel on stdin and never enter process arguments
+or the Docker client's environment. The CLI keeps deployment-owned connection,
+context, and TLS settings. Unless `DOCKER_API_VERSION` is set, the worker asks
+the daemon for its API version through that CLI before sending a versioned
+request. Negotiation, creation, and attachment share the execution deadline;
 after an uncertain create, cleanup reconciles the unique launch label before
 removing a container.
 
-A request supplies either a permitted `image` or a deployment-approved
-`imageSourceRef`. An image-source reference resolves to an immutable provisioning
-plan before execution. The caller does not provide:
-
-- a Docker endpoint;
-- a daemon-visible host source path;
-- a Dockerfile, build context, build target, or build argument;
-- Docker socket or data-root mounts;
-- privileged mode, host namespaces, or arbitrary devices;
-- MoonMind ownership-label overrides.
-
-`resources.gpu` is the one typed device resource a caller may request. It names a
-supported vendor, a device count, and optional bounded driver capabilities, and
-is absent for every CPU-only job. It is not device authority: the caller never
-supplies a device path, a runtime socket, a Docker flag, or privileged mode.
-See [GPU Container Contract](../Workflows/GpuContainerContract.md).
-
-MoonMind enriches every request with owner, workflow, run, step, session,
-expiration, idempotency, and resolved-image metadata.
-
----
-
-### Workspace filesystem boundary
+### 7.1 Workspace filesystem boundary
 
 Agent-written workspace directories are untrusted when the worker publishes logs
-or prepares another launch. Runtime artifact writes use fresh files and atomic
-replacement under descriptor-pinned, non-symlink parents; they never truncate an
-agent-selected symlink or hardlink target. Managed launchers use the same parent
-validation for support files and artifact directories, and ownership transfer
-walks pinned directory handles without following symlinks.
+or prepares another launch. Artifact writes use fresh files and atomic
+replacement under descriptor-pinned, non-symlink parents, and never truncate an
+agent-selected symlink or hardlink target. Managed launchers apply the same
+parent validation, and ownership transfer walks pinned directory handles without
+following symlinks.
 
-Workload `collectGlobs` traversal never enters symlinked directories, including
-literal glob prefixes. Collection has bounded entry and depth budgets as well as
-the existing artifact-count limit. Budget exhaustion is recorded as truncation;
-unsafe paths fail publication with observable diagnostics instead of redirecting
-worker filesystem access.
-
-## 9. Durable job identity and state
-
-A job has one stable `job_id`. An idempotency key is derived from caller identity,
-workflow/run/step identity where present, and a caller request ID.
-
-The durable job record stores request intent and compact observations; it does
-not store registry secrets, build secrets, or unbounded logs.
-
-Terminal states are:
-
-```text
-succeeded
-failed
-timed_out
-canceled
-```
-
-Cleanup, image-validation, or artifact-publication failures are recorded
-separately and do not silently rewrite primary workload success.
+`collectGlobs` traversal never enters symlinked directories, including literal
+glob prefixes, and has bounded entry and depth budgets plus the artifact-count
+limit. Budget exhaustion is recorded as truncation; unsafe paths fail
+publication with diagnostics rather than redirecting worker filesystem access.
 
 ---
 
-## 10. Workspace resolution
+## 8. Job identity and state
 
-Workspaces are logical references, not raw host paths. The `workspaceRef` field
-reuses the canonical cross-runtime workspace locator in
-`moonmind/schemas/workspace_locator_models.py`. Supported kinds are:
+A job has one stable `job_id`. Its idempotency key derives from caller identity,
+workflow/run/step identity where present, and a caller request ID. The durable
+record stores request intent and compact observations, not registry or build
+secrets or unbounded logs.
 
-```text
-sandbox
-managed_runtime
-external_state
-```
-
-Resolution steps are:
-
-1. authenticate the principal;
-2. authorize access to the referenced run or session;
-3. resolve the canonical workspace record;
-4. map it to a source visible to the configured Docker daemon;
-5. verify containment and deny symlink escapes;
-6. create the destination mount and workdir;
-7. run a visibility probe before a pull or build.
-
-A failed probe stops the job before expensive image provisioning.
-
-For host Docker, MoonMind maps a logical container path to the physical host bind
-root or an approved named volume. The agent does not perform this translation.
-Artifacts use a separate approved mount or spool.
+Terminal states are `succeeded`, `failed`, `timed_out`, and `canceled`.
+Cleanup, image-validation, and artifact-publication failures are recorded
+separately and do not rewrite primary workload success.
 
 ---
 
-## 11. Image acquisition, local provisioning, and reuse
+## 9. Workspace resolution
 
-### 11.1 Registry pull policy
+`workspaceRef` reuses the cross-runtime workspace locator in
+`moonmind/schemas/workspace_locator_models.py`, with kinds `sandbox`,
+`managed_runtime`, and `external_state`. Resolution authenticates the
+principal, authorizes the referenced run or session, resolves the workspace
+record, maps it to a source visible to the daemon, verifies containment and
+denies symlink escapes, creates the destination mount and workdir, and runs a
+visibility probe. A failed probe stops the job before expensive image
+provisioning.
 
-Supported registry pull policies are:
+For host Docker, MoonMind maps a logical container path to the physical host
+bind root or an approved named volume; the agent does not perform this
+translation. Artifacts use a separate approved mount or spool.
 
-```text
-if-missing
-always
-never
-```
+---
 
-`if-missing` is the default. Image presence is checked in the selected daemon,
-not in the caller container. Digests are preferred for reproducibility. When a
-tag is permitted, the job records the resolved digest.
+## 10. Image acquisition, provisioning, and reuse
 
-Image acquisition has a bounded 1800s execution window and 2100s total scheduling/retry window, independently of the later workload timeout. This applies to direct registry images and approved image sources. A short test request must not truncate a cold Unreal image pull. Retained Temporal histories keep their recorded acquisition timeout through the `container-job-image-pull-budget-v1` patch.
+### 10.1 Registry pulls
 
-### 11.2 Local-build freshness
+Pull policies are `if-missing` (default), `always`, and `never`. Presence is
+checked in the selected daemon, not the caller container. Digests are preferred;
+when a tag is permitted, the job records the resolved digest.
 
-Before invoking a local build, the trusted worker:
+Acquisition has a 1800s execution window and a 2100s scheduling/retry window,
+independent of the workload timeout, so a short test request does not truncate a
+cold Unreal pull. Retained Temporal histories keep their recorded acquisition
+timeout through the `container-job-image-pull-budget-v1` patch.
 
-1. resolves the approved recipe and computes its desired build key;
-2. inspects the configured image tag and recorded MoonMind build labels;
-3. verifies platform and freshness metadata;
-4. reuses the image immediately when it is fresh;
-5. acquires the per-build-key lock only when the image is missing or stale;
-6. re-inspects after acquiring the lock because another job may have completed
-   provisioning;
-7. invokes the bounded build only when the second inspection still requires it;
-8. validates the result and records the resolved image digest.
+### 10.2 Local-build freshness
 
-The canonical labels are conceptually:
+Before building, the worker resolves the recipe and desired build key, inspects
+the configured tag and its MoonMind build labels (`io.moonmind.image-source`,
+`io.moonmind.build-key`, `io.moonmind.built-at`, `io.moonmind.recipe-version`),
+verifies platform and freshness, and reuses a fresh image immediately. Only when
+the image is missing or stale does it take the per-build-key lock, re-inspect
+(another job may have finished), build if still needed, validate, and record the
+digest.
 
-```text
-io.moonmind.image-source
-io.moonmind.build-key
-io.moonmind.built-at
-io.moonmind.recipe-version
-```
-
-The build key, not wall-clock age alone, is the primary correctness check. An
+The build key, not wall-clock age, is the primary correctness check. The
 optional maximum age lets deployments refresh unchanged recipes so updated base
-images and operating-system packages are not cached forever.
+images and OS packages are not cached forever.
 
-### 11.3 Efficient invalidation
+The fingerprint covers only effective inputs to the target rather than the
+whole build context. For the MoonMind Python test image, ordinary source changes
+are mounted at run time and do not rebuild the dependency image; changes to the
+Dockerfile, lockfile, dependency manifest, test tooling, build arguments,
+platform, or recipe version do. BuildKit layer caching stays enabled, so a
+stale-key rebuild can reuse unchanged layers, and no build runs at all for a
+fresh image.
 
-The fingerprint covers the effective inputs to the selected target. It must not
-hash the whole repository merely because the repository is the Docker build
-context. For the MoonMind Python test image, normal Python source changes are
-mounted at run time and do not require rebuilding the dependency image. Changes
-to the Dockerfile, lockfile, dependency manifest, test-runtime tooling, build
-arguments, platform, or recipe version do require a new build key.
+### 10.3 Provisioning lock
 
-BuildKit layer caching remains enabled. A stale-key rebuild may still reuse
-unchanged layers, but no build command is invoked at all for a fresh image.
+Acquisition is serialized by normalized registry/repository/reference for
+registry images, and by source name, platform, and build key for local recipes.
+Waiters do not start redundant pulls or builds; they wait, re-inspect, and
+continue or receive the same bounded failure evidence.
 
-### 11.4 Provisioning lock
+### 10.4 Prebuilt image override
 
-MoonMind serializes acquisition by normalized image source and desired key:
+`MOONMIND_PYTHON_TEST_IMAGE` may name a versioned prebuilt image that follows
+registry pull policy and bypasses the local recipe; this suits deployments
+without a trusted local build root. A Compose deployment may offer an explicit
+preparation command or opt-in profile for prewarming, which calls the same
+provisioner and is never a dependency of API or worker startup.
 
-- registry images use normalized registry/repository/reference;
-- local recipes use source name, platform, and build key.
+### 10.5 Private images
 
-Concurrent waiters do not start redundant pulls or builds. They wait for the
-owner, re-inspect, and then continue or receive the same bounded provisioning
-failure evidence.
+A registry image declaration may carry an opaque `registryCredentialRef`. The
+API authorizes the resolved image and credential through
+`MOONMIND_REGISTRY_CREDENTIAL_GRANTS` before persisting a job, and the worker
+re-checks the match before inspecting or pulling; a declaration change while a
+job is in flight fails closed. Callers submit only `imageSourceRef` and cannot
+override image, pull policy, or credential. Declarations without a credential
+pull anonymously.
 
-### 11.5 Prebuilt image override
+For the Compose Unreal source, `MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF`
+names a managed secret (for example `db://tactics-ghcr-pull`) holding a JSON
+username and token, with a grant scoped to
+`ghcr.io/moonladderstudios/tactics-ue-base`. A host's Docker Desktop credential
+helper is not inherited by the worker container, and the worker never
+substitutes the agent's GitHub source-control token. Enrollment is a deployment
+operation: preserving the database, its secret encryption key, and
+configuration lets worker recreations and updates reuse a `db://` credential.
+Fresh deployments can use `env://`, `vault://`, or approved `exec://`
+references instead (for example `env://TACTICS_REGISTRY_AUTH` injected by a
+secret manager). Missing or unauthorized references fail closed rather than
+searching other credentials.
 
-Operators may configure `MOONMIND_PYTHON_TEST_IMAGE` as a versioned prebuilt image.
-That source follows registry pull policy and bypasses the local recipe. A prebuilt
-image is preferred for deployments that do not mount a trusted local build root.
+A job carries only the non-sensitive reference. Authorization is enforced on
+every run, including cache hits, because an image being present in the daemon
+does not grant permission to run it. Credentials are resolved only inside a
+trusted execution-time Activity, written to a per-job Docker config with
+restrictive permissions, redacted from observations, and removed on every
+outcome including orphan reconciliation. The default Unreal workload profile
+mounts no pull credentials: its runner has no Docker endpoint, uses
+`networkPolicy: none`, and its image is acquired by the host before start.
 
-A local Compose deployment may retain an explicit preparation command or opt-in
-Compose profile for operators who want prewarming. It must call the same
-provisioner and must never be a dependency of ordinary API or worker startup.
+#### Managed-session GHCR pulls
 
-### 11.6 Private images
+Public runtime images are pulled anonymously. An explicit private `ghcr.io`
+identity selects exactly one deployment configuration, in precedence order: the
+`MOONMIND_GHCR_PULL_*_SECRET_REF` (or `WORKFLOW_` equivalent) SecretRef pair,
+the deployment `GHCR_PULL_USER` + `GHCR_PULL_TOKEN` pair, or the same-named
+managed-secret slug pair read in one store session.
 
-A deployment registry image declaration may carry an optional opaque
-`registryCredentialRef`. The API authorizes the resolved image and credential
-through `MOONMIND_REGISTRY_CREDENTIAL_GRANTS` before persisting a job, and the
-worker checks that both still match that authorization before inspecting or
-pulling. Callers continue to submit only `imageSourceRef`; they cannot override
-the source's image, pull policy, or credential. Missing grants fail at admission.
-Existing declarations without a credential retain their anonymous pull behavior.
-If a credential or image declaration changes while a job is in flight, an
-authorization mismatch fails closed; a new submission obtains a new decision.
+When none is configured, the deployment's own GitHub credential (the
+`repository-connection:git-default` connection, with `read:packages`)
+authenticates the pull, because requiring a separate registry secret to pull an
+image the single-user deployment itself declared is unnecessary setup.
+`MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED=false` keeps the credentials
+separate. This derivation applies only to `ghcr.io` repositories the deployment
+declared — a managed-session or Omnigent image from configuration, a job's
+`imageSourceRef`, or a direct `image` whose registry and repository exactly match
+a declared source without its own `registryCredentialRef` — so a workflow cannot
+borrow the deployment's identity to pull arbitrary packages. `GHCR_PULL_*`
+plaintext is not read from agent-authored launch fields. Incomplete pairs,
+unresolvable SecretRefs, rotation between paired reads, store outages, and denied
+credentials fail at the registry boundary without falling back to another
+identity, ambient Docker login, or anonymous pull.
 
-For the Compose Unreal source, set
-`MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF` to a managed secret such as
-`db://tactics-ghcr-pull` and declare a grant scoped to
-`ghcr.io/moonladderstudios/tactics-ue-base`. Store the registry username and
-password/token as a JSON object in that encrypted secret. A host's Docker Desktop
-credential helper is client-local and is not inherited by the worker container.
-The worker never substitutes the agent's GitHub source-control token.
+### 10.6 Image lifetime and maintenance
 
-Registry enrollment is a deployment operation, not a per-job or per-container
-step. With a `db://` reference, preserving the application database, its managed
-secret encryption key, and deployment configuration makes worker recreations
-and application updates reuse the credential automatically. The API's separate
-session-key volume likewise preserves its generated local signing key across
-API recreations; empty Compose defaults select that durable key path.
+Images survive job, session, and workflow completion, and job cleanup never
+prunes images globally. The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup`
+workflow runs Docker storage maintenance on the trusted agent-runtime worker:
+it removes day-old unused untagged images, stale build cache, and unreferenced
+anonymous volumes, keeps tagged images (such as declared container-job images)
+so later jobs reuse them, and escalates to all unused images and build cache
+when the `/work/agent_jobs` filesystem stays above its critical watermark. Named
+volumes and containers are never targets. [Managed Runtime
+Cleanup](ManagedRuntimeCleanup.md) describes thresholds and
+`MOONMIND_DOCKER_STORAGE_*` tuning.
 
-Fresh deployments with empty databases can instead use an `env://`, `vault://`,
-or approved `exec://` registry credential reference. Their deployment provisioner
-supplies access to that selected source; no dashboard enrollment or database
-copy is required. For example, `env://TACTICS_REGISTRY_AUTH` resolves a JSON
-username/password pair injected into the trusted worker by the deployment's
-secret manager. Both the image declaration and its repository-scoped grant must
-name that same reference. Secret values do not belong in the image declaration
-or grant. Missing or unauthorized references fail closed instead of searching
-other credentials.
-
-A job request carries a non-sensitive `registryCredentialRef` only; it never
-carries a username, token, password, or Docker auth blob. Private-image
-authorization is enforced on every run before either a cache hit or pull is
-accepted. A private image being present in the daemon does not grant another user
-permission to execute it.
-
-Registry credentials are resolved only inside a trusted execution-time Activity,
-materialized in a per-job Docker config with restrictive permissions, redacted
-from observations, and removed on success, failure, cancellation, timeout, and
-orphan reconciliation.
-
-The default Unreal workload profile does not mount registry pull credentials
-into the running workload. Its runner has no Docker endpoint and uses
-`networkPolicy: none`; its image is acquired by the host before it starts. Its
-workspace and build-cache mounts remain independent of registry authentication.
-
-#### 11.6.1 Managed-session GHCR pull decoupling
-
-Public runtime images are acquired anonymously by default: no model or source
-credential, no managed-secret access beyond the GHCR slug check, and no login
-helper. An explicit private `ghcr.io` identity selects exactly one deployment
-configuration, in precedence order: the `MOONMIND_GHCR_PULL_*_SECRET_REF` (or
-`WORKFLOW_` equivalent) SecretRef pair, the deployment `GHCR_PULL_USER` +
-`GHCR_PULL_TOKEN` pair, or the `GHCR_PULL_USER` + `GHCR_PULL_TOKEN`
-managed-secret slug pair read coherently in one store session.
-
-When none of those is configured, the deployment's own GitHub credential
-(the `repository-connection:git-default` connection, needing `read:packages`) authenticates the pull
-through a GitHub username lookup, rather than downgrading to an anonymous pull
-that a private package denies. This deliberately reverses that part of
-MoonLadderStudios/MoonMind#4012: requiring a separately provisioned registry
-secret to pull an image the deployment itself declared is setup a single-user
-deployment does not need, and #4012 already allowed a registry identity to use
-a provider-supported token. `MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED=false`
-restores the strict separation.
-
-The derivation is bound to `ghcr.io` and to deployment-declared repositories —
-a managed-session or Omnigent image from deployment configuration, a container
-job's `imageSourceRef`, or a direct container-job `image` whose registry and
-repository exactly equal those of a declared registry source that has no
-`registryCredentialRef` (for example a digest pin of that source's tag). The
-requested reference is pulled unchanged. Any other image reference supplied by
-a job or other workflow input is never authenticated this way, which is the
-exposure #4012 step 5 guards against, and a source bound to its own
-`registryCredentialRef` is reachable only through that source. Reading
-`GHCR_PULL_*` plaintext from agent-authored launch fields stays removed and
-must not be reintroduced. Incomplete
-pairs, unresolvable SecretRefs, rotation/disable between the paired reads,
-managed-store outage, and denied/revoked credentials fail at the registry
-boundary without trying another identity, ambient Docker login, or an
-anonymous downgrade. Safe recovery is to restore the selected deployment pair
-and retry the pull; removing the source coupling requires no new PAT prompt
-for unaffected scratch or public-image work.
-
-### 11.7 Image lifetime
-
-Images survive job, session, and workflow completion. Deployment-level retention
-expires superseded images and build cache while protecting images used by
-containers. Job cleanup never performs global image pruning.
-
-The hourly `MoonMind.ManagedRuntimeWorkspaceCleanup` operational workflow asks
-the trusted agent-runtime worker to run Docker storage maintenance. Every pass
-removes unused untagged images (superseded digest-pinned releases) older than
-one day, build cache unused for one day, and anonymous volumes that no
-container references. Tagged images, such as a deployment-declared container-job
-image, survive routine passes so the next job reuses them instead of
-re-pulling. If the filesystem that contains `/work/agent_jobs` remains at or
-above the default 90% critical watermark, the pass also removes every remaining
-unused image and all unused build cache. Named volumes and containers are never
-targets, and failures are surfaced as degraded maintenance for retry on the
-next hourly run. [Managed Runtime Cleanup](ManagedRuntimeCleanup.md) owns the
-full maintenance contract.
-
-Operators can disable the maintenance or tune its watermarks and minimum
-ages with the documented `MOONMIND_DOCKER_STORAGE_*` settings. The high
-watermark must be lower than the critical watermark; invalid values fail before
-any prune command runs.
-
-The operator recovery path is `tools/cleanup-docker-space.sh`. It must remain
-usable when the Docker data root has no free space: inspection must not launch a
-diagnostic container, and `--dry-run` must execute only read operations. During
-the pre-cutover cleanup window, the utility may discover sidecars through the
-`moonmind.kind=session-docker-sidecar` ownership label and prune only images that
-their nested daemons report as unused. This compatibility cleanup is bounded to
-labeled MoonMind sidecars and must not remove active workload images.
+`tools/cleanup-docker-space.sh` is the operator recovery path and works when the
+Docker data root is full: inspection launches no diagnostic container, and
+`--dry-run` only reads. It also prunes images that nested daemons in sidecars
+labeled `moonmind.kind=session-docker-sidecar` report as unused.
 
 ---
 
-## 12. Container security and resources
+## 11. Container security and resources
 
-Structured jobs apply:
+Structured jobs run with `--privileged=false`, dropped capabilities,
+`no-new-privileges`, no host PID/IPC/user/network namespace, no Docker socket,
+data-root, or host-root mounts, only approved workspace, artifact, scratch, and
+cache mounts, MoonMind-owned labels, an explicit network mode, and bounded CPU,
+memory, shared memory, process count, output, and timeout. The only device
+access is the typed `resources.gpu` request, realized as the vendor's Docker
+device request and bounded by a non-overridable deployment ceiling. Callers may
+request resources within deployment ceilings but cannot weaken security
+defaults.
 
-- `--privileged=false`;
-- dropped Linux capabilities;
-- `no-new-privileges`;
-- no host PID, IPC, user, or network namespace;
-- no arbitrary devices, and no device access at all beyond the typed
-  `resources.gpu` resource request, which is realized as the vendor's Docker
-  device request and bounded by a non-overridable deployment device ceiling;
-- no Docker socket, data-root, or host-root mounts;
-- approved workspace, artifact, scratch, and cache mounts only;
-- MoonMind-owned labels;
-- explicit network mode;
-- bounded CPU, memory, shared memory, process count, output, and timeout.
+### 11.1 Fixed limits
 
-Callers may request resources only within deployment ceilings. They may not
-weaken security defaults.
+Limits are per-container ceilings enforced by Docker (`--cpus`, `--memory`,
+`--shm-size`, `--pids-limit`, `--gpus`, and the job timeout), not reservations
+from a calculated pool; there is no aggregate resource accounting, and aggregate
+settings such as `MOONMIND_MACHINE_*` are not read. New requests carry explicit
+positive limits (`require_explicit_resources`) with one fixed `memoryMiB`; a
+zero `cpuMillis` never means unlimited. Both Python-test entrypoints submit 2
+CPUs and 4 GiB.
 
-### Fixed limits and concurrency
+Zero-valued and memory-range requests stay decodable so persisted jobs and
+histories replay. An admitted but unstarted job with such values continues under
+its own identity: when reconcile finds no container, the launch resolves a
+deterministic successor (`legacy_fixed_successor_resources`: 2 CPUs for a zero
+`cpuMillis`, the persisted `memoryMiB` as the fixed limit, other fields
+preserved) without rewriting the serialized request, and a successor the ceiling
+cannot admit fails closed for replanning.
 
-Resource limits are explicit per-container ceilings enforced directly by
-Docker (`--cpus`, `--memory`, `--shm-size`, `--pids-limit`, `--gpus`, and the
-job timeout). They are never reservations subtracted from a calculated pool,
-and there is no automatic aggregate resource accounting: no machine-derived
-budgets, no CPU pool, no memory negotiation, and no resource ledger. A
-positive `cpuMillis` value becomes an ordinary Docker CPU quota.
+Because fixed limits do not guarantee a configuration fits its host, deployments
+size host count, job count, and per-container limits together.
 
-New container-job requests must carry explicit positive limits
-(`require_explicit_resources`): a zero `cpuMillis` never means unlimited CPU,
-never selects a fallback, and never reaches a pool implementation, and
-`minimumMemoryMiB` ranges are retired — new jobs set one fixed `memoryMiB`.
-Historical zero-valued and memory-range requests remain decodable so persisted
-jobs and Temporal histories replay; an already-admitted, unstarted legacy job
-keeps an executable continuation under its own identity instead of a terminal
-replan message. When reconcile finds no existing container, the launch
-boundary resolves the deterministic fixed-resource successor
-(`legacy_fixed_successor_resources`): stock 2 CPUs for a zero `cpuMillis`
-value, the persisted `memoryMiB` as the single fixed limit with the retired
-`minimumMemoryMiB` range dropped, and every other explicit field preserved.
-The original serialized request is never rewritten, repeated retries converge
-on the same successor, and a successor the deployment ceiling cannot admit
-still fails closed for an operator replan. Already-running containers are
-observed and cleaned up under their recorded ownership rather
-than recreated for new defaults. Both Python-test entrypoints submit the same
-static product default — 2 CPUs and 4 GiB — qualified through the real
-test-container path.
+### 11.2 Concurrency
 
-Temporary shortages put new jobs in `waiting_for_capacity`, using Temporal
-timers within the original job timeout:
+`MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS` (default 1) caps container-job
+containers launching or running at once. The backend-scoped capacity lock
+serializes daemon enumeration and the following `docker start` across workers,
+and the daemon's owned containers are the slot ledger. A retry never takes a
+second slot, and a slot is released only after the container is confirmed
+stopped or removed, so an uncertain launch never reads as free. Agent hosts use
+a separate count (host leases), so an agent holding the last host slot can still
+launch the test job it is waiting for.
 
-> Waiting for a container-job slot. The configured limit is 1.
+Shortages put jobs in `waiting_for_capacity` on Temporal timers within the
+original timeout ("Waiting for a container-job slot. The configured limit is
+1."), keeping job identity and workspace instead of becoming a test failure; an
+exhausted wait reports that testing did not start. Memory is not reclaimed from
+agents with low CPU usage, since an idle process can hold live RAM.
 
-They preserve the job identity and workspace instead of becoming a test
-failure and another implementation attempt. An exhausted wait reports that
-testing did not start. Agent memory is not reclaimed merely because its CPU
-usage is low: an idle process can retain live RAM. This policy does not
-implement memory overcommit or suspend and resize a running agent.
-
-#### Concurrency: one deployment-owned job count
-
-Container-job concurrency is one deployment-owned maximum active-job setting:
-
-| Setting | Effect |
-| --- | --- |
-| `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS` | Maximum container-job containers launching or running at once. Defaults to 1 for the initial removal release. |
-
-The count-and-admit operation is atomic across the deployment's workers: the
-existing backend-scoped capacity lock serializes the daemon enumeration and
-the `docker start` that follows, and the daemon's owned containers are the
-slot ledger — no per-process semaphore, no dashboard status, and no new
-reservation table. A retry never acquires a second slot for the same job: a
-job whose own container is already running already holds its slot, while a job
-that only created its container still waits on the other holders. The claim
-covers both launching and running work and is released after the container is
-confirmed stopped or removed; an uncertain launch outcome never reads as a
-free slot. Agent hosts and their subordinate test jobs use separate counts
-(host leases vs. this job ledger), so an agent occupying the final host slot
-can still launch the test job it is waiting for.
-
-The replacement deliberately gives up automatic aggregate resource
-accounting. Fixed limits and concurrency reduce exposure, but they do not
-guarantee that every deployment configuration fits its host: size the
-deployment (host count, job count, and per-container limits) so the configured
-concurrency fits its host. The retired aggregate settings (`MOONMIND_MACHINE_*`,
-`MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB`) are ignored when still
-exported and must be removed from deployment configuration — they are never
-reinterpreted as per-container limits.
-
-Local image builds use separate deployment policy. Their Dockerfile, context,
-target, arguments, network access, timeout, output limit, and validation command
-are fixed by the approved recipe. A caller cannot turn a container job into a
-build job.
+Local image builds use the recipe's fixed Dockerfile, context, target, arguments,
+network, timeout, output limit, and validation, so a caller cannot turn a
+container job into a build job.
 
 ---
 
-## 13. Lifecycle and cleanup
+## 12. Lifecycle and cleanup
 
-The canonical lifecycle is:
+1. authenticate, authorize, and validate;
+2. create or replay idempotent job identity;
+3. resolve and probe the workspace;
+4. resolve the permitted image or approved source;
+5. inspect and, only when needed, pull or build under the provisioning lock;
+6. validate and record the resolved digest;
+7. construct the non-overridable launch plan;
+8. create and start the labeled container;
+9. capture logs and state, then publish outputs and diagnostics;
+10. remove job-scoped runtime objects.
 
-1. authenticate and authorize;
-2. validate the request;
-3. create or replay idempotent job identity;
-4. resolve and probe the workspace;
-5. resolve the permitted image or approved image source;
-6. inspect and, only when necessary, pull or build under the provisioning lock;
-7. validate and record the resolved image digest;
-8. construct the non-overridable launch plan;
-9. create and start the labeled workload container;
-10. capture logs and state;
-11. publish outputs and diagnostics;
-12. remove job-scoped runtime objects.
-
-Cancellation and timeout stop only the owned build or job container and preserve
-available evidence when possible.
-
-A recurring reconciler removes only labeled job-scoped objects whose durable jobs
-are terminal or expired. Image maintenance is a separate deployment operation.
-
-There is intentionally no lifecycle step equivalent to "prepare every optional
-image during MoonMind startup."
+Cancellation and timeout stop only the owned build or container and keep
+available evidence. A recurring reconciler removes only labeled job-scoped
+objects whose jobs are terminal or expired. There is no "prepare every optional
+image at startup" step.
 
 ---
 
-## 14. Observability and durable evidence
+## 13. Observability
 
-Durable metadata includes:
+Durable job metadata records ownership and correlation (owner, source session,
+workflow, run, step), backend, the requested image or source ref, the image
+observation (`ImageObservation` in `moonmind/schemas/container_job_models.py`:
+resolved digest, cache presence and hit, build key, freshness at start,
+`provisionAction` of `reuse`/`pull`/`build`/`none`, lock wait, pull and build
+durations), container id, status, exit code, timing, workspace kind, log and
+artifact refs, and cleanup status. Secrets, registry-auth payloads, build
+secrets, and unbounded logs are excluded.
 
-```text
-job_id
-owner_principal
-source_kind
-source_session_id
-workflow_id
-run_id
-step_id
-backend_ref
-backend_kind
-image_requested
-image_source_ref
-image_digest
-image_present_at_start
-image_cache_hit
-image_build_key
-image_fresh_at_start
-image_provision_action
-image_provision_waited_on_lock
-image_pull_duration_seconds
-image_build_duration_seconds
-container_id
-status
-exit_code
-started_at
-completed_at
-duration_seconds
-workspace_ref_kind
-log_refs
-artifact_refs
-cleanup_status
-```
+Registry pull output is redacted and kept as bounded stream tails, published
+immediately and refreshed at most every 15s. The job projection links it while
+acquisition runs, a later timeout cannot erase it, and diagnostic publication
+failures do not replace the pull result.
 
-`image_provision_action` is one of `reuse`, `pull`, `build`, or `none`. Secrets,
-registry-auth payloads, build secrets, and unbounded logs are excluded.
-
-Registry pull output is redacted before publication and retained in bounded stream tails. The default worker publishes the first progress immediately, refreshes at most every 15s, and preserves the final available prefix on cancellation. The existing job projection links this evidence while acquisition is running; a later timeout with no new log ref cannot erase it. Diagnostic publication failures do not replace the pull result.
-
-Metrics distinguish workspace resolution, image cache hits, freshness misses,
-lock waits, pull time, build time, validation time, container startup, workload
-runtime, artifact collection, and cleanup.
+Metrics separate workspace resolution, cache hits, freshness misses, lock waits,
+pull, build, validation, container startup, workload runtime, artifact
+collection, and cleanup.
 
 ---
 
-## 15. Omnigent and managed-session integration
+## 14. Omnigent and managed-session integration
 
-Omnigent and MoonMind managed sessions use the same tools and job contract. An
-agent runtime does not need a Docker CLI to run repository tests and must not
-advertise a session-local `DOCKER_HOST`. The Omnigent side of this contract —
-supported startup path, Host Classes, credential materializers, and session
-control — is owned by the [Omnigent module entrypoint](../Omnigent/README.md);
-this section owns only the container-job and MCP tooling both sides share.
+Omnigent and managed sessions use the same tools and contract. An agent runtime
+does not need a Docker CLI for repository tests and does not advertise a
+session-local `DOCKER_HOST`. The Omnigent side (startup path, Host Classes,
+credential materializers, session control) is described in the
+[Omnigent module entrypoint](../Omnigent/README.md).
 
-The default profile-bound Omnigent host receives a host-lease-scoped bearer
-capability and a dependency-free `moonmind` CLI projection. Its capability pins
-the exact sandbox WorkspaceLocator, Step Execution owner, runtime, and host
-lease; the scoped API endpoint rejects another sandbox or correlation identity.
-The existing dual-homed egress proxy exposes exactly one control-plane route to
-the host: `POST /mcp/container/tools/call`. It rejects every other MoonMind API
-path, and the scoped endpoint then validates the bearer capability. This does
-not expose a Docker endpoint to the host: the trusted container worker remains
-the sole Docker owner.
+The profile-bound Omnigent host receives a host-lease-scoped bearer capability
+and a dependency-free `moonmind` CLI projection. The capability pins the exact
+sandbox WorkspaceLocator, Step Execution owner, runtime, and host lease, and the
+scoped endpoint rejects any other sandbox or correlation identity. The
+dual-homed egress proxy exposes one control-plane route to the host,
+`POST /mcp/container/tools/call`, and rejects every other API path. The host
+never gets a Docker endpoint; the trusted container worker remains the only
+Docker owner.
 
 Session capability may advertise:
 
@@ -1032,14 +663,13 @@ capabilities:
     provisioning: on-demand
 ```
 
-`available: true` means the backend and approved provisioner are configured. It
-does not mean an optional image has already been built. Capability admission must
-not force the image from `cold` to `ready` before the workflow determines that
-Python tests are needed.
+`available: true` means the backend and provisioner are configured, not that an
+optional image is built. Capability admission does not force an image from
+`cold` to `ready` before the workflow needs it.
 
 ---
 
-## 16. MoonMind Python test path
+## 15. MoonMind Python test path
 
 Managed agents run targeted Python verification with:
 
@@ -1047,370 +677,118 @@ Managed agents run targeted Python verification with:
 moonmind container python-tests tests/unit/path/test_file.py
 ```
 
+### 15.1 Credentials
+
 In `accounts`, `oidc`, and `header` modes, the managed-session credential
-boundary supplies a scoped Bearer credential as
-`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; the CLI sends it on every MCP request.
-In explicitly restricted local `disabled` mode the same bearer shape is issued
-for the stable persisted user behind loopback-only bind or documented trusted
-ingress. Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup
-with migration guidance.
-An authenticated deployment must not expose a shared or deployment-wide token
-to managed sessions. The token is signed by the trusted session launcher,
-expires with the bounded session lifetime, and is accepted only by
-`/mcp/container/tools/call`. A generic Omnigent host receives it as a file in
-its lease-owned control volume, minted for the launch policy's
-`timeoutSeconds`. Its session can outlive that timeout, because the session
-runs until the execute activity deadline while it makes progress. So while the
-session is driven, the realizer re-mints the same scope at half the lifetime
-and atomically replaces the file. This happens independently of the
-host-lease heartbeats, and each Docker command is bounded. A resumed host
-renews before its session is driven. A failed renewal is logged and retried
-after one heartbeat interval without ending the session. The CLI re-reads the
-file for every request, so a job that runs across a renewal polls with the new
-token. When the session ends, the last token lapses within one lifetime. Its claims bind the owner, runtime, agent run, and
-session; submissions whose logical workspace or correlation differs from those
-claims fail before job creation. It is transported over the API's TLS/loopback
-transport, never placed in URLs, and never accepted as a MoonMind browser
-session. On this endpoint a missing capability is
-`401 container_capability_required` and an invalid or expired capability is
-`401 invalid_container_capability` (not the generic `auth_required` /
-`auth_invalid` user-auth codes); classify and remediate capability failures
-by these endpoint-specific codes.
+boundary supplies a scoped bearer as `MOONMIND_CONTAINER_JOBS_BEARER_TOKEN`; in
+restricted local `disabled` mode the same shape is issued for the stable
+persisted user behind a loopback-only bind or trusted ingress. Sessions never
+receive a shared deployment-wide token. The token is signed by the session
+launcher, expires with the bounded session lifetime, is accepted only by
+`/mcp/container/tools/call`, travels over TLS/loopback and never in URLs, and is
+never a browser session. Its claims bind owner, runtime, agent run, and session,
+and submissions whose workspace or correlation differ fail before job creation.
 
-The command derives the canonical locator from the active authority: a
-`managed_runtime` locator for a managed session or the exact `sandbox` locator
-for an isolated Omnigent host. It submits durable work, polls
-`container.status`, and exits from the authoritative terminal state.
+A generic Omnigent host receives the token as a file in its lease-owned control
+volume, minted for the launch policy's `timeoutSeconds`. Because the session can
+run until the execute activity deadline, the realizer re-mints the same scope at
+half the lifetime and atomically replaces the file; a failed renewal is logged
+and retried after one heartbeat interval without ending the session. The CLI
+re-reads the file per request, so long-running jobs poll with the current token.
 
-The Python-test workflow resolves the configured source before starting the test
-container:
+A missing capability returns `401 container_capability_required` and an invalid
+or expired one `401 invalid_container_capability`, distinct from the generic
+user-auth codes.
 
-1. If a versioned prebuilt image is configured, inspect and pull it according to
-   deployment policy.
-2. Otherwise resolve the deployment-owned `moonmind-python-tests` local recipe.
-3. Reuse `moonmind-python-tests:local` when its build key and freshness metadata
-   match.
-4. If it is missing or stale, build the `test-runtime` target once under the
-   provisioning lock, validate `pytest`, and record the resulting digest.
-5. Run the requested tests against the managed workspace using that resolved
-   digest.
+### 15.2 Execution
 
-The workload is equivalent to:
+The command derives the locator from the active authority (`managed_runtime`
+for a managed session, the exact `sandbox` locator for an isolated Omnigent
+host), submits durable work, polls `container.status`, and exits from the
+terminal state.
+
+The workflow uses a configured versioned prebuilt image if there is one;
+otherwise it resolves the `moonmind-python-tests` recipe, reuses
+`moonmind-python-tests:local` when its build key and freshness match, or builds
+the `test-runtime` target once under the lock, validates `pytest`, and records
+the digest. Tests then run against the managed workspace using that digest. The
+workload is equivalent to:
 
 ```json
 {
   "imageSourceRef": "moonmind-python-tests",
   "workdir": "/workspace",
-  "command": [
-    "bash",
-    "-lc",
-    "./tools/test_unit.sh --python-only -- \"$@\"",
-    "moonmind-python-tests",
-    "tests/unit"
-  ],
+  "command": ["bash", "-lc", "./tools/test_unit.sh --python-only -- \"$@\"", "moonmind-python-tests", "tests/unit"],
   "environment": [
     {"name": "MOONMIND_FORCE_LOCAL_TESTS", "value": "1"},
     {"name": "MOONMIND_PYTEST_JUNITXML", "value": "artifacts/pytest-unit.xml"},
     {"name": "PYTHONPATH", "value": "/workspace"}
   ],
   "networkMode": "bridge",
-  "outputs": [
-    {"name": "pytest-junit", "relativePath": "artifacts/pytest-unit.xml"}
-  ]
+  "outputs": [{"name": "pytest-junit", "relativePath": "artifacts/pytest-unit.xml"}]
 }
 ```
 
-After provisioning, the resolved container launch uses the immutable image digest
-and does not pull again. `pullPolicy: never` is valid only for that resolved launch;
-it is not a substitute for the preceding ensure-image step.
+After provisioning, the launch uses the immutable digest and does not pull
+again; `pullPolicy: never` applies only to that resolved launch and does not
+replace the ensure-image step.
 
-The trusted worker mounts the deployment's `agent_workspaces` named volume with a
-constrained volume subpath. It never forwards the worker-local
-`/work/agent_jobs/...` path to the host daemon as a bind mount.
+The worker mounts the `agent_workspaces` named volume with a constrained volume
+subpath and never forwards its local `/work/agent_jobs/...` path to the host
+daemon as a bind mount.
 
-A missing or stale local image is normal first-use state. Only a failed or
-misconfigured provisioner is an environment blocker. Build failure is not a test
-assertion failure, and the returned evidence must state the recipe, desired build
-key, failure class, and bounded remediation guidance.
+A missing or stale image is normal first-use state; only a failed or
+misconfigured provisioner is an environment blocker. A build failure is not a
+test assertion failure, and its evidence states the recipe, desired build key,
+failure class, and bounded remediation guidance.
 
-### 16.1 Generic managed-session jobs
+### 15.3 Generic managed-session jobs
 
-Other portable Skills submit a workload-only JSON spec with:
+Other portable Skills submit a workload-only JSON spec:
 
 ```bash
 moonmind container run --spec /path/to/job.json --request-id stable-phase-id
 ```
 
-The CLI replaces any supplied workspace locator with the current admitted
+The CLI replaces any supplied workspace locator with the admitted
 managed-runtime identity and injects workflow, session, run, step, and
 idempotency correlation. The spec may name an approved `imageSourceRef` and
-approved `cacheRef` values, but it cannot choose Docker endpoints, host paths,
-raw volume names, or registry credentials.
+`cacheRef` values but cannot choose endpoints, host paths, raw volume names, or
+registry credentials.
 
-The validated runtime profile remains authoritative for workload capability.
-`workloadMode=container-jobs` enables the scoped endpoint,
-`workloadMode=no-docker` advertises no container tools, and
-`workloadMode=kubernetes-job` fails before launch until a configured Kubernetes
-backend exists. Workflow text and runtime environment overrides cannot elevate
-that profile decision.
+The validated runtime profile decides workload capability:
+`workloadMode=container-jobs` enables the scoped endpoint, `no-docker`
+advertises no container tools, and `kubernetes-job` fails before launch unless a
+Kubernetes backend is configured. Workflow text and runtime environment
+overrides cannot elevate that decision.
 
-The `tactics-unreal` source selects the deployment-approved Unreal image. Its
-default `pullPolicy=if-missing` makes the first admitted job provision a cold
-daemon cache through the existing coalesced registry acquisition path. Registry
-authorization or reachability failures remain actionable provisioning errors,
-and an operator may explicitly set `never` when prewarming is required by
-deployment policy. The `unreal-ccache` and `unreal-ubt` cache refs resolve to exact
-deployment-owned targets and owner-scoped host volumes derived from the
-configured base names. Jobs owned by the same authorized principal reuse their
-cache; another user or service identity receives a different writable volume.
-
-The checked-in `tactics-test` Skill detects managed-session identity and routes
-its existing `run_dood_unreal_tactics.sh` entrypoint through
-`moonmind container run`. Outside MoonMind the same entrypoint retains its
-direct-Docker behavior, so the portable capability does not depend on a
-MoonMind-only fork.
+The `tactics-unreal` source selects the deployment-approved Unreal image; its
+default `pullPolicy=if-missing` lets the first admitted job provision a cold
+cache through the coalesced acquisition path, and an operator may set `never`
+when prewarming is required. The `unreal-ccache` and `unreal-ubt` cache refs
+resolve to deployment-owned targets and owner-scoped volumes derived from the
+configured base names, so jobs from the same principal reuse a cache while
+another identity gets a different writable volume. The `tactics-test` Skill
+routes its `run_dood_unreal_tactics.sh` entrypoint through
+`moonmind container run` inside a managed session and keeps direct-Docker
+behavior outside MoonMind, so the portable capability needs no MoonMind-only
+fork.
 
 ---
 
-## 17. Workload examples
+## 16. Readiness and failure classes
 
-### 17.1 .NET tests
+The service is ready when configuration parses, the backend kind is supported,
+the endpoint is reachable, worker routes are available, and Temporal submission
+works. It does not require optional images. Image-source state is reported
+separately as `ready`, `cold` (missing, provisioner configured), `stale`,
+`provisioning`, or `blocked` (configuration or execution failed).
 
-```json
-{
-  "image": "mcr.microsoft.com/dotnet/sdk:8.0@sha256:...",
-  "workspaceRef": {
-    "kind": "managed_runtime",
-    "runtimeId": "rt_...",
-    "agentRunId": "conv_..."
-  },
-  "workdir": "/workspace",
-  "command": ["dotnet", "test", "--logger", "trx;LogFileName=/artifacts/tests.trx"],
-  "networkMode": "bridge",
-  "timeoutSeconds": 3600
-}
-```
-
-### 17.2 Unreal automation
-
-```json
-{
-  "image": "ghcr.io/example/unreal-runner@sha256:...",
-  "workspaceRef": {
-    "kind": "managed_runtime",
-    "runtimeId": "rt_...",
-    "agentRunId": "conv_..."
-  },
-  "workdir": "/workspace",
-  "command": ["bash", "-lc", "./tools/run_unreal_validation.sh"],
-  "networkMode": "none",
-  "timeoutSeconds": 14400
-}
-```
-
-All workloads use the same backend and lifecycle. Toolchain-specific logic stays
-in images, repository scripts, and approved source configuration, not in the
-backend core.
-
----
-
-## 18. Readiness and failure classes
-
-The Docker Backend Service reports ready only when configuration parses, the
-backend kind is supported, the endpoint is reachable, required worker routes are
-available, and Temporal submission is available.
-
-Service readiness does **not** require optional images to exist. Image-source
-state is reported separately:
-
-```text
-ready          fresh image exists
-cold           image is missing but provisioner is configured
-stale          image exists but requires refresh
-provisioning   a pull or build is in progress
-blocked        provisioning configuration or execution failed
-```
-
-Canonical failure classes include:
-
-```text
-backend_unavailable
-invalid_request
-permission_denied
-workspace_not_found
-workspace_not_visible
-image_source_not_found
-image_not_found
-image_pull_timeout
-image_pull_auth_failed
-image_build_not_configured
-image_build_inputs_unavailable
-image_build_timeout
-image_build_failed
-image_validation_failed
-image_platform_mismatch
-image_use_denied
-credential_unresolved
-repository_scope_mismatch
-registry_auth_failed
-credential_cleanup_failed
-resource_limit_exceeded
-gpu_request_invalid
-gpu_vendor_unsupported
-gpu_count_unsupported
-gpu_backend_unsupported
-gpu_runtime_unavailable
-gpu_resource_unavailable
-container_start_failed
-workload_failed
-workload_timed_out
-artifact_publication_failed
-cleanup_failed
-```
-
-A cold image never produces `backend_unavailable` by itself. The first requesting
-job transitions through acquisition or build and receives the authoritative
-result.
-
----
-
-## 19. Validation rules
-
-The service fails closed unless all applicable rules pass:
-
-1. The configured backend exists and uses a supported kind.
-2. The endpoint comes from deployment configuration, not request input.
-3. The daemon is reachable before service readiness succeeds.
-4. Optional image presence is not a startup-readiness requirement.
-5. The caller is authenticated and authorized.
-6. The workspace reference resolves to an authorized workspace.
-7. The visibility probe succeeds before an expensive pull or build.
-8. The mount plan contains no caller-supplied arbitrary host path.
-9. Docker socket, data-root, and host-root mounts are denied.
-10. Privileged mode, host namespaces, and devices are denied.
-11. Resources and timeout fit deployment ceilings.
-12. Registry credentials are references resolved only at execution time.
-13. Private-image authorization is checked on every run, including cache hits.
-14. A local build references a named deployment-owned recipe.
-15. The caller cannot override recipe paths, target, arguments, validation, or
-    freshness policy.
-16. The desired build key is recorded and checked before local image reuse.
-17. Concurrent provisioning is coalesced by source and desired key.
-18. Job cleanup does not remove shared images.
-19. Image maintenance protects active containers.
-20. MoonMind ownership labels cannot be overridden.
-21. Managed and Omnigent sessions do not receive Docker daemon authority.
-22. Ordinary Compose startup does not invoke optional image provisioning.
-
----
-
-## 20. Stable design rules
-
-1. Agents request container jobs through MoonMind; they do not receive Docker
-   authority.
-2. The Docker Backend Service is part of the MoonMind API subsystem.
-3. Temporal owns long-running durability, timeout, cancellation, provisioning,
-   and cleanup coordination.
-4. One deployment-selected daemon supplies the cross-workflow image cache.
-5. Registry images and approved local recipes are provisioned on demand.
-6. Optional image readiness is not MoonMind service readiness.
-7. `docker compose up` does not build a test image unless an operator explicitly
-   selects an opt-in preparation action.
-8. Freshness is deterministic and based on the effective build inputs, with an
-   optional bounded refresh age.
-9. Concurrent requests do not duplicate pulls or builds.
-10. Image lifetime is deployment-scoped, not workflow- or session-scoped.
-11. Job cleanup removes job objects but not shared images.
-12. Workspaces are logical authenticated references resolved by MoonMind.
-13. The structured container contract is the normal public surface.
-14. Local-build recipes are deployment-owned and are not arbitrary agent input.
-15. The current backend is the existing system Docker host or proxy.
-16. A future endpoint switch is configuration behind the same adapter.
-17. The core remains workload-agnostic.
-18. Artifacts, job records, and bounded observations remain durable truth.
-19. Per-session Docker daemons and graphs are not part of the desired state.
-
----
-
-## 21. Final declarative contract
-
-```yaml
-dockerBackendService:
-  owner: moonmind-api
-  durability: temporal
-
-  startup:
-    checksBackend: true
-    checksWorkerRoutes: true
-    provisionsOptionalImages: false
-
-  callers:
-    - moonmind-managed-session
-    - omnigent-session
-    - workflow-tool
-    - authenticated-api-client
-
-  tools:
-    asynchronous:
-      - container.submit
-      - container.status
-      - container.logs
-      - container.artifacts
-      - container.cancel
-    arbitraryBuildExposedToAgents: false
-    rawDockerCliExposedToAgents: false
-
-  backend:
-    selectedBy: deployment
-    currentKind: docker-engine
-    currentEndpoint: system-docker-host
-    futureEndpointSwitchAllowed: true
-    dedicatedMoonMindDaemonRequiredNow: false
-
-  images:
-    registryAcquisition: on-demand
-    localRecipeAcquisition: on-demand
-    defaultPullPolicy: if-missing
-    localFreshness: build-key-and-optional-max-age
-    provisioningLock: per-source-and-desired-key
-    cacheScope: selected-daemon
-    reusableAcrossWorkflows: true
-    removeOnJobEnd: false
-
-  pythonTests:
-    sourceSelectedBy: deployment
-    prebuiltRegistryImageAllowed: true
-    localRecipeAllowed: true
-    buildOnComposeStartup: false
-    buildOnFirstRequiredTestWhenMissingOrStale: true
-    reuseFreshBuild: true
-
-  workspaces:
-    callerProvidesLogicalRef: true
-    callerProvidesHostPath: false
-    resolvedByMoonMind: true
-    visibilityProbeBeforeProvisioning: true
-
-  security:
-    dockerSocketInAgent: false
-    dockerHostInAgent: false
-    privilegedJobs: false
-    arbitraryHostMounts: false
-    arbitraryBuildContextFromCaller: false
-    privateImageAuthorizationPerRun: true
-
-  cleanup:
-    containers: job-scoped
-    scratch: job-scoped
-    images: deployment-retention
-```
-
-Mental model:
-
-- MoonMind starts its API, workers, Temporal routes, and Docker authority boundary.
-- It does not speculate about which optional toolchains a future workflow may use.
-- A workflow that actually needs an image asks MoonMind to ensure it.
-- MoonMind reuses a fresh image, pulls a permitted image, or builds an approved
-  local recipe once under a lock.
-- The configured daemon retains the image for later workflows.
-- No test-image build belongs on the ordinary Compose startup critical path.
+Failure classes (`ContainerJobFailureClass` in
+`moonmind/schemas/container_job_models.py`) distinguish backend availability,
+request validation and authorization, workspace resolution and visibility,
+image source, pull, build, validation, platform, and use authorization, registry
+credential resolution and cleanup, resource and GPU limits, container start,
+workload failure or timeout, artifact publication, and cleanup. A cold image
+never produces `backend_unavailable` by itself; the first job that needs it
+moves through acquisition or build and receives the authoritative result.

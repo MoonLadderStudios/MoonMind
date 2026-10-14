@@ -95,9 +95,8 @@ A selected verification still collects real pytest nodes, proves exactly one log
 
 ### Execution Budgets
 
-The workflow is the authority for effective limits. The #4369 revision
-replaced the blanket 30-minute job ceiling with simple per-row bounds sized
-from observed setup, testing, and bounded diagnostics/cleanup:
+The workflow is the authority for effective limits. Each row has a simple
+bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
@@ -139,7 +138,7 @@ are never raised to fit the table.
 Use the installed pytest timeout mechanism for stuck tests and native Actions step/job bounds for the outer process. Keep an existing shell deadline only where it provides a distinct useful bound. A cooperative session timeout and a diagnostic stack dump do not replace a hard process bound. No additional timeout framework, test retry loop, watchdog, or cancellation service is needed.
 
 Pytest fail-fast (`--maxfail=1` on ordinary runs, omitted on schedules so
-diagnostic collection continues) stops one invocation. Native matrix fail-fast stops its siblings. The #4369 bounds above are the implemented
+diagnostic collection continues) stops one invocation. Native matrix fail-fast stops its siblings. The bounds above are the implemented
 behavior, not tuning proposals.
 
 ### Reliability Sharding
@@ -170,15 +169,15 @@ The import accepts exactly one snapshot per shard from one run, attempt, and rev
 
 ### Reliability Docker Fixture Layers
 
-The Compose dependency file uses pinned registry images, and the reliability corpus no longer builds case-specific images. The former `test_automatic_release_availability.py` fixture, which generated a Python/Temporal Dockerfile per case, was removed with the retained-cohort release machinery in #4451; #4376 was closed as superseded for that reason.
+The Compose dependency file uses pinned registry images, and the reliability corpus does not build case-specific images.
 
-Do not build a cache for retired release machinery or restore a deleted fixture to satisfy an old optimization issue. If a surviving test adds an expensive build, inspect actual cold/warm build output and separate build cost from routing waits and startup. Prefer native layer caching; add only a small immutable dependency fixture if a material remaining cost is demonstrated.
+If a surviving test adds an expensive build, inspect actual cold/warm build output and separate build cost from routing waits and startup. Prefer native layer caching; add only a small immutable dependency fixture if a material remaining cost is demonstrated.
 
 Mutable release records, images under test, containers, volumes, queues, and workspaces remain case/shard-owned. A cached base must not make an intentionally removed case image appear restored. Cold execution must remain correct, and cleanup must not remove another case's resources or use global Docker prune. The existing integration/exact-artifact build caches remain separate from this measurement question.
 
 ### Logs And Diagnostic Evidence
 
-The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter. #4371 delivered this path and is closed; remaining interruption-evidence work belongs to #4369 and the #4365 coordinator.
+The existing workflow streams combined pytest output through `tee`, captures the pytest exit code, and uses `tools/ci/write_backend_matrix_summary.py` with logs, actual JUnit reports, and timing artifacts. Extend that path rather than introducing another reporter.
 
 Keep normal success evidence small: tested revision, suite/shard and attempt identity, real output, any JUnit report, and useful slow-case timings. Existing artifacts use finite retention and distinct shard/attempt names. Richer service diagnostics belong on the failure path where useful, from known test-owned locations with redaction. Do not collect whole environments, source trees, tokens, or unrelated host files.
 
@@ -202,7 +201,7 @@ The executable dependency map narrows only audited lane-local inputs: ordinary i
 
 Unknown/full changes, dependencies, Docker/Compose, shared boot/runtime/auth/config and migration boundaries conservatively retain all four. Generated OpenAPI, its generators, shared client transport and native-chat/Omnigent contracts retain cross-layer coverage. Frontend paths are not blanket exclusions. Reliability journeys keep their separate owner.
 
-- Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion services (`api_service/services/profile_secret_migration.py`, `api_service/services/single_user_conversion.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`).
+- Single-user impact: settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion services (`api_service/services/profile_secret_migration.py`, `api_service/services/single_user_conversion.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`).
 - The `integration-ci` job also runs the default Compose product journeys in `tools/first_run_journey_3938.sh`, each on its own matrix row beside the hermetic suite and the host-updater transport row: a fresh instance, and an in-place upgrade to the candidate from an account-era release that predates the guarded single-user conversion. The upgrade deploys that release from its own `docker-compose.yaml`, and the API startup log must show the conversion classifying its data as one eligible operator. A third journey (`--controller`) drives Settings Operations against the real `deploy/controller` server, which runs beside the candidate stack without a Docker daemon so it can never mutate a stack. The dashboard submits, observes the original error and logs, reconnects after the API is replaced without submitting again, and retries. Workflow-backed history stays readable. They drive the real API and compiled dashboard with no seeded person or provider credential and fail on any failed or unobserved step. Their runner (`tools/first_run_journey_3938.sh`, `tools/single_user_journey_checks.py`, `tools/single_user_journey_browser.mjs`) and the routes they drive (executions, artifacts, recurring workflows, and the dashboard pages) select `integration_ci=true`.
 - Single-user integration suites select `integration_ci=true` through the `tests/integration/` prefix (reliability-owned `tests/integration/reliability/` stays excluded). Required-check aggregation needs no workflow change: the existing `integration-ci` job in `.github/workflows/pytest-unit-tests.yml` already runs whenever `integration_ci=true`, and `ci-required` already aggregates its result.
 
@@ -214,7 +213,7 @@ The shared conftest's crash-recovery override depends on pytest-xdist 3.8.0's
 private `LoadScopeScheduling` state behind the public scheduler hook. It retains
 the original failed-test report, drops completed files from requeueing, and
 supplies a replacement worker's required next item before execution. The latter
-matches [upstream #1328](https://github.com/pytest-dev/pytest-xdist/pull/1328).
+matches [the upstream pytest-xdist fix](https://github.com/pytest-dev/pytest-xdist/pull/1328).
 `tests/unit/workflows/temporal/test_pytest_worker_crash_recovery.py` is the slow,
 real-subprocess compatibility coverage, including a replacement facing queued
 single-test files. When updating the declared xdist dependency, run these cases
