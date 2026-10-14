@@ -971,3 +971,28 @@ Recipe:
 The current captures use Chromium with synthetic workflow titles such as “Refresh the setup guide,” the public `MoonLadderStudios/MoonMind` repository, and a fixed example clock. List and Overview captures are 1600×500 and 1600×880 respectively. The build and browser capture ran in a temporary, credential-free GitHub Actions job; the capture job is not a required CI gate.
 
 Refresh the images when the pictured flow materially changes. Do not add byte-identical regeneration checks, a required CI workflow, prose/alt-text unit tests, or a light/dark/mobile image matrix for these captures.
+
+---
+
+## 21. Reading one engineering journey
+
+This section explains one supported journey through existing Workflow Detail surfaces (MoonMind#3930). It is not a demonstration project, sample repository, or recording, and it adds no panel or status vocabulary.
+
+**Journey.** A repository task fails in a middle step. The existing remediation path repairs it, verifies the exact candidate, and publishes saved work as a pull request.
+
+* **Operator entrypoint.** Use README Quick start steps 2–5. Connect a Provider Profile in **Settings → Providers & Secrets**. Add a **Source Control** connection with assigned repositories. Then use **Create** with Omnigent, a compatible Profile, and the pull-request publishing option.
+* **Authority.** The Provider Profile selects credentials and model defaults. The Source Control connection limits repository access. Publication is permitted separately from saving results; see [Workflow Publishing](../Workflows/WorkflowPublishing.md).
+* **Existing evidence.** `tests/integration/reliability/test_failure_recovery_publication_journey.py` composes the real workflow controllers, PostgreSQL and artifact owners, checkpoint capture and cold restore, the remediation verifier, and saved-work publication. The failed run keeps its saved bytes and failure diagnostic. Repair resumes only unfinished phases, and verification records `verified_resolved` against the exact candidate checkpoint. A transient provider read failure during publication is retried without rerunning implementation, resulting in exactly one push and one pull-request create. Both `[recovery]` and `[corrected]` cases passed in [CI / Test Suite run 38360365487](https://github.com/MoonLadderStudios/MoonMind/actions/runs/38360365487) (reliability shards, main `c2f4b27d9`).
+* **Limitation.** Provider compute and Temporal transport are controlled fixtures. This is not live provider qualification, and reviewing it requires no paid or live run. `tools/first_run_journey_3938.sh` checks startup and state but deliberately cancels its task, so it is not evidence of a generated result.
+
+**What Workflow Detail shows for such a run.** The Overview tab answers the basic questions from fields the run already records:
+
+| Question | Existing surface |
+| --- | --- |
+| What happened? | **Summary** (operator summary, or the execution summary) and its **Outcome** reason |
+| What failed? | **Run Summary**: outcome code and stage, **Failed Step**, **Failure Category**, and the last-step message. A quality-gate stop says that no failed Step Execution was fabricated. |
+| Where is the output? | Pull-request link, **Open failure diagnostics** (a canonical `artifact://<id>` diagnostics ref links to its download; any other ref stays visible as text), the remediation workspace head, and the run's artifacts on the **Evidence** tab |
+| What can I do next? | The **Workflow actions** menu offers only actions the server marks available, such as Edit, Rerun, or Continue remediation, with disabled reasons otherwise. |
+| Was a governance report produced? | The **Governance report** block shows `ready`, `partial`, `pending`, or `failed`, plus the recorded reason code and recoverability when generation did not produce a report. Only its summary is kept, and a report failure never changes the run or publication outcome. Runs whose terminal state was committed outside the workflow terminal-recording path (for example operator cancellation) have no block; see [RunGovernanceReports](../Governance/RunGovernanceReports.md) §6. |
+
+Overview and Evidence do not depend on native chat. When chat is unavailable, the Debug tab keeps a read-only session transcript. The render tests in `frontend/src/entrypoints/workflow-detail.test.tsx` cover the failed-run questions and the governance block.
