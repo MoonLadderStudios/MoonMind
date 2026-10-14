@@ -40,6 +40,53 @@ from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
 
 pytestmark = [pytest.mark.asyncio]
 
+
+@pytest.mark.parametrize("owned_admission", [False, True])
+async def test_existing_action_needs_server_identity_admission(
+    mock_temporal_adapter, owned_admission
+):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    )
+
+    definition_id = uuid4()
+    service = RecurringWorkflowsService(
+        None, temporal_client_adapter=mock_temporal_adapter
+    )
+    workflow_type, workflow_input = service._workflow_bundle_for_target(
+        definition_id=definition_id,
+        name="Scheduled work",
+        owner_user_id=None,
+        target_payload={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {},
+        },
+    )
+    memo = {PROVIDER_PROFILE_MEMO_KEY: {}}
+    if owned_admission:
+        memo["publicationGitIdentityAdmission"] = {
+            "schemaVersion": "v1",
+            "identity": workflow_input["initial_parameters"]["_publicationGitIdentity"],
+        }
+    action = SimpleNamespace(
+        workflow=workflow_type,
+        id=make_scheduled_workflow_id_base(definition_id),
+        args=[workflow_input],
+        task_queue="mm.workflow.user.v2",
+        memo=memo,
+        typed_search_attributes=[
+            SimpleNamespace(key=SimpleNamespace(name=PROVIDER_PROFILE_SEARCH_ATTRIBUTE))
+        ],
+    )
+    assert service._schedule_action_mismatch(
+        action=action,
+        definition_id=definition_id,
+        workflow_type=workflow_type,
+        workflow_input=workflow_input,
+    ) is (not owned_admission)
+
+
 @asynccontextmanager
 async def recurring_db(tmp_path: Path):
     db_path = tmp_path / "recurring_workflows.db"
@@ -57,6 +104,7 @@ async def recurring_db(tmp_path: Path):
         yield async_session_maker
     finally:
         await engine.dispose()
+
 
 @pytest.fixture(autouse=True)
 def _managed_default_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,9 +134,18 @@ def mock_temporal_adapter():
     adapter.resolve_workflow_task_queue = MagicMock(return_value="mm.workflow.user.v2")
     return adapter
 
+
+@pytest.mark.parametrize(
+    "forged_identity",
+    [{"name": "forged", "email": "forged@example.invalid"}, "malformed"],
+)
 async def test_create_definition_creates_temporal_schedule(
-    tmp_path: Path, mock_temporal_adapter
+    tmp_path: Path, mock_temporal_adapter, monkeypatch, forged_identity
 ) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Admitted operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "admitted@example.invalid")
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringWorkflowsService(
@@ -107,6 +164,14 @@ async def test_create_definition_creates_temporal_schedule(
                 target={
                     "workflowType": "MoonMind.UserWorkflow",
                     "initialParameters": {
+                        "_publicationGitIdentity": forged_identity,
+                        "publicationGitIdentityAdmission": {
+                            "schemaVersion": "v1",
+                            "identity": {
+                                "name": "forged",
+                                "email": "forged@example.invalid",
+                            },
+                        },
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
                         "task": {
@@ -135,9 +200,29 @@ async def test_create_definition_creates_temporal_schedule(
                 "MoonMind.UserWorkflow"
             )
             assert "workflowType" not in call_kwargs["workflow_input"]
-            assert call_kwargs["workflow_input"]["initial_parameters"]["task"][
-                "instructions"
-            ] == "Queue job"
+            identity = {
+                "name": "Admitted operator",
+                "email": "admitted@example.invalid",
+            }
+            assert (
+                call_kwargs["workflow_input"]["initial_parameters"][
+                    "_publicationGitIdentity"
+                ]
+                == identity
+            )
+            assert call_kwargs["memo"]["publicationGitIdentityAdmission"] == {
+                "schemaVersion": "v1",
+                "identity": identity,
+            }
+            assert (
+                "_publicationGitIdentity" not in definition.target["initialParameters"]
+            )
+            assert (
+                call_kwargs["workflow_input"]["initial_parameters"]["task"][
+                    "instructions"
+                ]
+                == "Queue job"
+            )
             assert call_kwargs["workflow_input"]["initial_parameters"]["system"][
                 "recurrence"
             ]["definitionId"] == str(definition.id)
@@ -3453,10 +3538,15 @@ async def test_schedule_actions_record_provider_profile_projection_4640(
         assert expected_summary["selectionState"] == selection
 
         def assert_projection(kwargs):
+            from moonmind.omnigent.git_identity import resolve_git_identity
+            name, email = resolve_git_identity()
+            identity = {"name": name, "email": email}
             assert kwargs["memo"] == {
                 "definitionId": str(definition.id),
                 PROVIDER_PROFILE_MEMO_KEY: expected_summary,
+                "publicationGitIdentityAdmission": {"schemaVersion": "v1", "identity": identity},
             }
+            assert kwargs["workflow_input"]["initial_parameters"]["_publicationGitIdentity"] == identity
             assert kwargs["search_attributes"] == {
                 "mm_owner_type": "system",
                 "mm_owner_id": "system",

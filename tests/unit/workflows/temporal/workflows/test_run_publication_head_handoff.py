@@ -124,6 +124,10 @@ async def test_request_carries_only_accepted_workflow_publication(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "git_identity",
+    [None, {"name": "Admitted operator", "email": "admitted@example.invalid"}],
+)
+@pytest.mark.parametrize(
     "authority",
     [
         None,
@@ -136,7 +140,7 @@ async def test_request_carries_only_accepted_workflow_publication(
     ],
 )
 async def test_profile_host_publication_preserves_optional_authority(
-    tmp_path, monkeypatch, authority
+    tmp_path, monkeypatch, authority, git_identity
 ):
     publish = AsyncMock(return_value={"push_status": "no_commits"})
     monkeypatch.setattr(
@@ -154,7 +158,10 @@ async def test_profile_host_publication_preserves_optional_authority(
     )
     if authority is not None:
         kwargs["accepted_published_head"] = authority
+    if git_identity is not None:
+        kwargs["publication_git_identity"] = git_identity
     await OmnigentOAuthHostRuntime.publish_workspace(
         SimpleNamespace(_workspace_root=tmp_path), **kwargs
     )
     assert publish.await_args.kwargs["accepted_published_head"] == authority
+    assert publish.await_args.kwargs.get("publication_git_identity") == git_identity

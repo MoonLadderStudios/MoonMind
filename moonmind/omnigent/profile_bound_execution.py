@@ -16,6 +16,7 @@ from moonmind.omnigent.authority_chain import (
     build_omnigent_authority_chain_evidence,
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.git_identity import publication_git_identity_projection
 from moonmind.omnigent.codex_execution_decisions import (
     bind_candidate_workspace,
     bind_cold_restore_workspace_spec,
@@ -2029,27 +2030,27 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 runtime=provider_runtime,
                                 attempt_ordinal=self._attempts.current_attempt(),
                             ):
-                                publication = (
-                                    await self._workspace_publication.publish_workspace(
-                                        workspace_locator=workspace_locator_payload
-                                        or {},
-                                        current_workflow_id=workflow_id,
-                                        current_step_execution_id=(
-                                            step_execution_id or request.idempotency_key
-                                        ),
-                                        publication_identity=(
-                                            logical_publication_identity(request)
-                                        ),
-                                        publish_mode=publish_mode,
-                                        base_branch=self._starting_branch(request),
-                                        repository=self._repository_source(request),
-                                        github_token=await resolve_github_token(
-                                            for_publication=True
-                                        ),
-                                        accepted_published_head=(
-                                            request.parameters or {}
-                                        ).get("acceptedPublishedHead"),
-                                    )
+                                publication = await self._workspace_publication.publish_workspace(
+                                    workspace_locator=workspace_locator_payload or {},
+                                    current_workflow_id=workflow_id,
+                                    current_step_execution_id=(
+                                        step_execution_id or request.idempotency_key
+                                    ),
+                                    publication_identity=(
+                                        logical_publication_identity(request)
+                                    ),
+                                    publish_mode=publish_mode,
+                                    base_branch=self._starting_branch(request),
+                                    repository=self._repository_source(request),
+                                    github_token=await resolve_github_token(
+                                        for_publication=True
+                                    ),
+                                    accepted_published_head=(
+                                        request.parameters or {}
+                                    ).get("acceptedPublishedHead"),
+                                    publication_git_identity=publication_git_identity_projection(
+                                        request.parameters or {}
+                                    ),
                                 )
                         except Exception as exc:
                             code = str(

@@ -323,6 +323,8 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     initial_parameters = copy.deepcopy(dict(initial_parameters))
+    initial_parameters.pop("_publicationGitIdentity", None)
+    initial_parameters.pop("publicationGitIdentityAdmission", None)
     try:
         from moonmind.workflows.executions.execution_contract import (
             validate_workflow_runtime_targets,
@@ -588,6 +590,9 @@ class RecurringWorkflowsService:
         recurrence["definitionId"] = str(definition_id)
         system["recurrence"] = recurrence
         initial_parameters["system"] = system
+        from moonmind.omnigent.git_identity import admit_publication_git_identity
+
+        admit_publication_git_identity(initial_parameters)
         return workflow_type, {
             "workflow_type": workflow_type,
             "title": str(target_payload.get("title") or name),
@@ -653,6 +658,11 @@ class RecurringWorkflowsService:
         """
 
         parameters = workflow_input.get("initial_parameters") or {}
+        from moonmind.omnigent.git_identity import (
+            PUBLICATION_GIT_IDENTITY_MEMO_KEY,
+            publication_git_identity_admission,
+        )
+
         summary, search_value = build_provider_profile_projection(
             parameters,
             labels=await provider_profile_label_snapshot(self._session, parameters),
@@ -660,6 +670,9 @@ class RecurringWorkflowsService:
         return {
             "memo": {
                 "definitionId": str(definition_id),
+                PUBLICATION_GIT_IDENTITY_MEMO_KEY: publication_git_identity_admission(
+                    parameters.get("_publicationGitIdentity")
+                ),
                 PROVIDER_PROFILE_MEMO_KEY: summary,
             },
             "search_attributes": {
@@ -714,8 +727,28 @@ class RecurringWorkflowsService:
                 for pair in typed_attributes
             )
         )
+        from moonmind.omnigent.git_identity import admitted_publication_git_identity
+
+        try:
+            admitted_identity = (
+                admitted_publication_git_identity(memo)
+                if isinstance(memo, Mapping)
+                else None
+            )
+        except ValueError:
+            admitted_identity = None
+        expected_identity = (workflow_input.get("initial_parameters") or {}).get(
+            "_publicationGitIdentity"
+        )
+        has_identity_admission = (
+            admitted_identity is not None
+            and isinstance(expected_identity, Mapping)
+            and admitted_identity
+            == (expected_identity.get("name"), expected_identity.get("email"))
+        )
         return (
             not has_profile_projection
+            or not has_identity_admission
             or temporal_workflow_type != workflow_type
             or temporal_workflow_id_base != expected_workflow_id_base
             or temporal_input != workflow_input

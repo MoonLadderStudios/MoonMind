@@ -2307,23 +2307,18 @@ class TemporalExecutionService:
             )
 
         params = dict(initial_parameters or {})
+        publication_admission = None
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
-            from moonmind.omnigent.git_identity import (
-                resolve_execution_git_identity,
-                resolve_git_identity,
-            )
+            from moonmind.omnigent.git_identity import admit_publication_git_identity
 
-            git_name, git_email = (
-                resolve_execution_git_identity(
-                    _publication_identity_source.parameters or {}
-                )
-                if _publication_identity_source is not None
-                else resolve_git_identity()
+            publication_admission = admit_publication_git_identity(
+                params,
+                source_memo=(
+                    (_publication_identity_source.memo or {})
+                    if _publication_identity_source is not None
+                    else None
+                ),
             )
-            # This server-resolved choice belongs to the admitted workflow,
-            # including successors of an interrupted logical step. New workflows
-            # use current defaults; idempotent redelivery returned above.
-            params["_publicationGitIdentity"] = {"name": git_name, "email": git_email}
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
         task_params = dict(_workflow_payload(params))
@@ -2401,6 +2396,10 @@ class TemporalExecutionService:
             ),
             "titleRevision": 0,
         }
+        if publication_admission is not None:
+            from moonmind.omnigent.git_identity import PUBLICATION_GIT_IDENTITY_MEMO_KEY
+
+            memo[PUBLICATION_GIT_IDENTITY_MEMO_KEY] = publication_admission
         # Admitting-authority code revision (MoonLadderStudios/MoonMind#4224):
         # post-incident analysis can tell which revision admitted the run; the
         # executing worker stamps its own revision in AgentRun metadata.
@@ -3123,7 +3122,7 @@ class TemporalExecutionService:
             parameters_patch = {
                 key: value
                 for key, value in parameters_patch.items()
-                if key != "_publicationGitIdentity"
+                if key not in {"_publicationGitIdentity", "publicationGitIdentityAdmission"}
             }
 
         record = await self._require_source_execution(workflow_id)

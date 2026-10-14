@@ -90,6 +90,12 @@ async def _record(workflow_class, identity: str):
             {_KEY: _IDENTITY},
             id=identity,
             task_queue=identity,
+            memo={
+                "publicationGitIdentityAdmission": {
+                    "schemaVersion": "v1",
+                    "identity": _IDENTITY,
+                }
+            },
         )
         result = await handle.result()
         history = await handle.fetch_history()
@@ -146,7 +152,10 @@ async def test_new_publication_identity_payload_records_patch_and_replays():
     result, history = await _record(
         CurrentPublicationIdentityHandoff, "publication-identity-current-worker"
     )
-    assert result[_KEY] == _IDENTITY
+    assert result["publicationGitIdentityAdmission"] == {
+        "schemaVersion": "v1",
+        "identity": _IDENTITY,
+    }
     assert _PATCH in _patch_ids(history)
     await Replayer(
         workflows=[CurrentPublicationIdentityHandoff],
