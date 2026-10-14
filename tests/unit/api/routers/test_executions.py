@@ -20001,7 +20001,9 @@ def _mm3788_provider_profile(
     )
 
 
-def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, AsyncMock]]:
+def _mm3788_client(
+    profile: SimpleNamespace, *, execute: Any = None
+) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
@@ -20020,6 +20022,8 @@ def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, Async
             return None
 
         async def execute(self, _stmt):
+            if execute is not None:
+                return await execute(_stmt)
             return SimpleNamespace(all=lambda: [])
 
     app.dependency_overrides[get_async_session] = lambda: _Session()
@@ -20505,6 +20509,118 @@ async def test_mm3833_goal_preset_expands_with_the_profile_route(monkeypatch) ->
     )
 
     assert captured["context"]["targetRuntime"] == "codex_cli"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_with_an_agent_profile_keeps_omnigent(
+    monkeypatch,
+) -> None:
+    """An explicit Agent Profile is Omnigent intent, whatever the account's route."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    request = _mm3833_recurring_request({"providerProfileRef": "subscription"})
+    request["agentProfile"] = {
+        "profileId": "team-codex",
+        "version": 2,
+        "providerProfileRef": "subscription",
+    }
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        request, session=_ProfileRouteSession(profile)
+    )
+
+    assert metadata["targetRuntime"] == "omnigent"
+    assert metadata["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_preset_expansion_and_admission_share_one_profile_route(
+    monkeypatch,
+) -> None:
+    """A configuration activated mid-submission cannot split its Backend.
+
+    Preset expansion previews the Profile's route before Create admits it; both
+    must use one decision so expanded steps match the admitted workflow.
+    """
+
+    from api_service.db.models import OmnigentAgentProfile
+    from moonmind.workflows.executions.preset_goal_scheduler import (
+        GoalPresetSchedule,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    profile.credential_source = "oauth_volume"
+    profile.runtime_materialization_mode = "oauth_home"
+    activated = (
+        SimpleNamespace(
+            profile_id="activated", active_version=1, default_for_runtime=True
+        ),
+        SimpleNamespace(
+            version=1,
+            digest="sha256:" + "9" * 64,
+            validation_result={"ready": True},
+            document={
+                "providerRequirements": {
+                    "runtimeId": "codex_cli",
+                    "credentialSource": "oauth_volume",
+                    "materializationMode": "oauth_home",
+                }
+            },
+        ),
+    )
+    configuration_reads: list[object] = []
+
+    async def execute(statement: Any) -> SimpleNamespace:
+        columns = getattr(statement, "column_descriptions", None) or []
+        if any(column.get("entity") is OmnigentAgentProfile for column in columns):
+            configuration_reads.append(statement)
+            # The configuration is activated right after the first read.
+            rows = [] if len(configuration_reads) == 1 else [activated]
+            return SimpleNamespace(all=lambda: rows)
+        return SimpleNamespace(all=lambda: [])
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingCatalog:
+        def __init__(self, session):
+            self.session = session
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        _CapturingCatalog,
+    )
+    body = {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "goal": "Expand one goal preset",
+                "runtime": {"providerProfileRef": "subscription"},
+            },
+        },
+    }
+
+    for test_client, service in _mm3788_client(profile, execute=execute):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+    assert parameters["targetRuntime"] == "codex_cli"
 
 
 @pytest.mark.asyncio
@@ -21222,6 +21338,62 @@ def test_mm3833_cli_agent_profile_reaches_snapshot_resolution_with_its_account(
     # The resolver persisted exactly this snapshot as the workflow's usage.
     (usage,) = session.selection.added
     assert usage.effective_snapshot == snapshot
+
+
+class _Mm3833HistoricalAgentProfileSession(_Mm3833AgentProfileAdmissionSession):
+    """Version 2 stays launch-ready, but version 3 is now the active one."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.selection.profile.active_version = 3
+
+    async def execute(self, statement: Any) -> Any:
+        result = await self.selection.execute(statement)
+        # Only active versions are loaded for an unpinned Provider Profile.
+        rows = [
+            row
+            for row in result.all()
+            if not (
+                len(row) == 2
+                and row[0] is self.selection.profile
+                and row[1].version != row[0].active_version
+            )
+        ]
+        return SimpleNamespace(all=lambda: rows)
+
+
+def test_mm3833_explicit_historical_agent_profile_keeps_the_omnigent_route(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected historical version is not reinterpreted as a direct Profile."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    payload = build_execution_payload(
+        instructions="Run the named historical configuration.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+        idempotency_key="mm3833-historical-agent-profile",
+    )
+    payload["payload"]["agentProfile"]["version"] = 2
+
+    test_client, service, _user = client
+    response, compile_plan, _plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        payload,
+        db_session=_Mm3833HistoricalAgentProfileSession(),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["agentProfileSnapshot"]["version"] == 2
 
 
 def test_mm3935_cli_extra_params_survive_plan_admission(
