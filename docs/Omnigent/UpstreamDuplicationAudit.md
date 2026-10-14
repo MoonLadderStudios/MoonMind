@@ -38,7 +38,7 @@ states the durable disposition; the module enforces it in CI.
 | Event journal vs provider stream | `bridge_store.py` event index + `execute.py` | Durable pages, normalized events, raw bounded journal | MoonMind journal | None demonstrated: provider SSE has no durable cursors |
 | Catalog projection vs agent inventory | `harness_platform/catalog.py` + `omnigent_catalog.py` router | Trust classification, profile support evidence, readiness gating | MoonMind projection | None demonstrated: stock inventory carries no trust semantics |
 | Artifact manifest vs session files | `bridge_artifacts.py` + `workspace_publication.py` | Terminal result, capture manifests, redacted diagnostics, ArtifactRefs | MoonMind manifest | None demonstrated: upstream files lack provenance/retention |
-| Native UI facade vs upstream app | `native_ui.py` + `workflow_chat_facade.py` | Binding-scoped routes, allowlist, bootstrap contract, version gate | MoonMind facade | Version-gated only; unknown versions fail closed, never proxied directly |
+| Native UI facade vs upstream app | `native_ui.py` + `workflow_chat_facade.py` | Binding-scoped routes, allowlist, bootstrap contract, enable controls | MoonMind facade | Gated by the scoped contract, not build identity; unsupported operations fail closed, never proxied directly |
 | Wire transport vs host protocol | `omnigent_client.py` + `bridge_proxy.py` | Facade validation, bounds, redacted codes, harvest-before-delete | MoonMind facade | None demonstrated: raw wire handling has no idempotency/ordering |
 
 Every row's persisted consumers, removal criteria, and proving test live in
