@@ -25201,17 +25201,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         info = workflow.info()
         if lease.get("owner") != f"{info.namespace}/{info.workflow_id}":
             return
-        repository = str(lease.get("repository") or "").strip()
+        lease_repository = str(lease.get("repository") or "").strip()
         attempt_id = str(lease.get("attemptId") or "").strip()
         try:
             issue_number = int(lease.get("issueNumber") or 0)
         except (TypeError, ValueError):
             return
-        if not repository or issue_number <= 0 or not attempt_id:
+        if not lease_repository or issue_number <= 0 or not attempt_id:
             return
+        issue = context.get("issue")
+        if not isinstance(issue, Mapping):
+            return
+        repository = str(issue.get("repository") or "").strip()
         if (
-            str(context.get("repository") or "").casefold() != repository.casefold()
-            or context.get("issueNumber") != issue_number
+            not repository
+            or repository.casefold() != lease_repository.casefold()
+            or issue.get("number") != issue_number
         ):
             return
         assessment = self._early_issue_blocker_assessment or self._assessment_context
@@ -25225,7 +25230,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "github_issue.finalize_failed_attempt"
         )
         payload = {
-            "repository": str(context["repository"]),
+            "repository": repository,
             "issueNumber": issue_number,
             "attemptId": attempt_id,
             "executionEvent": "blocked",
