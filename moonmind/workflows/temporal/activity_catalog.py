@@ -1109,6 +1109,15 @@ def build_default_activity_catalog(
         ),
         # ---- General-purpose repo operations (provider-agnostic) ----
         TemporalActivityDefinition(
+            activity_type="github_issue.collect_evidence",
+            family="repo",
+            capability_class="integration:github",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(180, 360),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="repo.create_pr",
             family="repo",
             capability_class="integration:jules",
