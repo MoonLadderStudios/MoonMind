@@ -4359,7 +4359,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if self._workflow_patch_enabled(
             RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH
         ):
-            continuation_options["memo"] = self._publication_identity_memo()
+            continuation_options["memo"] = {
+                **(workflow.memo() or {}),
+                **self._publication_identity_memo(),
+            }
         workflow.continue_as_new(
             self._build_remediation_loop_continue_as_new_input(
                 ordered_nodes=ordered_nodes,
