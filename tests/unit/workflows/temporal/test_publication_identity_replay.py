@@ -177,6 +177,7 @@ class LegacyIdentityContinuation:
         return {
             "parameters": await _handoff(_request(parent, {}).parameters),
             "runId": workflow.info().run_id,
+            "memo": workflow.memo(),
         }
 
 
@@ -195,6 +196,7 @@ class CurrentIdentityContinuation:
         return {
             "parameters": await _handoff(_request(parent, {}).parameters),
             "runId": workflow.info().run_id,
+            "memo": workflow.memo(),
         }
 
 
@@ -208,6 +210,12 @@ async def test_publication_identity_continue_as_new_and_legacy_history_replay(le
             "identity": _IDENTITY,
         }
     }
+    admission.update(
+        providerProfile={"providerProfileRef": "recorded-profile"},
+        definitionId="recorded-definition",
+        runtimeWorkflowContract={"schemaVersion": "v1", "mode": "recorded"},
+        workerCodeRevision="recorded-worker",
+    )
     identity = f"publication-identity-continuation-{legacy}"
     async with (
         await WorkflowEnvironment.start_time_skipping() as env,
@@ -223,6 +231,7 @@ async def test_publication_identity_continue_as_new_and_legacy_history_replay(le
             producer.run, {}, id=identity, task_queue=identity, memo=admission
         )
         result = await handle.result()
+        assert result["memo"] == admission
         first = await handle.fetch_history()
         successor = await env.client.get_workflow_handle(
             identity, run_id=result["runId"]
