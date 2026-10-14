@@ -806,6 +806,68 @@ async def test_plan_admission_rejects_active_rollback_gate(
         )
 
 
+_PLANLESS_ADMISSION = OmnigentSessionAdmissionRequest(
+    workflowId="workflow-1",
+    stepExecutionId="step-1",
+    agentRunId="agent-run-1",
+    executionProfileRef="provider-profile-1",
+).model_dump(mode="json", by_alias=True)
+
+
+@pytest.mark.asyncio
+async def test_planless_admission_has_no_separate_rollout_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retired rollout settings can no longer divert plan-less admission."""
+
+    from moonmind.config.settings import FeatureFlagsSettings, settings
+
+    for name, value in (
+        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE", "disabled"),
+        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS", "other"),
+        (
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "other-profile",
+        ),
+        ("FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION", "superseded"),
+    ):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        settings,
+        "feature_flags",
+        FeatureFlagsSettings(_env_file=None),
+    )
+
+    decision = (
+        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+            _PLANLESS_ADMISSION
+        )
+    )
+
+    assert decision["admitted"] is True
+    assert decision["reasonCode"] == "enabled"
+    assert decision["admissionMode"] == "enabled"
+    assert decision["admittedFeatureGeneration"] == OMNIGENT_SESSION_FEATURE_GENERATION
+
+
+@pytest.mark.asyncio
+async def test_planless_admission_follows_the_shared_rollback_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent import session_supervisor_rollback
+
+    monkeypatch.setattr(
+        session_supervisor_rollback,
+        "rollback_mode_from_settings",
+        lambda _flags: "disable_new_admission",
+    )
+
+    with pytest.raises(ValueError, match="rollback generation blocks"):
+        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+            _PLANLESS_ADMISSION
+        )
+
+
 @pytest.mark.asyncio
 async def test_side_effect_rejects_obsolete_runtime_binding_fence(
     monkeypatch: pytest.MonkeyPatch,
