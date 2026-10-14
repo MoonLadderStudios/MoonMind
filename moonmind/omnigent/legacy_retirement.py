@@ -22,17 +22,15 @@ The guard helpers here:
 Removing a component is ordinary engineering: delete the code, its row, and the
 tests that only existed for it, and keep the behavior tests of the surviving
 owner (#3932). There is no removal stage, criterion ledger, or drain census.
-
-The module also records temporary supervisor rollout flags with their exit
-condition so a rollout flag can never silently become a permanent alternate
-architecture.
+Restoring a prior default for new work belongs to the supervisor rollback
+control (:mod:`moonmind.omnigent.session_supervisor_rollback`), not to a row.
 """
 
 from __future__ import annotations
 
 import os
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -42,30 +40,18 @@ from moonmind.omnigent.retirement_surfaces import (
     surface_exists,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - import cycle: rollback imports this module
-    from moonmind.omnigent.session_supervisor_rollback import RollbackExerciseDecision
-
-RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v2"
+RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v3"
 
 
 class RetirementClass(str, Enum):
     """Whether a retained legacy path still admits new work.
 
-    :data:`ACTIVE_PRODUCT_PATH` admits new work; :data:`ROLLBACK_ONLY` admits
-    new work only under an explicitly permitted rollback generation;
-    :data:`NEW_ADMISSION_DISABLED` refuses it. Recorded work is never affected.
+    :data:`ACTIVE_PRODUCT_PATH` admits new work; :data:`NEW_ADMISSION_DISABLED`
+    refuses it. Recorded work is never affected.
     """
 
     ACTIVE_PRODUCT_PATH = "active_product_path"
     NEW_ADMISSION_DISABLED = "new_admission_disabled"
-    ROLLBACK_ONLY = "rollback_only"
-
-
-# Classes that still admit new work. Everything else must not appear as the
-# target of a newly compiled execution plan.
-_NEW_ADMISSION_CLASSES: frozenset[RetirementClass] = frozenset(
-    {RetirementClass.ACTIVE_PRODUCT_PATH, RetirementClass.ROLLBACK_ONLY}
-)
 
 
 class RetirementGuardError(RuntimeError):
@@ -94,21 +80,10 @@ class LegacyPathRecord(BaseModel):
     # The concrete code path that can still create new records or admit new work
     # through this component. Empty exactly when the class no longer admits.
     new_admission_source: str = Field("", alias="newAdmissionSource")
-    # Exact rollback generations permitted to re-admit new work through this
-    # path. Exact membership only — never a prefix or substring match.
-    rollback_generations: frozenset[str] = Field(
-        default_factory=frozenset, alias="rollbackGenerations"
-    )
 
     @property
     def admits_new_work(self) -> bool:
-        return self.retirement_class in _NEW_ADMISSION_CLASSES
-
-    @property
-    def requires_rollback_generation(self) -> bool:
-        """Whether admitting new work needs an explicit rollback generation."""
-
-        return self.retirement_class is RetirementClass.ROLLBACK_ONLY
+        return self.retirement_class is RetirementClass.ACTIVE_PRODUCT_PATH
 
     @model_validator(mode="after")
     def _validate(self) -> "LegacyPathRecord":
@@ -128,14 +103,6 @@ class LegacyPathRecord(BaseModel):
                 f"{self.path_id}: class {self.retirement_class.value!r} does not "
                 "admit new work, so it must not name a new-admission source"
             )
-        if (
-            self.retirement_class is RetirementClass.ROLLBACK_ONLY
-            and not self.rollback_generations
-        ):
-            raise ValueError(
-                f"{self.path_id}: rollback_only requires an exact permitted "
-                "rollback generation allowlist"
-            )
         return self
 
 
@@ -148,7 +115,6 @@ class LegacyAdmissionDecision(BaseModel):
     allowed: bool
     reason_code: str = Field(alias="reasonCode")
     retirement_class: RetirementClass = Field(alias="retirementClass")
-    rollback_generation: str | None = Field(None, alias="rollbackGeneration")
     contract_version: str = Field(RETIREMENT_CONTRACT_VERSION, alias="contractVersion")
 
     def as_dict(self) -> dict[str, Any]:
@@ -588,8 +554,6 @@ def retirement_record_for_surface(
 def assert_surface_admits_new_work(
     surface_ref: str,
     *,
-    rollback_generation: str | None = None,
-    rollback_exercise: RollbackExerciseDecision | None = None,
     inventory: tuple[LegacyPathRecord, ...] | None = None,
 ) -> LegacyAdmissionDecision | None:
     """Reject new work that selects a retired surface.
@@ -603,92 +567,42 @@ def assert_surface_admits_new_work(
     record = retirement_record_for_surface(surface_ref, inventory=inventory)
     if record is None:
         return None
-    return assert_new_admission_allowed(
-        record.path_id,
-        rollback_generation=rollback_generation,
-        rollback_exercise=rollback_exercise,
-        inventory=inventory,
-    )
+    return assert_new_admission_allowed(record.path_id, inventory=inventory)
 
 
-def evaluate_new_admission(
-    path: LegacyPathRecord,
-    *,
-    rollback_generation: str | None = None,
-    rollback_exercise: RollbackExerciseDecision | None = None,
-) -> LegacyAdmissionDecision:
+def evaluate_new_admission(path: LegacyPathRecord) -> LegacyAdmissionDecision:
     """Whether new work may be admitted through ``path``.
 
-    ``rollback_only`` admits new work only under an exactly allowlisted rollback
-    generation *and* a fresh, successful, exactly-scoped rollback exercise for
-    this row. The generation alone is a global string: without the scoped
-    exercise decision one allowlisted generation would re-admit every profile,
-    Host Class, materializer, model, launch policy, host mode, architecture, and
-    owner cohort using the path, and would stay valid after the exercise window
-    expired. ``new_admission_disabled`` refuses, which is what stops new Agent
-    Profiles, schedules, presets, and alternate API clients from creating new
-    legacy work once the class changes — without touching execution,
-    cancellation, cleanup, or reads for already-recorded plans.
+    ``new_admission_disabled`` refuses, which is what stops new Agent Profiles,
+    schedules, presets, and alternate API clients from creating new legacy work
+    once the class changes — without touching execution, cancellation, cleanup,
+    or reads for already-recorded plans.
     """
 
-    generation = (rollback_generation or "").strip() or None
-    if path.retirement_class is RetirementClass.ACTIVE_PRODUCT_PATH:
+    if path.admits_new_work:
         return LegacyAdmissionDecision(
             pathId=path.path_id,
             allowed=True,
             reasonCode="active_product_path",
             retirementClass=path.retirement_class,
-            rollbackGeneration=generation,
-        )
-    if path.retirement_class is RetirementClass.ROLLBACK_ONLY:
-        if generation is None:
-            reason = "rollback_generation_required"
-        elif generation not in path.rollback_generations:
-            reason = "rollback_generation_not_allowlisted"
-        elif rollback_exercise is None:
-            reason = "rollback_exercise_evidence_required"
-        elif rollback_exercise.retirement_path_id != path.path_id:
-            reason = "rollback_exercise_scope_mismatch"
-        elif not rollback_exercise.satisfied:
-            reason = f"rollback_exercise_unsatisfied:{rollback_exercise.reason_code}"
-        else:
-            return LegacyAdmissionDecision(
-                pathId=path.path_id,
-                allowed=True,
-                reasonCode="rollback_generation_permitted",
-                retirementClass=path.retirement_class,
-                rollbackGeneration=generation,
-            )
-        return LegacyAdmissionDecision(
-            pathId=path.path_id,
-            allowed=False,
-            reasonCode=reason,
-            retirementClass=path.retirement_class,
-            rollbackGeneration=generation,
         )
     return LegacyAdmissionDecision(
         pathId=path.path_id,
         allowed=False,
         reasonCode=f"new_admission_disabled:{path.retirement_class.value}",
         retirementClass=path.retirement_class,
-        rollbackGeneration=generation,
     )
 
 
 def assert_new_admission_allowed(
     path_id: str,
     *,
-    rollback_generation: str | None = None,
-    rollback_exercise: RollbackExerciseDecision | None = None,
     inventory: tuple[LegacyPathRecord, ...] | None = None,
 ) -> LegacyAdmissionDecision:
     """Fail fast when new work selects a path whose class no longer admits it."""
 
-    record = get_retirement_record(path_id, inventory=inventory)
     decision = evaluate_new_admission(
-        record,
-        rollback_generation=rollback_generation,
-        rollback_exercise=rollback_exercise,
+        get_retirement_record(path_id, inventory=inventory)
     )
     if not decision.allowed:
         raise LegacyAdmissionRejected(
