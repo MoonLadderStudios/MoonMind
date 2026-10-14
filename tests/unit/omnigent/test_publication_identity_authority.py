@@ -104,7 +104,7 @@ async def test_activity_identity_unavailable_authority_does_not_default(monkeypa
         ),
     )
     with pytest.raises(RuntimeError, match="recorded memo unavailable"):
-        result = await git_identity.publication_git_identity_projection({})
+        await git_identity.publication_git_identity_projection({})
 
 
 @pytest.mark.asyncio
