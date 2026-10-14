@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from markdown_it import MarkdownIt
 
-from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS, GitHubService
 from moonmind.workflows.temporal.github_issue_admission import (
     ENTRYPOINT_SEARCH,
     admit_for_entrypoint,
@@ -297,7 +297,7 @@ async def check_prerequisites(
                         "select an explicit issue or narrow the issue search."
                     )
                 token, _error = await github_service.resolve_github_token(
-                    repo=dependency_repo
+                    repo=dependency_repo, operations=ISSUE_OPERATIONS
                 )
                 if not token:
                     raise ValueError("GitHub prerequisite lookup is unavailable.")
@@ -811,7 +811,9 @@ async def resolve_issue(
         }
     }
     counts = evidence["searchEvidence"]
-    token, error = await github_service.resolve_github_token(repo=repository)
+    token, error = await github_service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return None, {
             **evidence,

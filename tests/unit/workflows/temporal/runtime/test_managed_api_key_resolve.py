@@ -933,9 +933,11 @@ async def test_github_secret_saved_after_the_migration_selects_the_unrecorded_de
     )
     try:
         token = await resolve_github_token_for_launch({})
-        selected = await managed_api_key_resolve_module.resolve_selected_github_credential_for_launch(
-            DEFAULT_GIT_CONNECTION_REF, repo="MoonLadderStudios/MoonMind"
-        )
+        selected = (
+            await managed_api_key_resolve_module.select_github_access_for_launch(
+                DEFAULT_GIT_CONNECTION_REF, repository="MoonLadderStudios/MoonMind"
+            )
+        ).credential
     finally:
         await engine.dispose()
 
@@ -1083,8 +1085,8 @@ async def test_recorded_connection_without_assignments_authorizes_no_repository(
         with pytest.raises(
             RepositoryContractError, match="REPOSITORY_CONNECTION_UNAVAILABLE"
         ) as excinfo:
-            await managed_api_key_resolve_module.resolve_selected_github_credential_for_launch(
-                "repository-connection:team-b", repo="MoonLadderStudios/MoonMind"
+            await managed_api_key_resolve_module.select_github_access_for_launch(
+                "repository-connection:team-b", repository="MoonLadderStudios/MoonMind"
             )
     finally:
         await engine.dispose()

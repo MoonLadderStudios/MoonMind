@@ -962,7 +962,9 @@ async def test_service_comment_round_trip(monkeypatch: pytest.MonkeyPatch) -> No
     _service_responses(monkeypatch, handler)
     service = GitHubService()
 
-    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+    async def fake_token(
+        explicit_token: str | None = None, *, repo: str | None = None, operations=()
+    ):
         return "ghs-test", None
 
     monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))
@@ -987,7 +989,9 @@ async def test_service_comment_transport_loss_is_outcome_unknown(monkeypatch: py
     _service_responses(monkeypatch, handler)
     service = GitHubService()
 
-    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+    async def fake_token(
+        explicit_token: str | None = None, *, repo: str | None = None, operations=()
+    ):
         return "ghs-test", None
 
     monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))
@@ -1018,7 +1022,9 @@ async def test_service_comment_malformed_entries_fail_the_read(monkeypatch: pyte
     _service_responses(monkeypatch, handler)
     service = GitHubService()
 
-    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+    async def fake_token(
+        explicit_token: str | None = None, *, repo: str | None = None, operations=()
+    ):
         return "ghs-test", None
 
     monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))
@@ -1052,7 +1058,9 @@ async def test_service_comment_full_final_page_is_incomplete_evidence(monkeypatc
     _service_responses(monkeypatch, handler)
     service = GitHubService()
 
-    async def fake_token(explicit_token: str | None = None, *, repo: str | None = None):
+    async def fake_token(
+        explicit_token: str | None = None, *, repo: str | None = None, operations=()
+    ):
         return "ghs-test", None
 
     monkeypatch.setattr(GitHubService, "resolve_github_token", staticmethod(fake_token))

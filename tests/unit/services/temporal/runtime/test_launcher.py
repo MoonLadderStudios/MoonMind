@@ -36,6 +36,10 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
+from tests.helpers.repository_connections import (
+    github_app_provider_edge as _app_provider_edge,
+    serve_repository_connections as _record_connections,
+)
 
 
 @pytest.fixture
@@ -2319,6 +2323,33 @@ def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_pat
     assert "ghp_testtoken123" not in gitconfig_text
     assert "from moonmind" not in gh_wrapper.read_text(encoding="utf-8")
     assert "from moonmind" not in git_helper.read_text(encoding="utf-8")
+
+def test_persist_gh_config_bash_env_restores_wrappers_and_keeps_declared_bash_env(
+    tmp_path,
+):
+    declared = tmp_path / "declared_bash_env.sh"
+    declared.write_text("DECLARED_RAN=yes\nPATH=/usr/bin:/bin\n")
+    env = {"PATH": "/usr/bin:/bin", "BASH_ENV": str(declared)}
+    ManagedRuntimeLauncher._persist_gh_config(
+        env,
+        str(tmp_path),
+        github_socket_path="/tmp/github-auth.sock",
+        real_gh_path="/usr/bin/gh",
+    )
+
+    assert env["BASH_ENV"] == str(tmp_path / ".moonmind" / "bash_env.sh")
+    nested = subprocess.run(
+        ["bash", "-c", 'echo "$DECLARED_RAN"; command -v gh'],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert nested.stdout.splitlines() == [
+        "yes",
+        str(tmp_path / ".moonmind" / "bin" / "gh"),
+    ]
+
 
 def test_persist_gh_config_writes_safe_directory_without_token(tmp_path):
     env = {"PATH": "/usr/bin"}
@@ -5497,21 +5528,6 @@ def _recorded_connection(
     )
 
 
-def _record_connections(monkeypatch, connections: dict[str, RepositoryConnection]):
-    loaded: list[str] = []
-
-    async def _load(connection_ref: str, **_kwargs):
-        loaded.append(connection_ref)
-        return connections.get(connection_ref)
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
-        "load_repository_connection_for_launch",
-        _load,
-    )
-    return loaded
-
-
 async def _request_github_token(
     launcher: ManagedRuntimeLauncher, request: AgentExecutionRequest
 ) -> str | None:
@@ -5756,6 +5772,258 @@ async def test_explicit_recorded_connection_is_selected_among_several(
     assert resolved.connection_ref == "repository-connection:team-b"
     assert token == "team-b-token"
     assert set(loaded) == {"repository-connection:team-b"}
+
+
+@pytest.mark.asyncio
+async def test_selected_github_app_connection_reaches_launch_over_ambient_and_default(
+    tmp_path, monkeypatch
+):
+    """#4003/#4011: a selected App connection issues through bound acquisition.
+
+    The launcher uses the App installation token of the selected connection
+    B, restricted to the target repository and its admitted operations,
+    instead of failing closed or reading the ambient token or default PAT A.
+    """
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    monkeypatch.setenv("DEFAULT_PAT_A", "default-token-A")
+    app_connection = _recorded_connection(
+        "repository-connection:app-b",
+        {
+            "source": "github_app",
+            "appRef": "github-app:moonmind-test",
+            "installationRef": "installation:123",
+        },
+    ).model_copy(update={"allowed_repository_ids": ("MoonLadderStudios/MoonMind",)})
+    loaded = _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "secret_ref",
+                    "credentialRef": {"provider": "env", "key": "DEFAULT_PAT_A"},
+                },
+            ),
+            "repository-connection:app-b": app_connection,
+        },
+    )
+    secret_reads: list[str] = []
+
+    async def _no_secret_ref(ref: str, **_kwargs):
+        secret_reads.append(ref)
+        raise AssertionError("an App launch must not read a PAT SecretRef")
+
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials._resolve_secret_ref_with_revision",
+        _no_secret_ref,
+    )
+    issued = _app_provider_edge(monkeypatch, "ghs_selected_app_b")
+    launcher = _ready_launcher(tmp_path)
+    request = _git_target_request("repository-connection:app-b", publish_mode="pr")
+
+    resolved = await launcher._ensure_repository_ready_for_launch(request, None)
+    token = await _request_github_token(launcher, request)
+
+    assert resolved is not None
+    assert resolved.connection_ref == "repository-connection:app-b"
+    assert token == "ghs_selected_app_b"
+    assert set(loaded) == {"repository-connection:app-b"}
+    assert secret_reads == []
+    assert issued
+    for payload in issued:
+        # Issuance is narrowed to the target repository and the connection's
+        # admitted operations; nothing is requested without restrictions.
+        assert payload["repositories"] == ["MoonMind"]
+        assert payload["permissions"]["contents"] == "write"
+        assert payload["permissions"]["pull_requests"] == "write"
+
+
+@pytest.mark.asyncio
+async def test_launched_github_app_token_renews_through_the_selected_connection(
+    tmp_path, monkeypatch
+):
+    """#4011: a launch hands its broker a renewal of the selected App access.
+
+    Git/gh in a run longer than one installation token re-issue through the
+    same recorded connection, restricted as at launch, and never through the
+    ambient token or another connection. A PAT selection has no renewal.
+    """
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    _capture_launch_env(monkeypatch)
+    connections = {
+        "repository-connection:git-default": _recorded_connection(
+            "repository-connection:git-default",
+            {
+                "source": "github_app",
+                "appRef": "github-app:moonmind-test",
+                "installationRef": "installation:123",
+            },
+        ).model_copy(
+            update={"allowed_repository_ids": ("MoonLadderStudios/MoonMind",)}
+        )
+    }
+    _record_connections(monkeypatch, connections)
+    issued = _app_provider_edge(monkeypatch, [f"ghs_{n}" for n in range(1, 10)])
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    launcher._github_auth_brokers.start = AsyncMock()
+    workspace_root = tmp_path / "workspaces" / "app-run" / "repo"
+    workspace_root.mkdir(parents=True)
+    (workspace_root / ".git").mkdir()
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="app-run",
+        request=_make_request(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    start = launcher._github_auth_brokers.start.await_args.kwargs
+    assert start["token"].startswith("ghs_")
+    assert start["expires_at"] is not None
+    launch_issuances = len(issued)
+    renewed_token, renewed_expiry = await start["renew"]()
+    assert renewed_token == f"ghs_{launch_issuances + 1}" != start["token"]
+    assert renewed_expiry is not None
+    # One re-issuance, restricted exactly as at launch.
+    assert len(issued) == launch_issuances + 1
+    assert issued[-1] == issued[0]
+
+    # The recorded connection changed to another account mid-run: renewal
+    # fails closed instead of switching accounts.
+    connections["repository-connection:git-default"] = connections[
+        "repository-connection:git-default"
+    ].model_copy(update={"id": "repository-connection:other-account"})
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CONNECTION_MISMATCH"):
+        await start["renew"]()
+    assert len(issued) == launch_issuances + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_id", ["claude_code", "codex_cli"])
+async def test_expiring_app_token_reaches_nested_login_shells_only_through_broker(
+    tmp_path, monkeypatch, runtime_id
+):
+    """#4011: an App token is never exported as a static env value.
+
+    claude_code and codex_cli run tools in nested ``bash -lc`` shells whose
+    profile resets PATH. Those shells still resolve the renewing gh wrapper
+    and Git credential helper, so no consumer holds a token that lapses
+    about an hour into the run.
+    """
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    captured_env = _capture_launch_env(monkeypatch)
+    _record_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": _recorded_connection(
+                "repository-connection:git-default",
+                {
+                    "source": "github_app",
+                    "appRef": "github-app:moonmind-test",
+                    "installationRef": "installation:123",
+                },
+            ).model_copy(
+                update={"allowed_repository_ids": ("MoonLadderStudios/MoonMind",)}
+            )
+        },
+    )
+    _app_provider_edge(monkeypatch, [f"ghs_{n}" for n in range(1, 10)])
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
+    launcher._github_auth_brokers.start = AsyncMock()
+    workspace_root = tmp_path / "workspaces" / "app-run" / "repo"
+    workspace_root.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", str(workspace_root)], check=True, capture_output=True
+    )
+    profile = _make_profile(
+        runtime_id=runtime_id,
+        command_template=[runtime_id, "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+        secret_refs={},
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="app-run",
+        request=_make_request(
+            workspace_spec={"repository": "MoonLadderStudios/MoonMind"}
+        ),
+        profile=profile,
+        workspace_path=str(workspace_root),
+    )
+    await process.wait()
+
+    assert launcher._github_auth_brokers.start.await_args.kwargs["renew"]
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "WORKFLOW_GITHUB_TOKEN"):
+        assert name not in captured_env
+    assert not any(
+        value.startswith("ghs_") or value == "ambient-token-A"
+        for value in captured_env.values()
+    )
+
+    bin_dir = workspace_root.parent / ".moonmind" / "bin"
+    # A login shell whose profile resets PATH, as Debian's /etc/profile does.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text("PATH=/usr/bin:/bin\nexport PATH\n")
+    nested = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "command -v gh; git config --get-all credential.helper",
+        ],
+        cwd=workspace_root,
+        env={**captured_env, "HOME": str(home)},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    resolved_gh, *helpers = nested.stdout.splitlines()
+    assert resolved_gh == str(bin_dir / "gh")
+    assert helpers and all("git-credential-moonmind" in h for h in helpers)
+
+
+@pytest.mark.asyncio
+async def test_selected_github_app_issuance_failure_blocks_launch_without_fallback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    app_connection = _recorded_connection(
+        "repository-connection:app-b",
+        {
+            "source": "github_app",
+            "appRef": "github-app:moonmind-test",
+            "installationRef": "installation:123",
+        },
+    ).model_copy(update={"allowed_repository_ids": ("acme/other",)})
+    _record_connections(monkeypatch, {"repository-connection:app-b": app_connection})
+    issued = _app_provider_edge(monkeypatch, "ghs_must_not_issue")
+    launcher = _ready_launcher(tmp_path)
+    request = _git_target_request("repository-connection:app-b")
+
+    with pytest.raises(
+        RepositoryContractError, match="REPOSITORY_CREDENTIAL_UNAVAILABLE"
+    ) as excinfo:
+        await _request_github_token(launcher, request)
+
+    assert issued == []
+    assert "repository-connection:app-b" in str(excinfo.value)
+    assert "ambient-token-A" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,8 @@ def _response(status: int, json_body, *, headers: dict[str, str] | None = None):
     )
 
 
+# The default connection derives from the deployment declaration.
+@pytest.mark.usefixtures("deployment_without_recorded_connections")
 async def test_readiness_permission_403_reports_unavailable_evidence(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
@@ -125,6 +127,8 @@ async def test_publish_branch_boundary_uses_token_aware_push(monkeypatch, tmp_pa
     assert push_call["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
 
+# The default connection derives from the deployment declaration.
+@pytest.mark.usefixtures("deployment_without_recorded_connections")
 async def test_github_permission_diagnostic_crosses_service_boundary(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
