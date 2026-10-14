@@ -2082,6 +2082,29 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         assert await usage_snapshot() == old_snapshot
         mock_temporal_adapter.update_schedule.assert_not_called()
 
+        # A Temporal schedule update can fail after admission. The usage row
+        # stays with the unchanged definition for the same reason.
+        compiled_plan = admission.compile_plan.return_value
+
+        async def compile_after_commit(**_kwargs):
+            await session.commit()
+            return compiled_plan
+
+        admission.compile_plan.side_effect = compile_after_commit
+        mock_temporal_adapter.update_schedule.side_effect = RuntimeError(
+            "schedule update unavailable"
+        )
+        failed = await service.refresh_managed_bootstrap_schedules()
+        assert failed.refreshed == 0
+        [failure] = failed.failures
+        assert "schedule update unavailable" in failure
+        await session.refresh(definition)
+        assert definition.version == 1
+        assert definition.target["agentProfileSnapshot"] == old_snapshot
+        assert await usage_snapshot() == old_snapshot
+
+        mock_temporal_adapter.update_schedule.side_effect = None
+        mock_temporal_adapter.update_schedule.reset_mock()
         admission.compile_plan.side_effect = None
         admission.compile_plan.reset_mock()
         refresh_calls.clear()
