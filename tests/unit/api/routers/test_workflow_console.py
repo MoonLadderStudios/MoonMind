@@ -1163,6 +1163,45 @@ def test_skills_api_exposes_pr_resolver_selector_contract(
     }
 
 
+def test_skills_api_exposes_backend_publish_contract(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Create page reads each Skill's publication contract from the backend.
+
+    The projection uses the same resolution the submit path enforces, so a
+    Skill without frontmatter publish metadata (``jira-verify``) still reports
+    that it publishes no repository changes.
+    """
+
+    repository_root = Path(__file__).resolve().parents[4]
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_local_mirror_root",
+        str(tmp_path / "local"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.settings.workflow.skills_legacy_mirror_root",
+        str(repository_root / ".agents" / "skills"),
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.workflow_console.list_available_skill_names",
+        lambda: ("batch-pr-resolver", "fix-ci", "jira-verify", "pr-resolver", "moonspec-verify"),
+    )
+
+    response = client.get("/api/workflows/skills")
+
+    assert response.status_code == 200
+    contracts = {
+        item["id"]: item["publishContract"] for item in response.json()["legacyItems"]
+    }
+    assert contracts == {
+        "batch-pr-resolver": {"selfManaged": False, "repositoryPublishDisabled": True},
+        "fix-ci": {"selfManaged": True, "repositoryPublishDisabled": False},
+        "jira-verify": {"selfManaged": False, "repositoryPublishDisabled": True},
+        "moonspec-verify": {"selfManaged": False, "repositoryPublishDisabled": False},
+        "pr-resolver": {"selfManaged": True, "repositoryPublishDisabled": False},
+    }
+
+
 def test_skills_api_large_schema_uses_input_contract_ref(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

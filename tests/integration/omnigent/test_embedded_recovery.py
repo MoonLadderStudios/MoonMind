@@ -657,6 +657,12 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         nonlocal container_running
         if args[:3] == ("docker", "network", "inspect"):
             return (0, json.dumps({"Internal": True, "EnableIPv6": False}), "")
+        if args[:2] == ("docker", "stop") and args[-1] == host_container_id:
+            # Static cleanup stops the exact container it launched on.
+            command_order.append("host_stop_requested")
+            if cleanup_succeeds:
+                container_running = False
+            return (0, "", "")
         if args[:2] == ("docker", "compose"):
             if " up " in f" {' '.join(args)} ":
                 container_running = True

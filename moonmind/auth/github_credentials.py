@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +16,7 @@ class GitHubCredentialSource(StrEnum):
     DIRECT_ENV = "direct_env"
     SECRET_REF_ENV = "secret_ref_env"
     SETTINGS_TOKEN_REF = "settings_token_ref"
+    GITHUB_APP = "github_app"
     MISSING = "missing"
     UNRESOLVABLE = "unresolvable"
 
@@ -31,6 +33,9 @@ class ResolvedGitHubCredential(BaseModel):
     # read as the value. Connection revisions alone do not fence its rotation.
     reference_revision: str | None = Field(None, alias="referenceRevision")
     repo: str | None = None
+    # When an issued token (a GitHub App installation token) lapses; a
+    # long-lived PAT has none. Holders renew through the same selection.
+    expires_at: datetime | None = Field(None, alias="expiresAt")
     diagnostic: str | None = None
     # A configured reference that could not be read (for example during a
     # brief secret-store outage) may resolve on retry; missing or empty
@@ -397,15 +402,20 @@ async def resolve_connection_github_credential(
     connection: Any,
     *,
     repo: str | None = None,
+    operations: Sequence[str] = (),
+    principal_ref: str = "system:repository-connection",
 ) -> ResolvedGitHubCredential:
     """Resolve only the credential a selected repository connection names.
 
     A typed SecretRef is read from its own backend and nowhere else: when it
     is unreadable or empty the result is unresolved, never another
     environment token, Settings reference, or managed secret
-    (MoonLadderStudios/MoonMind#4023). Only historical ``github_resolver``
-    connections keep the deployment declaration
-    (:func:`resolve_deployment_github_credential`).
+    (MoonLadderStudios/MoonMind#4023). A GitHub App connection issues an
+    installation token through the shared bound acquisition, restricted to
+    ``repo`` and ``operations`` (the connection's admitted operations when
+    omitted); a failed issuance is unresolved, never a PAT or another
+    connection. Only historical ``github_resolver`` connections keep the
+    deployment declaration (:func:`resolve_deployment_github_credential`).
     """
 
     connection_id = str(getattr(connection, "id", "") or "").strip() or "connection"
@@ -426,6 +436,14 @@ async def resolve_connection_github_credential(
             source_name=connection_id,
             repo=repo,
         )
+    if source == "github_app":
+        return await _acquire_app_connection_credential(
+            connection,
+            connection_id=connection_id,
+            repo=repo,
+            operations=operations,
+            principal_ref=principal_ref,
+        )
     return ResolvedGitHubCredential(
         source=GitHubCredentialSource.UNRESOLVABLE,
         sourceName=connection_id,
@@ -435,4 +453,62 @@ async def resolve_connection_github_credential(
             f"credentials, which this boundary cannot acquire{target}; MoonMind "
             "does not substitute another GitHub credential."
         ),
+    )
+
+
+async def _acquire_app_connection_credential(
+    connection: Any,
+    *,
+    connection_id: str,
+    repo: str | None,
+    operations: Sequence[str],
+    principal_ref: str,
+) -> ResolvedGitHubCredential:
+    """Issue the selected App connection's token through bound acquisition."""
+
+    from moonmind.auth.bound_acquisition import (
+        BOUND_ISSUER_FAILED,
+        BOUND_UNAVAILABLE,
+        BoundAccessError,
+    )
+    from moonmind.auth.github_app_wiring import acquire_bound_credential_for_connection
+
+    target = f" for {repo}" if repo else ""
+    admitted = tuple(operations) or tuple(
+        getattr(connection, "allowed_operations", ()) or ()
+    )
+    try:
+        acquired = await acquire_bound_credential_for_connection(
+            connection,
+            operations=admitted,
+            principal_ref=principal_ref,
+            execution_owner=f"repository-connection:{connection_id}:{repo or '*'}",
+            repository_display=repo or "",
+            repository=repo or "",
+        )
+    except asyncio.CancelledError:
+        raise
+    except BoundAccessError as exc:
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=connection_id,
+            repo=repo,
+            diagnostic=(
+                f"Repository connection {connection_id} GitHub App credential "
+                f"could not be issued{target}: {exc}; MoonMind does not "
+                "substitute another GitHub credential."
+            ),
+            retryable=exc.code in {BOUND_ISSUER_FAILED, BOUND_UNAVAILABLE},
+        )
+    try:
+        token = acquired.credential.use_now(lambda material: material.decode())
+    finally:
+        acquired.credential.clear()
+    expires_at = acquired.binding.expires_at
+    return ResolvedGitHubCredential(
+        token=token,
+        source=GitHubCredentialSource.GITHUB_APP,
+        sourceName=connection_id,
+        repo=repo,
+        expiresAt=datetime.fromisoformat(expires_at) if expires_at else None,
     )

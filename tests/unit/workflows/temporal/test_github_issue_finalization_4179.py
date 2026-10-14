@@ -334,7 +334,9 @@ class _FakeService:
         self.calls: list[str] = []
         self.list_calls: list[str] = []
 
-    async def resolve_github_token(self, repo: str = "") -> tuple[str | None, str]:
+    async def resolve_github_token(
+        self, repo: str = "", operations: tuple[str, ...] = ()
+    ) -> tuple[str | None, str]:
         _ = repo
         return "token", ""
 
@@ -473,8 +475,9 @@ async def test_activity_available_no_work_releases_without_status_label(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_activity_writer_stop_failure_never_false_release() -> None:
+async def test_activity_writer_stop_failure_never_false_release(monkeypatch) -> None:
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await acts.finalize_failed_attempt(
         **_base_kwargs(writer_evidence={"writers_stopped": False}), service=service
     )
@@ -484,8 +487,9 @@ async def test_activity_writer_stop_failure_never_false_release() -> None:
 
 
 @pytest.mark.asyncio
-async def test_activity_unknown_mutation_and_preservation_block() -> None:
+async def test_activity_unknown_mutation_and_preservation_block(monkeypatch) -> None:
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     unknown_mut = await acts.finalize_failed_attempt(
         **_base_kwargs(mutation_evidence=_mutations(push_outcome="unknown")), service=service
     )
@@ -799,10 +803,11 @@ async def test_failed_path_tool_cancellation_holds_without_rerun(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_failed_path_tool_internal_event_retained_without_effects() -> None:
+async def test_failed_path_tool_internal_event_retained_without_effects(monkeypatch) -> None:
     from moonmind.workflows.temporal import story_output_tools as tools
 
     service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
     result = await tools.finalize_github_issue_failed_attempt(
         {
             "repository": "o/r",
@@ -1202,3 +1207,29 @@ async def test_activity_code_review_recovery_releases(monkeypatch) -> None:
     assert result["released"] is True
     assert result["disposition"] == "to_recovery_needed"
     assert "status: recovery-needed" in service.labels
+
+
+@pytest.mark.parametrize(
+    "method,reference,sha",
+    [
+        ("pr_head_verified", "pr_url", "pr_head_sha"),
+        ("saved_branch_verified", "saved_branch", "saved_sha"),
+    ],
+)
+def test_preservation_specific_sha_wins_over_generic_revision(method, reference, sha):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+
+    result = preserve_authoritative_output(
+        {
+            "save_method": method,
+            "preservation_verified": True,
+            reference: "candidate-reference",
+            sha: "specific-sha",
+            "revision": "generic-other-sha",
+        }
+    )
+    assert result["preserved"] is True
+    assert "candidate-reference@specific-sha" in result["summary"]
+    assert "generic-other-sha" not in result["summary"]

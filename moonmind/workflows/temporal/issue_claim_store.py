@@ -228,8 +228,8 @@ class IssueClaimStore:
     async def record_finalization(
         self, owner: str, phase: str, value: dict[str, Any]
     ) -> None:
-        """Pin the release plan before mutation and its observed result afterwards."""
-        if phase not in {"plan", "result"}:
+        """Pin the plan, confirmed label observation, and final released result."""
+        if phase not in {"plan", "observation", "result"}:
             raise ValueError("Unknown claim finalization phase")
         async with self.locked(owner) as row:
             receipts = dict(row.finalization_json or {})

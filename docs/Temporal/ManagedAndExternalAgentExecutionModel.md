@@ -459,9 +459,11 @@ plan-less lane. Recurring schedule creation and target edits compile the same
 plan into the stored target when the target names Omnigent or omits the runtime
 under an Omnigent default, so every scheduled launch carries it. An edit whose
 plan cannot be compiled is rejected rather than stored without one. A schedule
-stored without a plan before this admission existed is compiled by the existing
-deployment schedule refresh pass on its next run; a definition that cannot yet
-be compiled is named in the refresh failures and retried on the next pass. Session admission
+stored without a plan before this admission existed, with or without an Agent
+Profile snapshot, is compiled by the existing deployment schedule refresh pass
+on its next run; a stored snapshot must match the schedule's durable Agent
+Profile usage. A definition that cannot yet be compiled is named in the refresh
+failures and retried on the next pass. Session admission
 returns `realizer_managed_lifecycle` for `generic-omnigent-host@1`, which runs
 through `integration.omnigent.profile_bound_execute`. A plan recording
 `codex-profile-bound@1` uses `integration.omnigent.execute` and keeps its
@@ -473,9 +475,7 @@ realizer.
 The durable supervisor is retained compatibility for AgentRuns that carry no
 persisted plan: in-flight and replayed histories admitted before plan
 admission, exact reruns of those executions, and occurrences of a stored
-plan-less schedule until the refresh pass compiles its plan. A schedule saved
-with only a managed-bootstrap Agent Profile snapshot and no plan is advanced by
-the same pass but not yet compiled, so it remains a consumer of this lane. The
+plan-less schedule until the refresh pass compiles its plan. The
 supervisor input contains
 only immutable owner identities, a compiled-intent artifact ref and digest, the
 initial turn-attempt identity, and frozen feature/compatibility versions;

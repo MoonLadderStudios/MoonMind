@@ -1623,7 +1623,14 @@ async def test_controller_clone_resolves_descriptor_for_git_without_container_to
     assert docker_envs[0]["GITHUB_TOKEN"] == token
     assert "GIT_CONFIG_GLOBAL=" in docker_run_text
     assert "GIT_TERMINAL_PROMPT=0" in docker_run_text
-    assert ".moonmind/bin" in docker_run_text
+    path_value = next(
+        part.split("=", 1)[1]
+        for part in docker_commands[0]
+        if part.startswith("PATH=")
+    )
+    assert Path(path_value.split(os.pathsep)[0]).resolve() == (
+        Path(request.session_workspace_path) / ".moonmind" / "bin"
+    ).resolve()
     assert container_payloads
     assert token not in str(container_payloads[0])
     assert "githubCredential" in str(container_payloads[0])
@@ -7849,3 +7856,209 @@ def test_broker_configuration_rejects_workspace_links(tmp_path, target):
         )
     assert victim.read_text() == "unchanged"
     assert list(outside.iterdir()) == [victim]
+
+
+@pytest.mark.asyncio
+async def test_app_selected_session_reaches_github_only_through_renewing_broker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4011: a session outlives one App token.
+
+    A Codex managed session whose selection is a GitHub App connection
+    renews its installation token through the same recorded connection and
+    never holds it in a static container env value. Its nested ``bash -lc``
+    tool shells still resolve the brokered gh wrapper and Git helper.
+    """
+
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryContractError,
+    )
+    from tests.helpers.repository_connections import (
+        github_app_connection,
+        github_app_provider_edge,
+        serve_repository_connections,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-token-A")
+    connections = {
+        "repository-connection:git-default": github_app_connection(
+            "repository-connection:git-default"
+        )
+    }
+    serve_repository_connections(monkeypatch, connections)
+    issued = github_app_provider_edge(monkeypatch, [f"ghs_{n}" for n in range(1, 10)])
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 1000,
+    )
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="mm:task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "mm:task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "mm:task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "mm:task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        workspaceSpec={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    docker_runs: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        run_as_uid: int | None = None,
+        run_as_gid: int | None = None,
+    ) -> tuple[int, str, str]:
+        if command[0] == "git":
+            return 0, "", ""
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            docker_runs.append((command, env))
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": request.session_id,
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": request.thread_id,
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    brokers = Mock()
+    brokers.start = AsyncMock()
+    brokers.stop = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+        github_auth_brokers=brokers,
+    )
+
+    await controller.launch_session(request)
+
+    # The container holds no token: not the App token, not the ambient one.
+    (run_command, run_env), = docker_runs
+    container_env = dict(
+        run_command[index + 1].split("=", 1)
+        for index, part in enumerate(run_command)
+        if part == "-e" and "=" in run_command[index + 1]
+    )
+    inherited = [
+        run_command[index + 1]
+        for index, part in enumerate(run_command)
+        if part == "-e" and "=" not in run_command[index + 1]
+    ]
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "WORKFLOW_GITHUB_TOKEN"):
+        assert name not in container_env
+        assert name not in inherited
+    assert not any(
+        value.startswith("ghs_") or value == "ambient-token-A"
+        for value in [*container_env.values(), *(run_env or {}).values()]
+    )
+
+    # The broker renews through the selected connection, restricted as at
+    # launch, and refuses a selection that now names another account.
+    start = brokers.start.await_args.kwargs
+    assert start["token"].startswith("ghs_")
+    assert start["expires_at"] is not None
+    issuances = len(issued)
+    renewed_token, renewed_expiry = await start["renew"]()
+    assert renewed_token.startswith("ghs_") and renewed_token != start["token"]
+    assert renewed_expiry is not None
+    assert len(issued) == issuances + 1
+    assert issued[-1] == issued[0]
+    connections["repository-connection:git-default"] = connections[
+        "repository-connection:git-default"
+    ].model_copy(update={"id": "repository-connection:other-account"})
+    with pytest.raises(RepositoryContractError, match="REPOSITORY_CONNECTION_MISMATCH"):
+        await start["renew"]()
+    assert len(issued) == issuances + 1
+
+    # A nested login shell whose profile resets PATH, as Debian's
+    # /etc/profile does, still reaches the brokered gh and Git helper.
+    bin_dir = Path(request.session_workspace_path) / ".moonmind" / "bin"
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".profile").write_text("PATH=/usr/bin:/bin\nexport PATH\n")
+    nested = subprocess.run(
+        ["bash", "-lc", "command -v gh; git config --get-all credential.helper"],
+        cwd=tmp_path,
+        env={**container_env, "HOME": str(home)},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    resolved_gh, *helpers = nested.stdout.splitlines()
+    # The session path holds the workflow ID's ":", which no PATH entry can.
+    assert ":" in str(bin_dir)
+    assert Path(resolved_gh).resolve() == (bin_dir / "gh").resolve()
+    assert helpers and all("git-credential-moonmind" in h for h in helpers)
+
+
+@pytest.mark.asyncio
+async def test_pat_selected_session_keeps_its_direct_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A non-expiring PAT has no renewal and keeps the inherited env value."""
+
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        serve_repository_connections,
+    )
+
+    monkeypatch.setenv("DEFAULT_ACCOUNT_PAT", "token-for-default-A")
+    serve_repository_connections(
+        monkeypatch,
+        {
+            "repository-connection:git-default": github_pat_connection(
+                "repository-connection:git-default", "DEFAULT_ACCOUNT_PAT"
+            )
+        },
+    )
+    brokers = Mock()
+    brokers.start = AsyncMock()
+    workspace_root = tmp_path / "agent_jobs"
+    request = _git_target_session_request(
+        workspace_root, "repository-connection:git-default"
+    )
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        ready_poll_interval_seconds=0,
+        github_auth_brokers=brokers,
+    )
+    session_environment: dict[str, str] = {}
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller.os.geteuid",
+        lambda: 1000,
+    )
+
+    secret_env = await controller._configure_session_github_auth(
+        request, session_environment
+    )
+
+    assert secret_env == {"GITHUB_TOKEN": "token-for-default-A"}
+    start = brokers.start.await_args.kwargs
+    assert start["token"] == "token-for-default-A"
+    assert "renew" not in start and "expires_at" not in start
+    assert session_environment["BASH_ENV"] == str(
+        Path(request.session_workspace_path) / ".moonmind" / "bash_env.sh"
+    )

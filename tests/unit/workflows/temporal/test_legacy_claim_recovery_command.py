@@ -27,6 +27,9 @@ from tests.unit.workflows.temporal.test_issue_reservation_policy import (
 )
 from tools import recover_legacy_issue_claims as command
 
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
+
 
 def _args(tmp_path, *, apply=False):
     return argparse.Namespace(

@@ -228,6 +228,7 @@ class OmnigentGithubCredentialPort(Protocol):
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         projection_reservation: dict[str, Any] | None = None,
         projection_verifier: Callable[[], Awaitable[None]] | None = None,
+        issuance_sink: Callable[[str | None], None] | None = None,
     ) -> dict[str, Any] | None: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...
