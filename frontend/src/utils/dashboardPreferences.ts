@@ -68,6 +68,8 @@ export type DashboardPreferences = {
   workflowListDefaultStatuses: string[];
   /** Workflow list page size. */
   workflowListPageSize: number;
+  /** Client-side order of the current page; never a server/API sort. */
+  workflowListSort: { field: string; direction: 'asc' | 'desc' };
   /** Whether the workflow list polls for live updates. */
   liveUpdatesEnabled: boolean;
   /** Create page guided (false) vs expert/advanced (true) default. */
@@ -115,6 +117,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   },
   workflowListDefaultStatuses: [],
   workflowListPageSize: DEFAULT_PAGE_SIZE,
+  workflowListSort: { field: 'updatedAt', direction: 'desc' },
   liveUpdatesEnabled: true,
   createExpertMode: false,
   debugFieldsVisible: true,
@@ -215,6 +218,11 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
     workflowListColumnVisibility: sanitizeColumnVisibility(value.workflowListColumnVisibility),
     workflowListDefaultStatuses: sanitizeStringList(value.workflowListDefaultStatuses),
     workflowListPageSize: sanitizePageSize(value.workflowListPageSize),
+    workflowListSort: isPlainObject(value.workflowListSort)
+      && ['title', 'status', 'progress', 'repository', 'providerProfile', 'updatedAt'].includes(String(value.workflowListSort.field))
+      && ['asc', 'desc'].includes(String(value.workflowListSort.direction))
+      ? { field: String(value.workflowListSort.field), direction: value.workflowListSort.direction as 'asc' | 'desc' }
+      : { ...DEFAULT_DASHBOARD_PREFERENCES.workflowListSort },
     liveUpdatesEnabled: sanitizeBoolean(
       value.liveUpdatesEnabled,
       DEFAULT_DASHBOARD_PREFERENCES.liveUpdatesEnabled,

@@ -3,6 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
+import { navigateTo } from '../lib/navigation';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { WorkflowLifecycleStatusPill } from '../components/ExecutionStatusPill';
 import { WORKFLOW_OBJECTIVE_OUTCOMES, resolveWorkflowDisplayStatus } from '../status/workflowStatus';
@@ -793,7 +794,7 @@ function sortRows(
 function replaceUrlQuery(params: URLSearchParams) {
   const queryText = params.toString();
   const path = window.location.pathname;
-  window.history.replaceState({}, '', queryText ? `${path}?${queryText}` : path);
+  navigateTo(queryText ? `${path}?${queryText}` : path, { replace: true });
 }
 
 function sanitizeApiErrorMessage(message: string): string {
@@ -1404,11 +1405,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   // MM-954: sorting is current-page-only. The sort field/direction live in
-  // component state only — they are intentionally neither seeded from nor written
-  // to the URL, so a shared link never implies a global server-side sort across
-  // the full filtered result set.
-  const [sortField, setSortField] = useState<string>('updatedAt');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // the existing dashboard preferences so a list/detail round trip keeps the
+  // operator's order. They never enter the URL or list API: sorting stays local
+  // to the currently loaded page.
+  const [sortField, setSortField] = useState(initialPrefs.workflowListSort.field);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(initialPrefs.workflowListSort.direction);
+  useEffect(() => {
+    const saved = readDashboardPreferences().workflowListSort;
+    if (saved.field !== sortField || saved.direction !== sortDir) {
+      updateDashboardPreferences({ workflowListSort: { field: sortField, direction: sortDir } });
+    }
+  }, [sortField, sortDir]);
   const filterValidationErrors = useMemo(() => {
     if (!hasEditedFilters) return initialFilterValidationErrors;
     const params = new URLSearchParams();
@@ -1637,6 +1644,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const handleResetPreferences = useCallback(() => {
     const defaults = resetDashboardPreferences();
+    setSortField(defaults.workflowListSort.field);
+    setSortDir(defaults.workflowListSort.direction);
     setDensity(defaults.workflowListDensity);
     setColumnVisibility(defaults.workflowListColumnVisibility);
     setLiveUpdatesPref(defaults.liveUpdatesEnabled);
