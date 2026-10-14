@@ -41,7 +41,7 @@ Compose pulls published images. A fresh local install does not need an `.env` fi
 2. In **Settings → Providers & Secrets**, connect a Provider Profile with an API key or a supported OAuth flow. For OAuth, complete the opened enrollment tab, then return and click **Finalize**.
 3. For authenticated GitHub work, add a **Source Control** connection and assign the repositories it may access. Token and GitHub App connections are supported.
 4. Click **Create**. Select **Omnigent** under Runtime and a compatible Profile. Enter your task and repository details, or choose a Skill or Preset. Review the publishing option before submitting.
-5. Open the workflow to inspect its progress, outputs, artifacts, and logs.
+5. Open the workflow to inspect its progress, outputs, artifacts, and logs. [Reading one engineering journey](docs/UI/WorkflowConsoleArchitecture.md#21-reading-one-engineering-journey) shows where a run's outcome, failure, output, and next action appear.
 
 Application login, model-provider credentials, and source-control access are separate settings. A healthy dashboard alone does not mean an agent is ready to run.
 
