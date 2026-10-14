@@ -1083,9 +1083,11 @@ def test_restart_queue_and_lost_ack_reconcile_without_duplication(
 def test_primary_failure_survives_reporting_and_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R10: original errors and confirmed work survive reporting failure.
+    """R10: original errors keep their classification through reporting failure.
 
-    The strict denial names the real underlying cause instead of the
+    This covers error classification only; preserved confirmed work after a
+    reporting failure is proven at the session persistence boundary. The
+    strict denial names the real underlying cause instead of the
     reporting wrapper, optional certification failure never masks an
     ordinary admission, fenced cleanup stays retryable without consuming
     failure budgets, and only a genuine provider credential rejection

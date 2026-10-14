@@ -59,14 +59,12 @@ def test_mm933_tasks_require_claim_mapping_or_explicit_explanation() -> None:
         "MM-927",
         "Every task must map to stable claim IDs",
         "No source claim applies: <reason>",
-        "moonspec-doc-reconcile",
     ):
         assert required in text
 
     assert "Each task MUST reference the relevant stable claim IDs" in template
     assert "No source claim applies: <reason>" in template
     assert "Source Packet" in template
-    assert "moonspec-doc-reconcile" in template
 
 
 def test_mm933_task_template_examples_map_implementation_tasks_to_claims() -> None:

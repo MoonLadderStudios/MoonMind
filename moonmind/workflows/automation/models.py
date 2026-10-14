@@ -228,6 +228,7 @@ class AutomationPhase(str, enum.Enum):
     ALIGN = "moonspec_align"
     IMPLEMENT = "moonspec_implement"
     VERIFY = "moonspec_verify"
+    # Retired pass (MoonMind#4808); kept so stored phase rows still load.
     DOC_RECONCILE = "moonspec_doc_reconcile"
     ORCHESTRATE = "moonspec_orchestrate"
     COMMIT_PUSH = "commit_push"

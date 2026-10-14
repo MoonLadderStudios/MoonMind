@@ -1,6 +1,6 @@
 # MoonSpec Document Model
 
-This document defines the document classes MoonSpec workflows operate on, the precedence rules between them, and the reconciliation expectation that keeps canonical documentation aligned with verified implementation. MoonSpec skills and presets reference this document instead of restating its rules.
+This document defines the document classes MoonSpec workflows operate on, the precedence rules between them, and how canonical documentation stays accurate as the code changes. MoonSpec skills and presets reference this document instead of restating its rules.
 
 ## Document Classes
 
@@ -14,7 +14,7 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 ### Temporary execution artifacts
 
 - **Location**: `specs/`, `artifacts/`, and `artifacts/story-breakdowns/` (all gitignored).
-- **Content**: derived, run-scoped working material — `spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts/`, story breakdown JSON/markdown, discovery ledgers, and tool handoffs.
+- **Content**: derived, run-scoped working material — `spec.md`, `plan.md`, `tasks.md`, `research.md`, `contracts/`, story breakdown JSON/markdown, and tool handoffs.
 - **Lifecycle**: disposable. They exist to execute one run of work and are never cited as authority for desired state. A spec is a temporary derived view of its canonical source, not a replacement for it.
 
 ### Imperative working documents
@@ -36,30 +36,22 @@ MoonSpec specification workflows still produce declarative, single-story specs. 
 When a derived artifact (`spec.md`, `stories.json`, `plan.md`, `tasks.md`) conflicts with its canonical source document:
 
 1. The canonical document wins by default.
-2. If implementation or verification evidence shows the canonical document itself is impossible to satisfy as written, unclear, or internally inconsistent, the canonical document must be updated through doc reconciliation — or the conflict escalated — rather than silently overridden in the derived artifact.
+2. If the change legitimately alters documented behavior, or evidence shows the canonical document itself is wrong, the change updates the owning document rather than silently overriding it in the derived artifact.
 3. Derived artifacts never resolve such conflicts on their own authority.
 
-## Reconciliation Expectation
+## Documentation Maintenance
 
-Implementation runs that discover canonical-document drift end with a doc-reconciliation pass (see the `moonspec-doc-reconcile` skill): when a non-trivial change lands, its durable decisions are reflected in the owning `docs/` files.
-
-Reconciliation updates a canonical document only when discoveries **definitely require** it — the document is impossible, unclear, or inconsistent:
-
-- **Impossible**: verified evidence shows a documented claim cannot be satisfied as written or was factually incorrect independent of the implementation.
-- **Unclear**: the implementation had to resolve a documented ambiguity, and the document must record the verified resolution to stay usable.
-- **Inconsistent**: the implementation correctly resolved an internal contradiction in the document, and the document must record the resolution to stay coherent.
-
-Divergence alone never qualifies: an implementation that differs from a clear, consistent, satisfiable document is an implementation defect or an unapproved desired-state change, and deliberate verification-backed divergence is escalated for an owner decision instead of applied. Stylistic preferences, additions for completeness, speculative improvements, and unverified observations never qualify either. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as tracked issues instead of applied.
+Documentation maintenance is part of ordinary change work. Review the documentation relevant to the change, rewrite affected explanations in place, remove superseded or duplicated material, and leave accurate documentation unchanged. Describe supported behavior without recording an unintended regression as intended design: code establishes what exists, and the task and standing repository policy establish whether it is acceptable.
 
 ## Documentation Architecture Standard
 
-The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, fallback, precedence, or reconciliation rules. The document classes, classification and fallback rule, precedence rule, and reconciliation expectation defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
+The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, fallback, or precedence rules. The document classes, classification and fallback rule, and precedence rule defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
 
 ### Read order
 
 Read MoonSpec documentation in this order:
 
-1. **MoonSpec Document Model** (this document) — document classes, classification and fallback, precedence, and reconciliation.
+1. **MoonSpec Document Model** (this document) — document classes, classification and fallback, precedence, and documentation maintenance.
 2. **[Documentation Architecture Standard](../DocumentationArchitecture.md)** — viewpoint rules that refine the canonical declarative documents.
 3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
 4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.

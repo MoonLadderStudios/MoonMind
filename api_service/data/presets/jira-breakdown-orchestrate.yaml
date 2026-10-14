@@ -164,7 +164,7 @@ steps:
       Create one Jira Orchestrate workflow execution for each Jira issue created from the trusted Jira story output.
 
       Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating downstream workflow executions.
-      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream Jira Orchestrate doc-reconciliation step knows the canonical source document. If the source path is absent because the story came from a trusted Jira issue description or workflow instructions, preserve the source title and source Jira issue traceability instead of inventing a document path.
+      Each downstream workflow execution must carry the story's sourceReference.path as its source_design_path input when present so the downstream Jira Orchestrate workflow knows the canonical source document. If the source path is absent because the story came from a trusted Jira issue description or workflow instructions, preserve the source title and source Jira issue traceability instead of inventing a document path.
       Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not produce Jira issue mappings.
       Each downstream workflow execution must run Jira Orchestrate on its corresponding Jira story issue and must not run implementation inline inside this breakdown run.
       Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier generated workflow ID.
