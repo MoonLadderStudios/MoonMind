@@ -299,14 +299,12 @@ def build_remediation_progress_vector(
             regressions.append("required_check_regressed")
         if candidate_disposition in {"contaminated", "unsafe_side_effect", "scope_expanded"}:
             regressions.append(candidate_disposition)
+        # The evidence digest is retained for audit, but a new report or URL
+        # with the same unresolved checks is not implementation progress.
         meaningful = bool(
             previous_gap_ids - current_gap_ids
             or gap_score < prior.unresolved_gap_score
             or any(previous_checks.get(key) == "failed" and status == "passed" for key, status in current_checks.items())
-            or (
-                authoritative_evidence_digest
-                and authoritative_evidence_digest != prior.new_authoritative_evidence_digest
-            )
             or (
                 prior.candidate_disposition == "contaminated"
                 and candidate_disposition == "clean"
