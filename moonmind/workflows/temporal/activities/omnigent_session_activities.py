@@ -15,6 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
+from moonmind.omnigent.git_identity import publication_git_identity_projection
 
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
@@ -5157,6 +5158,9 @@ async def omnigent_publish_workspace_activity(
                 github_token=github_token,
                 accepted_published_head=(agent_request.parameters or {}).get(
                     "acceptedPublishedHead"
+                ),
+                publication_git_identity=publication_git_identity_projection(
+                    agent_request.parameters or {}
                 ),
             )
         finally:

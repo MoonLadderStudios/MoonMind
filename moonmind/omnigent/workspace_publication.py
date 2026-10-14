@@ -17,7 +17,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.auth.github_credentials import resolve_github_credential
 from moonmind.config.settings import settings
-from moonmind.omnigent.git_identity import resolve_execution_git_identity
+from moonmind.omnigent.git_identity import (
+    publication_git_identity_projection,
+    resolve_publication_git_identity,
+)
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
@@ -603,8 +606,8 @@ class OmnigentWorkspacePublicationService:
         )
         if token:
             command_env["GH_TOKEN"] = token
-        git_user_name, git_user_email = resolve_execution_git_identity(
-            {"_publicationGitIdentity": publication_git_identity}
+        git_user_name, git_user_email = resolve_publication_git_identity(
+            publication_git_identity
         )
         command_env.update(
             {
@@ -1099,7 +1102,7 @@ class OmnigentWorkspacePublicationService:
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
                     publication_identity=logical_publication_identity(request),
-                    publication_git_identity=parameters.get("_publicationGitIdentity"),
+                    publication_git_identity=publication_git_identity_projection(parameters),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -1115,7 +1118,7 @@ class OmnigentWorkspacePublicationService:
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
                 publication_identity=logical_publication_identity(request),
-                publication_git_identity=parameters.get("_publicationGitIdentity"),
+                publication_git_identity=publication_git_identity_projection(parameters),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,

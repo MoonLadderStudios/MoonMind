@@ -23458,27 +23458,44 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             # A pre-update worker may omit this key even with updated API input;
             # histories without the marker retain their original Activity shape.
             parameters.pop("_publicationGitIdentity", None)
+            parameters.pop("publicationGitIdentityAdmission", None)
             projected_runtime = parameters.get("runtime")
             if isinstance(projected_runtime, Mapping):
                 explicit = projected_runtime.get("parameters")
-                if (
-                    isinstance(explicit, Mapping)
-                    and "_publicationGitIdentity" in explicit
-                ):
+                if isinstance(explicit, Mapping) and {
+                    "_publicationGitIdentity",
+                    "publicationGitIdentityAdmission",
+                }.intersection(explicit):
                     parameters["runtime"] = {
                         **projected_runtime,
                         "parameters": {
                             key: value
                             for key, value in explicit.items()
-                            if key != "_publicationGitIdentity"
+                            if key
+                            not in {
+                                "_publicationGitIdentity",
+                                "publicationGitIdentityAdmission",
+                            }
                         },
                     }
-            identity = (workflow_parameters or {}).get("_publicationGitIdentity")
+            from moonmind.omnigent.git_identity import (
+                PUBLICATION_GIT_IDENTITY_MEMO_KEY,
+                admitted_publication_git_identity,
+                publication_git_identity_admission,
+            )
+
+            try:
+                admission_memo = workflow.memo() or {}
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
+                admission_memo = {}
+            identity = admitted_publication_git_identity(admission_memo)
             if identity is not None:
-                # Preserve malformed admitted data for the existing fail-closed
-                # runtime reader rather than silently switching to defaults.
-                parameters["_publicationGitIdentity"] = (
-                    dict(identity) if isinstance(identity, Mapping) else identity
+                parameters[PUBLICATION_GIT_IDENTITY_MEMO_KEY] = (
+                    publication_git_identity_admission(
+                        {"name": identity[0], "email": identity[1]}
+                    )
                 )
 
         return AgentExecutionRequest(

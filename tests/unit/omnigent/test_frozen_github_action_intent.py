@@ -505,13 +505,21 @@ async def test_profile_preflight_and_publisher_use_the_same_canonical_repository
     monkeypatch.setattr(
         OmnigentProfileBoundExecutionCoordinator, "__init__", capture_runtime
     )
+    identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
     *_, result = await _drive_authority_chain_coordinator(
         AsyncMock(return_value=AgentRunResult(summary="done")),
-        request_parameters={"repository": "https://github.com/OWNER/REPO.git"},
+        request_parameters={
+            "repository": "https://github.com/OWNER/REPO.git",
+            "publicationGitIdentityAdmission": {"schemaVersion": "v1", "identity": identity},
+        },
     )
     assert result.failure_class is None
     assert calls["prepare_host"].await_args.kwargs["target_repository"] == "owner/repo"
     assert calls["publish_workspace"].await_args.kwargs["repository"] == "owner/repo"
+    assert (
+        calls["publish_workspace"].await_args.kwargs.get("publication_git_identity")
+        == identity
+    )
 
 
 @pytest.mark.asyncio

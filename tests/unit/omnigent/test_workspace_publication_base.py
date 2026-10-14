@@ -1149,14 +1149,20 @@ async def test_successor_attempt_reconciles_predecessor_publication(
         or "moonmind-worker@users.noreply.github.com",
     }
     first, first_workspace = _attempt_request(tmp_path, ordinal=1)
-    first.parameters["_publicationGitIdentity"] = dict(admitted_identity)
+    first.parameters["publicationGitIdentityAdmission"] = {
+        "schemaVersion": "v1",
+        "identity": dict(admitted_identity),
+    }
     first_workspace.parent.mkdir(parents=True)
     git("clone", str(origin), str(first_workspace), cwd=tmp_path)
     (first_workspace / "work.txt").write_text("completed work\n")
     # The verified after_execution save precedes publication, so the successor
     # restores the agent's uncommitted result rather than the publisher commit.
     second, second_workspace = _attempt_request(tmp_path, ordinal=2)
-    second.parameters["_publicationGitIdentity"] = dict(admitted_identity)
+    second.parameters["publicationGitIdentityAdmission"] = {
+        "schemaVersion": "v1",
+        "identity": dict(admitted_identity),
+    }
     second_workspace.parent.mkdir(parents=True)
     shutil.copytree(first_workspace, second_workspace, symlinks=True)
 

@@ -573,7 +573,7 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
         }
     )
     if admitted_identity is not None:
-        request.parameters["_publicationGitIdentity"] = admitted_identity
+        request.parameters["publicationGitIdentityAdmission"] = {"schemaVersion": "v1", "identity": admitted_identity}
     await OmnigentWorkspaceMaterializer(
         command_runner=fail_runner,
         workspace_root=tmp_path,

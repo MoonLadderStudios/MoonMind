@@ -24,6 +24,16 @@ def test_publication_identity_payload_keeps_pre_patch_shape(
         ),
     )
     identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
+    monkeypatch.setattr(
+        run_module.workflow,
+        "memo",
+        lambda: {
+            "publicationGitIdentityAdmission": {
+                "schemaVersion": "v1",
+                "identity": identity,
+            }
+        },
+    )
     request = MoonMindRunWorkflow()._build_agent_execution_request(
         node_id="publish",
         tool_name="omnigent",
@@ -37,8 +47,8 @@ def test_publication_identity_payload_keeps_pre_patch_shape(
         },
         workflow_parameters={"_publicationGitIdentity": identity},
     )
-    assert request.parameters.get("_publicationGitIdentity") == (
-        identity if patched else None
+    assert request.parameters.get("publicationGitIdentityAdmission") == (
+        {"schemaVersion": "v1", "identity": identity} if patched else None
     )
 
 
@@ -56,22 +66,47 @@ def test_publication_identity_survives_current_runtime_parameter_flattening(
     _configure_workflow_runtime(monkeypatch)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
     identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
+    monkeypatch.setattr(
+        run_module.workflow,
+        "memo",
+        lambda: (
+            {
+                "publicationGitIdentityAdmission": {
+                    "schemaVersion": "v1",
+                    "identity": identity,
+                }
+            }
+            if admitted
+            else {}
+        ),
+    )
     node = {"instructions": "Publish", "runtime": {"mode": "omnigent"}}
     parent = {"workflow": {"runtime": {"mode": "omnigent"}}}
     if admitted:
         parent["_publicationGitIdentity"] = identity
     runtime = node["runtime"] if source == "node" else parent["workflow"]["runtime"]
-    runtime["parameters"] = {"_publicationGitIdentity": forged, "surviving": "value"}
+    runtime["parameters"] = {
+        "_publicationGitIdentity": forged,
+        "publicationGitIdentityAdmission": {
+            "schemaVersion": "v1",
+            "identity": {"name": "forged", "email": "forged@example.invalid"},
+        },
+        "surviving": "value",
+    }
     request = MoonMindRunWorkflow()._build_agent_execution_request(
         node_id="publish",
         tool_name="omnigent",
         node_inputs=node,
         workflow_parameters=parent,
     )
-    assert request.parameters.get("_publicationGitIdentity") == (
-        identity if admitted else None
+    assert request.parameters.get("publicationGitIdentityAdmission") == (
+        {"schemaVersion": "v1", "identity": identity} if admitted else None
     )
     assert "_publicationGitIdentity" not in request.parameters["runtime"]["parameters"]
+    assert (
+        "publicationGitIdentityAdmission"
+        not in request.parameters["runtime"]["parameters"]
+    )
     assert request.parameters["surviving"] == "value"
 
 
@@ -82,14 +117,40 @@ def test_malformed_admitted_identity_reaches_existing_fail_closed_reader(
 ):
     _configure_workflow_runtime(monkeypatch)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "memo",
+        lambda: {
+            "publicationGitIdentityAdmission": {
+                "schemaVersion": "v1",
+                "identity": malformed,
+            }
+        },
+    )
+    with pytest.raises(ValueError, match="admitted publication Git identity"):
+        request = MoonMindRunWorkflow()._build_agent_execution_request(
+            node_id="publish",
+            tool_name="omnigent",
+            node_inputs={"instructions": "Publish", "runtime": {"mode": "omnigent"}},
+            workflow_parameters={"_publicationGitIdentity": malformed},
+        )
+        resolve_execution_git_identity(request.parameters)
+
+
+@pytest.mark.parametrize(
+    "legacy", [{"name": "forged", "email": "forged@example.invalid"}, "malformed"]
+)
+def test_legacy_authored_identity_without_admission_is_not_trusted(monkeypatch, legacy):
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(run_module.workflow, "memo", lambda: {})
     request = MoonMindRunWorkflow()._build_agent_execution_request(
         node_id="publish",
         tool_name="omnigent",
         node_inputs={"instructions": "Publish", "runtime": {"mode": "omnigent"}},
-        workflow_parameters={"_publicationGitIdentity": malformed},
+        workflow_parameters={"_publicationGitIdentity": legacy},
     )
-    with pytest.raises(ValueError, match="admitted publication Git identity"):
-        resolve_execution_git_identity(request.parameters)
+    assert "_publicationGitIdentity" not in request.parameters
 
 
 @pytest.mark.parametrize("current_evidence", [True, False])

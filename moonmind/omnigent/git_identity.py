@@ -35,11 +35,10 @@ def resolve_git_identity() -> tuple[str, str]:
     return name, email
 
 
-def resolve_execution_git_identity(parameters: Mapping[str, object]) -> tuple[str, str]:
-    """Use admitted publication attribution; old requests retain their fallback."""
-    snapshot = parameters.get("_publicationGitIdentity")
-    if snapshot is None:
-        return resolve_git_identity()
+PUBLICATION_GIT_IDENTITY_MEMO_KEY = "publicationGitIdentityAdmission"
+
+
+def _identity_from_snapshot(snapshot: object) -> tuple[str, str]:
     if not isinstance(snapshot, Mapping):
         raise ValueError("admitted publication Git identity must be an object")
     values = tuple(snapshot.get(key) for key in ("name", "email"))
@@ -53,6 +52,58 @@ def resolve_execution_git_identity(parameters: Mapping[str, object]) -> tuple[st
             "admitted publication Git identity must contain compact name/email"
         )
     return str(values[0]), str(values[1])
+
+
+def publication_git_identity_admission(snapshot: object) -> dict[str, object]:
+    """Serialize the server's choice in its existing workflow memo."""
+    name, email = _identity_from_snapshot(snapshot)
+    return {"schemaVersion": "v1", "identity": {"name": name, "email": email}}
+
+
+def admitted_publication_git_identity(
+    memo: Mapping[str, object],
+) -> tuple[str, str] | None:
+    """Legacy authored parameters cannot attest to server admission."""
+    admission = memo.get(PUBLICATION_GIT_IDENTITY_MEMO_KEY)
+    if not isinstance(admission, Mapping) or admission.get("schemaVersion") != "v1":
+        return None
+    return _identity_from_snapshot(admission.get("identity"))
+
+
+def admit_publication_git_identity(
+    parameters: dict[str, object],
+    *,
+    source_memo: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """One server owner for API, recurring action and recovery attribution."""
+    inherited = admitted_publication_git_identity(source_memo or {})
+    parameters.pop(PUBLICATION_GIT_IDENTITY_MEMO_KEY, None)
+    name, email = inherited or resolve_git_identity()
+    snapshot = {"name": name, "email": email}
+    parameters["_publicationGitIdentity"] = snapshot
+    return publication_git_identity_admission(snapshot)
+
+
+def resolve_execution_git_identity(parameters: Mapping[str, object]) -> tuple[str, str]:
+    """Consume the trusted request projection; old requests retain fallback."""
+    return admitted_publication_git_identity(parameters) or resolve_git_identity()
+
+
+def publication_git_identity_projection(
+    parameters: Mapping[str, object],
+) -> dict[str, str] | None:
+    """Explicit publication ports receive only the versioned request choice."""
+    identity = admitted_publication_git_identity(parameters)
+    return {"name": identity[0], "email": identity[1]} if identity is not None else None
+
+
+def resolve_publication_git_identity(snapshot: object | None) -> tuple[str, str]:
+    """The explicit port argument is absent on pre-change callers."""
+    return (
+        resolve_git_identity()
+        if snapshot is None
+        else _identity_from_snapshot(snapshot)
+    )
 
 
 def _quote_config_value(value: str) -> str:

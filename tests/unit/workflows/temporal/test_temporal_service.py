@@ -643,6 +643,10 @@ async def test_create_execution_initializes_lifecycle_search_attributes(
             "name": "Admitted operator",
             "email": "admitted@example.invalid",
         }
+        assert source.memo["publicationGitIdentityAdmission"] == {
+            "schemaVersion": "v1",
+            "identity": source.parameters["_publicationGitIdentity"],
+        }
         monkeypatch.setattr(settings.workflow, "git_user_name", "Changed default")
         redelivery = await service.create_execution(
             workflow_type="MoonMind.UserWorkflow",
@@ -689,6 +693,10 @@ async def test_input_update_preserves_admitted_publication_identity(
                 "_publicationGitIdentity": {
                     "name": "forged",
                     "email": "forged@example.invalid",
+                },
+                "publicationGitIdentityAdmission": {
+                    "schemaVersion": "v1",
+                    "identity": {"name": "forged", "email": "forged@example.invalid"},
                 },
                 "foo": "updated",
             },
@@ -5523,8 +5531,17 @@ async def test_failed_step_recovery_accepts_legacy_checkpoint_memo_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_identity",
+    [
+        "server-admitted",
+        None,
+        {"name": "Legacy authored", "email": "legacy@example.invalid"},
+        "legacy-malformed",
+    ],
+)
 async def test_selected_step_recovery_starts_from_preserved_step(
-    tmp_path, mock_client_adapter, monkeypatch
+    tmp_path, mock_client_adapter, monkeypatch, legacy_identity
 ):
     monkeypatch.setattr(settings.workflow, "git_user_name", "Original operator")
     monkeypatch.setattr(settings.workflow, "git_user_email", "original@example.test")
@@ -5547,6 +5564,15 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
+        if legacy_identity != "server-admitted":
+            created.memo = {key: value for key, value in created.memo.items() if key != "publicationGitIdentityAdmission"}
+            created.parameters = {**created.parameters, "_publicationGitIdentity": legacy_identity}
+        else:
+            # Provenance in server memo, not a copied/mutable source parameter.
+            created.parameters = {
+                **created.parameters,
+                "_publicationGitIdentity": "changed source field",
+            }
         created.close_status = TemporalExecutionCloseStatus.FAILED
         created.memo = {
             **created.memo,
@@ -5596,8 +5622,8 @@ async def test_selected_step_recovery_starts_from_preserved_step(
         resumed = await service.describe_execution(result["execution"]["workflowId"])
         assert result["relationship"] == "Recovered from selected step"
         assert resumed.parameters["_publicationGitIdentity"] == {
-            "name": "Original operator",
-            "email": "original@example.test",
+            "name": "Original operator" if legacy_identity == "server-admitted" else "Changed deployment",
+            "email": "original@example.test" if legacy_identity == "server-admitted" else "changed@example.test",
         }
         assert resumed.parameters["recoverySource"]["recoveryMode"] == "selected_step"
         assert resumed.parameters["recoverySource"]["failedStepId"] == "design"
@@ -5607,8 +5633,12 @@ async def test_selected_step_recovery_starts_from_preserved_step(
             for step in resumed.parameters["recoverySource"]["preservedSteps"]
         ] == ["plan"]
         assert resumed.parameters["workflow"]["resume"]["failedStepId"] == "design"
-        assert resumed.parameters["workflow"]["resume"]["recoveryMode"] == "selected_step"
-        assert resumed.parameters["workflow"]["resume"]["selectedStartStepId"] == "design"
+        assert (
+            resumed.parameters["workflow"]["resume"]["recoveryMode"] == "selected_step"
+        )
+        assert (
+            resumed.parameters["workflow"]["resume"]["selectedStartStepId"] == "design"
+        )
 
 
 @pytest.mark.asyncio
