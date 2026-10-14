@@ -1121,6 +1121,9 @@ function RoutedDashboardPage({
     const routeWorkflowId = decodeWorkflowIdFromPath(location.pathname);
     if (routeWorkflowId) {
       setLastSelectedWorkflowId(routeWorkflowId);
+      if (readDashboardPreferences().lastSelectedWorkflowId !== routeWorkflowId) {
+        updateDashboardPreferences({ lastSelectedWorkflowId: routeWorkflowId });
+      }
     }
     const match = location.pathname.match(/^\/schedules\/([^/]+)$/);
     if (match) {
@@ -1239,7 +1242,7 @@ function RoutedDashboardPage({
     }
     pendingRequestRef.current = null;
     setResolutionStatus(null);
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   const handleCollectionListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
