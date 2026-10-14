@@ -310,17 +310,19 @@ async def test_blocked_assessment_terminal_routes_claim_to_durable_finalizer(
 ) -> None:
     """The #2741 blocker boundary must not leave an unrecorded active claim."""
     subject = MoonMindRunWorkflow()
-    subject._trusted_issue_context = {
-        "trustedSource": "moonmind.github.get_issue",
-        "repository": "MoonLadderStudios/Tactics",
-        "issueNumber": 2741,
-        "issueClaimLease": {
-            "owner": "default/wf-auto-publish",
-            "attemptId": "att-a5dff863c1b5-9dd5",
-            "repository": "moonladderstudios/tactics",
-            "issueNumber": 2741,
-        },
-    }
+    subject._trusted_issue_context = subject._trusted_previous_outputs_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issueRef": "MoonLadderStudios/Tactics#2741",
+            "issue": {"repository": "MoonLadderStudios/Tactics", "number": 2741},
+            "issueClaimLease": {
+                "owner": "default/wf-auto-publish",
+                "attemptId": "att-a5dff863c1b5-9dd5",
+                "repository": "moonladderstudios/tactics",
+                "issueNumber": 2741,
+            },
+        }
+    )
     subject._assessment_context = {
         "assessmentVerdict": "NOT_IMPLEMENTED",
         "assessmentArtifactRef": "art_stale",
