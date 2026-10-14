@@ -69,10 +69,10 @@ Some older execution paths remain for compatibility. Available harness and profi
 For upgrades, use the deployment updater:
 
 ```bash
-bash tools/update-moonmind.sh --branch main
+bash tools/update-moonmind.sh
 ```
 
-The host updater requires Python 3.10+ and Compose V2. See the [update guide](docs/Steps/DockerComposeUpdateSystem.md) for release selection, preserved settings, and recovery from interrupted updates.
+The host updater requires Python 3.10+ and Compose V2. See the [update guide](docs/Steps/DockerComposeUpdateSystem.md) for what an update installs, preserved settings, and recovery from interrupted updates.
 
 ## More information
 

@@ -128,7 +128,9 @@ Use the existing deployment-state directory and its image env overlay, JSON meta
 
 Preserve the operator's `.env`, Compose overrides, project identity, credentials, bindings, and network attachments. Update only controller-owned image/operation fields and preserve unrelated entries. Write state safely so interruption leaves recoverable intent, not a truncated sole copy.
 
-Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release. A requested branch tip whose image is still publishing is an availability condition: use the existing bounded resolution policy, preserve explicit target intent, and report the actual selected source. Do not silently substitute a different target for an explicit request.
+Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release.
+
+The default host update (`tools/update-moonmind.sh`) updates to `latest`: it pulls `<image-repository>:latest` once and installs whatever that tag currently names. It does not derive an image from Git, a branch tip, or a `sha-<commit>` tag, does not wait for a specific build to publish, and does not fall back through ancestors or check source revisions. A commit merged moments ago is installed by the next update after its image publishes. The digest that pull resolved is recorded only so every service in the operation runs the same image.
 
 The installed Omnigent server/host selection belongs to this same deployment owner. Future managed launches resolve it from installed deployment intent. Historical attempt records retain the actual image and session that executed them.
 
