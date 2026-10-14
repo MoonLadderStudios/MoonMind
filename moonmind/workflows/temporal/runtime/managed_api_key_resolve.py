@@ -458,7 +458,7 @@ async def load_admitted_repository_access(workflow_id: str) -> tuple[str, bool]:
 async def _admitted_repository_record(
     workflow_id: str,
 ) -> tuple[str, str, Mapping[str, Any]]:
-    """Read the nearest canonical owner once for all admitted repository uses."""
+    """Read the nearest admitted owner, including Temporal-started schedules."""
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import TemporalExecutionCanonicalRecord
@@ -480,7 +480,35 @@ async def _admitted_repository_record(
                     str(getattr(record, "run_id", "") or ""),
                     record.parameters,
                 )
-        owner = await _recorded_parent_workflow_id(owner)
+        parent = await _recorded_parent_workflow_id(owner)
+        if parent:
+            owner = parent
+            continue
+
+        from temporalio import activity
+
+        if activity.in_activity():
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+            from moonmind.workflows.temporal.service import TemporalExecutionService
+
+            # Schedules start runs without an API source row. Reuse the exact
+            # start-input recovery owner, never Visibility parameters or the
+            # schedule's subsequently edited target, as repository authority.
+            try:
+                async with async_session_maker() as session:
+                    service = TemporalExecutionService(
+                        session, client_adapter=TemporalClientAdapter(activity.client())
+                    )
+                    projection = await service.describe_execution(owner)
+                    source = await service.read_scheduled_execution_source(projection)
+                return owner, source.run_id, source.parameters
+            except Exception as exc:
+                raise RepositoryContractError(
+                    "REPOSITORY_CONNECTION_UNAVAILABLE",
+                    f"admitted inputs of run {owner!r} could not be read "
+                    f"({type(exc).__name__}); no other connection is substituted",
+                ) from exc
+        break
     raise RepositoryContractError(
         "REPOSITORY_CONNECTION_UNAVAILABLE",
         f"run {requested!r} has no recorded repository authority; no other "

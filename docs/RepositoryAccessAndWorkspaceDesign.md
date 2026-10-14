@@ -326,8 +326,13 @@ binding. A plan that bound no repository authority admitted only the default
 connection, and an unreadable plan fails. A child workflow started by a
 run, such as an agent step, merge gate, or resolver or remediation child, has
 no canonical record of its own. It acts with the nearest recorded run on its
-Temporal parent chain, read from the worker's Temporal client. A chain that
-reaches no recorded run fails. As at launch, an omitted reference means
+Temporal parent chain, read from the worker's Temporal client. When the root is
+a Temporal-started scheduled UserWorkflow with no API source row, the existing
+scheduled-input recovery owner reads that exact run's immutable start input,
+validates its workflow type and user/system ownership, and returns a detached
+authority view. Compact Visibility parameters and the schedule's current target
+cannot authorize repository access, and no canonical row is backfilled. A chain
+with no verifiable admitted root fails. As at launch, an omitted reference means
 `repository-connection:git-default`, and an unrecorded default derives from the
 deployment declaration. Selection uses the launch selector, so a deleted,
 disabled, or unassigned connection fails there.

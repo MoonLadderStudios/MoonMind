@@ -1601,3 +1601,68 @@ async def test_authored_connection_is_used_without_reading_the_plan(monkeypatch)
 
     assert access == ("repository-connection:explicit", False)
     assert loaded == []
+
+
+async def test_scheduled_merge_child_reads_exact_parent_start_authority(monkeypatch):
+    """Temporal-started schedules have no API canonical source record."""
+    from unittest.mock import AsyncMock
+
+    from temporalio import activity
+
+    from api_service.db.models import (
+        TemporalExecutionOwnerType,
+        TemporalExecutionProjectionSourceMode,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+
+    _recorded_run(monkeypatch, {})  # No canonical row for these workflow IDs.
+    projection = TemporalExecutionRecord(
+        workflow_id="mm:scheduled",
+        run_id="scheduled-run",
+        owner_type=TemporalExecutionOwnerType.SYSTEM,
+        owner_id="system",
+        source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+        workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+        parameters={"repository": "compact visibility cannot grant authority"},
+        memo={},
+    )
+    parameters = {
+        "repository": {
+            "provider": "git",
+            "connectionRef": "repository-connection:original-schedule",
+            "repository": {"name": "acme/repo"},
+        },
+        "omnigentExecutionPlan": _PLAN_BINDING,
+    }
+    reader = AsyncMock(
+        return_value={
+            "workflow_type": "MoonMind.UserWorkflow",
+            "owner_user_id": None,
+            "initial_parameters": parameters,
+        }
+    )
+    describe = AsyncMock(return_value=projection)
+    monkeypatch.setattr(TemporalExecutionService, "describe_execution", describe)
+    monkeypatch.setattr(TemporalClientAdapter, "read_workflow_start_input", reader)
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(activity, "client", lambda: SimpleNamespace())
+
+    async def parent(workflow_id):
+        return "mm:scheduled" if workflow_id == "merge-child" else ""
+
+    monkeypatch.setattr(
+        managed_api_key_resolve_module, "_recorded_parent_workflow_id", parent
+    )
+
+    owner, run_id, actual = (
+        await managed_api_key_resolve_module._admitted_repository_record("merge-child")
+    )
+
+    assert (owner, run_id, actual) == ("mm:scheduled", "scheduled-run", parameters)
+    reader.assert_awaited_once_with("mm:scheduled", run_id="scheduled-run")
+    assert projection.parameters == {
+        "repository": "compact visibility cannot grant authority"
+    }
