@@ -322,17 +322,23 @@ async def test_blocked_assessment_terminal_routes_claim_to_durable_finalizer(
         },
     }
     subject._assessment_context = {
-        "assessmentVerdict": "BLOCKED",
-        "assessmentArtifactRef": "art_01M4VZXGFPWHV6Y8QZP0T72CFE",
+        "assessmentVerdict": "NOT_IMPLEMENTED",
+        "assessmentArtifactRef": "art_stale",
     }
     subject._failure_diagnostic = {
         "stepTitle": "github.check_issue_blockers",
         "message": "Required packaged GPU proof is unavailable: image_pull_auth_failed.",
     }
-    subject._early_issue_blocker_remaining_requirements = [
-        "R-2: Run packaged GPU proof.",
-        "R-3: Publish nine worlds.",
-    ]
+    subject._record_early_issue_blocker_result(
+        {
+            "assessmentVerdict": "BLOCKED",
+            "assessmentArtifactRef": "art_01M4VZXGFPWHV6Y8QZP0T72CFE",
+            "remainingRequirements": [
+                "R-2: Run packaged GPU proof.",
+                "R-3: Publish nine worlds.",
+            ],
+        }
+    )
     calls: list[tuple[str, Any]] = []
     summary = await _finalize_and_capture_summary(
         monkeypatch,
