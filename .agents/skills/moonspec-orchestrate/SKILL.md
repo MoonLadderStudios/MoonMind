@@ -149,7 +149,7 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
 
 1. Run `moonspec-verify` as the final gate unless an up-to-date verification report already covers the current code and artifacts.
 2. If verdict is `FULLY_IMPLEMENTED`, report success.
-3. If verdict is `ADDITIONAL_WORK_NEEDED`, use the verification report as the remaining-work list:
+3. If verdict is `ADDITIONAL_WORK_NEEDED`, follow the verifier's `recommendedNextAction`. Run automatic remediation only for `reattempt_current_step`; `needs_human` and `blocked` stop with the report's concrete authority, decision, or environment reason. When reattempting, use the report as the remaining-work list:
    - run `moonspec-implement` for bounded code, test, or required in-scope documentation gaps,
    - rerun targeted unit/integration validation for executable changes; review documentation-only corrections,
    - rerun `moonspec-verify`.

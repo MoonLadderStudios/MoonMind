@@ -99,7 +99,7 @@ steps:
     instructions: |-
       Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
       Treat this workflow step text as operational guidance, not as the source-direct verification baseline; verify against the original request, source design, or active feature spec.
-      If the verdict is ADDITIONAL_WORK_NEEDED, use the report as the remaining-work list and run at most two bounded implementation and verification cycles.
+      If the verdict is ADDITIONAL_WORK_NEEDED, follow recommendedNextAction: run at most two bounded implementation and verification cycles only for reattempt_current_step; needs_human or blocked stops with the report's concrete reason. During an authorized reattempt, implement bounded code, test, or required in-scope documentation gaps; validate executable changes and review documentation-only corrections.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context.
       If the verdict is BLOCKED, stop and report the environment diagnostic and minimum repair.
       Claim completion only when the verdict is FULLY_IMPLEMENTED.
