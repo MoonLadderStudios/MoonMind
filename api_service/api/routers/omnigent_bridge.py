@@ -3264,9 +3264,9 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
         await websocket.close(code=4401, reason=exc.code)
         return
     except OmnigentBridgeModeUnsupportedError:
-        # MoonLadderStudios/MoonMind#3955 removal stage: launch modules are
-        # unavailable, so the retired transport fails actionably instead of
-        # crashing on a bare ImportError. Proxy routes never reach this path.
+        # MoonLadderStudios/MoonMind#3955: once the launch modules are
+        # deleted, the retired transport fails actionably instead of crashing
+        # on a bare ImportError. Proxy routes never reach this path.
         await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
         return
     # NOTE (#3955): the host-channel registry is a launch-only runtime
@@ -3310,7 +3310,7 @@ async def embedded_omnigent_host_tunnel(websocket: WebSocket, host_id: str) -> N
     except (EmbeddedHostChannelError, UpstreamHostProtocolError):
         await websocket.close(code=4400)
     except OmnigentBridgeModeUnsupportedError:
-        # Removal stage: actionable close instead of a bare ImportError crash.
+        # Launch modules deleted: actionable close instead of a bare ImportError.
         await websocket.close(code=4401, reason=EMBEDDED_TRANSPORT_RETIRED_CODE)
     finally:
         if channel is not None:
