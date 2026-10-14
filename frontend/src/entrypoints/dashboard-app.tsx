@@ -1247,6 +1247,11 @@ function RoutedDashboardPage({
   const handleCollectionListModeSelect = async (mode: CollectionListDisplayMode) => {
     const selectedMode = mode;
     const search = new URLSearchParams(location.search);
+    const requestLocation = `${location.pathname}${location.search}`;
+    const requestIsCurrent = (requestId: symbol) => (
+      pendingRequestRef.current === requestId
+      && `${window.location.pathname}${window.location.search}` === requestLocation
+    );
     pendingRequestRef.current = null;
     setResolutionStatus(null);
 
@@ -1262,7 +1267,7 @@ function RoutedDashboardPage({
           const authorizedRememberedId = rememberedId
             ? await authorizedRecurringDefinitionId(apiBase, rememberedId)
             : null;
-          if (pendingRequestRef.current !== requestId) {
+          if (!requestIsCurrent(requestId)) {
             return;
           }
           if (rememberedId && !authorizedRememberedId) {
@@ -1270,7 +1275,7 @@ function RoutedDashboardPage({
             updateDashboardPreferences({ lastSelectedDefinitionId: '' });
           }
           const targetDefinitionId = authorizedRememberedId || await firstVisibleRecurringDefinitionId(apiBase);
-          if (pendingRequestRef.current !== requestId) {
+          if (!requestIsCurrent(requestId)) {
             return;
           }
           if (!targetDefinitionId) {
@@ -1283,7 +1288,7 @@ function RoutedDashboardPage({
           requestRecurringFocusForMode(selectedMode, targetDefinitionId);
           navigate(`/schedules/${encodeURIComponent(targetDefinitionId)}`);
         } catch {
-          if (pendingRequestRef.current === requestId) {
+          if (requestIsCurrent(requestId)) {
             setResolutionStatus('Recurring schedule list is unavailable.');
           }
         }
@@ -1328,7 +1333,7 @@ function RoutedDashboardPage({
         setResolutionStatus('Opening first skill...');
         try {
           const catalogSkillIds = await visibleSkillIds(apiBase);
-          if (pendingRequestRef.current !== requestId) {
+          if (!requestIsCurrent(requestId)) {
             return;
           }
           const rememberedId = lastSelectedSkillId?.trim() || '';
@@ -1349,7 +1354,7 @@ function RoutedDashboardPage({
           setResolutionStatus(null);
           navigate(encodeSkillDetailPath(targetSkillId, location.search));
         } catch {
-          if (pendingRequestRef.current === requestId) {
+          if (requestIsCurrent(requestId)) {
             setResolutionStatus('Skill list is unavailable.');
           }
         }
@@ -1393,7 +1398,7 @@ function RoutedDashboardPage({
         const authorizedRememberedId = rememberedId
           ? await authorizedWorkflowId(apiBase, rememberedId, search)
           : null;
-        if (pendingRequestRef.current !== requestId) {
+        if (!requestIsCurrent(requestId)) {
           return;
         }
         if (rememberedId && !authorizedRememberedId) {
@@ -1401,7 +1406,7 @@ function RoutedDashboardPage({
           updateDashboardPreferences({ lastSelectedWorkflowId: '' });
         }
         const targetWorkflowId = authorizedRememberedId || await firstVisibleWorkflowId(apiBase, search);
-        if (pendingRequestRef.current !== requestId) {
+        if (!requestIsCurrent(requestId)) {
           return;
         }
         if (!targetWorkflowId) {
@@ -1413,7 +1418,7 @@ function RoutedDashboardPage({
         setResolutionStatus(null);
         navigate(workflowDetailHref(targetWorkflowId, search));
       } catch {
-        if (pendingRequestRef.current === requestId) {
+        if (requestIsCurrent(requestId)) {
           setResolutionStatus('Workflow list is unavailable.');
         }
       }
