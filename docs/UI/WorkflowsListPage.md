@@ -151,6 +151,7 @@ Current URL behavior:
 4. Current frontend table sorting is client-side and current-page-only.
 5. Current frontend sorting is intentionally not seeded from the URL, written to the URL, or sent to the list API. This avoids implying a global server-side order across the full filtered result set before the UI adopts server-authoritative sort for every visible sortable column.
 6. The UI labels current sorting scope through footer copy, header tooltip text, and screen-reader hints.
+7. The existing dashboard preferences retain the current-page sort field and direction across table/detail navigation. Reset dashboard preferences restores the default order.
 
 Current API request shape:
 

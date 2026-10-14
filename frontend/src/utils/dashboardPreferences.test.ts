@@ -103,6 +103,14 @@ describe('dashboardPreferences', () => {
   });
 
   describe('invalid preference fallback (MM-964 invalid preference fallback)', () => {
+    it('preserves valid current-page sort preferences and defaults malformed orders', () => {
+      updateDashboardPreferences({ workflowListSort: { field: 'title', direction: 'asc' } });
+      expect(readDashboardPreferences().workflowListSort).toEqual({ field: 'title', direction: 'asc' });
+      for (const workflowListSort of [null, { field: 'unknown', direction: 'asc' }, { field: 'title', direction: 'unknown' }]) {
+        expect(sanitizeDashboardPreferences({ workflowListSort }).workflowListSort)
+          .toEqual(DEFAULT_DASHBOARD_PREFERENCES.workflowListSort);
+      }
+    });
     it('falls back to defaults when the stored blob is not valid JSON', () => {
       window.localStorage.setItem(DASHBOARD_PREFERENCES_STORAGE_KEY, '{not json');
       expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
