@@ -7865,6 +7865,38 @@ describe('Workflow Detail Entrypoint', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Edit' })).toBeTruthy();
   });
 
+  it('links canonical artifact diagnostics refs and keeps unresolvable refs visible', async () => {
+    const summaryArtifact = {
+      finishOutcome: { code: 'FAILED', stage: 'executing' },
+      operatorSummary: 'Verification failed before publication.',
+      failure: {
+        category: 'execution_error',
+        stepId: 'verify',
+        diagnosticsRef: 'artifact://art_01diagnostics3930',
+      },
+    };
+    mockFailedRunWithSummaryArtifact(summaryArtifact, summaryArtifact);
+
+    const { unmount } = renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(
+      (await screen.findByRole('link', { name: 'Open failure diagnostics' })).getAttribute('href'),
+    ).toBe('/api/artifacts/art_01diagnostics3930/download');
+    unmount();
+
+    const pathSummaryArtifact = {
+      ...summaryArtifact,
+      failure: { ...summaryArtifact.failure, diagnosticsRef: 'artifact://launch/diagnostics' },
+    };
+    mockFailedRunWithSummaryArtifact(pathSummaryArtifact, pathSummaryArtifact);
+
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+
+    expect(await screen.findByText('artifact://launch/diagnostics')).toBeTruthy();
+    expect(screen.getByText(/Failure diagnostics:/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Open failure diagnostics' })).toBeNull();
+  });
+
   it('shows the terminal governance report summary when the run-summary artifact omits it', async () => {
     const summaryArtifact = {
       finishOutcome: { code: 'FAILED', stage: 'executing' },
@@ -7930,6 +7962,7 @@ describe('Workflow Detail Entrypoint', () => {
         'Report generation failed as an auxiliary step; task and publication state are unchanged.',
       ),
     ).toBeTruthy();
+    expect(within(block).getByText('Reason: REPORT_STORE_UNAVAILABLE (recoverable)')).toBeTruthy();
     expect(screen.getByText('Verification failed before publication.')).toBeTruthy();
   });
 
