@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Protocol
 from moonmind.omnigent.git_identity import (
     ensure_workspace_git_identity,
     resolve_git_identity,
+    resolve_execution_git_identity,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -433,6 +434,7 @@ class OmnigentWorkspaceMaterializer:
                 candidate,
                 runtime_uid=runtime_uid,
                 runtime_gid=runtime_gid,
+                identity=resolve_execution_git_identity(request.parameters or {}),
             )
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only

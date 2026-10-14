@@ -22122,6 +22122,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if workflow_parameters is not None:
+            identity = workflow_parameters.get("_publicationGitIdentity")
+            if isinstance(identity, Mapping):
+                # Only server-admitted workflow data, never plan/node overrides.
+                # Histories without the optional snapshot keep their old payload.
+                parameters["_publicationGitIdentity"] = dict(identity)
         if self._workflow_patch_enabled(RUN_GITHUB_ACTION_PERMISSIONS_PATCH):
             # Presence matters: a malformed null declaration must not disappear
             # into the default read-only path. Old histories keep their payload.

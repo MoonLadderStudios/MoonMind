@@ -503,8 +503,12 @@ async def test_materializer_reapplies_commit_identity_to_existing_workspace(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admitted_identity",
+    [None, {"name": "Original Operator", "email": "original@example.test"}],
+)
 async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, admitted_identity
 ):
     """A checkpoint restore cannot leave a stale or missing commit identity.
 
@@ -556,23 +560,26 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
     async def fail_runner(*_args, **_kwargs):  # pragma: no cover - must not run
         raise AssertionError("existing authoritative checkout must not be cloned")
 
+    request = _request(
+        {
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "main",
+            "workspaceCheckpointRestoreRef": "artifact://checkpoint",
+        }
+    )
+    if admitted_identity is not None:
+        request.parameters["_publicationGitIdentity"] = admitted_identity
     await OmnigentWorkspaceMaterializer(
         command_runner=fail_runner,
         workspace_root=tmp_path,
         artifact_service=Artifacts(),
     ).materialize(
-        _request(
-            {
-                "workspaceLocator": {
-                    "kind": "sandbox",
-                    "workspaceId": workspace_id,
-                    "relativePath": "repo",
-                },
-                "repository": "MoonLadderStudios/MoonMind",
-                "branch": "main",
-                "workspaceCheckpointRestoreRef": "artifact://checkpoint",
-            }
-        ),
+        request,
         runtime_uid=os.getuid(),
         runtime_gid=os.getgid(),
     )
@@ -581,8 +588,12 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
     config = (existing / ".git" / "config").read_text(encoding="utf-8")
     assert "Stale Import" not in config
     assert "stale@example.test" not in config
-    assert "Deployment Operator" in config
-    assert "operator@example.test" in config
+    expected = admitted_identity or {
+        "name": "Deployment Operator",
+        "email": "operator@example.test",
+    }
+    assert expected["name"] in config
+    assert expected["email"] in config
 
 
 @pytest.mark.asyncio

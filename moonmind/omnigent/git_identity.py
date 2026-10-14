@@ -10,6 +10,7 @@ instead of blocking a commit-capable run.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from moonmind.utils.workspace_paths import (
@@ -32,6 +33,26 @@ def resolve_git_identity() -> tuple[str, str]:
         str(settings.workflow.git_user_email or "").strip() or DEFAULT_GIT_USER_EMAIL
     )
     return name, email
+
+
+def resolve_execution_git_identity(parameters: Mapping[str, object]) -> tuple[str, str]:
+    """Use admitted publication attribution; old requests retain their fallback."""
+    snapshot = parameters.get("_publicationGitIdentity")
+    if snapshot is None:
+        return resolve_git_identity()
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("admitted publication Git identity must be an object")
+    values = tuple(snapshot.get(key) for key in ("name", "email"))
+    if any(
+        not isinstance(value, str)
+        or not value.strip()
+        or any(char in value for char in "\0\n\r")
+        for value in values
+    ):
+        raise ValueError(
+            "admitted publication Git identity must contain compact name/email"
+        )
+    return str(values[0]), str(values[1])
 
 
 def _quote_config_value(value: str) -> str:
@@ -149,6 +170,7 @@ def ensure_workspace_git_identity(
     *,
     runtime_uid: int | None,
     runtime_gid: int | None,
+    identity: tuple[str, str] | None = None,
 ) -> bool:
     """Reapply the resolved commit identity to a materialized Git workspace.
 
@@ -167,7 +189,7 @@ def ensure_workspace_git_identity(
     preparation cannot complete without applying the required identity.
     """
 
-    name, email = resolve_git_identity()
+    name, email = identity if identity is not None else resolve_git_identity()
     root = Path(workspace)
     git_dir = _resolve_workspace_git_dir(root)
     if git_dir is None:
