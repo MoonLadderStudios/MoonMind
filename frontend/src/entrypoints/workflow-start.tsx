@@ -94,29 +94,7 @@ const EFFORT_OPTIONS_DATALIST_ID = "queue-effort-options";
 const REPOSITORY_OPTIONS_DATALIST_ID = "queue-repository-options";
 const BRANCH_OPTIONS_DATALIST_ID = "queue-branch-options";
 const OWNER_REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const PR_RESOLVER_SKILLS = new Set(["pr-resolver"]);
-const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
-const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
-const JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG = "jira-breakdown-implement";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
-const SELF_MANAGED_PUBLISH_SKILLS = new Set([
-  ...PR_RESOLVER_SKILLS,
-  "fix-comments",
-  "fix-ci",
-  "fix-merge-conflicts",
-]);
-const SIDE_EFFECT_PUBLISH_DISABLED_SKILLS = new Set([
-  "batch-pr-resolver",
-  "batch-dependabot-resolver",
-  "batch-workflows",
-]);
-const PUBLISH_DISABLED_SKILLS = new Set([
-  JIRA_BREAKDOWN_PRESET_SLUG,
-  JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
-  JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG,
-  "jira-verify",
-  "jira-pr-verify",
-]);
 const MOONSPEC_ORCHESTRATE_PRESET_SLUG = "moonspec-orchestrate";
 const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
   [JIRA_ORCHESTRATE_PRESET_SLUG]: new Set([
@@ -1074,6 +1052,8 @@ interface PresetSummary {
   defaults?: Record<string, unknown>;
   requiredCapabilities?: string[];
   capabilities?: string[];
+  // Backend-declared workflow publication (preset `workflowPublish`).
+  workflowPublish?: Record<string, unknown> | null;
 }
 
 interface PresetDetail extends PresetSummary {
@@ -1094,6 +1074,13 @@ interface SkillCapabilityDetail {
   requiredCapabilities?: string[];
   publish?: Record<string, unknown> | null;
   sideEffect?: Record<string, unknown> | null;
+  publishContract?: SkillPublishContract | null;
+}
+
+// Publication constraints the backend submit path enforces for a Skill.
+interface SkillPublishContract {
+  selfManaged?: boolean;
+  repositoryPublishDisabled?: boolean;
 }
 
 interface SkillCatalogResult {
@@ -2277,68 +2264,30 @@ function hasExplicitSkillSelection(skillId: string): boolean {
   return normalized !== "" && normalized !== "auto";
 }
 
-function skillPublishMetadataDeclaresAuto(
-  publish: Record<string, unknown> | null | undefined,
-): boolean {
-  if (!publish) {
-    return false;
-  }
-  return (
-    String(publish.mode || "").trim().toLowerCase() === "auto" &&
-    String(publish.owner || "").trim().toLowerCase() === "agent" &&
-    publish.requiresEvidence === true
-  );
-}
-
-function skillSideEffectMetadataDeclaresAgentOwned(
-  sideEffect: Record<string, unknown> | null | undefined,
-): boolean {
-  if (!sideEffect) {
-    return false;
-  }
-  return (
-    String(sideEffect.owner || "").trim().toLowerCase() === "agent" &&
-    String(sideEffect.kind || "").trim().length > 0
-  );
-}
-
 function isSelfManagedPublishSkill(
-  skillId: string,
   detail?: SkillCapabilityDetail | null,
 ): boolean {
-  if (detail?.publish) {
-    return skillPublishMetadataDeclaresAuto(detail.publish);
-  }
-  return SELF_MANAGED_PUBLISH_SKILLS.has(skillId.trim().toLowerCase());
-}
-
-function isPublishDisabledSkill(skillId: string): boolean {
-  return PUBLISH_DISABLED_SKILLS.has(skillId.trim().toLowerCase());
+  return detail?.publishContract?.selfManaged === true;
 }
 
 function isRepositoryPublishDisabledSkill(
-  skillId: string,
   detail?: SkillCapabilityDetail | null,
 ): boolean {
-  if (isPublishDisabledSkill(skillId)) {
-    return true;
-  }
-  if (detail?.sideEffect) {
-    return skillSideEffectMetadataDeclaresAgentOwned(detail.sideEffect);
-  }
-  return SIDE_EFFECT_PUBLISH_DISABLED_SKILLS.has(skillId.trim().toLowerCase());
+  return detail?.publishContract?.repositoryPublishDisabled === true;
 }
 
 function resolveEffectivePublishSkillId(
   primarySkillId: string,
   appliedTemplates: AppliedTemplateState[],
+  skillDetailsById: Record<string, SkillCapabilityDetail> = {},
 ): string {
   for (const template of [...appliedTemplates].reverse()) {
     const slug = String(template.slug || "").trim();
+    const detail = skillDetailsById[slug] || null;
     if (
       slug &&
-      (isSelfManagedPublishSkill(slug) ||
-        isRepositoryPublishDisabledSkill(slug))
+      (isSelfManagedPublishSkill(detail) ||
+        isRepositoryPublishDisabledSkill(detail))
     ) {
       return slug;
     }
@@ -6756,6 +6705,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           !Array.isArray(item.sideEffect)
             ? { sideEffect: item.sideEffect }
             : {}),
+          ...(item.publishContract &&
+          typeof item.publishContract === "object" &&
+          !Array.isArray(item.publishContract)
+            ? { publishContract: item.publishContract }
+            : {}),
         };
       }
       const ids = Array.from(
@@ -6774,17 +6728,22 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   });
 
   useEffect(() => {
+    // A Skill's declared publication is only a default: an operator's explicit
+    // Publish Mode choice is never rewritten by selecting a Skill.
+    if (publishModeTouched) {
+      return;
+    }
     const primarySkill = String(steps[0]?.skillId || "")
       .trim()
       .toLowerCase();
     const primarySkillDetail =
       skillsQuery.data?.detailsById[primarySkill] || null;
-    if (isSelfManagedPublishSkill(primarySkill, primarySkillDetail)) {
+    if (isSelfManagedPublishSkill(primarySkillDetail)) {
       setPublishMode("auto");
-    } else if (isRepositoryPublishDisabledSkill(primarySkill, primarySkillDetail)) {
+    } else if (isRepositoryPublishDisabledSkill(primarySkillDetail)) {
       setPublishMode("none");
     }
-  }, [skillsQuery.data?.detailsById, steps[0]?.skillId]);
+  }, [publishModeTouched, skillsQuery.data?.detailsById, steps[0]?.skillId]);
 
   const hasToolStep = steps.some((step) => step.stepType === "tool");
   const trustedToolsQuery = useQuery({
@@ -6903,37 +6862,47 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       resolveEffectivePublishSkillId(
         String(steps[0]?.skillId || "").trim() || "auto",
         activeAppliedTemplatesForSteps(appliedTemplates, steps),
+        skillsQuery.data?.detailsById,
       ),
-    [appliedTemplates, steps],
+    [appliedTemplates, skillsQuery.data?.detailsById, steps],
   );
   const effectiveSkillDetail =
     skillsQuery.data?.detailsById[effectiveSkillId.trim()] || null;
 
   useEffect(() => {
-    if (
-      pageMode.mode === "create" &&
-      selectedPreset &&
-      isSelfManagedPublishSkill(selectedPreset.slug)
-    ) {
-      setPublishMode("auto");
-    } else if (
-      pageMode.mode === "create" &&
-      selectedPreset &&
-      isRepositoryPublishDisabledSkill(selectedPreset.slug)
-    ) {
-      setPublishMode("none");
+    if (pageMode.mode !== "create" || !selectedPreset || publishModeTouched) {
+      return;
     }
-  }, [pageMode.mode, selectedPreset?.slug]);
+    const declaredPublishMode = publishModeSelectionForWorkflowPublish(
+      selectedPreset.workflowPublish,
+    );
+    if (declaredPublishMode) {
+      setPublishMode(declaredPublishMode);
+    }
+  }, [pageMode.mode, selectedPreset?.key, selectedPreset?.workflowPublish]);
 
   const mergeAutomationAvailable =
-    !isSelfManagedPublishSkill(effectiveSkillId, effectiveSkillDetail) &&
-    !isRepositoryPublishDisabledSkill(effectiveSkillId, effectiveSkillDetail);
-  const autoPublishAvailable = isSelfManagedPublishSkill(
-    effectiveSkillId,
-    effectiveSkillDetail,
-  );
+    !isSelfManagedPublishSkill(effectiveSkillDetail) &&
+    !isRepositoryPublishDisabledSkill(effectiveSkillDetail);
+  const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillDetail);
+  // A blank source has no repository to publish to: until the operator picks
+  // a mode, Create shows and submits save-only (None) instead of the page's
+  // repository default. Skill-owned Auto keeps its own declared target.
+  const sourcePublishMode =
+    pageMode.mode === "create" &&
+    !remediationDraft &&
+    !publishModeTouched &&
+    !repository.trim() &&
+    normalizePublishModeForSubmit(publishMode) !== "auto"
+      ? "none"
+      : publishMode;
 
   useEffect(() => {
+    // Availability only moves a derived default; an explicit choice that no
+    // longer fits stays visible and is reported at submit.
+    if (publishModeTouched) {
+      return;
+    }
     if (autoPublishAvailable) {
       if (publishMode !== "auto" && publishMode !== "none") {
         setPublishMode("auto");
@@ -6950,6 +6919,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     effectiveSkillId,
     mergeAutomationAvailable,
     publishMode,
+    publishModeTouched,
   ]);
 
   const availableDependencyOptions = useMemo(
@@ -7729,19 +7699,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const preset = templateItems.find((item) => item.key === presetKey);
     const catalogDetail = preset ? presetDetailFromCatalogItem(preset) : null;
     updateStepPreset(localId, presetKey, catalogDetail);
-    if (!preset) {
+    if (!preset || pageMode.mode !== "create" || publishModeTouched) {
       return;
     }
-    if (
-      pageMode.mode === "create" &&
-      isSelfManagedPublishSkill(preset.slug)
-    ) {
-      setPublishMode("auto");
-    } else if (
-      pageMode.mode === "create" &&
-      isRepositoryPublishDisabledSkill(preset.slug)
-    ) {
-      setPublishMode("none");
+    const declaredPublishMode = publishModeSelectionForWorkflowPublish(
+      preset.workflowPublish,
+    );
+    if (declaredPublishMode) {
+      setPublishMode(declaredPublishMode);
     }
   }
 
@@ -8502,7 +8467,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const expandedPublishSelection = publishModeSelectionForWorkflowPublish(
       expansion.workflowPublish,
     );
-    if (pageMode.mode === "create" && expandedPublishSelection) {
+    if (
+      pageMode.mode === "create" &&
+      expandedPublishSelection &&
+      !publishModeTouched
+    ) {
       setPublishMode(expandedPublishSelection);
     }
     const autoFillSuffix =
@@ -8513,13 +8482,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       expansion.warnings.length > 0
         ? ` ${expansion.warnings.join(" ")}`
         : "";
+    const appliedPresetSkillDetail =
+      skillsQuery.data?.detailsById[
+        String(expansion.appliedTemplate?.slug || preset.slug).trim()
+      ] || null;
     const publishConstraintSuffix = isSelfManagedPublishSkill(
-      String(expansion.appliedTemplate?.slug || preset.slug),
+      appliedPresetSkillDetail,
     )
       ? ` ${preset.title} manages its own PR/publish flow, so Publish Mode is Auto and merge automation is unavailable.`
-      : isRepositoryPublishDisabledSkill(
-            String(expansion.appliedTemplate?.slug || preset.slug),
-          )
+      : isRepositoryPublishDisabledSkill(appliedPresetSkillDetail) ||
+          expandedPublishSelection === "none"
         ? ` ${preset.title} performs non-repository side effects, so Publish Mode is None.`
         : "";
     setMessage(
@@ -9343,7 +9315,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       }
     }
-    const formPublishMode = normalizePublishModeForSubmit(publishMode);
+    const formPublishMode = normalizePublishModeForSubmit(sourcePublishMode);
     if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
       setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
@@ -9444,37 +9416,61 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const effectivePublishSkillId = resolveEffectivePublishSkillId(
       primarySkillId,
       activeSubmissionAppliedTemplates,
+      skillsQuery.data?.detailsById,
     );
     const effectivePublishSkillDetailForSubmit =
       skillsQuery.data?.detailsById[effectivePublishSkillId.trim()] || null;
-    if (
-      requestedPublishMode === "auto" &&
-      !isSelfManagedPublishSkill(
-        effectivePublishSkillId,
-        effectivePublishSkillDetailForSubmit,
-      )
-    ) {
+    const publishSkillSelfManaged = isSelfManagedPublishSkill(
+      effectivePublishSkillDetailForSubmit,
+    );
+    const publishSkillRepositoryDisabled = isRepositoryPublishDisabledSkill(
+      effectivePublishSkillDetailForSubmit,
+    );
+    if (requestedPublishMode === "auto" && !publishSkillSelfManaged) {
       setSubmitMessage(
         "Publish mode Auto requires an auto-publish-capable skill.",
       );
       clearSubmitBusy();
       return;
     }
-    const effectivePublishMode =
-      isSelfManagedPublishSkill(
-        effectivePublishSkillId,
-        effectivePublishSkillDetailForSubmit,
-      )
-        ? "auto"
-        : isRepositoryPublishDisabledSkill(
-            effectivePublishSkillId,
-            effectivePublishSkillDetailForSubmit,
-          )
+    // The Skill's backend publication contract supplies the default only
+    // while the operator has not chosen a mode. An explicit choice is never
+    // rewritten; an incompatible one is reported before launch.
+    if (
+      publishModeTouched &&
+      publishSkillSelfManaged &&
+      requestedPublishMode !== "auto" &&
+      requestedPublishMode !== "none"
+    ) {
+      setSubmitMessage(
+        `Publish mode ${requestedPublishMode} is not available for skill '${effectivePublishSkillId}', which publishes through its own flow. Choose Auto or None.`,
+      );
+      clearSubmitBusy();
+      return;
+    }
+    if (
+      publishModeTouched &&
+      publishSkillRepositoryDisabled &&
+      requestedPublishMode !== "none"
+    ) {
+      setSubmitMessage(
+        `Skill '${effectivePublishSkillId}' does not publish repository changes. Choose Publish Mode None.`,
+      );
+      clearSubmitBusy();
+      return;
+    }
+    const effectivePublishMode = publishModeTouched
+      ? requestedPublishMode
+      : publishSkillSelfManaged
+        ? requestedPublishMode === "none"
+          ? "none"
+          : "auto"
+        : publishSkillRepositoryDisabled
           ? "none"
           : requestedPublishMode;
     const selectedWorkflowPublish =
       submitExpandedWorkflowPublish ||
-      (normalizePublishModeSelection(publishMode) === presetPublishSelection
+      (normalizePublishModeSelection(sourcePublishMode) === presetPublishSelection
         ? presetWorkflowPublish
         : null);
     const effectiveWorkflowPublish =
@@ -10321,16 +10317,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       : primaryStepSkill;
 
     const shouldSubmitMergeAutomation =
-      isMergeAutomationPublishMode(publishMode) &&
+      isMergeAutomationPublishMode(sourcePublishMode) &&
       effectivePublishMode === "pr" &&
-      !isSelfManagedPublishSkill(
-        effectivePublishSkillId,
-        effectivePublishSkillDetailForSubmit,
-      ) &&
-      !isRepositoryPublishDisabledSkill(
-        effectivePublishSkillId,
-        effectivePublishSkillDetailForSubmit,
-      );
+      !isSelfManagedPublishSkill(effectivePublishSkillDetailForSubmit) &&
+      !isRepositoryPublishDisabledSkill(effectivePublishSkillDetailForSubmit);
     // Never resolve a provider profile from placeholder data: during a runtime
     // switch refetch `data` still holds the previous runtime's profiles, which
     // must not be submitted under the newly selected runtime.
@@ -10429,9 +10419,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       payload: {
         ...(normalizedRepository && submissionBranch
           ? {
+              // Create has no connection selector: an omitted connectionRef
+              // selects the deployment's default connection server-side.
               repository: {
                 provider: "git",
-                connectionRef: "repository-connection:git-default",
                 repository: { name: normalizedRepository },
                 branch: { name: submissionBranch },
               },
@@ -13036,7 +13027,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 name="publishMode"
                 aria-label="Publish Mode"
                 title={publishModeTooltip}
-                value={publishMode}
+                value={sourcePublishMode}
                 onChange={(event) => {
                   setPublishModeTouched(true);
                   setPublishMode(event.target.value);

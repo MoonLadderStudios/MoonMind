@@ -184,3 +184,61 @@ def test_run_gh_wrapper_resolves_real_gh_after_wrapper_path(
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["GITHUB_TOKEN"] == "broker-issued-token"
+
+
+@pytest.mark.asyncio
+async def test_github_auth_broker_renews_an_expiring_token_before_it_lapses():
+    """#4011: a run outliving one App installation token keeps Git/gh access.
+
+    The broker re-issues through the run's own renewal (the launch's selected
+    connection) shortly before expiry, once for concurrent callers, and never
+    serves an expired token when renewal fails.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    now = [datetime(2026, 10, 13, 8, 0, tzinfo=timezone.utc)]
+    first_expiry = now[0] + timedelta(minutes=55)
+    renewals: list[datetime] = []
+    outcomes: list[object] = [("ghs_second", first_expiry + timedelta(minutes=55))]
+
+    async def renew():
+        renewals.append(now[0])
+        await asyncio.sleep(0.05)
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    manager = GitHubAuthBrokerManager()
+    socket_dir = Path("/tmp") / f"mm-gh-renew-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    socket_path = str(socket_dir / "github.sock")
+    try:
+        await manager.start(
+            run_id="run-app",
+            token="ghs_first",
+            socket_path=socket_path,
+            expires_at=first_expiry,
+            renew=renew,
+            clock=lambda: now[0],
+        )
+
+        assert await asyncio.to_thread(request_github_token, socket_path) == "ghs_first"
+        assert renewals == []
+
+        # Within the renewal margin, concurrent Git/gh calls share one issuance.
+        now[0] = first_expiry - timedelta(minutes=2)
+        tokens = await asyncio.gather(
+            *(asyncio.to_thread(request_github_token, socket_path) for _ in range(3))
+        )
+        assert tokens == ["ghs_second"] * 3
+        assert len(renewals) == 1
+
+        # A failed renewal never serves the lapsed token.
+        outcomes.append(RuntimeError("selected connection credential is unavailable"))
+        now[0] = first_expiry + timedelta(minutes=56)
+        with pytest.raises(RuntimeError, match="selected connection credential"):
+            await asyncio.to_thread(request_github_token, socket_path)
+    finally:
+        await manager.stop("run-app")
+        shutil.rmtree(socket_dir, ignore_errors=True)

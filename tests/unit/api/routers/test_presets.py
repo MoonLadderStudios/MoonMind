@@ -94,6 +94,31 @@ def test_list_templates_success() -> None:
     assert item["inputs"][0]["name"] == "goal"
     assert "steps" not in item
 
+def test_list_templates_returns_declared_workflow_publish() -> None:
+    client, catalog, _ = _build_app()
+    catalog.list_templates.return_value = [
+        {
+            "slug": "tracker-only",
+            "scope": "global",
+            "title": "Tracker Only",
+            "description": "desc",
+            "workflowPublish": {"mode": "none"},
+        },
+        {
+            "slug": "no-policy",
+            "scope": "global",
+            "title": "No Policy",
+            "description": "desc",
+        },
+    ]
+
+    response = client.get("/api/presets", params={"scope": "global"})
+
+    assert response.status_code == 200
+    items = {item["slug"]: item for item in response.json()["items"]}
+    assert items["tracker-only"]["workflowPublish"] == {"mode": "none"}
+    assert items["no-policy"]["workflowPublish"] is None
+
 def test_list_templates_defaults_to_personal_scope_when_omitted() -> None:
     client, catalog, _ = _build_app()
     catalog.list_templates.return_value = []

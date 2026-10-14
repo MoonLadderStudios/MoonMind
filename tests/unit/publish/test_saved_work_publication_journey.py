@@ -414,7 +414,7 @@ async def journey(
             github_credentials, "resolve_github_credential", no_ambient_credential
         )
         monkeypatch.setattr(
-            checkpoint_restore, "resolve_github_token_for_launch", no_source_clone
+            checkpoint_restore, "resolve_admitted_git_read", no_source_clone
         )
         monkeypatch.setattr(
             saved_candidate_module, "github_remote_url", lambda _repo: str(remote)

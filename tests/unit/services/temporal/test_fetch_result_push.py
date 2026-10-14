@@ -37,6 +37,7 @@ def _make_mock_store(
     record.runtime_id = runtime_id
     record.status = status
     record.workspace_path = workspace_path
+    record.resolved_repository_target = None
     record.pid = 12345
     record.exit_code = 0
     record.started_at = datetime.now(tz=UTC)
@@ -2273,8 +2274,8 @@ class TestPushWorkspaceBranch:
                 proc.returncode = 0
             return proc
 
-        resolved = MagicMock()
-        resolved.token = "resolved-push-token"
+        access = MagicMock()
+        access.credential.token = "resolved-push-token"
         with (
             patch.object(
                 TemporalAgentRuntimeActivities,
@@ -2282,16 +2283,21 @@ class TestPushWorkspaceBranch:
                 return_value="owner/repo",
             ) as detect_repo,
             patch(
-                "moonmind.auth.github_credentials.resolve_github_credential",
+                "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+                "select_github_access_for_launch",
                 new_callable=AsyncMock,
-                return_value=resolved,
-            ) as resolve_github,
+                return_value=access,
+            ) as select_access,
             patch("asyncio.create_subprocess_exec", side_effect=_mock_exec),
         ):
             result = await activities._push_workspace_branch("run-1")
 
         detect_repo.assert_called_once_with("/work/agent_jobs/run-1/repo")
-        resolve_github.assert_awaited_once_with(repo="owner/repo")
+        select_access.assert_awaited_once_with(
+            "repository-connection:git-default",
+            repository="owner/repo",
+            required_operations=("write", "branch_write"),
+        )
         assert result["push_status"] == "pushed"
         assert captured_push_env is not None
         assert captured_push_env["GITHUB_TOKEN"] == "resolved-push-token"
@@ -3420,3 +3426,67 @@ class TestFetchResultPushIntegration:
 
         launcher.cleanup_run_support.assert_awaited_once_with("run-1")
         supervisor.cleanup_deferred_run_files.assert_called_once_with("run-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded_target", [True, False])
+async def test_workspace_push_uses_the_runs_selected_connection_not_ambient(
+    tmp_path, monkeypatch, recorded_target
+):
+    """A managed run pushes with the connection its launch selected (#4003).
+
+    Launch records the selected connection in ``resolvedRepositoryTarget``;
+    the later push reads only that connection's credential, never the
+    deployment's ambient token, so the run cannot switch accounts. A run
+    without a recorded target derives the default connection as launch does.
+    """
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from tests.helpers.repository_connections import (
+        github_pat_connection,
+        github_repository_assignment,
+        record_repository_connections,
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-secret-canary")
+    monkeypatch.setenv("SELECTED_REPOSITORY_PAT", "selected-secret-canary")
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("repository-connection:pat-b", "SELECTED_REPOSITORY_PAT"),
+        assignments=[
+            github_repository_assignment("repository-connection:pat-b", "acme/repo")
+        ],
+    )
+    workspace = tmp_path / "repo"
+    subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(workspace), "remote", "add", "origin",
+         "https://github.com/acme/repo.git"],
+        check=True,
+    )
+    record = ManagedRunRecord(
+        runId="run-1",
+        agentId="codex",
+        runtimeId="codex_cli",
+        status="completed",
+        startedAt=datetime.now(tz=UTC),
+        workspacePath=str(workspace),
+        resolvedRepositoryTarget=(
+            {"connectionRef": "repository-connection:pat-b"}
+            if recorded_target
+            else None
+        ),
+    )
+    try:
+        token = await TemporalAgentRuntimeActivities._resolve_workspace_push_github_token(
+            record
+        )
+    finally:
+        await engine.dispose()
+
+    if recorded_target:
+        assert token == "selected-secret-canary"
+    else:
+        # The unrecorded default derives from the deployment declaration.
+        assert token == "ambient-secret-canary"

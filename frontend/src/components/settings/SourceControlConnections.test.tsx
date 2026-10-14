@@ -7,7 +7,9 @@ import { SourceControlConnections, SOURCE_CONTROL_QUERY_KEY, connectionIdFor } f
 import { SettingsDraftGuardProvider } from './SettingsDraftGuard';
 
 const TOKEN = 'github_pat_' + 'A'.repeat(40);
-const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
+// Publishing includes issue collaboration, which uses the default connection.
+const PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request', 'issues'];
+const PRE_ISSUES_PUBLISH_OPERATIONS = ['read', 'write', 'branch_write', 'review_request'];
 
 interface ConnectionFixture {
   id: string;
@@ -566,6 +568,34 @@ describe('SourceControlConnections', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Operations' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByTestId('location').textContent).toBe('/settings/operations');
+  });
+
+  it('keeps an existing publishing connection publishing and removes issue collaboration with publishing', async () => {
+    const state = {
+      items: [connection({
+        allowedOperations: [...PUBLISH_OPERATIONS, 'merge_request'],
+        // Recorded before publishing included issue collaboration.
+        assignments: [{ repository: 'acme/widgets', providerRepoId: '7', operations: PRE_ISSUES_PUBLISH_OPERATIONS, revision: 1, verified: true }],
+      })],
+    };
+    const fetchMock = stubApi(state, {
+      'PATCH /api/v1/repository-connections/personal-github': (_url, init) => {
+        const body = JSON.parse(String(init.body));
+        state.items = [connection({ policyRevision: 2, allowedOperations: body.allowedOperations })];
+        return json(state.items[0]);
+      },
+    });
+    renderSection();
+    const edit = await screen.findByRole('form', { name: 'Edit connection' });
+    expect(screen.getByText('read and publish')).toBeTruthy();
+    const toggle = within(edit).getByLabelText(/Allow publishing/) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+    fireEvent.click(within(edit).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(calls(fetchMock, 'PATCH', '/api/v1/repository-connections/personal-github')).toHaveLength(1));
+    expect(bodyOf(calls(fetchMock, 'PATCH', '/api/v1/repository-connections/personal-github')[0]).allowedOperations)
+      .toEqual(['read', 'merge_request']);
   });
 
   it('does not imply complete publishing from generic write, or change operations while renaming', async () => {
