@@ -1881,7 +1881,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # keeps the reservation instead of taking the no-work backoff.
         self._issue_claim_work_started_attempt: str | None = None
         self._assessment_context: dict[str, Any] = {}
-        self._early_issue_blocker_remaining_requirements: list[str] | None = None
+        self._early_issue_blocker_assessment: dict[str, Any] | None = None
         self._step_ledger_rows: list[dict[str, Any]] = []
         self._step_ledger_by_id: dict[str, dict[str, Any]] = {}
         self._progress_snapshot: dict[str, Any] = {
@@ -14223,13 +14223,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         if (
                             tool_name == "github.check_issue_blockers"
                             and isinstance(outputs, Mapping)
-                            and isinstance(outputs.get("remainingRequirements"), list)
                         ):
-                            self._early_issue_blocker_remaining_requirements = [
-                                item
-                                for item in outputs["remainingRequirements"]
-                                if isinstance(item, str) and item.strip()
-                            ]
+                            self._record_early_issue_blocker_result(outputs)
                         if isinstance(outputs, Mapping) and workflow.patched(
                             RUN_FAILED_RESULT_BLOCKER_PATCH
                         ):
@@ -25172,6 +25167,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._incident_reconstruction_summary = summary
         return summary, manifest_ref
 
+    def _record_early_issue_blocker_result(
+        self, outputs: Mapping[str, Any]
+    ) -> None:
+        # FAIL_FAST bypasses the normal assessment-context update. The blocker
+        # activity's own result is authoritative over a prior assessment.
+        result = {
+            "assessmentVerdict": str(outputs.get("assessmentVerdict") or "").upper(),
+            "assessmentArtifactRef": str(outputs.get("assessmentArtifactRef") or "").strip(),
+        }
+        remaining = outputs.get("remainingRequirements")
+        if isinstance(remaining, list):
+            result["remainingRequirements"] = [
+                item for item in remaining if isinstance(item, str) and item.strip()
+            ]
+        self._early_issue_blocker_assessment = result
+
     async def _finalize_early_issue_blocker(self, *, status: str) -> None:
         if status != "failed" or not workflow.patched(
             RUN_EARLY_ISSUE_BLOCKER_FINALIZATION_PATCH
@@ -25203,13 +25214,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or context.get("issueNumber") != issue_number
         ):
             return
-        verdict = str(self._assessment_context.get("assessmentVerdict") or "").upper()
+        assessment = self._early_issue_blocker_assessment or self._assessment_context
+        verdict = str(assessment.get("assessmentVerdict") or "").upper()
         if verdict != "BLOCKED":
             return
         self._publish_context["objectiveOutcome"] = "verification_blocked"
-        assessment_ref = str(
-            self._assessment_context.get("assessmentArtifactRef") or ""
-        ).strip()
+        assessment_ref = str(assessment.get("assessmentArtifactRef") or "").strip()
         reason = self._sanitize_operator_summary(str(diagnostic.get("message") or ""))
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "github_issue.finalize_failed_attempt"
@@ -25223,10 +25233,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "assessmentArtifactRef": assessment_ref,
             "reason": reason or "Issue assessment blocked before implementation.",
         }
-        if self._early_issue_blocker_remaining_requirements is not None:
-            payload["remainingRequirements"] = list(
-                self._early_issue_blocker_remaining_requirements
-            )
+        if isinstance(assessment.get("remainingRequirements"), list):
+            payload["remainingRequirements"] = list(assessment["remainingRequirements"])
         try:
             result = await workflow.execute_activity(
                 "github_issue.finalize_failed_attempt",
