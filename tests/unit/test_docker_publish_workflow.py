@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -165,7 +166,7 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert summary_step, "merge job must write a build summary to GITHUB_STEP_SUMMARY"
 
     run = summary_step["run"]
-    assert 'docker buildx imagetools inspect "${IMAGE_NAME}:latest"' in run
+    assert 'docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}"' in run
     assert "{{.Manifest.Digest}}" in run
     assert "${IMAGE_NAME}:${VERSION}@${DIGEST}" in run
     assert "Release / Promote Stable" in run
@@ -293,3 +294,82 @@ def test_cli_tooling_installer_keeps_npm_cache_by_default() -> None:
     assert installer.index("${CLEAN_NPM_CACHE:-false}") < installer.index(
         "npm cache clean --force || true"
     )
+
+
+def _run_manifest_step(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
+    """Execute the real manifest step with fake gh/docker; return docker args."""
+    import os
+    import shutil
+    import subprocess
+
+    workflow = _load_workflow()
+    merge_job = workflow["jobs"]["merge"]
+    step = next(
+        s for s in merge_job["steps"] if s.get("name") == "Create manifest list and push"
+    )
+    bash = shutil.which("bash")
+    assert bash is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(f"#!{bash}\nprintf '%s\\n' '{main_head}'\n")
+    (bin_dir / "docker").write_text(
+        f'#!{bash}\nprintf "%s\\n" "$*" >> "{tmp_path}/docker.log"\n'
+    )
+    for tool in ("gh", "docker"):
+        (bin_dir / tool).chmod(0o755)
+    digests = tmp_path / "digests"
+    digests.mkdir()
+    (digests / ("a" * 64)).write_text("")
+    output = tmp_path / "github_output"
+    env = {
+        **os.environ,
+        **{key: str(value) for key, value in step.get("env", {}).items()},
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "IMAGE_NAME": "ghcr.io/example/moonmind",
+        "VERSION_TAG": "20261014.1",
+        "GITHUB_REF": ref,
+        "GITHUB_SHA": sha,
+        "GITHUB_REPOSITORY": "example/moonmind",
+        "GITHUB_OUTPUT": str(output),
+    }
+    subprocess.run(
+        [bash, "-e", "-o", "pipefail", "-c", step["run"]],
+        cwd=digests,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return (tmp_path / "docker.log").read_text()
+
+
+def test_latest_moves_only_for_the_current_main_tip(tmp_path) -> None:
+    args = _run_manifest_step(
+        tmp_path, ref="refs/heads/main", sha="b" * 40, main_head="b" * 40
+    )
+    assert "ghcr.io/example/moonmind:latest" in args
+    assert "ghcr.io/example/moonmind:sha-" + "b" * 40 in args
+
+
+@pytest.mark.parametrize(
+    ("ref", "sha", "main_head"),
+    [
+        # A build for a commit main has already moved past finishes late.
+        ("refs/heads/main", "b" * 40, "c" * 40),
+        # A manual dispatch against another branch.
+        ("refs/heads/feature", "b" * 40, "c" * 40),
+    ],
+)
+def test_latest_is_not_moved_by_stale_or_non_main_builds(
+    tmp_path, ref, sha, main_head
+) -> None:
+    args = _run_manifest_step(tmp_path, ref=ref, sha=sha, main_head=main_head)
+    assert ":latest" not in args
+    assert "ghcr.io/example/moonmind:20261014.1" in args
+
+
+def test_latest_publication_is_serialized() -> None:
+    merge_job = _load_workflow()["jobs"]["merge"]
+    concurrency = merge_job.get("concurrency") or {}
+    assert concurrency.get("cancel-in-progress") is False
+    assert concurrency.get("group")

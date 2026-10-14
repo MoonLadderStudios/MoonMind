@@ -3,7 +3,6 @@ name: update-moonmind
 description: Install one immutable MoonMind release through a durable updater that recreates the fleet in place, preserving deployment authority and operator access.
 metadata:
   required-capabilities:
-    - git
     - docker
     - python3
 ---
