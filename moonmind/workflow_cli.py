@@ -387,7 +387,12 @@ def build_execution_payload(
     if repo:
         request_payload["repository"] = repo
     if agent_profile and agent_profile.strip():
-        request_payload["agentProfile"] = {"profileId": agent_profile.strip()}
+        agent_selection = {"profileId": agent_profile.strip()}
+        # The form names the account on the Agent Profile too; without it the
+        # server cannot resolve the configuration against the chosen Profile.
+        if provider_profile and provider_profile.strip():
+            agent_selection["providerProfileRef"] = provider_profile.strip()
+        request_payload["agentProfile"] = agent_selection
     key = (idempotency_key or "").strip() or new_request_id()
     request_payload["idempotencyKey"] = key
     return {"type": "task", "payload": request_payload}

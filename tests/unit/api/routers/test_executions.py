@@ -20289,6 +20289,224 @@ async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None
     assert metadata["profileId"] == "claude_minimax_team"
 
 
+class _ProfileRouteSession:
+    """Session holding one Provider Profile and no Omnigent configuration."""
+
+    def __init__(self, profile: SimpleNamespace) -> None:
+        self._profile = profile
+
+    async def get(self, _model: object, profile_id: str) -> object | None:
+        return self._profile if self._profile.profile_id == profile_id else None
+
+    async def execute(self, _stmt: object) -> SimpleNamespace:
+        return SimpleNamespace(all=lambda: [])
+
+
+def _mm3833_recurring_request(runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {"workflow": {"runtime": runtime}},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        {"providerProfileRef": "subscription"},
+        # The form's untouched advanced control is not an authored runtime.
+        {
+            "mode": "omnigent",
+            "authored": False,
+            "providerProfileRef": "subscription",
+        },
+    ],
+    ids=["omitted", "untouched_control"],
+)
+async def test_mm3833_recurring_schedule_follows_the_profile_route_like_create(
+    monkeypatch, runtime
+) -> None:
+    """A schedule pinned to a direct Profile resolves the runtime Create does."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        _mm3833_recurring_request(dict(runtime)),
+        session=_ProfileRouteSession(profile),
+    )
+
+    assert metadata["targetRuntime"] == "codex_cli"
+    assert metadata["profileId"] == "subscription"
+    assert metadata["runtimeCutover"]["selectionSource"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_keeps_explicit_runtime_and_custom_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="claude_team", runtime_id="claude_code"
+    )
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        _mm3833_recurring_request(
+            {
+                "mode": "claude_code",
+                "providerProfileRef": "claude_team",
+                "model": "claude-custom-model",
+                "effort": "high",
+            }
+        ),
+        session=_ProfileRouteSession(profile),
+    )
+
+    assert metadata["targetRuntime"] == "claude_code"
+    assert metadata["runtimeCutover"]["selectionSource"] == "authored"
+    assert metadata["model"] == "claude-custom-model"
+    assert metadata["requestedModel"] == "claude-custom-model"
+    assert metadata["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_rejects_a_forged_untouched_pair() -> None:
+    """A forged explicit runtime is still checked when the Profile is loaded first."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_recurring_runtime_metadata(
+            _mm3833_recurring_request(
+                {"mode": "claude_code", "providerProfileRef": "codex_minimax_team"}
+            ),
+            session=_ProfileRouteSession(profile),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+
+
+def test_mm3833_create_records_the_profile_route_as_non_authored(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    body = _mm3788_task_request(target_runtime="codex_cli", profile_id="subscription")
+    del body["payload"]["targetRuntime"]
+    del body["payload"]["workflow"]["runtime"]["mode"]
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_cli_profile_pin_selects_the_create_route(monkeypatch) -> None:
+    """`moonmind workflow run --provider-profile` resolves like the form."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    profile.default_model = "gpt-profile-default"
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=build_execution_payload(
+                instructions="Run with the pinned Profile.",
+                provider_profile="subscription",
+                idempotency_key="mm3833-cli-profile",
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "subscription"
+    assert parameters["model"] == "gpt-profile-default"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_cli_envelope_with_a_forged_runtime_fails_before_effects() -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    body = build_execution_payload(
+        instructions="Forge an incompatible pair.",
+        provider_profile="codex_minimax_team",
+        idempotency_key="mm3833-cli-forged",
+    )
+    body["payload"]["targetRuntime"] = "claude_code"
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "provider_profile_runtime_mismatch"
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3833_goal_preset_expands_with_the_profile_route(monkeypatch) -> None:
+    """Preset steps inherit the runtime Create will admit, not the bare default."""
+
+    from moonmind.workflows.executions.preset_goal_scheduler import (
+        GoalPresetSchedule,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    captured: dict[str, Any] = {}
+
+    class _CapturingCatalog:
+        def __init__(self, session):
+            self.session = session
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        _CapturingCatalog,
+    )
+
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload={
+            "goal": "Expand one goal preset",
+            "runtime": {"providerProfileRef": "subscription"},
+        },
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=_ProfileRouteSession(profile),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
+    )
+
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+
+
 @pytest.mark.asyncio
 async def test_mm3788_step_runtime_selection_rejects_cross_runtime_profile() -> None:
     steps = _normalize_task_steps(
