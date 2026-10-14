@@ -2931,13 +2931,18 @@ function GovernanceReportBlock({ workflowId, report }: { workflowId: string; rep
     report_id?: unknown;
     status?: unknown;
     link?: { href?: unknown; status?: unknown; explanation?: unknown } | null;
-    generation_status?: { status?: unknown } | null;
+    generation_status?: { status?: unknown; reason_code?: unknown; recoverable?: unknown } | null;
   };
   const reportId = typeof block.report_id === 'string' && block.report_id.trim() ? block.report_id : null;
-  const generationStatus =
-    block.generation_status && typeof block.generation_status === 'object'
-      ? block.generation_status.status
-      : undefined;
+  const generation =
+    block.generation_status && typeof block.generation_status === 'object' ? block.generation_status : null;
+  const generationStatus = generation ? generation.status : undefined;
+  const generationReason =
+    generation && typeof generation.reason_code === 'string' && generation.reason_code.trim()
+      ? generation.reason_code.trim()
+      : null;
+  const generationRecoverable =
+    typeof generation?.recoverable === 'boolean' ? generation.recoverable : null;
   if (!reportId && !block.link && generationStatus === undefined) return null;
   const status = normalizeGovernanceReportStatus(block.status ?? block.link?.status ?? generationStatus);
   const serverHref = block.link && typeof block.link.href === 'string' ? block.link.href : null;
@@ -2949,6 +2954,12 @@ function GovernanceReportBlock({ workflowId, report }: { workflowId: string; rep
       <h4>Governance report</h4>
       <p className="small">Status: {formatStatusLabel(status)}</p>
       <p className="small">{governanceReportExplanation(status, serverExplanation)}</p>
+      {generationReason ? (
+        <p className="small">
+          Reason: {generationReason}
+          {generationRecoverable === null ? '' : generationRecoverable ? ' (recoverable)' : ' (not recoverable)'}
+        </p>
+      ) : null}
       <p className="small">
         Only this summary is kept with the run; the full report body is not stored. Run artifacts
         remain on the Evidence tab.
@@ -4975,6 +4986,15 @@ function artifactRefHref(apiBase: string, ref: string): string | null {
   if (/^https?:\/\//i.test(artifactId)) return artifactId;
   if (artifactId.startsWith('artifact://')) return null;
   return buildArtifactDownloadHref(apiBase, artifactId);
+}
+
+// Producers record diagnostics as canonical ``artifact://<artifact_id>`` refs
+// (MoonMind#3930). Resolve that single-id form to its download; path-shaped
+// refs have no download target and stay null.
+function canonicalArtifactRefHref(apiBase: string, ref: string): string | null {
+  const artifactId = ref.trim().replace(/^artifact:\/\//, '');
+  if (!artifactId || artifactId.includes('/')) return null;
+  return artifactRefHref(apiBase, artifactId);
 }
 
 function branchEvidenceLinks(apiBase: string, branch: CheckpointBranch): ReactNode {
@@ -9362,7 +9382,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const runSummaryDiagnosticsRef =
     runSummary?.failure?.diagnosticsRef || runSummary?.lastStep?.diagnosticsRef || '';
   const runSummaryDiagnosticsHref = runSummaryDiagnosticsRef
-    ? artifactRefHref(payload.apiBase, runSummaryDiagnosticsRef)
+    ? canonicalArtifactRefHref(payload.apiBase, runSummaryDiagnosticsRef)
     : null;
   const displayedLastStepSummary = runSummary?.lastStep?.summary
     ? formatWorkflowSummary(runSummary.lastStep.summary, workflowDisplayStatus, execution?.objectiveOutcome, execution?.completionDisposition)
@@ -10875,6 +10895,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     {runSummary.failure ? 'Open failure diagnostics' : 'Open last step diagnostics'}
                   </a>
                 </div>
+              ) : runSummaryDiagnosticsRef ? (
+                <p className="small">
+                  {runSummary.failure ? 'Failure diagnostics:' : 'Last step diagnostics:'}{' '}
+                  <code className="text-xs break-all">{runSummaryDiagnosticsRef}</code>
+                </p>
               ) : null}
               {runSummary.nextAction ? <p className="small">Next action: {runSummary.nextAction}</p> : null}
             </section>

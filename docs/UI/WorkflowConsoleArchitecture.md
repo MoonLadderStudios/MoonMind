@@ -991,8 +991,8 @@ This section explains one supported journey through existing Workflow Detail sur
 | --- | --- |
 | What happened? | **Summary** (operator summary, or the execution summary) and its **Outcome** reason |
 | What failed? | **Run Summary**: outcome code and stage, **Failed Step**, **Failure Category**, and the last-step message. A quality-gate stop says that no failed Step Execution was fabricated. |
-| Where is the output? | Pull-request link, **Open failure diagnostics**, the remediation workspace head, and the run's artifacts on the **Evidence** tab |
+| Where is the output? | Pull-request link, **Open failure diagnostics** (a canonical `artifact://<id>` diagnostics ref links to its download; any other ref stays visible as text), the remediation workspace head, and the run's artifacts on the **Evidence** tab |
 | What can I do next? | The **Workflow actions** menu offers only actions the server marks available, such as Edit, Rerun, or Continue remediation, with disabled reasons otherwise. |
-| Was a governance report produced? | The **Governance report** block shows `ready`, `partial`, `pending`, or `failed`. Only its summary is kept, and a report failure never changes the run or publication outcome; see [RunGovernanceReports](../Governance/RunGovernanceReports.md) §6. |
+| Was a governance report produced? | The **Governance report** block shows `ready`, `partial`, `pending`, or `failed`, plus the recorded reason code and recoverability when generation did not produce a report. Only its summary is kept, and a report failure never changes the run or publication outcome. Runs whose terminal state was committed outside the workflow terminal-recording path (for example operator cancellation) have no block; see [RunGovernanceReports](../Governance/RunGovernanceReports.md) §6. |
 
 Overview and Evidence do not depend on native chat. When chat is unavailable, the Debug tab keeps a read-only session transcript. The render tests in `frontend/src/entrypoints/workflow-detail.test.tsx` cover the failed-run questions and the governance block.
