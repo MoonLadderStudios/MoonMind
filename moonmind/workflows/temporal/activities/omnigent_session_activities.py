@@ -5085,6 +5085,7 @@ async def omnigent_publish_workspace_activity(
         OmnigentProfileBoundExecutionCoordinator,
     )
     from moonmind.omnigent.workspace_intent import compile_workspace_intent
+    from moonmind.omnigent.workspace_publication import logical_publication_identity
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     command, should_execute = await _claim_command(request)
@@ -5147,7 +5148,7 @@ async def omnigent_publish_workspace_activity(
                 workspace_locator=workspace_locator,
                 current_workflow_id=workflow_id,
                 current_step_execution_id=step_execution_id,
-                publication_identity=agent_request.idempotency_key,
+                publication_identity=logical_publication_identity(agent_request),
                 publish_mode=publish_mode,
                 base_branch=base_branch,
                 repository=str(

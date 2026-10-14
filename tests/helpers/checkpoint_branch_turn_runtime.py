@@ -217,6 +217,18 @@ class CheckpointBranchRuntimeLedger:
 
         self._boundary_release.set()
 
+    def confirm_unconfirmed_host_stops(self) -> None:
+        """Act as the host janitor: finish stops whose acknowledgment was lost.
+
+        An unconfirmed stop keeps its host lease draining, so a retry waits
+        for this confirmation instead of starting beside the old host.
+        """
+
+        for key, lease in list(self._host_leases.items()):
+            if lease.status == "draining":
+                self.own("cleanup", f"cleanup:{key}")
+                self._host_leases[key] = lease.model_copy(update={"status": "stopped"})
+
     async def artifact_ref(self, kind: str, key: str, body: bytes) -> str:
         if self.artifact_writer is not None:
             return await self.artifact_writer(kind, key, body)
@@ -393,9 +405,12 @@ async def execute_checkpoint_branch_request(
             ledger._host_leases[key] = lease
             return lease
 
-        async def mark_host_lease_failed(self, _lease_id, **_kwargs):
-            lease = ledger._host_leases[key].model_copy(update={"status": "failed"})
-            ledger._host_leases[key] = lease
+        async def record_unconfirmed_host_cleanup(self, _lease_id, *, code, summary):
+            # Like the repository, an unconfirmed stop stays draining so the
+            # Provider Profile's exclusive host index remains held.
+            assert code and summary
+            lease = ledger._host_leases[key]
+            assert lease.status == "draining"
             return lease
 
     class Runtime:

@@ -2011,6 +2011,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 }
                             )
                             break
+                        from moonmind.omnigent.workspace_publication import (
+                            logical_publication_identity,
+                        )
+
                         await emit(
                             publication_stage,
                             "started",
@@ -2033,7 +2037,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                                         current_step_execution_id=(
                                             step_execution_id or request.idempotency_key
                                         ),
-                                        publication_identity=request.idempotency_key,
+                                        publication_identity=(
+                                            logical_publication_identity(request)
+                                        ),
                                         publish_mode=publish_mode,
                                         base_branch=self._starting_branch(request),
                                         repository=self._repository_source(request),
@@ -2805,7 +2811,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 launch_evidence_ref
                             )
                         try:
-                            await self._hosts.mark_host_lease_failed(
+                            # The stop is unconfirmed: the container may still
+                            # run. Keep the profile's exclusive host fenced
+                            # until the janitor confirms it, so no successor
+                            # attempt starts beside it.
+                            await self._hosts.record_unconfirmed_host_cleanup(
                                 host_lease.lease_id,
                                 code=type(cleanup_exc).__name__,
                                 summary=str(cleanup_exc),

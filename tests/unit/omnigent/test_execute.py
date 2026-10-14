@@ -6454,8 +6454,15 @@ class _RestartedOmnigentTransportPool:
     heartbeat-only frames a session with a dead runner receives.
     """
 
-    def __init__(self, marker: str, *, refused_connections: int) -> None:
+    def __init__(
+        self,
+        marker: str,
+        *,
+        refused_connections: int,
+        snapshot: dict[str, Any] | None = None,
+    ) -> None:
         self.refused = {"remaining": refused_connections, "count": 0}
+        session_snapshot = snapshot or _host_lost_snapshot(marker)
         self.paths: list[str] = []
 
         async def heartbeats():
@@ -6490,7 +6497,7 @@ class _RestartedOmnigentTransportPool:
                     headers={"content-type": "text/event-stream"},
                 )
             if path == "/v1/sessions/session-1" and request.method == "GET":
-                return httpx.Response(200, json=_host_lost_snapshot(marker))
+                return httpx.Response(200, json=session_snapshot)
             return httpx.Response(200, json={})
 
         self._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -6580,6 +6587,103 @@ async def test_run_omnigent_execution_recovers_turn_orphaned_by_host_loss(
     assert "host" in result.summary
     assert [call["status"] for call in store.terminal_calls] == ["failed"]
     assert loop.time() - started < 10.0
+
+
+@pytest.mark.asyncio
+async def test_server_partition_reattaches_healthy_turn_without_duplicate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """A temporary Omnigent server partition is waited out, not repeated.
+
+    The host and its accepted turn stayed healthy while only the server was
+    unreachable. The retried Activity reconnects to that same turn and reports
+    its result without creating another session or posting the prompt again.
+    """
+
+    correlation_id = "corr-partition"
+    idempotency_key = "idem-partition"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {correlation_id}\n"
+        f"  idempotencyKey: {idempotency_key}"
+    )
+    store = _RecordingBridgeStore()
+    store.row.omnigent_session_id = "session-1"
+    store.row.first_message_state = "posted"
+    store.row.first_message_posted_at = object()
+    healthy = _host_lost_snapshot(marker, host_online=True)
+    healthy["items"] = [
+        healthy["items"][0],
+        _CODEX_PATCH_CALL,
+        _CODEX_PATCH_OUTPUT,
+        _CODEX_FINAL,
+    ]
+    pool = _RestartedOmnigentTransportPool(
+        marker, refused_connections=3, snapshot=healthy
+    )
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client."
+        "_CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._SESSION_HOST_LOSS_GRACE_SECONDS", 0.05
+    )
+    from moonmind.omnigent.execute import _await_marked_turn_terminal
+
+    async def short_quiescence(**kwargs):
+        # The real transcript-quiescence gate, with a test-sized quiet period.
+        kwargs.update(
+            interval_seconds=0.005,
+            quiet_period_seconds=0.02,
+            tool_only_quiet_period_seconds=0.02,
+        )
+        return await _await_marked_turn_terminal(**kwargs)
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal", short_quiescence
+    )
+
+    token = _ACTIVITY_HEARTBEAT_STATE.set({})
+    try:
+        result = await asyncio.wait_for(
+            run_omnigent_execution(
+                AgentExecutionRequest(
+                    agentKind="external",
+                    agentId="omnigent",
+                    correlationId=correlation_id,
+                    idempotencyKey=idempotency_key,
+                    parameters={
+                        "omnigent": {
+                            "agent": {"agentName": "opencode-native-ui"},
+                            "session": {"allowEmptyWorkspace": True},
+                            "prompt": {"text": "resolve"},
+                        },
+                    },
+                ),
+                artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+                run_store=store,
+                transport_pool=pool,
+            ),
+            timeout=10.0,
+        )
+    finally:
+        _ACTIVITY_HEARTBEAT_STATE.reset(token)
+        await pool.client().aclose()
+
+    assert pool.refused["count"] == 3, "the server outage must be waited out"
+    assert [path for path in pool.paths if path.startswith("POST ")] == []
+    assert result.failure_class is None
+    assert result.retry_recommendation != "retry_step_execution"
+    assert result.metadata["omnigentSessionId"] == "session-1"
+    assert [call["status"] for call in store.terminal_calls] == ["completed"]
 
 
 def test_host_loss_grace_restarts_when_the_host_reconnects() -> None:

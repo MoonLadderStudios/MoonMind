@@ -1879,7 +1879,10 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
     workflow._integration = None
     child_requests: list[AgentExecutionRequest] = []
     start_workspaces: dict[int, dict[str, Any]] = {}
-    archive_ref = "artifact://checkpoints/interrupted-step-archive"
+    # ``workspace.capture_checkpoint`` records compact artifact ids, exactly as
+    # the after-execution evidence stores them; the successor needs a ref.
+    archive_id = "art_01INTERRUPTEDSTEPARCHIVE00"
+    archive_ref = "artifact://" + archive_id
     prior_restore_ref = "artifact://checkpoints/prior-verified-head"
 
     async def fake_execute_typed_activity(
@@ -1953,8 +1956,8 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
             "workspaceKind": "worktree_archive",
             "workspaceDigest": "sha256:" + "a" * 64,
             "workspaceIdentityDigest": "sha256:" + "b" * 64,
-            "checkpointManifestRef": "artifact://checkpoints/manifest",
-            "workspaceArchiveRef": archive_ref,
+            "checkpointManifestRef": "art_01INTERRUPTEDSTEPMANIFEST0",
+            "workspaceArchiveRef": archive_id,
         }
         return checkpoint_ref
 
