@@ -28,8 +28,10 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        ExecutionBudget,
         OmnigentExecutionPlanBinding,
         RepositoryOutcomePolicy,
+        resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
         CLAUDE_STOCK_AGENT_NAME,
@@ -1095,6 +1097,19 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# MoonMind#4627: an Omnigent Step retried after its host was lost or replaced
+# restores the predecessor's verified after-execution worktree archive into the
+# successor sandbox. Without one, the successor restarts from its admitted
+# inputs and records that limitation instead of a blocked launch. Older
+# histories keep their recorded fresh-sandbox retry.
+RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
+    "run-omnigent-interrupted-step-workspace-v1"
+)
+# MoonMind#4627: an agent Step retried after an interruption keeps the hard
+# execution ceiling it was admitted with. Each successor receives only the
+# ceiling the interrupted attempts left, and an exhausted ceiling stops instead
+# of starting another attempt. Older histories keep a fresh budget per attempt.
+RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
 # GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
 # and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
 # candidate into doc reconciliation, then publish that reconciled archive (or
@@ -1765,6 +1780,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._step_external_agent_ids: dict[str, str] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._fresh_source_step_execution_attempts: set[str] = set()
+        # Interrupted Omnigent successors keyed by ``step:attempt``: the
+        # verified predecessor archive to restore, or a recorded restart from
+        # admitted inputs when no verified save exists.
+        self._interrupted_step_restore_refs: dict[str, str] = {}
+        self._interrupted_step_restart_limitations: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
         self._step_execution_context_projections: dict[
@@ -2967,6 +2987,74 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             in self._fresh_source_step_execution_attempts
         )
 
+    @staticmethod
+    def _remaining_interrupted_step_timeout_policy(
+        timeout_policy: Mapping[str, Any] | None,
+        *,
+        budget: ExecutionBudget,
+        consumed_seconds: float,
+    ) -> dict[str, Any]:
+        """Return the successor policy bounded by the Step's remaining ceiling."""
+
+        remaining = max(1, int(budget.max_seconds - consumed_seconds))
+        base = min(budget.base_seconds, remaining)
+        return {
+            **dict(timeout_policy or {}),
+            **ExecutionBudget(
+                base_seconds=base,
+                max_seconds=remaining,
+                progress_stall_seconds=min(budget.progress_stall_seconds, base),
+                mode=budget.mode,
+            ).as_timeout_policy(),
+        }
+
+    def _carry_interrupted_omnigent_step_workspace(
+        self,
+        logical_step_id: str,
+        *,
+        next_attempt: int,
+    ) -> None:
+        """Hand the interrupted attempt's latest durable save to its successor.
+
+        A replaced host leaves no live sandbox to continue. Only the
+        after-execution worktree archive, captured with verified digests into
+        artifact storage, is real saved work. When the interrupted attempt
+        produced none, the save it was itself restored from is carried
+        forward. Without either the successor restarts from the Step's
+        admitted inputs and says so.
+        """
+
+        key = self._step_execution_launch_block_key(logical_step_id, next_attempt)
+        evidence = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        ).get("after_execution")
+        archive_ref = ""
+        if (
+            isinstance(evidence, Mapping)
+            and evidence.get("workspaceKind") == "worktree_archive"
+            and str(evidence.get("workspaceDigest") or "").startswith("sha256:")
+            and str(evidence.get("workspaceIdentityDigest") or "").startswith(
+                "sha256:"
+            )
+            and str(evidence.get("checkpointManifestRef") or "").strip()
+        ):
+            archive_ref = str(evidence.get("workspaceArchiveRef") or "").strip()
+        if not archive_ref.startswith("artifact://"):
+            # A host lost before its own capture still restored the save it
+            # inherited from an earlier interruption; keep carrying that save.
+            archive_ref = self._interrupted_step_restore_refs.get(
+                self._step_execution_launch_block_key(
+                    logical_step_id, next_attempt - 1
+                ),
+                "",
+            )
+        if archive_ref.startswith("artifact://"):
+            self._interrupted_step_restore_refs[key] = archive_ref
+            return
+        self._fresh_source_step_execution_attempts.add(key)
+        self._interrupted_step_restart_limitations.add(key)
+
     def _record_workspace_policy_launch_block(
         self,
         logical_step_id: str,
@@ -3059,6 +3147,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             workspace["sourceExecutionOrdinal"] = (
                 dict(source_execution_ordinal) if source_execution_ordinal else None
             )
+        if (
+            self._step_execution_launch_block_key(logical_step_id, attempt)
+            in self._interrupted_step_restart_limitations
+        ):
+            # Work after the interrupted attempt's last durable boundary is
+            # repeated from the admitted Step inputs.
+            workspace["restartLimitation"] = "no_verified_workspace_checkpoint"
         self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
         return workspace
 
@@ -13148,6 +13243,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
 
                 system_retries = 0
+                # Interrupted attempts share the Step's admitted hard ceiling.
+                interrupted_step_budget: ExecutionBudget | None = None
+                interrupted_step_consumed_seconds = 0.0
+                agent_attempt_started_at: datetime | None = None
                 while system_retries <= 3:
                     route = None
                     execute_payload = None
@@ -13294,6 +13393,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
+                            if current_step_execution > 1 and workflow.patched(
+                                RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
+                            ):
+                                interrupted_restore_ref = (
+                                    self._interrupted_step_restore_refs.get(
+                                        self._step_execution_launch_block_key(
+                                            node_id, current_step_execution
+                                        )
+                                    )
+                                )
+                                # The interrupted attempt started from any
+                                # earlier trusted restore, so its own verified
+                                # save holds the newer work.
+                                if interrupted_restore_ref:
+                                    trusted_remediation_checkpoint_restore_ref = (
+                                        interrupted_restore_ref
+                                    )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
@@ -13631,6 +13747,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         ),
                                     )
                                 else:
+                                    if workflow.patched(
+                                        RUN_INTERRUPTED_STEP_DEADLINE_PATCH
+                                    ):
+                                        if interrupted_step_budget is None:
+                                            interrupted_step_budget = (
+                                                resolve_execution_budget(
+                                                    agent_kind=request.agent_kind,
+                                                    timeout_policy=request.timeout_policy,
+                                                )
+                                            )
+                                        elif interrupted_step_consumed_seconds > 0:
+                                            request = request.model_copy(
+                                                update={
+                                                    "timeout_policy": self._remaining_interrupted_step_timeout_policy(
+                                                        request.timeout_policy,
+                                                        budget=interrupted_step_budget,
+                                                        consumed_seconds=(
+                                                            interrupted_step_consumed_seconds
+                                                        ),
+                                                    )
+                                                }
+                                            )
+                                        agent_attempt_started_at = workflow.now()
                                     child_result = await workflow.execute_child_workflow(
                                         "MoonMind.AgentRun",
                                         self._with_issue_claim_work_started(request),
@@ -13987,6 +14126,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        if (
+                            retryable
+                            and system_retries < 3
+                            and interrupted_step_budget is not None
+                            and agent_attempt_started_at is not None
+                        ):
+                            interrupted_step_consumed_seconds += max(
+                                0.0,
+                                (
+                                    workflow.now() - agent_attempt_started_at
+                                ).total_seconds(),
+                            )
+                            agent_attempt_started_at = None
+                            if (
+                                interrupted_step_consumed_seconds
+                                >= interrupted_step_budget.max_seconds
+                            ):
+                                retryable = False
+                                budget_note = (
+                                    "the Step's execution budget was exhausted "
+                                    "across interrupted attempts"
+                                )
+                                step_failure_summary = (
+                                    f"{step_failure_summary}; {budget_note}"
+                                )
+                                if provider_failure_summary:
+                                    provider_failure_summary = (
+                                        f"{provider_failure_summary}; {budget_note}"
+                                    )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
@@ -14011,6 +14179,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             await self._wait_if_paused_at_safe_boundary()
                             if self._cancel_requested:
                                 return
+                            if (
+                                tool_type == "agent_runtime"
+                                and _normalize_agent_runtime_id(
+                                    self._agent_id_from_runtime_inputs(
+                                        node_inputs=node_inputs,
+                                        fallback_name=tool_name,
+                                    )
+                                )
+                                == "omnigent"
+                                and workflow.patched(
+                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
+                                )
+                            ):
+                                self._carry_interrupted_omnigent_step_workspace(
+                                    node_id,
+                                    next_attempt=(
+                                        self._step_execution_for(node_id)
+                                        or current_step_execution
+                                    )
+                                    + 1,
+                                )
                             self._mark_step_running(
                                 node_id,
                                 updated_at=workflow.now(),
