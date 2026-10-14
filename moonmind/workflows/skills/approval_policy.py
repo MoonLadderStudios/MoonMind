@@ -94,6 +94,16 @@ def step_gate_contract_violations(
     invalid/degraded and downgrade its verdict to ``NO_DETERMINATION``.
     """
     violations: list[str] = []
+    # The artifact publisher can validate against durable inputs unavailable to
+    # this pure parser, including the original issue assessment. Carry those
+    # failures across the compact Temporal result boundary.
+    published_violations = payload.get("contractViolations")
+    if isinstance(published_violations, list):
+        violations.extend(
+            reason.strip()[:500]
+            for reason in published_violations
+            if isinstance(reason, str) and reason.strip()
+        )
     raw_verdict = str(payload.get("verdict") or "").strip()
     if not raw_verdict:
         violations.append(

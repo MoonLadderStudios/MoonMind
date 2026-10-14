@@ -140,6 +140,20 @@ the source requires before a repository change, such as proving legacy tasks
 have drained before removing their handlers. Verify that prerequisite or return
 the bounded evidence handoff; do not perform an unauthorized deployment.
 
+## Source obligations and admission
+
+Before expensive checks, bind the assessment's existing `verificationMap` to the
+original source using the acceptance policy. Preserve allowed methods and any
+explicit live/rendered/profile/topology requirements. Resolve cheap capability
+probes and run the helper's `admission` command; continue independent ready work,
+reuse busy owners, and do not repeat unchanged unavailable setup. Never import
+parent-epic physical or human gates or turn a free-form suggestion into a blocker.
+
+Read the current owner-supplied artifact bytes before reissuing an old blocker.
+Retain individually passed objective rows even if the aggregate was nonpassing;
+collect only missing/invalidated proof. A changed inventory requires a fresh
+judgment on the same candidate, not another implementation or full export.
+
 ## Evidence policy
 
 Apply [the acceptance policy](references/acceptance-policy.md) to every source
@@ -331,9 +345,11 @@ classify the environment according to `AGENTS.md`.
 ### Browser-independent verification
 
 Apply the acceptance policy's browser-independent defaults in every mode. Browser
-checks are optional diagnostics unless the controlling source or caller
-explicitly requires a browser acceptance gate or human visual signoff for this
-verification run. Preserve that explicit authority. Missing browsers, Playwright,
+checks are optional diagnostics unless the controlling source, caller, or
+applicable root or scoped `AGENTS.md` instructions explicitly require a browser
+acceptance gate or human visual signoff for this verification run. Preserve that
+explicit authority. Merely naming a browser suite in guidance or generic docs
+does not make it an acceptance requirement. Missing browsers, Playwright,
 browser installation, screenshots, live UI access, or human visual review must never
 block the default verifier or fail its workflow. Record unavailable browser
 checks as advisory `NOT RUN`; do not put them in Remaining Work or choose a
@@ -507,7 +523,7 @@ the caller retains its verdict-based default; omission is not an explicit stop.
 
 ## Evidence binding
 
-For objective success, include `validatedRefs.acceptance` using the complete
+For current structured judgments of every verdict, include `validatedRefs.acceptance` using the complete
 `acceptance/v1` contract in [the acceptance policy](references/acceptance-policy.md).
 Capture subject and scope before checks and confirm content is unchanged afterward.
 Preserve source/base identity separately. Bind each mandatory requirement to actual

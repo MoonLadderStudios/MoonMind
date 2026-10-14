@@ -242,15 +242,24 @@ Quickstart guidance:
 
 ## Agent Context
 
-Keep this feature's technology, status, and decisions in `plan.md` and its feature artifacts. Planning does not edit lasting agent guidance such as `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`.
+Keep feature technology and status in `plan.md`. Routine planning must not change
+lasting repository guidance. The agent context script is a no-op by default.
 
-Only when the user explicitly asks to record this plan in lasting agent guidance, run:
+Only when the user explicitly requests a lasting guidance edit, run:
 
 ```bash
-.specify/scripts/bash/update-agent-context.sh --write [agent]
+.specify/scripts/bash/update-agent-context.sh --write __AGENT__
 ```
 
-Omit `[agent]` to update the existing agent files. The script adds only new technology from the current plan, keeps manual additions between the managed markers, and writes through symlinked agent files. Without `--write` it changes nothing.
+Replace `__AGENT__` with the active integration key when known. If unknown, omit
+the agent argument to update existing agent files. The `--write` flag records the
+explicit request; it is not a routine planning prerequisite.
+
+An authorized update must preserve manual additions, symlink targets and existing
+file permissions. The script never creates or updates `AGENTS.md` from plan data, including through
+an alias. Any explicitly requested repository-policy edit belongs in a separate,
+intentional guidance change; a plan template cannot supply that policy. Report any update failure rather than claiming the
+context was recorded.
 
 ## Stop Point
 
