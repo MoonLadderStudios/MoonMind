@@ -654,16 +654,56 @@ def render_native_ui_document(
   function announceFatal(reason) {
     fatalAnnounced = true;
     if (readinessObserver) readinessObserver.disconnect();
+    const code = String(reason || "native_crash").slice(0, 128);
     try {
       window.parent.postMessage(
         {
           type: "moonmind.omnigent.chat.fatal",
           chatBindingId: binding.chatBindingId,
-          reason: String(reason || "native_crash").slice(0, 128),
+          reason: code,
         },
         window.location.origin
       );
     } catch (err) {}
+    showFullPageUnavailable(code);
+  }
+  // Full-page presentation has no embedding shell to receive these signals,
+  // so it shows its own unavailable surface and bounds startup with the same
+  // deadline the embedded shell uses (docs/UI/WorkflowChatPanel.md §4.1).
+  const fullPage = window.parent === window;
+  let unavailableShown = false;
+  function showFullPageUnavailable(code) {
+    if (!fullPage || unavailableShown) return;
+    function render() {
+      if (unavailableShown || !document.body) return;
+      unavailableShown = true;
+      const panel = document.createElement("main");
+      panel.setAttribute("role", "alert");
+      const heading = document.createElement("h1");
+      heading.textContent = "Chat unavailable";
+      const detail = document.createElement("p");
+      detail.textContent =
+        "Native chat could not load (" + code + "). The workflow's recorded " +
+        "transcript and results remain available in MoonMind.";
+      const retry = document.createElement("button");
+      retry.setAttribute("type", "button");
+      retry.textContent = "Retry";
+      retry.addEventListener("click", function () {
+        window.location.reload();
+      });
+      panel.append(heading, detail, retry);
+      document.body.replaceChildren(panel);
+    }
+    if (document.body) {
+      render();
+    } else {
+      document.addEventListener("DOMContentLoaded", render, { once: true });
+    }
+  }
+  if (fullPage) {
+    window.setTimeout(function () {
+      if (!readyAnnounced && !fatalAnnounced) announceFatal("readiness_timeout");
+    }, 15000);
   }
   window.addEventListener("error", function () {
     announceFatal("native_crash");
