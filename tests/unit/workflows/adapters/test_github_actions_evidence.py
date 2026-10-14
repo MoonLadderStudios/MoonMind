@@ -117,6 +117,9 @@ def fixture(monkeypatch, *, files=None):
                     else "open",
                     "draft": not state.get("marked_ready", False),
                     "node_id": "PR_7",
+                    "html_url": state.get(
+                        "html_url", f"https://github.com/{REPO}/pull/7"
+                    ),
                     "head": {
                         "sha": state.get("moved_head", HEAD)
                         if state["pulls"] > 1
@@ -447,6 +450,22 @@ async def test_untrusted_identity_never_becomes_evidence(monkeypatch, change):
     assert result["status"] == "unavailable"
     assert result["files"] == []
     assert result["gaps"]
+
+
+@pytest.mark.asyncio
+async def test_pull_request_url_is_bound_to_the_admitted_connection(monkeypatch):
+    enterprise_url = f"https://ghe.example.com/{REPO}/pull/7"
+    service, state, _requests = fixture(monkeypatch)
+    state["html_url"] = enterprise_url
+    accepted = await collect(service, pull_request_url=enterprise_url)
+    assert accepted["status"] == "ready"
+
+    rejected = await collect(
+        service, pull_request_url=f"https://github.com/{REPO}/pull/7"
+    )
+    assert rejected["status"] == "unavailable"
+    assert rejected["files"] == []
+    assert rejected["gaps"] == [{"code": "pull_request_identity_mismatch"}]
 
 
 @pytest.mark.asyncio

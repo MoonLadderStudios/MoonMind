@@ -5649,6 +5649,10 @@ async def test_run_execution_stage_additional_work_publishes_pushed_branch_as_dr
     assert workflow._publish_context["moonSpecDraftPublication"]["policy"] == (
         "draft_pr_on_additional_work_needed"
     )
+    assert (
+        workflow._publish_context["moonSpecDraftPublication"]["createdByWorkflow"]
+        is True
+    )
 
 
 @pytest.mark.asyncio

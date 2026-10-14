@@ -81,6 +81,8 @@ steps:
 
     Reconcile the saved candidate, latest persisted verifier evidence, and current prerequisite readiness before choosing work. The initial assessment is immutable history; its BLOCKED verdict does not veto independent ready work or later accepted evidence. If only evidence collection remains, preserve the implementation and run only the missing proof through its existing authorized owner. Current denied authority, cancellation, and explicit holds remain stops.
 
+    If the recorded verdict is FULLY_IMPLEMENTED and no later persisted verifier evidence names remaining work, make no code changes and report that implementation is skipped because the issue appears implemented in the current repository state; the verification step still decides acceptance.
+
     When the existing-PR resolution step produced an exact existing PR and validated current head, continue that same PR from its validated head: prepare the workspace from the existing head, implement only the remaining requirements, and update that PR. Preserve the resolved issue and predecessor across replay/retry. Never repeat search during recovery of an already selected issue, reset a continuation to the base branch, or create a second PR just because the preset normally produces one. Keep internal remediation within this one issue attempt.
 
     Reconcile the assessment requirements verification map against the original
