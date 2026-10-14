@@ -98,16 +98,59 @@ def admit_publication_git_identity(
     return publication_git_identity_admission(snapshot)
 
 
-def resolve_execution_git_identity(parameters: Mapping[str, object]) -> tuple[str, str]:
-    """Consume the trusted request projection; old requests retain fallback."""
-    return admitted_publication_git_identity(parameters) or resolve_git_identity()
+async def _recorded_publication_memo() -> Mapping[str, object]:
+    """Read admission from this Activity's recorded run and parent chain.
+
+    Request parameters were authorable in retained payloads. Only the worker's
+    existing Temporal client and actual Activity context locate this authority.
+    A failed read is unavailable authority; it never selects a new identity.
+    """
+    from temporalio import activity
+
+    if not activity.in_activity():
+        return {}
+    info = activity.info()
+    owner = (info.workflow_id, info.workflow_run_id)
+    visited: set[tuple[str, str]] = set()
+    for _ in range(8):
+        if not all(owner) or owner in visited:
+            raise RuntimeError("publication admission parent/run authority is invalid")
+        visited.add(owner)
+        described = (
+            await activity.client()
+            .get_workflow_handle(owner[0], run_id=owner[1])
+            .describe()
+        )
+        if (described.id, described.run_id) != owner:
+            raise RuntimeError(
+                "publication admission description does not match its run"
+            )
+        memo = await described.memo()
+        if admitted_publication_git_identity(memo) is not None:
+            return memo
+        if not described.parent_id:
+            return {}
+        owner = (described.parent_id, described.parent_run_id or "")
+    raise RuntimeError("publication admission parent chain exceeds its existing bound")
 
 
-def publication_git_identity_projection(
+async def resolve_execution_git_identity(
     parameters: Mapping[str, object],
+) -> tuple[str, str]:
+    """Use recorded admission; legacy authored parameters remain inert."""
+    identity = await publication_git_identity_projection(parameters)
+    return (
+        _identity_from_snapshot(identity)
+        if identity is not None
+        else resolve_git_identity()
+    )
+
+
+async def publication_git_identity_projection(
+    parameters: Mapping[str, object] | None = None,
 ) -> dict[str, str] | None:
-    """Explicit publication ports receive only the versioned request choice."""
-    identity = admitted_publication_git_identity(parameters)
+    """Ports receive the recorded choice, never an authored payload assertion."""
+    identity = admitted_publication_git_identity(await _recorded_publication_memo())
     return {"name": identity[0], "email": identity[1]} if identity is not None else None
 
 

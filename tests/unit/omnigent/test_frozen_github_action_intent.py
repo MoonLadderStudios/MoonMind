@@ -506,6 +506,9 @@ async def test_profile_preflight_and_publisher_use_the_same_canonical_repository
         OmnigentProfileBoundExecutionCoordinator, "__init__", capture_runtime
     )
     identity = {"name": "Admitted operator", "email": "admitted@example.invalid"}
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, identity)
     *_, result = await _drive_authority_chain_coordinator(
         AsyncMock(return_value=AgentRunResult(summary="done")),
         request_parameters={

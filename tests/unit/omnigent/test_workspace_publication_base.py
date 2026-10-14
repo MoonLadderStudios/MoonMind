@@ -1149,6 +1149,9 @@ async def test_successor_attempt_reconciles_predecessor_publication(
         or "moonmind-worker@users.noreply.github.com",
     }
     first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, admitted_identity)
     first.parameters["publicationGitIdentityAdmission"] = {
         "schemaVersion": "v1",
         "identity": dict(admitted_identity),

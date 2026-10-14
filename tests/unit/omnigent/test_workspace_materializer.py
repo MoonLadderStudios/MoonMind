@@ -572,6 +572,9 @@ async def test_materializer_reapplies_commit_identity_after_checkpoint_restore(
             "workspaceCheckpointRestoreRef": "artifact://checkpoint",
         }
     )
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, admitted_identity)
     if admitted_identity is not None:
         request.parameters["publicationGitIdentityAdmission"] = {"schemaVersion": "v1", "identity": admitted_identity}
     await OmnigentWorkspaceMaterializer(

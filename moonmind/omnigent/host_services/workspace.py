@@ -434,7 +434,7 @@ class OmnigentWorkspaceMaterializer:
                 candidate,
                 runtime_uid=runtime_uid,
                 runtime_gid=runtime_gid,
-                identity=resolve_execution_git_identity(request.parameters or {}),
+                identity=await resolve_execution_git_identity(request.parameters or {}),
             )
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only

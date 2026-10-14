@@ -3512,6 +3512,9 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         preflight = await OmnigentOAuthHostRuntime(client=client).prepare_host(
             binding=binding,
             host_lease=lease,
+            publication_git_identity=await publication_git_identity_projection(
+                agent_request.parameters
+            ),
             workspace_key=f"{workflow_id}:{step_execution_id}",
             workspace_locator=workspace_locator,
             current_workflow_id=workflow_id,
@@ -5159,7 +5162,7 @@ async def omnigent_publish_workspace_activity(
                 accepted_published_head=(agent_request.parameters or {}).get(
                     "acceptedPublishedHead"
                 ),
-                publication_git_identity=publication_git_identity_projection(
+                publication_git_identity=await publication_git_identity_projection(
                     agent_request.parameters or {}
                 ),
             )
