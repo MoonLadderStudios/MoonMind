@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalogError,
     TemporalWorkerFleet,
     build_default_activity_catalog,
+    publication_task_queue,
 )
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityBinding,
@@ -424,7 +425,11 @@ def _queue_concurrency_limits_for_fleet(
     if merge_queue not in task_queues or merge_queue in shared_queues:
         # A merge queue configured as a normal queue keeps the fleet budget.
         return {}
-    return {merge_queue: temporal_settings.merge_automation_workflow_worker_concurrency}
+    return {
+        queue: temporal_settings.merge_automation_workflow_worker_concurrency
+        for queue in (merge_queue, publication_task_queue(merge_queue))
+        if queue in task_queues
+    }
 
 
 def _fleet_entry(

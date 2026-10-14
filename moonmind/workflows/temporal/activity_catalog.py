@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from moonmind.config.settings import TemporalSettings, settings
 from moonmind.workflows.codex_session_timeouts import (
@@ -39,6 +39,19 @@ AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 AGENT_RUNTIME_CONTROL_TASK_QUEUE = "mm.activity.agent_runtime.control"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
+# A behavior contract, independent of worker/source versions. Older workers do
+# not poll these queues. Retained workflows keep their original queues until
+# they finish; capable workers serve both from the existing fleets.
+PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX = ".publication-v1"
+
+
+def publication_task_queue(task_queue: str) -> str:
+    return (
+        task_queue
+        if task_queue.endswith(PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX)
+        else task_queue + PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX
+    )
+
 
 def get_workflow_task_queue(
     temporal_settings: TemporalSettings | None = None,
@@ -71,6 +84,7 @@ def get_workflow_poll_task_queues(
     )
     merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
     queues = (start_queue, replay_queue, merge_queue)
+    queues += tuple(publication_task_queue(queue) for queue in queues if queue)
     return tuple(dict.fromkeys(queue for queue in queues if queue))
 
 
@@ -88,9 +102,12 @@ def get_workflow_child_task_queue(
 
     cfg = temporal_settings or settings.temporal
     merge_queue = str(cfg.merge_automation_workflow_task_queue).strip()
-    if current_task_queue == merge_queue:
-        return merge_queue
-    return str(cfg.user_workflow_v2_task_queue).strip()
+    admitted_lane = current_task_queue.endswith(PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX)
+    if current_task_queue in (merge_queue, publication_task_queue(merge_queue)):
+        child_queue = merge_queue
+    else:
+        child_queue = str(cfg.user_workflow_v2_task_queue).strip()
+    return publication_task_queue(child_queue) if admitted_lane else child_queue
 
 
 class TemporalActivityCatalogError(ValueError):
@@ -180,6 +197,17 @@ class TemporalActivityRoute:
     timeouts: TemporalActivityTimeouts
     retries: TemporalActivityRetries
     heartbeat_required: bool = False
+
+
+def get_activity_task_queue(
+    route: TemporalActivityRoute, current_workflow_queue: str,
+) -> str:
+    if (
+        route.fleet in {WORKFLOW_FLEET, AGENT_RUNTIME_FLEET, SANDBOX_FLEET}
+        and current_workflow_queue.endswith(PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX)
+    ):
+        return publication_task_queue(route.task_queue)
+    return route.task_queue
 
 
 def _activity_retries(
@@ -1881,6 +1909,18 @@ def build_default_activity_catalog(
         ),
     )
 
+    fleets = tuple(
+        replace(
+            fleet,
+            task_queues=tuple(dict.fromkeys((
+                *fleet.task_queues,
+                *(publication_task_queue(queue) for queue in fleet.task_queues),
+            ))),
+        )
+        if fleet.fleet in {AGENT_RUNTIME_FLEET, SANDBOX_FLEET}
+        else fleet
+        for fleet in fleets
+    )
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
 
 

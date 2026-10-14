@@ -42,8 +42,9 @@ pytestmark = [pytest.mark.asyncio]
 
 
 @pytest.mark.parametrize("owned_admission", [False, True])
+@pytest.mark.parametrize("migrated_route", [False, True])
 async def test_existing_action_needs_server_identity_admission(
-    mock_temporal_adapter, owned_admission
+    mock_temporal_adapter, owned_admission, migrated_route,
 ):
     from moonmind.workflows.executions.provider_profile_projection import (
         PROVIDER_PROFILE_MEMO_KEY,
@@ -73,7 +74,7 @@ async def test_existing_action_needs_server_identity_admission(
         workflow=workflow_type,
         id=make_scheduled_workflow_id_base(definition_id),
         args=[workflow_input],
-        task_queue="mm.workflow.user.v2",
+        task_queue="mm.workflow.user.v2" + (".publication-v1" if migrated_route else ""),
         memo=memo,
         typed_search_attributes=[
             SimpleNamespace(key=SimpleNamespace(name=PROVIDER_PROFILE_SEARCH_ATTRIBUTE))
@@ -84,7 +85,7 @@ async def test_existing_action_needs_server_identity_admission(
         definition_id=definition_id,
         workflow_type=workflow_type,
         workflow_input=workflow_input,
-    ) is (not owned_admission)
+    ) is (not (owned_admission and migrated_route))
 
 
 @asynccontextmanager

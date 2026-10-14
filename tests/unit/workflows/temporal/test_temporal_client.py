@@ -109,6 +109,16 @@ async def test_get_drain_metrics_counts_running_workflows(adapter):
     assert result["stale_running"] == 0
     adapter._client.count_workflows.assert_awaited_once()
 
+async def test_default_drain_metrics_include_admitted_workflow_lanes(adapter):
+    adapter._client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=1))
+    await adapter.get_drain_metrics()
+    query = adapter._client.count_workflows.await_args.kwargs["query"]
+    for queue in (
+        settings.temporal.user_workflow_v2_task_queue,
+        settings.temporal.merge_automation_workflow_task_queue,
+    ):
+        assert '"' + queue + '.publication-v1"' in query
+
 async def test_get_drain_metrics_with_task_queue_filter(adapter):
     """get_drain_metrics should include TaskQueue filter in Visibility query."""
 
