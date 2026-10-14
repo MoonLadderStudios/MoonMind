@@ -1111,6 +1111,7 @@ async def get_omnigent_codex_catalog_readiness(
 
     from api_service.services.profile_execution_selection import (
         load_execution_configurations,
+        profile_has_native_inventory_route,
         select_execution_configuration,
     )
 
@@ -1165,13 +1166,15 @@ async def get_omnigent_codex_catalog_readiness(
         # Busy is informational. The Provider Profile Manager queues every
         # request for a full profile, whatever its 429 ``rate_limit_policy``.
         busy = active_slot_counts.get(row.profile_id, 0) >= (row.max_parallel_runs or 1)
-        # Compatibility is the admission decision itself: Create resolves a
-        # Profile to exactly one execution configuration through this owner,
-        # so the projection cannot offer a Profile admission rejects, or hide
-        # one it accepts. A rejected Profile is listed as incompatible input
-        # with admission's own reason instead of being omitted.
+        # Compatibility is the admission decision itself: Create routes a
+        # Profile directly when it has the native inventory route, and
+        # otherwise resolves it to exactly one execution configuration through
+        # this owner, so the projection cannot offer a Profile admission
+        # rejects, or hide one it accepts. A rejected Profile is listed as
+        # incompatible input with admission's own reason instead of omitted.
         try:
-            select_execution_configuration(row, configurations)
+            if not profile_has_native_inventory_route(row, configurations):
+                select_execution_configuration(row, configurations)
         except HTTPException as exc:
             reason = _reason("compatible_provider_profile_unavailable")
             if isinstance(exc.detail, dict) and exc.detail.get("message"):

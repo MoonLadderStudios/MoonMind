@@ -1637,7 +1637,15 @@ def test_catalog_blocks_declined_free_route_with_precise_privacy_reason(monkeypa
 
 
 def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatch):
-    """`credential_source == "none"` is not a blanket eligibility escape hatch."""
+    """`credential_source == "none"` is not a blanket eligibility escape hatch.
+
+    Create routes this Profile directly, so the registered credential
+    capability, which readiness owns, is what rejects it.
+    """
+
+    from api_service.api.routers.provider_profiles import (
+        _credential_capability_check,
+    )
 
     stray = _profile(
         profile_id="claude-credentialless",
@@ -1645,17 +1653,30 @@ def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatc
         runtime_id="claude_code",
         credential_source=SimpleNamespace(value="none"),
         runtime_materialization_mode=SimpleNamespace(value="composite"),
+        auth_state=SimpleNamespace(value="connected"),
+        last_auth_method=None,
+        secret_refs={},
+        env_template=None,
+        file_templates=None,
+        home_path_overrides=None,
+        command_behavior={},
     )
     app = _app(monkeypatch, session=_Session([stray]))
+
+    def readiness(row, **_kwargs):
+        check = _credential_capability_check(row)
+        return {"launch_ready": check["status"] != "error", "checks": [check]}
+
+    monkeypatch.setattr(catalog, "_provider_profile_readiness", readiness)
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
     assert body["eligibleProviderProfiles"] == []
-    # Reported as incompatible input, not silently omitted.
+    # Reported as ineligible input, not silently omitted.
     assert [
         (item["profileId"], [reason["code"] for reason in item["gateReasons"]])
         for item in body["ineligibleProviderProfiles"]
-    ] == [("claude-credentialless", ["compatible_provider_profile_unavailable"])]
+    ] == [("claude-credentialless", ["profile_validation_required"])]
 
 
 _MM3833_REPRESENTATIVE_PROFILES = (
@@ -1682,12 +1703,24 @@ _MM3833_REPRESENTATIVE_PROFILES = (
         credential_source=SimpleNamespace(value="none"),
         runtime_materialization_mode=SimpleNamespace(value="composite"),
     ),
-    # An OpenAI API key on the Codex runtime: no configuration accepts it.
+    # An OpenAI API key on the Codex runtime: no configuration accepts it, so
+    # it keeps the direct native route.
     _profile(
         profile_id="codex-api-key",
         account_label="OpenAI API key",
         credential_source=SimpleNamespace(value="secret_ref"),
         runtime_materialization_mode=SimpleNamespace(value="api_key_env"),
+    ),
+    # Pinned to a configuration that is no longer loadable: the pin keeps the
+    # Omnigent route, so it never falls back direct and admission rejects it.
+    _profile(
+        profile_id="codex-pinned-missing",
+        account_label="OpenAI pinned",
+        execution_configuration={
+            "profileId": "retired-configuration",
+            "version": 1,
+            "digest": "sha256:" + "0" * 64,
+        },
     ),
 )
 
@@ -1696,14 +1729,16 @@ _MM3833_REPRESENTATIVE_PROFILES = (
 async def test_mm3833_catalog_eligibility_agrees_with_profile_admission(monkeypatch):
     """The catalog offers exactly the Profiles Create admission accepts.
 
-    Admission is ``profile_execution_selection``, which Create runs for a
-    selected Profile before resolving its launch snapshot. A Profile it
+    Admission is Create's Profile route: a Profile with the native inventory
+    route launches directly, and any other Profile must resolve through
+    ``profile_execution_selection`` before its launch snapshot. A Profile it
     rejects is listed as incompatible input with admission's own reason; it is
     never omitted, and no other account takes its place.
     """
 
     from api_service.services.profile_execution_selection import (
         profile_execution_selection,
+        profile_route_runtime,
     )
 
     rows = list(_MM3833_REPRESENTATIVE_PROFILES)
@@ -1711,8 +1746,13 @@ async def test_mm3833_catalog_eligibility_agrees_with_profile_admission(monkeypa
     rejected: dict[str, str] = {}
     for row in rows:
         admission_session = SimpleNamespace(
-            execute=AsyncMock(return_value=_Result(_builtin_configurations()))
+            execute=AsyncMock(
+                side_effect=lambda _statement: _Result(_builtin_configurations())
+            )
         )
+        if await profile_route_runtime(admission_session, None, row) != "omnigent":
+            admitted.add(row.profile_id)
+            continue
         try:
             selection = await profile_execution_selection(admission_session, row, None)
         except HTTPException as exc:
@@ -1726,8 +1766,9 @@ async def test_mm3833_catalog_eligibility_agrees_with_profile_admission(monkeypa
         "claude-oauth",
         "opencode-keyed",
         "opencode-zen-free",
+        "codex-api-key",
     }
-    assert set(rejected) == {"codex-api-key"}
+    assert set(rejected) == {"codex-pinned-missing"}
 
     body = (
         TestClient(_app(monkeypatch, session=_Session(rows)))
@@ -1754,6 +1795,32 @@ async def test_mm3833_catalog_eligibility_agrees_with_profile_admission(monkeypa
         profile_id: [("compatible_provider_profile_unavailable", message)]
         for profile_id, message in rejected.items()
     }
+
+
+def test_mm3833_catalog_offers_a_profile_create_routes_directly(monkeypatch):
+    """No Omnigent configuration is not a reason to hide a direct Profile.
+
+    Create admits a supported Profile without a compatible configuration
+    through its native runtime, so the catalog must offer it too.
+    """
+
+    body = (
+        TestClient(
+            _app(
+                monkeypatch,
+                session=_Session(
+                    [_profile(profile_id="codex-oauth")], configurations=[]
+                ),
+            )
+        )
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
+
+    assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
+        "codex-oauth"
+    ]
+    assert body["ineligibleProviderProfiles"] == []
 
 
 def _mm3833_generic_readiness(monkeypatch, document, providers):
