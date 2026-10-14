@@ -173,6 +173,19 @@ class _CapacityProbe:
         return _capacity_result()
 
 
+async def _query_answered_by_running_worker(handle: Any, query: Any) -> Any:
+    # The time-skipping test server can hand a query task to a long poll left
+    # by the worker that just stopped on the same task queue; that query is
+    # never answered. A fresh query reaches the running worker, so retry
+    # short attempts within the original bound instead of waiting it out.
+    async with asyncio.timeout(10):
+        while True:
+            try:
+                return await asyncio.wait_for(handle.query(query), timeout=2)
+            except TimeoutError:
+                continue
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "recover", [True, False], ids=["capacity-recovers", "budget-exhausted"]
@@ -224,9 +237,8 @@ async def test_production_capacity_wait_survives_restart_and_replays_legacy_hist
             max_cached_workflows=0,
         ):
             assert (
-                await asyncio.wait_for(
-                    legacy.query(_CurrentCapacitySearch.capacity_retry_enabled),
-                    timeout=10,
+                await _query_answered_by_running_worker(
+                    legacy, _CurrentCapacitySearch.capacity_retry_enabled
                 )
             ) is False
             assert legacy_probe.deferred_token is not None
