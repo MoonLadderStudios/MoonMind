@@ -99,7 +99,7 @@ services:
       # MoonLadderStudios/MoonMind#4115: the native Qdrant backend is retired.
       # The vector-free release wires no QDRANT_URL; a stale QDRANT_URL in an
       # old .env is ignored. Exact-container retirement of a pre-cutover
-      # orphan is an explicit operator action,
+      # orphan is an explicit operator action (docs/Runbooks/QdrantRetirement.md),
       # never broad orphan cleanup or `down -v`.
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
@@ -1160,7 +1160,7 @@ services:
   # qdrant-storage:/qdrant/storage. Removing this YAML definition does not
   # stop a running pre-cutover orphan nor delete pre-cutover host data:
   # exact-container retirement is an explicit operator action with ownership
-  # checks, and the pre-cutover
+  # checks (docs/Runbooks/QdrantRetirement.md), and the pre-cutover
   # volume persists as an unmanaged host orphan through the #4115
   # recovery window; its eventual deletion is a separate exact-resource
   # operator action, never automatic.
