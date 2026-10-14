@@ -31,6 +31,8 @@ class PublicationRetryJourney:
         )
 
 
+# The default connection derives from the deployment declaration.
+@pytest.mark.usefixtures('deployment_without_recorded_connections')
 @pytest.mark.parametrize('rate_limited', [False, True])
 async def test_recurring_publication_uses_durable_retry_and_one_remote_create(monkeypatch, rate_limited):
     monkeypatch.setenv('GITHUB_TOKEN', 'github-token-fixture')

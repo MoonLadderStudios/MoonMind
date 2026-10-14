@@ -59,6 +59,10 @@ from moonmind.services.skill_resolution import (
     extract_required_capabilities_from_skill_markdown,
     extract_side_effect_metadata_from_skill_markdown,
 )
+from moonmind.workflows.executions.execution_contract import (
+    WorkflowContractError,
+    skill_publish_contract,
+)
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
@@ -351,6 +355,14 @@ class DashboardSkillOption(BaseModel):
         None,
         alias="sideEffect",
         description="Skill-declared non-repository side-effect metadata, when present",
+    )
+    publish_contract: dict[str, bool] = Field(
+        default_factory=dict,
+        alias="publishContract",
+        description=(
+            "Publication constraints the submit path enforces for this Skill: "
+            "selfManaged (Skill-owned Auto) and repositoryPublishDisabled (None only)"
+        ),
     )
     markdown: str | None = Field(
         None, description="Markdown content of the skill, if requested"
@@ -765,6 +777,24 @@ def _schema_inline_size(input_schema: dict[str, Any]) -> int:
     )
 
 
+def _skill_publish_contract(
+    skill_id: str,
+    *,
+    publish: dict[str, Any] | None,
+    side_effect: dict[str, Any] | None,
+) -> dict[str, bool]:
+    try:
+        return skill_publish_contract(
+            skill_id,
+            publish_metadata=publish,
+            side_effect_metadata=side_effect,
+        )
+    except WorkflowContractError:
+        # Invalid publish metadata is rejected at submission; listing the
+        # Skill must not fail, and it claims no publication capability.
+        return {"selfManaged": False, "repositoryPublishDisabled": False}
+
+
 def _skill_option_from_contract(
     *,
     skill_id: str,
@@ -806,6 +836,9 @@ def _skill_option_from_contract(
         requiredCapabilities=required_capabilities or [],
         publish=publish,
         sideEffect=side_effect,
+        publishContract=_skill_publish_contract(
+            skill_id, publish=publish, side_effect=side_effect
+        ),
         markdown=markdown,
         inputSchema=input_schema,
         uiSchema=dict(contract.get("uiSchema") or {}),

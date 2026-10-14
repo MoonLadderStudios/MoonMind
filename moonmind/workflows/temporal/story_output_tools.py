@@ -28,7 +28,7 @@ from moonmind.integrations.jira.models import (
     TransitionIssueRequest,
 )
 from moonmind.integrations.jira.tool import JiraToolService
-from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS, GitHubService
 from moonmind.workflows.skills.acceptance_contract import (
     acceptance_evidence,
     validate_completion_target,
@@ -573,7 +573,9 @@ async def _discover_github_document_paths(
             "repository must be a GitHub owner/repo slug or GitHub URL for remote discovery"
         )
 
-    token, _resolution_error = await GitHubService.resolve_github_token()
+    token, _resolution_error = await GitHubService.resolve_github_token(
+        repo=repo_slug, operations=("read",)
+    )
     headers = GitHubService._github_headers(token) if token else {}
     normalized_directory = directory.strip("/")
     prefix = f"{normalized_directory}/" if normalized_directory else ""
@@ -2716,7 +2718,9 @@ def _merge_fields(
     return fields
 
 async def _default_github_story_fetcher(repo: str, ref: str, path: str) -> str:
-    token, _resolution_error = await GitHubService.resolve_github_token(repo=repo)
+    token, _resolution_error = await GitHubService.resolve_github_token(
+        repo=repo, operations=("read",)
+    )
     headers = GitHubService._github_headers(token) if token else {}
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
     params = {"ref": ref} if ref else None
@@ -5071,7 +5075,9 @@ async def _fetch_github_issue(
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> tuple[dict[str, Any] | None, str | None]:
     service = github_service_factory()
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return None, resolution_error or "GitHub issue lookup is unavailable."
     headers = service._github_headers(token)
@@ -7074,8 +7080,6 @@ def _github_status_pull_request_url(
     )
 
 
-
-
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
     if "requireVerification" not in inputs:
         return True
@@ -7983,23 +7987,92 @@ def _github_attempt_handoff_for_transition(
     import os as _os
 
     previous = _mapping((context or {}).get("previousOutputs"))
+    receipt = (context or {}).get("issue_claim_receipt")
+    admitted = (
+        parse_attempt_comment(receipt.comment_body).handoff
+        if isinstance(receipt, ClaimReceipt)
+        else None
+    )
+    if admitted and (admitted.repository.casefold(), admitted.issue_number) != (
+        repository.casefold(),
+        issue_number,
+    ):
+        raise ValueError("substitution_denied: handoff targets another issue")
+    retained = admitted.to_dict() if admitted else {}
+    # Identity and lineage belong to the durable claim, not stale tool inputs.
+    identity_keys = {
+        "attemptId",
+        "workflowId",
+        "runId",
+        "deploymentId",
+        "predecessorAttemptId",
+        "predecessorCommentId",
+    }
+    # Activity/outcome and next action are transition decisions. Other omitted
+    # evidence must survive sparse status updates of this same attempt.
+    for key in (
+        "activity",
+        "outcome",
+        "nextAction",
+        "writersStopped",
+        "pendingDisposition",
+    ):
+        retained.pop(key, None)
+
+    evidence_sources = (
+        inputs,
+        _mapping(inputs.get("previousOutputs")),
+        previous,
+        retained,
+    )
 
     def _first(*keys: str, default: Any = "") -> Any:
-        for key in keys:
-            value = inputs.get(key)
-            if value is None and isinstance(inputs.get("previousOutputs"), Mapping):
-                value = _mapping(inputs.get("previousOutputs")).get(key)
-            if value is None:
-                value = previous.get(key)
-            if isinstance(value, bool) or isinstance(value, (int, float)):
-                return value
-            if isinstance(value, (list, tuple)):
-                if value:
+        if admitted and keys[0] in identity_keys:
+            return retained.get(keys[0], default)
+        for source in evidence_sources:
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, (bool, int, float, list, tuple)):
                     return value
-                continue
-            if _string(value):
-                return value
+                if _string(value):
+                    return value
         return default
+
+    def _bound_field(
+        reference: str,
+        reference_keys: tuple[str, ...],
+        *keys: str,
+    ) -> str:
+        retained_reference = _first_string(
+            *(retained.get(key) for key in reference_keys)
+        )
+        for index, source in enumerate(evidence_sources):
+            source_reference = _first_string(
+                *(source.get(key) for key in reference_keys)
+            )
+            if source_reference:
+                if source_reference != reference:
+                    continue
+            elif index > 0 and reference != retained_reference:
+                # Historical evidence without a reference cannot prove a
+                # replacement candidate. Current inputs may supply a revision
+                # alone, but older evidence needs its own matching reference.
+                continue
+            # Shared head aliases belong only to a reference supplied alongside
+            # them, never to an unnamed retained PR or branch. Specific SHA
+            # fields can still update their own retained candidate directly.
+            # The resolved URL argument may come from historical metadata and
+            # therefore supplies no current-input revision provenance.
+            value = _first_string(
+                *(
+                    source.get(key)
+                    for key in keys
+                    if source_reference or key not in {"headSha", "head_sha"}
+                )
+            )
+            if value:
+                return value
+        return ""
 
     explicit_attempt = _string(_first("attemptId", "attempt_id"))
     workflow_id = _string(_first("workflowId", "workflow_id", "workflowID"))
@@ -8024,10 +8097,35 @@ def _github_attempt_handoff_for_transition(
             deployment_id = get_or_create_installation_id()
         except Exception:
             deployment_id = "inst-unconfigured"
-    pr_head = _string(_first("prHead", "pr_head", "headSha", "head_sha"))
-    pr_base = _string(_first("prBase", "pr_base", "baseBranch", "base_branch", "base"))
-    saved_branch = _string(_first("savedBranch", "saved_branch", "branch"))
-    saved_sha = _string(_first("savedSha", "saved_sha", "headSha", "head_sha"))
+    pr_reference_keys = ("prUrl", "pr_url", "pullRequestUrl", "pull_request_url")
+    pr_url = pull_request_url or _string(_first(*pr_reference_keys))
+    pr_head = _bound_field(
+        pr_url,
+        pr_reference_keys,
+        "prHead",
+        "pr_head",
+        "headSha",
+        "head_sha",
+    )
+    pr_base = _bound_field(
+        pr_url,
+        pr_reference_keys,
+        "prBase",
+        "pr_base",
+        "baseBranch",
+        "base_branch",
+        "base",
+    )
+    branch_reference_keys = ("savedBranch", "saved_branch", "branch")
+    saved_branch = _string(_first(*branch_reference_keys))
+    saved_sha = _bound_field(
+        saved_branch,
+        branch_reference_keys,
+        "savedSha",
+        "saved_sha",
+        "headSha",
+        "head_sha",
+    )
     writers_stopped_raw = _first("writersStopped", "writers_stopped", default=False)
     writers_stopped = bool(
         writers_stopped_raw is True
@@ -8046,12 +8144,22 @@ def _github_attempt_handoff_for_transition(
     retry_history = _first("retryHistory", "retry_history", default=[])
     if isinstance(retry_history, str):
         retry_history = [retry_history]
+    if admitted:
+        # Admission records predecessor IDs here. New progress extends that
+        # evidence without erasing it or changing the controlling identity.
+        retry_history = list(
+            dict.fromkeys(
+                _string(item)
+                for item in (*admitted.retry_history, *_list(retry_history))
+                if _string(item)
+            )
+        )
     try:
-        retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3) or 3)
+        retry_allowance = int(_first("retryAllowance", "retry_allowance", default=3))
     except (TypeError, ValueError):
         retry_allowance = 3
     try:
-        retry_remaining = int(_first("retryRemaining", "retry_remaining", default=retry_allowance) or retry_allowance)
+        retry_remaining = int(_first("retryRemaining", "retry_remaining", default=retry_allowance))
     except (TypeError, ValueError):
         retry_remaining = retry_allowance
     try:
@@ -8065,7 +8173,7 @@ def _github_attempt_handoff_for_transition(
         outcome_default = "no_work" if not pull_request_url else "implemented"
     elif mode == "needs_attention":
         outcome_default = "failed"
-    next_default = "continue_implementation"
+    next_default = admitted.next_action if admitted else "continue_implementation"
     if mode == "code_review":
         next_default = "continue_review"
     elif mode == "needs_attention":
@@ -8090,7 +8198,7 @@ def _github_attempt_handoff_for_transition(
         last_report=_string(_first("lastReport", "last_report", "reason", "transitionReason", "transition_reason")),
         writers_stopped=writers_stopped,
         pending_disposition=_string(_first("pendingDisposition", "pending_disposition")),
-        pr_url=pull_request_url,
+        pr_url=pr_url,
         pr_head=pr_head,
         pr_base=pr_base,
         saved_branch=saved_branch,
@@ -8699,7 +8807,9 @@ async def _update_github_issue_status(
         )
     target = _GITHUB_STATUS_MODE_TO_TARGET.get(mode, "to_in_progress")
     service = github_service_factory()
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": resolution_error or "GitHub issue update is unavailable."})
     headers = service._github_headers(token)
@@ -9605,6 +9715,12 @@ async def _finalize_github_issue_failed_attempt(
         receipt = await store.for_execution(claim_owner(_context))
         if receipt is None and await store.active_for_issue(repository, issue_number) is not None:
             raise ValueError("active_attempt_conflict: finalizer does not own this issue's durable claim")
+    remaining_requirements = inputs.get("remainingRequirements")
+    if remaining_requirements is None:
+        remaining_requirements = inputs.get("remaining_requirements")
+    retry_history = inputs.get("retryHistory")
+    if retry_history is None:
+        retry_history = inputs.get("retry_history", [])
     result = await _finalize_failed_attempt(
         repository=repository,
         issue_number=issue_number,
@@ -9618,8 +9734,12 @@ async def _finalize_github_issue_failed_attempt(
         attempt_id=_first_string(inputs.get("attemptId"), inputs.get("attempt_id")),
         primary_outcome=_first_string(inputs.get("primaryOutcome"), inputs.get("primary_outcome")) or execution_event,
         met_requirements=_list(inputs.get("metRequirements", inputs.get("met_requirements"))),
-        remaining_requirements=_list(inputs.get("remainingRequirements", inputs.get("remaining_requirements"))),
-        retry_history=_first_string(inputs.get("retryHistory"), inputs.get("retry_history")),
+        remaining_requirements=(
+            _list(remaining_requirements)
+            if remaining_requirements is not None
+            else None
+        ),
+        retry_history=retry_history,
         next_action=_first_string(inputs.get("nextAction"), inputs.get("next_action")),
         reason=_first_string(inputs.get("reason")),
         completion_mode=_first_string(inputs.get("completionMode"), inputs.get("completion_mode")) or "pr_only_handoff",

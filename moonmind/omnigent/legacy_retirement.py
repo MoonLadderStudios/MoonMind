@@ -550,6 +550,8 @@ def assert_architecture_exceptions_are_owned(
 # a permanent alternate architecture.
 LEGACY_RETIREMENT_COMPLETE = "legacy_retirement_complete"
 TEMPORARY_ROLLOUT_FLAGS: dict[str, str] = {
+    "omnigent_session_supervisor_admission_mode": LEGACY_RETIREMENT_COMPLETE,
+    "omnigent_session_supervisor_canary_owner_ids": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_generation": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_allowed_execution_profile_refs": LEGACY_RETIREMENT_COMPLETE,
     "omnigent_session_supervisor_rollback_mode": LEGACY_RETIREMENT_COMPLETE,

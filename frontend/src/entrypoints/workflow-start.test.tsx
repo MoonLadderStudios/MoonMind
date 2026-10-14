@@ -13389,6 +13389,215 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBe(false);
   });
 
+  function mockPublishContractCatalogs(): void {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: {
+              worker: ["moonspec-orchestrate", "pr-resolver", "custom-self-publisher"],
+            },
+            legacyItems: [
+              {
+                id: "custom-self-publisher",
+                publishContract: {
+                  selfManaged: true,
+                  repositoryPublishDisabled: false,
+                },
+              },
+              // The backend declares no publication constraint for this id,
+              // so the page must not apply a locally remembered one.
+              {
+                id: "pr-resolver",
+                publishContract: {
+                  selfManaged: false,
+                  repositoryPublishDisabled: false,
+                },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "moonspec-orchestrate",
+                scope: "global",
+                title: "MoonSpec Orchestrate",
+                description: "Ordinary implementation preset.",
+              },
+              {
+                slug: "tracker-only",
+                scope: "global",
+                title: "Tracker Only",
+                description: "Declares no repository publication.",
+                workflowPublish: { mode: "none" },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+  }
+
+  it("submits a blank repository source as save-only instead of the publish default", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repoInput = (await screen.findByLabelText(
+      "GitHub Repo",
+    )) as HTMLInputElement;
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishModeSelect.value).toBe("pr");
+
+    fireEvent.change(repoInput, { target: { value: "" } });
+    await waitFor(() => {
+      expect(publishModeSelect.value).toBe("none");
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Write a scratch report." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.repository).toBeUndefined();
+    expect(payload.publishMode).toBe("none");
+    expect((payload.task as Record<string, unknown>).publish).toEqual({
+      mode: "none",
+    });
+  });
+
+  it("keeps an explicitly chosen publish mode for a blank repository source", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repoInput = (await screen.findByLabelText(
+      "GitHub Repo",
+    )) as HTMLInputElement;
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    fireEvent.change(publishModeSelect, { target: { value: "branch" } });
+    fireEvent.change(repoInput, { target: { value: "" } });
+
+    expect(publishModeSelect.value).toBe("branch");
+  });
+
+  it("derives Skill publication defaults from the backend contract", async () => {
+    mockPublishContractCatalogs();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    expect(primaryStep).not.toBeNull();
+    const skillSelect = within(primaryStep as HTMLElement).getByRole(
+      "combobox",
+      { name: /skill/i },
+    );
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+
+    fireEvent.change(skillSelect, { target: { value: "custom-self-publisher" } });
+    await waitFor(() => {
+      expect(publishModeSelect.value).toBe("auto");
+    });
+
+    fireEvent.change(skillSelect, { target: { value: "pr-resolver" } });
+    await waitFor(() => {
+      expect(publishModeSelect.value).toBe("pr");
+    });
+  });
+
+  it("never rewrites an explicit publish mode from a Skill contract and reports the conflict", async () => {
+    mockPublishContractCatalogs();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    expect(primaryStep).not.toBeNull();
+    const primary = primaryStep as HTMLElement;
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    fireEvent.change(publishModeSelect, { target: { value: "branch" } });
+    fireEvent.change(within(primary).getByRole("combobox", { name: /skill/i }), {
+      target: { value: "custom-self-publisher" },
+    });
+    fireEvent.change(within(primary).getByLabelText("Instructions"), {
+      target: { value: "Repair the selected pull request." },
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("option", { name: "Auto" }) as HTMLOptionElement)
+          .disabled,
+      ).toBe(false);
+    });
+    expect(publishModeSelect.value).toBe("branch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    expect(
+      await screen.findByText(
+        /Publish mode branch is not available for skill 'custom-self-publisher'/,
+      ),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url) === "/api/executions"),
+    ).toBe(false);
+  });
+
+  it("applies a preset's declared publication only until the operator chooses", async () => {
+    mockPublishContractCatalogs();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const stepPresetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(stepPresetSelect.options).some(
+          (option) => option.text === "Tracker Only",
+        ),
+      ).toBe(true);
+    });
+    const publishModeSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    expect(publishModeSelect.value).toBe("pr");
+
+    fireEvent.change(stepPresetSelect, {
+      target: { value: "global::::tracker-only" },
+    });
+    await waitFor(() => {
+      expect(publishModeSelect.value).toBe("none");
+    });
+
+    fireEvent.change(publishModeSelect, { target: { value: "pr" } });
+    fireEvent.change(stepPresetSelect, {
+      target: { value: "global::::moonspec-orchestrate" },
+    });
+    fireEvent.change(stepPresetSelect, {
+      target: { value: "global::::tracker-only" },
+    });
+    expect(publishModeSelect.value).toBe("pr");
+  });
+
   it("submits a combined valid MM-641 draft without targetBranch", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
@@ -13457,9 +13666,10 @@ describe("Task Create MM-641 authoring validation", () => {
       "Move repository branch publish controls into Steps.",
     );
     expect(task.git).toBeUndefined();
+    // No connection is selected on Create, so the deployment default is
+    // derived server-side rather than hard-coded by the page.
     expect((request.payload as Record<string, unknown>).repository).toEqual({
       provider: "git",
-      connectionRef: "repository-connection:git-default",
       repository: { name: "MoonLadderStudios/MoonMind" },
       branch: { name: "feature/mm-641-create-page" },
     });
@@ -13520,9 +13730,10 @@ describe("Task Create MM-641 authoring validation", () => {
     const request = latestCreateRequest();
     const task = (request.payload as { task: Record<string, unknown> }).task;
     expect(task.git).toBeUndefined();
+    // No connection is selected on Create, so the deployment default is
+    // derived server-side rather than hard-coded by the page.
     expect((request.payload as Record<string, unknown>).repository).toEqual({
       provider: "git",
-      connectionRef: "repository-connection:git-default",
       repository: { name: "MoonLadderStudios/MoonMind" },
       branch: { name: "feature/pasted-while-loading" },
     });
@@ -14664,6 +14875,7 @@ describe("Task Create MM-578 Preset expansion", () => {
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
                 version: "1",
+                workflowPublish: { mode: "none" },
               },
             ],
           }),
@@ -14948,6 +15160,7 @@ describe("Task Create MM-578 Preset expansion", () => {
                 description: "Create dependent Jira Orchestrate tasks.",
                 latestVersion: "1",
                 version: "1",
+                workflowPublish: { mode: "none" },
               },
             ],
           }),
@@ -17999,10 +18212,8 @@ describe("Task Create governed Tool authoring", () => {
       };
     };
     expect(request.payload.repository).toBeUndefined();
-    expect(request.payload.requiredCapabilities).toEqual([
-      "gh",
-      "jira",
-    ]);
+    // A blank source submits save-only, so no PR publication demands gh.
+    expect(request.payload.requiredCapabilities).toEqual(["jira"]);
     expect(request.payload.task.steps[0]?.tool).toEqual({
       type: "tool",
       id: "jira.get_issue",
@@ -18064,10 +18275,8 @@ describe("Task Create governed Tool authoring", () => {
       };
     };
     expect(request.payload.repository).toBeUndefined();
-    expect(request.payload.requiredCapabilities).toEqual([
-      "gh",
-      "jira",
-    ]);
+    // A blank source submits save-only, so no PR publication demands gh.
+    expect(request.payload.requiredCapabilities).toEqual(["jira"]);
     expect(request.payload.task.git).toBeUndefined();
     expect(request.payload.task.steps[0]?.tool).toEqual({
       type: "tool",

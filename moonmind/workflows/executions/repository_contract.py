@@ -273,7 +273,13 @@ class ResolvedRepositoryTarget(BaseModel):
 
 
 RepositoryOperation = Literal[
-    "read", "write", "branch_write", "lock", "review_request", "merge_request"
+    "read",
+    "write",
+    "branch_write",
+    "lock",
+    "review_request",
+    "merge_request",
+    "issues",
 ]
 
 
@@ -544,6 +550,7 @@ def reconcile_default_git_connection(
             "branch_write",
             "review_request",
             "merge_request",
+            "issues",
         ),
         clientPolicy=client_policy,
         credential={"source": "github_resolver"},
