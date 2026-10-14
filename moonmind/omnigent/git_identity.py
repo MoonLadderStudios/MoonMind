@@ -70,6 +70,20 @@ def admitted_publication_git_identity(
     return _identity_from_snapshot(admission.get("identity"))
 
 
+def publication_git_identity_memo(memo: Mapping[str, object]) -> dict[str, object]:
+    """Carry only the already admitted choice across workflow boundaries."""
+    identity = admitted_publication_git_identity(memo)
+    return (
+        {
+            PUBLICATION_GIT_IDENTITY_MEMO_KEY: publication_git_identity_admission(
+                {"name": identity[0], "email": identity[1]}
+            )
+        }
+        if identity is not None
+        else {}
+    )
+
+
 def admit_publication_git_identity(
     parameters: dict[str, object],
     *,

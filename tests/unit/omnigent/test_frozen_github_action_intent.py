@@ -515,6 +515,10 @@ async def test_profile_preflight_and_publisher_use_the_same_canonical_repository
     )
     assert result.failure_class is None
     assert calls["prepare_host"].await_args.kwargs["target_repository"] == "owner/repo"
+    assert (
+        calls["prepare_host"].await_args.kwargs.get("publication_git_identity")
+        == identity
+    )
     assert calls["publish_workspace"].await_args.kwargs["repository"] == "owner/repo"
     assert (
         calls["publish_workspace"].await_args.kwargs.get("publication_git_identity")

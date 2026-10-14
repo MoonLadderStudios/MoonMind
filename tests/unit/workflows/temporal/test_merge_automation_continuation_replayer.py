@@ -163,10 +163,12 @@ def _payload(scenario: str) -> dict[str, Any]:
         ("repeated_wait", "blocked"),
     ],
 )
+@pytest.mark.parametrize("publication_memo_enabled", [False, True])
 async def test_continuation_histories_replay_deterministically(
     monkeypatch: pytest.MonkeyPatch,
     scenario: str,
     expected_status: str,
+    publication_memo_enabled: bool,
 ) -> None:
     async def skip_artifact(
         self: MoonMindMergeAutomationWorkflow,
@@ -195,6 +197,10 @@ async def test_continuation_histories_replay_deterministically(
         lambda name: (
             False
             if name == module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+            or (
+                name == module.PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH
+                and not publication_memo_enabled
+            )
             else original_patched(name)
         ),
     )
@@ -238,11 +244,39 @@ async def test_continuation_histories_replay_deterministically(
                 id=f"mm1209-{scenario}",
                 task_queue=parent_queue,
                 execution_timeout=timedelta(minutes=2),
+                memo={
+                    "publicationGitIdentityAdmission": {
+                        "schemaVersion": "v1",
+                        "identity": {
+                            "name": "Admitted",
+                            "email": "admitted@example.invalid",
+                        },
+                    }
+                },
             )
             result = await handle.result()
             history = await handle.fetch_history()
 
     assert result["status"] == expected_status
+    for event in history.events:
+        if event.HasField("start_child_workflow_execution_initiated_event_attributes"):
+            fields = (
+                event.start_child_workflow_execution_initiated_event_attributes.memo.fields
+            )
+            assert (
+                "publicationGitIdentityAdmission" in fields
+            ) is publication_memo_enabled
+    # Let the real SDK resolve the newly introduced patch while replaying a
+    # history recorded by the old worker, rather than forcing it off in replay.
+    monkeypatch.setattr(
+        module.workflow,
+        "patched",
+        lambda name: (
+            False
+            if name == module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+            else original_patched(name)
+        ),
+    )
     if scenario == "new_timed":
         assert result["continuationCounters"]["continuation_wait_completed"] == 1
     if scenario == "legacy_untimed":

@@ -20,7 +20,10 @@ from typing import Any, NoReturn
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
-from moonmind.omnigent.git_identity import ensure_workspace_git_identity
+from moonmind.omnigent.git_identity import (
+    ensure_workspace_git_identity,
+    resolve_publication_git_identity,
+)
 from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.host_failures import (
@@ -712,6 +715,7 @@ class OmnigentOAuthHostRuntime:
         restore_input_refs: tuple[str, ...] = (),
         workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
+        publication_git_identity: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         # Validate the complete product-owned decision before materializing skills,
         # creating volumes, or starting a container.
@@ -808,6 +812,7 @@ class OmnigentOAuthHostRuntime:
         )
         workspace_source = await self._prepare_workspace(
             workspace_locator=workspace_locator,
+            publication_git_identity=publication_git_identity,
             current_workflow_id=current_workflow_id,
             current_step_execution_id=current_step_execution_id,
             repository_source=repository_source,
@@ -4030,6 +4035,7 @@ class OmnigentOAuthHostRuntime:
         github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         artifact_gateway: Any | None = None,
         omnigent_isolation_verified: bool = False,
+        publication_git_identity: Mapping[str, str] | None = None,
     ) -> Path:
         """Resolve, and when required materialize, the authoritative workspace.
 
@@ -4275,7 +4281,7 @@ class OmnigentOAuthHostRuntime:
             must_exist=True,
         )
         # Fresh clones, checkpoint imports, and reused workspaces all need the
-        # deployment's commit identity before the agent can repair a PR. Apply
+        # admitted commit identity before the agent can repair a PR. Apply
         # it after restores on every preparation, preserving staged/saved work.
         # The launch boundary aligns ownership of the whole tree afterwards.
         await asyncio.to_thread(
@@ -4283,6 +4289,7 @@ class OmnigentOAuthHostRuntime:
             workspace,
             runtime_uid=None,
             runtime_gid=None,
+            identity=resolve_publication_git_identity(publication_git_identity),
         )
         self._last_workspace_evidence = self._workspace_resolution_evidence(
             locator=locator,
