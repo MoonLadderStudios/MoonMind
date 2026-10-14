@@ -15887,6 +15887,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         )
                         if created_head_sha:
                             self._publish_context["headSha"] = created_head_sha
+                        draft_publication = self._publish_context.get(
+                            "moonSpecDraftPublication"
+                        )
+                        if isinstance(draft_publication, dict):
+                            # Delayed evidence may mark only its own draft ready.
+                            draft_publication["createdByWorkflow"] = created is True
                         if (
                             self._moonspec_draft_publication_reason is not None
                             and not created

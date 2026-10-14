@@ -480,6 +480,7 @@ class GitHubService:
         workflow_identities: Sequence[str | int] = (),
         artifact_names: Sequence[str] = (),
         verify_candidate_only: bool = False,
+        pull_request_url: str = "",
     ) -> dict[str, Any]:
         """Collect bounded actual evidence for one admitted PR revision.
 
@@ -489,6 +490,8 @@ class GitHubService:
         no historic same-name archive is substituted for a missing current one.
         REST routes follow GitHub's workflow-runs and artifacts API contracts.
         No Actions permissions are granted or requested by this reader.
+        A supplied ``pull_request_url`` must be the PR the admitted connection
+        serves, so a URL from another host never selects this connection's PR.
         """
         _actions_validate_input(repository, pr_number, head_sha)
         if not str(admitted_workflow_id or "").strip():
@@ -517,6 +520,11 @@ class GitHubService:
                     if (
                         pr.get("number") != pr_number
                         or str(((pr.get("base") or {}).get("repo") or {}).get("full_name", "")).lower() != repository.lower()
+                        or (
+                            pull_request_url
+                            and str(pr.get("html_url") or "").rstrip("/").casefold()
+                            != pull_request_url.rstrip("/").casefold()
+                        )
                     ):
                         raise _ActionsEvidenceGap("pull_request_identity_mismatch")
                     result["observedHeadSha"] = (pr.get("head") or {}).get("sha")

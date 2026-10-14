@@ -383,6 +383,9 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         )
         assert published.created and published.head_sha == HEAD and state["published"]
         owner._publish_context["pullRequestUrl"] = published.url
+        owner._publish_context["moonSpecDraftPublication"]["createdByWorkflow"] = (
+            published.created
+        )
 
         async def dispatch(name, payload, **_kwargs):
             assert name == "github_issue.collect_evidence"

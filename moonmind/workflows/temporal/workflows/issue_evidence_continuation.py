@@ -241,9 +241,12 @@ async def resume_published_issue_evidence(
         return
     import re
 
+    # Any admitted host (github.com or an allowlisted enterprise host) may
+    # serve the PR; the evidence reader binds this URL to the admitted
+    # repository connection before collecting anything.
+    pull_request_url = str(context.get("pullRequestUrl") or "")
     match = re.fullmatch(
-        r"https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)/?",
-        str(context.get("pullRequestUrl") or ""),
+        r"https://[^/@\s]+/([^/]+/[^/]+)/pull/([1-9][0-9]*)/?", pull_request_url
     )
     head = str(context.get("headSha") or "")
     if not match or match[1].casefold() != str(owner._repo).casefold() or not head:
@@ -275,6 +278,7 @@ async def resume_published_issue_evidence(
         "repository": owner._repo,
         "prNumber": int(match[2]),
         "headSha": head,
+        "pullRequestUrl": pull_request_url,
         "workflowId": workflow.info().workflow_id,
         "runId": workflow.info().run_id,
         "principal": owner._principal(),
@@ -328,6 +332,7 @@ async def resume_published_issue_evidence(
                         timeout=min(timedelta(seconds=60), deadline - workflow.now()),
                     )
                 except asyncio.TimeoutError:
+                    # The bounded poll interval elapsed; collect evidence again.
                     pass
                 continue
             if (
@@ -625,8 +630,13 @@ async def resume_published_issue_evidence(
                 {
                     **payload,
                     "action": "mark_ready",
-                    "automationOwnedDraft": bool(
-                        context.get("moonSpecDraftPublication")
+                    # Only a draft this workflow created is its own to mark
+                    # ready; an adopted operator draft stays untouched.
+                    "automationOwnedDraft": (
+                        dict(context.get("moonSpecDraftPublication") or {}).get(
+                            "createdByWorkflow"
+                        )
+                        is True
                     ),
                     "userHold": owner._paused or owner._cancel_requested,
                     "gateResultRef": gate_ref,

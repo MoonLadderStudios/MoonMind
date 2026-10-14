@@ -92,7 +92,8 @@ def admitted(owner):
     owner._remediation_loop_spec = _spec()
     owner._remediation_loop_state = _state()
     owner._publish_context["moonSpecDraftPublication"] = {
-        "policy": "draft_pr_on_environment_blocked"
+        "policy": "draft_pr_on_environment_blocked",
+        "createdByWorkflow": True,
     }
     owner._wait_if_paused_at_safe_boundary = AsyncMock()
     owner._sync_remediation_loop_projection = lambda: None
@@ -162,6 +163,7 @@ async def test_new_exact_head_bytes_resume_verifier_then_persist_acceptance(
     )
     verifier.assert_awaited_once()
     assert reader.await_args_list[-1].args[1]["action"] == "mark_ready"
+    assert reader.await_args_list[-1].args[1]["automationOwnedDraft"] is True
     assert owner._remediation_loop_state.phase == RemediationLoopPhase.ACCEPTED
     assert owner._remediation_loop_state.consumed_budgets.attempts == 0
     assert owner._remediation_loop_state.consumed_budgets.evidence_retries == 1
@@ -192,6 +194,82 @@ async def test_moved_head_never_launches_verifier(admitted, monkeypatch):
         == "reconcile-candidate"
     )
     assert owner._remediation_loop_state.consumed_budgets.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_adopted_draft_is_never_marked_ready_as_automation_owned(
+    admitted, monkeypatch
+):
+    from moonmind.workflows.skills.approval_policy import StepGateResult
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    owner._publish_context["moonSpecDraftPublication"]["createdByWorkflow"] = False
+    subject = {"repository": "example/repo", "revision": "a" * 40}
+    reader = AsyncMock(
+        side_effect=[
+            {
+                "status": "ready",
+                "headSha": "a" * 40,
+                "subject": subject,
+                "semanticDigest": "sha256:bytes",
+                "evidenceSetDigest": "sha256:inventory",
+            },
+            {"status": "ready", "headSha": "a" * 40},
+            {"status": "held", "headSha": "a" * 40},
+        ]
+    )
+    monkeypatch.setattr(continuation, "_activity", reader)
+    monkeypatch.setattr(
+        continuation,
+        "_verify",
+        AsyncMock(return_value={"gateResultRef": "artifact://new-gate"}),
+    )
+    gate = StepGateResult(
+        verdict="FULLY_IMPLEMENTED",
+        recommended_next_action="advance",
+        validated_refs={
+            "acceptance": {"subject": subject, "evidenceSetDigest": "sha256:inventory"}
+        },
+    )
+    monkeypatch.setattr(owner, "_moonspec_verify_gate_result", lambda _: gate)
+    monkeypatch.setattr(
+        owner, "_moonspec_verify_gate_result_ref", lambda _: "artifact://new-gate"
+    )
+    monkeypatch.setattr(owner, "_record_moonspec_verify_gate", lambda **_: None)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    mark_ready = reader.await_args_list[-1].args[1]
+    assert mark_ready["action"] == "mark_ready"
+    assert mark_ready["automationOwnedDraft"] is False
+    assert (
+        owner._publish_context["issueEvidenceContinuation"]["nextAction"]
+        == "confirm-publication"
+    )
+
+
+@pytest.mark.asyncio
+async def test_enterprise_pull_request_url_reaches_the_admitted_reader(
+    admitted, monkeypatch
+):
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    url = "https://ghe.example.com/example/repo/pull/2"
+    owner._publish_context["pullRequestUrl"] = url
+    reader = AsyncMock(return_value={"status": "moved", "headSha": "b" * 40})
+    monkeypatch.setattr(continuation, "_activity", reader)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    request = reader.await_args.args[1]
+    assert request["prNumber"] == 2
+    assert request["pullRequestUrl"] == url
 
 
 @pytest.mark.asyncio

@@ -55,6 +55,7 @@ async def collect_github_issue_evidence(
         workflow_identities=payload.get("workflowIdentities") or (),
         artifact_names=payload.get("artifactNames") or (),
         verify_candidate_only=action == "verify_candidate",
+        pull_request_url=str(payload.get("pullRequestUrl") or ""),
     )
     files = observed.pop("files", [])
     result = {
