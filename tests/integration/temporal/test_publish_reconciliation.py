@@ -21,6 +21,8 @@ def _mock_get_response(status_code: int, json_body: list[dict]) -> httpx.Respons
     )
 
 
+# The default connection derives from the deployment declaration.
+@pytest.mark.usefixtures("deployment_without_recorded_connections")
 async def test_repo_create_pr_adopts_existing_head_base_without_post(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

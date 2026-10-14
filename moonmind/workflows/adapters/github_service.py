@@ -167,6 +167,8 @@ _GITHUB_PR_URL_RE = re.compile(
 _CONFLICTING_MERGEABLE_STATES = {"dirty"}
 _CONFLICTING_MERGE_STATE_STATUSES = {"CONFLICTING", "DIRTY"}
 _CONFLICTING_MERGEABLE_VALUES = {"CONFLICTING", "DIRTY"}
+#: The admitted collaboration operation for issue labels, comments and state.
+ISSUE_OPERATIONS = ("issues",)
 
 
 def _parse_github_timestamp(value: Any) -> datetime | None:
@@ -213,8 +215,9 @@ class GitHubService:
     """Thin wrapper around the GitHub REST API for pull-request operations.
 
     This service is stateless and safe to share across activity invocations.
-    Pull-request and issue helpers resolve authentication from an explicit
-    token, ``GITHUB_TOKEN`` env var, or the configured secret reference.
+    Pull-request and issue helpers use an explicit token when given, else the
+    default repository connection (:meth:`resolve_github_token`); issue
+    helpers require its ``issues`` collaboration operation.
 
     Repository readers (:meth:`read_pull_request`,
     :meth:`read_repository_target`, :meth:`commit_is_ancestor`) use only the
@@ -537,11 +540,31 @@ class GitHubService:
         explicit_token: str | None = None,
         *,
         repo: str | None = None,
+        operations: tuple[str, ...] = (),
     ) -> tuple[str, str | None]:
-        """Resolve a GitHub token from explicit input, env, or secret ref."""
-        from moonmind.auth.github_credentials import resolve_github_credential
+        """Resolve the GitHub token for one ``api.github.com`` operation.
 
-        resolved = await resolve_github_credential(explicit_token, repo=repo)
+        An explicit token stays explicit (blank fails closed). Otherwise the
+        token is the default repository connection's: a recorded connection
+        is authoritative and must admit ``operations`` (an App connection
+        issues for exactly those, or for its admitted operations when
+        omitted); only an unrecorded default derives from the deployment
+        declaration. A selection that cannot serve the call is the result,
+        never an ambient token of another account.
+        """
+        from moonmind.auth.github_credentials import resolve_github_credential
+        from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+        if explicit_token is not None:
+            resolved = await resolve_github_credential(explicit_token, repo=repo)
+        else:
+            resolved = (
+                await managed_api_key_resolve.resolve_default_github_connection_credential(
+                    repo=repo,
+                    required_operations=tuple(operations),
+                    expected_api_base="https://api.github.com",
+                )
+            )
         if resolved.token:
             return resolved.token, None
         return "", resolved.safe_summary
@@ -3687,6 +3710,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -3771,6 +3795,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -3825,6 +3850,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -3871,6 +3897,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -3917,6 +3944,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -3956,20 +3984,66 @@ class GitHubService:
                 }
 
     async def issue_claim_actor(self, *, repo: str) -> dict[str, Any]:
-        """Resolve the authenticated poster before persisting an issue claim."""
-        token, error = await self.resolve_github_token(repo=repo)
+        """Resolve the authenticated poster before persisting an issue claim.
+
+        A user token names its account through ``GET /user``. An App
+        installation token cannot read that endpoint; its comments are posted
+        by the App's bot account, which GraphQL reports as the viewer.
+        """
+        token, error = await self.resolve_github_token(
+            repo=repo, operations=ISSUE_OPERATIONS
+        )
         if not token:
             return {"ok": False, "reasonCode": "auth_unavailable", "summary": error}
+        headers = self._github_headers(token)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
-                response = await client.get("https://api.github.com/user", headers=self._github_headers(token))
-                response.raise_for_status()
-                actor = response.json()
+                response = await client.get(
+                    "https://api.github.com/user", headers=headers
+                )
+                if response.status_code == 403:
+                    actor = await self._installation_bot_account(client, headers)
+                else:
+                    response.raise_for_status()
+                    actor = response.json()
             except (httpx.HTTPError, ValueError):
                 return {"ok": False, "reasonCode": "claim_actor_unavailable"}
         if not isinstance(actor, dict) or not actor.get("id"):
             return {"ok": False, "reasonCode": "claim_actor_unavailable"}
         return {"ok": True, "actorId": str(actor["id"])}
+
+    @staticmethod
+    async def _installation_bot_account(
+        client: httpx.AsyncClient, headers: Mapping[str, str]
+    ) -> Any:
+        """The ``[bot]`` account an installation token acts as, or ``None``."""
+        response = await client.post(
+            "https://api.github.com/graphql",
+            headers=headers,
+            json={"query": "query { viewer { login } }"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        viewer = (
+            (payload.get("data") or {}).get("viewer")
+            if isinstance(payload, dict)
+            else None
+        )
+        login = viewer.get("login") if isinstance(viewer, dict) else None
+        if not isinstance(login, str) or not login.endswith("[bot]"):
+            return None
+        response = await client.get(
+            f"https://api.github.com/users/{login}", headers=headers
+        )
+        response.raise_for_status()
+        account = response.json()
+        if (
+            not isinstance(account, dict)
+            or account.get("type") != "Bot"
+            or account.get("login") != login
+        ):
+            return None
+        return account
 
     async def list_issue_comments(
         self,
@@ -3991,6 +4065,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -4065,6 +4140,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -4121,6 +4197,7 @@ class GitHubService:
         token, resolution_error = await self.resolve_github_token(
             github_token,
             repo=repo,
+            operations=ISSUE_OPERATIONS,
         )
         if not token:
             return {
@@ -4166,6 +4243,7 @@ __all__ = [
     "AutomatedReviewRequestResult",
     "CreatePRResult",
     "GitHubService",
+    "ISSUE_OPERATIONS",
     "MergePRResult",
     "PullRequestReadinessResult",
     "PullRequestReconciliation",

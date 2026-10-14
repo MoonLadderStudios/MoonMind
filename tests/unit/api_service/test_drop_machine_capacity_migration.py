@@ -54,7 +54,7 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     # OpenCode validation repair (#4526), the account-free preset catalog
     # (#4350), the legacy GitHub credential mapping (#4023), and the runtime
     # evidence retention backfill now extend it further as the single head.
-    assert tuple(script.get_heads()) == ("393_default_conn_merge_grant",)
+    assert tuple(script.get_heads()) == ("394_default_conn_issues_grant",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(

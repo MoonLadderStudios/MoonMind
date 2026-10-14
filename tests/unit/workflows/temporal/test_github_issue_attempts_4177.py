@@ -457,7 +457,7 @@ class _AttemptFakeService(ClaimCommentFixture):
         self.created_bodies: list[str] = []
         self.listed: list[dict[str, Any]] = []
 
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, *, repo: str, operations=()):
         return "ghs-test", None
 
     def _github_headers(self, token: str) -> dict[str, str]:
@@ -592,3 +592,513 @@ async def test_activity_path_reconciles_uncertain_creation(monkeypatch: pytest.M
     # A public marker without the durable receipt is not authority to adopt it.
     assert len(service.created_bodies) == 0
     assert result.outputs["reasonCode"] == "active_attempt_conflict"
+
+
+@pytest.mark.parametrize("remaining", [0, "0"])
+def test_transition_handoff_retains_explicit_exhausted_budget(remaining):
+    handoff = story_tools._github_attempt_handoff_for_transition(
+        mode="needs_attention",
+        repository="o/r",
+        issue_number=42,
+        inputs={"retryRemaining": remaining},
+        context={},
+        pull_request_url="",
+    )
+    assert handoff.retry_remaining == 0
+
+
+def test_sparse_transition_preserves_canonical_claim_evidence():
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        saved_branch="saved-work",
+        saved_sha="abc123",
+        last_report="Need automation proof",
+        predecessor_attempt_id="att-parent",
+        predecessor_comment_id="99",
+        retry_remaining=0,
+        next_action="verify",
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="code_review",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={"attemptId": "stale-attempt", "workflowId": "stale-workflow"},
+        context={"issue_claim_receipt": receipt},
+        pull_request_url="",
+    )
+    for field in (
+        "attempt_id",
+        "deployment_id",
+        "workflow_id",
+        "run_id",
+        "predecessor_attempt_id",
+        "predecessor_comment_id",
+        "last_report",
+        "pr_url",
+        "pr_head",
+        "pr_base",
+        "saved_branch",
+        "saved_sha",
+        "remaining_requirements",
+        "verification_summary",
+        "retry_history",
+        "retry_allowance",
+        "retry_remaining",
+    ):
+        assert getattr(result, field) == getattr(prior, field), field
+    assert result.activity == "awaiting-review"
+    assert result.outcome == "implemented"
+    assert result.next_action == "continue_review"
+    updated = story_tools._github_attempt_handoff_for_transition(
+        mode="code_review",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={
+            "saved_sha": "newsha",
+            "remainingRequirements": [],
+            "lastReport": "Verified",
+        },
+        context={"issue_claim_receipt": receipt},
+        pull_request_url=prior.pr_url,
+    )
+    assert updated.saved_sha == "newsha"
+    assert updated.remaining_requirements == ()
+    assert updated.last_report == "Verified"
+    recovering = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={},
+        context={"issue_claim_receipt": receipt},
+        pull_request_url="",
+    )
+    assert recovering.next_action == "verify"
+
+
+@pytest.mark.parametrize(
+    "source, candidate",
+    [
+        (source, candidate)
+        for source in (
+            "inputs",
+            "tool_previous",
+            "context_previous",
+            "unbound_previous",
+            "matching_previous",
+            "context_after_unbound",
+        )
+        for candidate in ("pr", "branch")
+    ]
+    + [("argument", "pr")],
+)
+@pytest.mark.parametrize("include_revision", [False, True])
+def test_sparse_transition_binds_revision_to_replacement_reference(
+    source, candidate, include_revision
+):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        pr_head="old-pr-sha", saved_branch="old-branch", saved_sha="old-saved-sha"
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    reference_key, revision_key = (
+        ("prUrl", "prHead") if candidate == "pr" else ("savedBranch", "savedSha")
+    )
+    new_reference = (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/99"
+        if candidate == "pr"
+        else "replacement-branch"
+    )
+    replacement = {reference_key: new_reference}
+    if include_revision:
+        replacement[revision_key] = "new-revision"
+    inputs = {}
+    context = {"issue_claim_receipt": receipt}
+    pull_request_url = ""
+    if source == "inputs":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = prior.to_dict()
+    elif source == "tool_previous":
+        inputs["previousOutputs"] = replacement
+        context["previousOutputs"] = prior.to_dict()
+    elif source == "context_previous":
+        context["previousOutputs"] = replacement
+    elif source == "unbound_previous":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = {revision_key: "old-unbound-revision"}
+    elif source == "matching_previous":
+        inputs.update(replacement)
+        inputs["previousOutputs"] = {
+            reference_key: new_reference,
+            revision_key: "new-revision",
+        }
+    elif source == "context_after_unbound":
+        inputs["previousOutputs"] = {revision_key: "old-unbound-revision"}
+        context["previousOutputs"] = replacement
+    else:
+        pull_request_url = new_reference
+        if include_revision:
+            inputs[revision_key] = "new-revision"
+        inputs["previousOutputs"] = prior.to_dict()
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url=pull_request_url,
+    )
+    result_reference, result_revision = (
+        (result.pr_url, result.pr_head)
+        if candidate == "pr"
+        else (result.saved_branch, result.saved_sha)
+    )
+    assert result_reference == new_reference
+    assert result_revision == (
+        "new-revision" if include_revision or source == "matching_previous" else ""
+    )
+    if candidate == "pr":
+        assert result.saved_branch == prior.saved_branch
+        assert result.saved_sha == prior.saved_sha
+    else:
+        assert result.pr_url == prior.pr_url
+        assert result.pr_head == prior.pr_head
+    preservation = preserve_authoritative_output(
+        {
+            "saveMethod": (
+                "pr_head_verified" if candidate == "pr" else "saved_branch_verified"
+            ),
+            "prUrl": result.pr_url,
+            "prHeadSha": result.pr_head,
+            "savedBranch": result.saved_branch,
+            "savedSha": result.saved_sha,
+            "preservationVerified": True,
+        }
+    )
+    assert preservation["preserved"] is bool(result_revision)
+    if result_revision:
+        assert f"{result_reference}@{result_revision}" in preservation["summary"]
+    else:
+        assert preservation["reasonCode"] == "preservation_incomplete"
+        assert preservation["workspaceRetained"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requirements, expected",
+    [
+        ({}, None),
+        ({"remainingRequirements": None}, None),
+        ({"remaining_requirements": None}, None),
+        ({"remainingRequirements": []}, []),
+        ({"remaining_requirements": []}, []),
+        ({"remainingRequirements": ["unfinished"]}, ["unfinished"]),
+    ],
+)
+async def test_failed_attempt_adapter_preserves_omitted_remaining_requirements(
+    monkeypatch, requirements, expected
+):
+    from moonmind.workflows.temporal.activities import (
+        github_issue_finalization_activities,
+    )
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+
+    observed = []
+
+    async def finalize(**kwargs):
+        observed.append(kwargs["remaining_requirements"])
+        return {
+            "released": False,
+            "reasonCode": "test_boundary",
+            "disposition": "",
+            "summary": "",
+            "transition": None,
+            "mutation": None,
+            "mutationOutcome": None,
+            "completionRoute": "",
+            "mergeAuthorized": False,
+            "workspaceRetained": True,
+            "pendingSync": None,
+            "commentId": None,
+        }
+
+    monkeypatch.setattr(
+        github_issue_finalization_activities, "finalize_failed_attempt", finalize
+    )
+    result = await TemporalIntegrationActivities.github_issue_finalize_failed_attempt(
+        None,
+        {
+            "repository": "o/r",
+            "issueNumber": 4177,
+            "executionEvent": "failed",
+            **requirements,
+        },
+    )
+    assert result["reasonCode"] == "test_boundary"
+    assert observed == [expected]
+
+
+@pytest.mark.parametrize(
+    "method, reference_key, revision_key",
+    [
+        ("pr_head_verified", "prUrl", "prHeadSha"),
+        ("pr_head_verified", "pr_url", "pr_head_sha"),
+        ("pr_head_verified", "pr_url", "revision"),
+        ("saved_branch_verified", "savedBranch", "savedSha"),
+        ("saved_branch_verified", "saved_branch", "saved_sha"),
+        ("saved_branch_verified", "saved_branch", "revision"),
+    ],
+)
+def test_preservation_pair_keeps_supported_aliases(
+    method, reference_key, revision_key
+):
+    from moonmind.workflows.temporal.github_issue_finalization import (
+        preserve_authoritative_output,
+    )
+
+    result = preserve_authoritative_output(
+        {
+            "save_method": method,
+            reference_key: "candidate",
+            revision_key: "head-sha",
+            "preservation_verified": True,
+        }
+    )
+    assert result["preserved"] is True
+    assert "candidate@head-sha" in result["summary"]
+
+
+@pytest.fixture
+def transition_claim():
+    from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt
+
+    prior = _handoff(
+        pr_head="old-pr-sha",
+        saved_branch="old-branch",
+        saved_sha="old-saved-sha",
+        predecessor_attempt_id="att-parent",
+        predecessor_comment_id="99",
+        retry_history=["att-older", "att-parent", "Older attempt failed"],
+    )
+    receipt = ClaimReceipt(
+        owner="default/wf-1",
+        repository=prior.repository.casefold(),
+        issue_number=4177,
+        attempt_id=prior.attempt_id,
+        actor_id="123",
+        comment_body=render_attempt_comment(prior),
+        comment_id="100",
+        confirmed=True,
+        pending_comment_body=None,
+        released=False,
+    )
+    return prior, {"issue_claim_receipt": receipt}
+
+
+@pytest.mark.parametrize(
+    "reference_key, candidate, source",
+    [
+        (key, candidate, source)
+        for candidate, keys in (
+            ("pr", ("prUrl", "pr_url", "pullRequestUrl", "pull_request_url")),
+            ("branch", ("savedBranch", "saved_branch", "branch")),
+        )
+        for key in keys
+        for source in ("inputs", "tool_previous", "context_previous")
+    ],
+)
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+def test_generic_transition_revision_only_updates_its_supplied_reference(
+    transition_claim, reference_key, candidate, source, revision_key
+):
+    prior, context = transition_claim
+    reference = (
+        "https://github.com/MoonLadderStudios/MoonMind/pull/99"
+        if candidate == "pr"
+        else "replacement-branch"
+    )
+    evidence = {revision_key: "new-sha"}
+    evidence[reference_key] = reference
+    inputs = evidence if source == "inputs" else {}
+    if source == "tool_previous":
+        inputs["previousOutputs"] = evidence
+    elif source == "context_previous":
+        context["previousOutputs"] = evidence
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url="",
+    )
+    if candidate == "pr":
+        assert (result.pr_url, result.pr_head) == (reference, "new-sha")
+        assert (result.saved_branch, result.saved_sha) == (
+            prior.saved_branch,
+            prior.saved_sha,
+        )
+    else:
+        assert (result.saved_branch, result.saved_sha) == (reference, "new-sha")
+        assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+
+
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+def test_generic_transition_revision_without_reference_keeps_both_candidates(
+    transition_claim, revision_key
+):
+    prior, context = transition_claim
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={revision_key: "unbound-sha"},
+        context=context,
+        pull_request_url="",
+    )
+    assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+    assert (result.saved_branch, result.saved_sha) == (
+        prior.saved_branch,
+        prior.saved_sha,
+    )
+
+
+@pytest.mark.parametrize(
+    "container", [None, "metadata", "publishContext", "publish_context"]
+)
+@pytest.mark.parametrize("source", ["tool_previous", "context_previous"])
+@pytest.mark.parametrize("revision_key", ["headSha", "head_sha"])
+@pytest.mark.parametrize("new_branch", [None, "replacement-branch"])
+def test_resolved_historical_pr_does_not_bind_current_generic_revision(
+    transition_claim, container, source, revision_key, new_branch
+):
+    prior, context = transition_claim
+    history = {"pullRequestUrl": prior.pr_url}
+    if container:
+        history = {container: history}
+    inputs = {revision_key: "current-sha"}
+    if new_branch:
+        inputs["savedBranch"] = new_branch
+    if source == "tool_previous":
+        inputs["previousOutputs"] = history
+    else:
+        context["previousOutputs"] = history
+    resolved_url = story_tools._github_status_pull_request_url(inputs, context)
+    assert resolved_url == prior.pr_url
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url=resolved_url,
+    )
+    assert (result.pr_url, result.pr_head) == (prior.pr_url, prior.pr_head)
+    assert (result.saved_branch, result.saved_sha) == (
+        (new_branch, "current-sha")
+        if new_branch
+        else (prior.saved_branch, prior.saved_sha)
+    )
+
+
+@pytest.mark.parametrize("candidate", ["pr", "branch"])
+def test_specific_transition_revision_can_update_unnamed_other_candidate(
+    transition_claim, candidate
+):
+    prior, context = transition_claim
+    inputs = (
+        {"pull_request_url": prior.pr_url, "saved_sha": "new-saved-sha"}
+        if candidate == "pr"
+        else {"branch": prior.saved_branch, "pr_head": "new-pr-sha"}
+    )
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="recovery_needed",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs={**inputs, "head_sha": "generic-sha"},
+        context=context,
+        pull_request_url="",
+    )
+    assert result.pr_head == ("generic-sha" if candidate == "pr" else "new-pr-sha")
+    assert result.saved_sha == ("new-saved-sha" if candidate == "pr" else "generic-sha")
+
+
+@pytest.mark.parametrize("history_key", ["retryHistory", "retry_history"])
+@pytest.mark.parametrize("source", ["inputs", "tool_previous", "context_previous"])
+@pytest.mark.parametrize(
+    "history", [["att-parent", "Current repair retried", "Current repair retried"], []]
+)
+def test_transition_accepts_updated_retry_history_without_changing_claim_identity(
+    transition_claim, history_key, source, history
+):
+    prior, context = transition_claim
+    evidence = {
+        history_key: history,
+        "internalRetryCount": 1,
+        "attempt_id": "wrong-attempt",
+        "workflow_id": "wrong-workflow",
+        "run_id": "wrong-run",
+        "deployment_id": "inst-wrong",
+        "predecessor_attempt_id": "wrong-parent",
+        "predecessor_comment_id": "999",
+    }
+    inputs = evidence if source == "inputs" else {}
+    if source == "tool_previous":
+        inputs["previousOutputs"] = evidence
+    elif source == "context_previous":
+        context["previousOutputs"] = evidence
+    result = story_tools._github_attempt_handoff_for_transition(
+        mode="in_progress",
+        repository=prior.repository,
+        issue_number=4177,
+        inputs=inputs,
+        context=context,
+        pull_request_url="",
+    )
+    assert result.retry_history == tuple(
+        dict.fromkeys((*prior.retry_history, *history))
+    )
+    assert result.internal_retry_count == 1
+    for field in (
+        "attempt_id",
+        "workflow_id",
+        "run_id",
+        "deployment_id",
+        "predecessor_attempt_id",
+        "predecessor_comment_id",
+    ):
+        assert getattr(result, field) == getattr(prior, field), field
+    predecessor = _handoff(attempt_id="att-parent", outcome="failed")
+    before = compute_effective_retry([predecessor, prior], max_attempts=3)
+    after = compute_effective_retry([predecessor, result], max_attempts=3)
+    assert after.remaining == before.remaining
+    assert after.charged_attempts == before.charged_attempts

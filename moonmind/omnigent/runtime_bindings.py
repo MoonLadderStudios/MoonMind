@@ -815,6 +815,27 @@ class RuntimeBindingSessionAuthoritySink:
                 updates={"omnigentSessionId": session_id},
             )
 
+    async def reserve_github_projection(self) -> dict[str, Any]:
+        """Reserve the next gh projection under the lease heartbeat's lock."""
+        async with self._lock:
+            self.binding, reservation = await reserve_github_projection(
+                self._store, self.binding
+            )
+            return reservation
+
+    async def record_authority(self, authority: dict[str, Any]) -> None:
+        """Record cleanup authority before the filesystem effect it governs."""
+        async with self._lock:
+            cleanup = list(self.binding.cleanupAuthorityRefs)
+            if authority in cleanup:
+                return
+            self.binding = await self._store.update(
+                self.binding.bindingId,
+                expected_revision=self.binding.revision,
+                expected_fencing_generation=self.binding.fencingGeneration,
+                updates={"cleanupAuthorityRefs": [*cleanup, authority]},
+            )
+
     async def heartbeat(self) -> StableRuntimeBinding:
         async with self._lock:
             self.binding = await self._store.update(
