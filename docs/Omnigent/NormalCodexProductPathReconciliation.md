@@ -3,21 +3,22 @@
 **Document Class:** Canonical declarative
 **Status:** Accepted
 **Owners:** MoonMind Platform
-**Last updated:** 2026-07-31
+**Last updated:** 2026-10-14
 **Authority:** Reconciliation index that pins one internally consistent normal
 Codex-through-Omnigent product path across its canonical owners. It does not
 redefine any owned contract; each stage names the document that owns it.
 **Traceability:** MoonLadderStudios/MoonMind#3565 (Omnigent Milestone 1, item 1.0
 declarative reconciliation)
 
-This document is the single normative anchor for the ordinary **Codex via
-Omnigent** journey from browser authoring through protected support evidence and
-cleanup. It exists because the path is owned by many canonical documents and no
-single document previously pinned the whole sequence, the whole failure matrix,
-and the evidence-qualified support state together. Where a detail is owned
-elsewhere, this document links the owner and does not restate its internals. When
-this document and an owner disagree, the owner wins for its own contract and this
-document must be reconciled to it.
+This document reconciles the **Codex via Omnigent** journey across its existing
+owners. Ordinary admission is certificate independent (#4560); explicitly
+selected strict certification retains the evidence requirements in
+[Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence).
+New-work selection uses the shared rollout boundary without the retired Codex
+phase inputs (#3931), as described in [Runtime Provider Rollout](RuntimeProviderRollout.md#12-configuration).
+The v1 cutover evidence and phase examples below remain historical interpretation,
+not ordinary startup instructions. Where a detail is owned elsewhere, that owner
+governs it and this reconciliation must stay current.
 
 ## 1. Universal product identity
 
@@ -80,12 +81,15 @@ compilation.
 This is the one normative sequence for the normal product path. Every stage names
 its trusted owner, the immutable refs/snapshots it carries, its retry/idempotency
 boundary, its failure behavior, its evidence, and the caller authority it
-prohibits. No stage may be reordered. Provider Profile capacity is acquired before
+prohibits. Actual admission/effect dependencies remain with those owners;
+the historical certification stage is not an ordinary execution prerequisite.
+Provider Profile capacity is acquired before
 any workspace side effect — matching the owning Create-to-host sequence in
 [CodexCreateToHostContract.md §5](./CodexCreateToHostContract.md#5-journey-and-ownership),
 so no workspace materialization runs for a request that cannot acquire capacity.
-Provider Profile capacity is released last, after credential-consuming host
-cleanup.
+Provider Profile capacity and credentials are released only after their consumers
+stop under the existing owner. Unrelated reporting, publication, or non-sensitive
+retention does not require keeping that capacity occupied.
 
 | # | Stage | Trusted owner | Immutable refs / snapshots | Retry / idempotency boundary | Failure behavior | Evidence | Prohibited caller authority |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -97,9 +101,9 @@ cleanup.
 | 6 | Static or on-demand stock host realization | Host owner | Effective launch snapshot, image digest, host lease | Bounded launch retry reuses the identical snapshot; one lease-owned host | `OMNIGENT_HOST_LAUNCH_FAILED` bounded; the unchosen mode is never used as fallback | Snapshot/lease/diagnostics | No arbitrary static host binding; no caller-selected host mode override |
 | 7 | `codex-native` readiness, bridge authorization, session creation, first-message commitment | Host owner + Omnigent Bridge | Registration evidence, `bridgeSessionRef`, `omnigentSessionRef`, idempotency key | Registration is bounded; the first message is posted exactly once by idempotency key | `OMNIGENT_HOST_REGISTRATION_TIMEOUT` / `OMNIGENT_BRIDGE_AUTHORIZATION_FAILED` / `OMNIGENT_FIRST_MESSAGE_AMBIGUOUS` (no auto-repost) | Binding/host/auth refs + key observations | No caller-authored session/host binding or duplicate first-message post |
 | 8 | Live + replayable event / resource / artifact projection | Omnigent Bridge | Durable event journal, cursor/page/SSE projection, resource refs | Replay from the durable journal is deterministic; cursors are idempotent | Projection continues from the journal; gaps are reported, never silently filled | Event journal + resource refs | No second-source runtime dashboard; no caller-authored event stream |
-| 9 | Repository candidate, publication, or terminal saved-work handling | Workspace / publication owner | `WorkspaceLocator`, `githubAuthorityRef`, bounded publish mode, publication result ref | Publication is idempotent within the bounded mutation scope; release is last | `OMNIGENT_REPOSITORY_PUBLICATION_FAILED`; saved-work is preserved without release | Publication result + saved-work refs | No broad mutation authority beyond the authored bounded scope |
+| 9 | Repository candidate, publication, or terminal saved-work handling | Workspace / publication owner | `WorkspaceLocator`, `githubAuthorityRef`, bounded publish mode, publication result ref | Publication is idempotent within the bounded mutation scope; failed publication preserves saved work | `OMNIGENT_REPOSITORY_PUBLICATION_FAILED`; confirmed saves remain recoverable | Publication result + saved-work refs | No broad mutation authority beyond the authored bounded scope |
 | 10 | Terminal harvest, cleanup / janitor reconciliation, Provider Profile release | Artifact owner + Host owner + Provider Profile Manager | Terminal envelope, capture manifest ref, cleanup evidence, lease release status | Harvest and cleanup are idempotent; janitor reconciles only lease-owned resources | `OMNIGENT_CLEANUP_FAILED` / `OMNIGENT_EVIDENCE_PUBLICATION_FAILED` retryable; auxiliary failure never overwrites `primaryStatus` | Terminal envelope + cleanup/janitor evidence | No reconciliation of resources the lease does not own; no release before cleanup |
-| 11 | Per-row evidence, combined matrix, support-row classification, cutover gating | Conformance + cutover owner | Per-run protected artifact, combined matrix digest, configured/deployed phase | Promotion is one-step, fresh, version-matched, and fail-closed | `OMNIGENT_SUPPORT_EVIDENCE_INVALID` / `OMNIGENT_CUTOVER_PROMOTION_BLOCKED`; a denied promotion preserves the deployed phase | Provenance-bound evidence manifest with SHA-256 digests | No caller-driven promotion; no support claim without protected evidence |
+| 11 | Optional observations, explicit strict certification, and historical v1 cutover evidence | Existing evidence resolver + conformance/cutover readers | Actual report subject/digests; retained v1 phase fields keep their recorded meaning | Ordinary admission can record an uncertified tier; explicit strict certification validates its required evidence | Invalid required strict evidence fails closed; unavailable optional observations do not veto ordinary admission | Provenance-bound evidence for the scope actually observed | No caller-driven certification downgrade or fabricated support claim |
 
 Owners: Create owns intent; the API compiler owns immutable input and
 workspace-intent construction while the Temporal workflow compiles the
@@ -107,8 +111,8 @@ workspace-intent construction while the Temporal workflow compiles the
 Provider Profile Manager owns eligibility,
 credentials, and capacity; the Host owner owns policy realization, readiness, and
 cleanup; the Bridge owns authorization, session, first-message idempotency, and
-events; the artifact owner owns evidence; the conformance/cutover owner owns
-support classification and phase gating; Temporal owns ordering and retries. This
+events; the artifact owner owns evidence; the conformance/evidence owners own
+certification and historical phase interpretation; Temporal owns ordering and retries. This
 reconciles the ownership prose in
 [CodexCreateToHostContract.md §5](./CodexCreateToHostContract.md#5-journey-and-ownership)
 and the cutover authority in
@@ -154,6 +158,10 @@ credential body, path, or provider payload appears.
 
 ### 4.3 Per-row and combined protected evidence
 
+This retained v1 example describes historical protected cutover evidence, not a
+certificate every ordinary workflow must obtain. Its original subject and digest
+semantics remain with the strict/historical readers.
+
 ```json
 {
   "perRow": {
@@ -187,11 +195,12 @@ credential body, path, or provider payload appears.
 }
 ```
 
-The readiness/cutover status is owned by the
-`/api/omnigent/codex-catalog-readiness` projection defined in
-[CodexSupportAndCutover.md](./CodexSupportAndCutover.md); the example above is the
-current fail-closed `opt_in` shape and must not be edited to imply a later phase
-without the protected evidence manifest that phase requires.
+The example above is the historical v1 cutover shape emitted by retained
+`cutover.py` helpers. It is not the current catalog-readiness response or a
+configuration requirement. The existing `/api/omnigent/codex-catalog-readiness`
+projection reports actual readiness; new-work selection and remaining controls
+are owned by [Runtime Provider Rollout](RuntimeProviderRollout.md). Do not rewrite
+old phase observations to imply certification or a deployed cutover that did not occur.
 
 ## 5. Complete failure and evidence matrix
 
@@ -199,7 +208,7 @@ An explicit Omnigent selection never silently runs through direct Codex, another
 failure across the end-to-end path, including the profile busy/stale and
 unsupported-runtime cases named by the owning sequence. The `OMNIGENT_*` codes for the pre-support stages are owned by
 [CodexCreateToHostContract.md §6](./CodexCreateToHostContract.md#6-failure-and-no-fallback-matrix);
-stages 11–12 (support-evidence validation and cutover promotion) are owned by
+strict certification and historical cutover failures are owned by
 [CodexSupportAndCutover.md](./CodexSupportAndCutover.md).
 
 | Stage | Stable code | Retryable | Remediation | Evidence requirement |
@@ -238,42 +247,33 @@ repeating these exact words, and no weaker state is written as a stronger one:
 - **supported** — the support matrix links passing evidence (hermetic where the
   row allows it, protected-live where the row requires it) for that exact
   combination.
-- **default** — the versioned rollout phase selects this path for new work.
+- **default** — the surviving rollout-selection policy selects this path for new work; selection is not certification.
 - **deprecated-disabled** — retained for compatibility, scheduling disabled.
 - **retired** — removed after history, rollback, and release gates pass.
 
-Milestone 1 completion may mark **supported** only the normal product-path rows
-proved by the protected browser-to-host matrix (#3564/#3508).
-It must not imply completion of checkpoint resume/branching, operator
-remediation, RAG, persistent policy/profile product journeys, restricted egress
-without live proof, embedded compatibility, Claude parity, broad **default**
-rollout, or direct-runtime retirement. Those rows remain **designed**, **implemented foundation**, or
-**repository-verifiable** until their own protected evidence is linked. The
-authoritative per-row state is owned by the support and conformance matrix in
-[CodexSupportAndCutover.md §Support and conformance matrix v1](./CodexSupportAndCutover.md#support-and-conformance-matrix-v1);
-this document does not restate row-by-row status and must be reconciled to that
-matrix whenever it changes. Its descriptive labels map into the vocabulary above:
-"implemented; live support pending", "Create implemented; full matrix pending",
-and "supported hermetically; live Omnigent pending" are **implemented
-foundation** or **repository-verifiable or hermetically verified** — never
-**supported** — until the row's protected-live artifact is linked;
-"experimental, not default", "partial", and "partially implemented" are
-**designed** or **implemented foundation**; "compatibility supported; retirement
-gated" is retained under the **deprecated-disabled** promotion rules.
+The original Milestone 1 protected browser-to-host matrix (#3564/#3508) proves
+only the subject and operations it observed. It does not establish another
+credential protocol, recovery journey, or deployed migration. Current support
+evidence and optional remediation observations remain with
+[CodexSupportAndCutover.md](CodexSupportAndCutover.md) and the conformance owner.
+Preserve strict v1 decoding and evidence-qualified claims without turning the old
+matrix into ordinary admission authority or rebuilding removed native retrieval.
 
 ## 7. Reconciliation and cutover state
 
-The normal product path defaults to the fail-closed **opt_in** cutover phase: no
-row is promoted to **supported** on the strength of code presence or hermetic
-tests alone, and promotion to **supported** and to any later **default** phase is
-gated on the protected browser-to-host matrix. The deployed phase advances
-independently through `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` and is reported by
-the `/api/omnigent/codex-catalog-readiness` projection and the support matrix; the
-point-in-time deployment status and the open milestone-evidence items are tracked
-in the roadmap and `docs/tmp/`, not here, so this canonical anchor stays
-declarative. This document is the declarative reconciliation for roadmap item
-**1.0**; the live-evidence items remain gated until their independently resolvable
-protected artifacts are linked.
+Create and schedules use `resolve_new_work_selection` and the shared
+`resolve_runtime_target_selection` boundary. They do not read
+`MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE` or
+`MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE`. Existing enablement/promotion, explicit
+rollback stops, direct-retirement cutoff, and class-based admission checks keep
+their real consumers; see [Runtime Provider Rollout](RuntimeProviderRollout.md).
+
+Omitted, blank, or `MOONMIND_OMNIGENT_EVIDENCE_POLICY=either` is ordinary admission
+and may record an uncertified tier. Explicit `protected` or `deployment` retains
+strict validation. The historical `opt_in` phase and phase-advancement examples
+are not current setup steps. Actual protected-live evidence remains necessary
+for the live certification it claims; this documentation change neither certifies
+a deployment nor closes separately owned live-evidence work.
 
 ## 8. Acceptance invariants
 
@@ -287,8 +287,9 @@ protected artifacts are linked.
   document refers to this canonical identity and never invents a competing one.
 - No caller authors host, daemon, session, path, or credential authority.
 - Explicit Omnigent selection is fail-closed with no silent fallback.
-- Provider Profile capacity is released last, after credential-consuming host
-  cleanup; auxiliary cleanup/publication failure never overwrites `primaryStatus`.
+- Provider Profile capacity is released after credential consumers stop through
+  the existing owner; auxiliary cleanup/publication failure never overwrites `primaryStatus`.
 - Support language is evidence-qualified; no row is promoted to **supported**
   without the protected evidence its row requires.
-- Cutover promotion is one-step, fresh, version-matched, and fail-closed.
+- Explicit strict certification retains its evidence validation and integrity
+  checks; historical phase records keep their meaning without gating ordinary admission.
