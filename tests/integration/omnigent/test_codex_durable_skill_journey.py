@@ -10,8 +10,9 @@ dereference it from durable storage.
 Two boundaries are controlled substitutes, named here explicitly:
 
 * Docker: ``docker compose up`` of the static Codex host is recorded instead of
-  run. Its fake reads the Skill directory handed to the launched host, which
-  is the bytes a real host would mount.
+  run. Its fake renders the service's mounts from the Compose file it was
+  given and reads the Skill at its in-container path through them, so a
+  dropped or misconfigured Skills mount fails the journey.
 * Provider: a fake Omnigent server (``FakeOmnigentServer``) plays the Codex
   turn. It returns a workspace file carrying the digest of the Skill the
   launched host received, so the retrieved result proves delivery.
@@ -24,12 +25,15 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
+import yaml
 from aiohttp import web
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -146,16 +150,45 @@ class CodexTurnServer(FakeOmnigentServer):
         )
 
 
+_COMPOSE_VARIABLE = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
+
+
+def _read_through_compose_mount(
+    compose_file: Path, service: str, env: Mapping[str, str], container_path: str
+) -> bytes:
+    """Read ``container_path`` through the service's rendered bind mounts."""
+
+    volumes = yaml.safe_load(compose_file.read_text(encoding="utf-8"))["services"][
+        service
+    ].get("volumes", [])
+    for volume in volumes:
+        source, target, *options = _COMPOSE_VARIABLE.sub(
+            lambda match: env.get(match[1]) or match[2] or "", str(volume)
+        ).split(":")
+        if container_path.startswith(target.rstrip("/") + "/"):
+            assert options == ["ro"], f"{target} must be mounted read-only"
+            host_root = compose_file.parent / source
+            return (host_root / container_path[len(target) :].lstrip("/")).read_bytes()
+    raise AssertionError(f"{service} mounts nothing at {container_path}")
+
+
 class StaticCodexDocker:
     """Record the static Codex host's Docker commands instead of running them."""
 
     def __init__(
-        self, *, workflow_id: str, server: CodexTurnServer, run_command: Any
+        self,
+        *,
+        workflow_id: str,
+        server: CodexTurnServer,
+        run_command: Any,
+        events: list[tuple[str, str]],
     ) -> None:
         self.server = server
         # Non-Docker commands (the trusted Git clone) run for real.
         self.run_command = run_command
         self.commands: list[tuple[str, ...]] = []
+        # Shared with the artifact gateway to order host stops against writes.
+        self.events = events
         self.compose_up_env: dict[str, str] | None = None
         self.container_running = False
         self.server_container_id = hashlib.sha256(
@@ -199,13 +232,19 @@ class StaticCodexDocker:
             platform.machine().lower(), platform.machine().lower()
         )
 
-    def _launch_host(self, env: dict[str, str]) -> None:
+    def _launch_host(self, args: tuple[str, ...], env: dict[str, str]) -> None:
         self.compose_up_env = dict(env)
         self.container_running = True
-        skills = Path(env["OMNIGENT_ACTIVE_SKILLS_DIR"])
-        self.server.delivered_skill = (
-            skills / _DURABLE_SKILL_NAME / "SKILL.md"
-        ).read_bytes()
+        self.server.delivered_skill = _read_through_compose_mount(
+            Path(args[args.index("-f") + 1]),
+            args[-1],
+            env,
+            f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}/{_DURABLE_SKILL_NAME}/SKILL.md",
+        )
+
+    def _stop_host(self) -> None:
+        self.container_running = False
+        self.events.append(("host_stop", self.host_container_id))
 
     async def __call__(self, *args: str, env=None, **kwargs) -> tuple[int, str, str]:
         if args[0] != "docker":
@@ -216,9 +255,9 @@ class StaticCodexDocker:
             return (0, json.dumps({"Internal": True, "EnableIPv6": False}), "")
         if args[:2] == ("docker", "compose"):
             if " up " in joined:
-                self._launch_host(dict(env or {}))
+                self._launch_host(args, dict(env or {}))
             elif " stop " in joined:
-                self.container_running = False
+                self._stop_host()
             elif " ps " in joined:
                 identity = (
                     self.server_container_id
@@ -228,7 +267,7 @@ class StaticCodexDocker:
                 return (0, f"{identity}\n", "")
             return (0, "", "")
         if args[:2] == ("docker", "stop") and args[-1] == self.host_container_id:
-            self.container_running = False
+            self._stop_host()
             return (0, "", "")
         if args[:2] == ("docker", "inspect"):
             return self._inspect(args[3], args[4])
@@ -317,6 +356,19 @@ class StaticCodexDocker:
                 assert 'eq .Destination "/home/app/.codex"' in format_value
                 return (0, "valid\n", "")
         raise AssertionError(f"unexpected Docker inspect: {format_value} {identity}")
+
+
+class RecordingArtifactGateway(TemporalOmnigentArtifactGateway):
+    """The durable gateway, recording each committed write in shared order."""
+
+    def __init__(self, session_factory, *, events: list[tuple[str, str]]) -> None:
+        super().__init__(session_factory)
+        self.events = events
+
+    async def write_bytes(self, **kwargs: Any) -> str:
+        ref = await super().write_bytes(**kwargs)
+        self.events.append(("artifact_write", ref))
+        return ref
 
 
 class HermeticProviderLeases:
@@ -580,7 +632,8 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         skillset_ref = await _write_durable_skill_snapshot(
             session_factory, workflow_id, "run"
         )
-        durable_gateway = TemporalOmnigentArtifactGateway(session_factory)
+        events: list[tuple[str, str]] = []
+        durable_gateway = RecordingArtifactGateway(session_factory, events=events)
         leases = HermeticProviderLeases()
         runtime = OmnigentOAuthHostRuntime(
             client=OmnigentHttpClient(base_url=running.base_url, api_token="journey"),
@@ -588,7 +641,10 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             repository_source_root=tmp_path,
         )
         docker = StaticCodexDocker(
-            workflow_id=workflow_id, server=server, run_command=runtime._run
+            workflow_id=workflow_id,
+            server=server,
+            run_command=runtime._run,
+            events=events,
         )
         runtime._run = docker  # type: ignore[method-assign]
         runtime._align_workspace_ownership = (  # type: ignore[method-assign]
@@ -638,6 +694,8 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             plan,
         )
     finally:
+        # The builder's process-wide pool is bound to this test's event loop.
+        await production.close_omnigent_transport_pool()
         await running.runner.cleanup()
 
     # The launched host received exactly the durable Skill bytes.
@@ -676,6 +734,14 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
         await durable_gateway.read_text(result.metadata["stateCheckpointRef"])
     )
     assert saved
+    checkpoint_write = events.index(
+        ("artifact_write", result.metadata["stateCheckpointRef"])
+    )
+    host_stops = [
+        index for index, (kind, _ref) in enumerate(events) if kind == "host_stop"
+    ]
+    assert host_stops
+    assert checkpoint_write < host_stops[0]
     assert result.metadata["runtimeBindingState"] == "cleanup_complete"
     runtime_chain = result.metadata["authorityChain"]["runtime"]
     assert runtime_chain["hostMode"] == "static_compose"
