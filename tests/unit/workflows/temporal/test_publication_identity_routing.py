@@ -155,6 +155,17 @@ def test_worker_topology_polls_identity_contract_and_retained_queues():
             assert queue + _SUFFIX in queues
 
 
+@pytest.mark.parametrize("activity_type", ["artifact.link", "plan.generate"])
+@pytest.mark.parametrize("owner", [MoonMindRunWorkflow, MoonMindAgentRun])
+def test_unchanged_routes_do_not_require_workflow_context(monkeypatch, activity_type, owner):
+    def unexpected_info():
+        raise AssertionError("An unchanged route must not read workflow context")
+
+    monkeypatch.setattr(workflow, "info", unexpected_info)
+    route = build_default_activity_catalog().resolve_activity(activity_type)
+    assert owner()._execute_kwargs_for_route(route)["task_queue"] == route.task_queue
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("admitted", [False, True])
 @pytest.mark.parametrize("operation", ["create", "rebuild"])
