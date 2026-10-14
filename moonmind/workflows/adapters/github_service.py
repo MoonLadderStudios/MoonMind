@@ -3984,22 +3984,66 @@ class GitHubService:
                 }
 
     async def issue_claim_actor(self, *, repo: str) -> dict[str, Any]:
-        """Resolve the authenticated poster before persisting an issue claim."""
+        """Resolve the authenticated poster before persisting an issue claim.
+
+        A user token names its account through ``GET /user``. An App
+        installation token cannot read that endpoint; its comments are posted
+        by the App's bot account, which GraphQL reports as the viewer.
+        """
         token, error = await self.resolve_github_token(
             repo=repo, operations=ISSUE_OPERATIONS
         )
         if not token:
             return {"ok": False, "reasonCode": "auth_unavailable", "summary": error}
+        headers = self._github_headers(token)
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
-                response = await client.get("https://api.github.com/user", headers=self._github_headers(token))
-                response.raise_for_status()
-                actor = response.json()
+                response = await client.get(
+                    "https://api.github.com/user", headers=headers
+                )
+                if response.status_code == 403:
+                    actor = await self._installation_bot_account(client, headers)
+                else:
+                    response.raise_for_status()
+                    actor = response.json()
             except (httpx.HTTPError, ValueError):
                 return {"ok": False, "reasonCode": "claim_actor_unavailable"}
         if not isinstance(actor, dict) or not actor.get("id"):
             return {"ok": False, "reasonCode": "claim_actor_unavailable"}
         return {"ok": True, "actorId": str(actor["id"])}
+
+    @staticmethod
+    async def _installation_bot_account(
+        client: httpx.AsyncClient, headers: Mapping[str, str]
+    ) -> Any:
+        """The ``[bot]`` account an installation token acts as, or ``None``."""
+        response = await client.post(
+            "https://api.github.com/graphql",
+            headers=headers,
+            json={"query": "query { viewer { login } }"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        viewer = (
+            (payload.get("data") or {}).get("viewer")
+            if isinstance(payload, dict)
+            else None
+        )
+        login = viewer.get("login") if isinstance(viewer, dict) else None
+        if not isinstance(login, str) or not login.endswith("[bot]"):
+            return None
+        response = await client.get(
+            f"https://api.github.com/users/{login}", headers=headers
+        )
+        response.raise_for_status()
+        account = response.json()
+        if (
+            not isinstance(account, dict)
+            or account.get("type") != "Bot"
+            or account.get("login") != login
+        ):
+            return None
+        return account
 
     async def list_issue_comments(
         self,

@@ -247,3 +247,53 @@ async def test_explicit_token_stays_explicit(monkeypatch, tmp_path):
     assert {request.headers["Authorization"] for request in requests} == {
         "Bearer explicit-token"
     }
+
+
+@pytest.mark.asyncio
+async def test_app_default_claims_as_the_app_bot_account(monkeypatch, tmp_path):
+    """An installation token cannot read ``GET /user``; its issue comments are
+    posted by the App's bot account, which is the claim actor."""
+
+    github_app_provider_edge(monkeypatch, "ghs_app_issue_token")
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(
+                403, json={"message": "Resource not accessible by integration"}
+            )
+        if request.url.path == "/graphql":
+            return httpx.Response(
+                200, json={"data": {"viewer": {"login": "moonmind-test[bot]"}}}
+            )
+        if request.url.path == "/users/moonmind-test[bot]":
+            return httpx.Response(
+                200, json={"login": "moonmind-test[bot]", "id": 9001, "type": "Bot"}
+            )
+        raise AssertionError(f"Unexpected request {request.method} {request.url}")
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    app = github_app_connection(_DEFAULT, _REPOSITORY)
+    app = app.model_copy(
+        update={
+            "credential": app.credential.model_copy(
+                update={"permitted_repositories": (_REPOSITORY,)}
+            )
+        }
+    )
+    engine = await _record_default(monkeypatch, tmp_path, app)
+    try:
+        actor = await GitHubService().issue_claim_actor(repo=_REPOSITORY)
+    finally:
+        await engine.dispose()
+
+    assert actor == {"ok": True, "actorId": "9001"}
+    assert {request.headers["Authorization"] for request in requests} == {
+        "Bearer ghs_app_issue_token"
+    }
