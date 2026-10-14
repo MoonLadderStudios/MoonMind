@@ -5476,6 +5476,8 @@ class TemporalIntegrationActivities:
                 "retryHistory": _first("retryHistory", "retry_history"),
                 "nextAction": _first("nextAction", "next_action"),
                 "reason": _first("reason"),
+                "terminalIntent": _first("terminalIntent", "terminal_intent"),
+                "assessmentArtifactRef": _first("assessmentArtifactRef", "assessment_artifact_ref"),
                 "completionMode": _first("completionMode", "completion_mode") or "pr_only_handoff",
                 "reviewOwnerEnded": _first("reviewOwnerEnded", "review_owner_ended"),
                 "cancellationHold": _first("cancellationHold", "cancellation_hold"),
