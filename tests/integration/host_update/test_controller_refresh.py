@@ -30,7 +30,9 @@ def command(args, *, check=True):
     return result.stdout.strip()
 
 
-def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_path):
+def test_host_refreshes_capable_controller_and_preserves_root_owned_work(
+    tmp_path, monkeypatch
+):
     if os.environ.get("MOONMIND_TEST_JOURNAL_TRANSITION") != "1":
         pytest.skip("Real Docker journey is enabled in controller-journey CI")
     candidate = os.environ["MOONMIND_TEST_JOURNAL_APP_IMAGE"]
@@ -45,7 +47,17 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_pat
     state = repo / "deploy/state/controller"
     state.mkdir(parents=True)
     dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text(f"FROM {candidate}\nLABEL moonmind.test.previous={project}\n")
+    legacy_bootstrap = tmp_path / "bootstrap-legacy.py"
+    legacy_bootstrap.write_text(
+        (ROOT / "deploy/controller/bootstrap.py")
+        .read_text()
+        .replace("cmd_recover_identity", "cmd_legacy_recover_identity")
+        .replace("cmd_describe_installation", "cmd_legacy_describe_installation")
+    )
+    dockerfile.write_text(
+        f"FROM {candidate}\nLABEL moonmind.test.previous={project}\n"
+        "COPY bootstrap-legacy.py /app/deploy/controller/bootstrap.py\n"
+    )
     command(["docker", "build", "--network=none", "-t", previous, str(tmp_path)])
     previous_id = command(
         ["docker", "image", "inspect", "--format", "{{.Id}}", previous]
@@ -126,7 +138,45 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_pat
         )
 
     command(["docker", "network", "create", network])
+    source = None
     try:
+        # The MoonMind host's project override must not reinterpret the
+        # separately installed controller's project during metadata inspection.
+        monkeypatch.setenv("COMPOSE_PROJECT_NAME", project)
+        description = json.loads(
+            command(
+                [
+                    "python3",
+                    str(ROOT / "deploy/controller/bootstrap.py"),
+                    "describe-installation",
+                    "--state-dir",
+                    str(state),
+                    "--repo",
+                    str(repo),
+                ]
+            )
+        )
+        assert description["identity"]["project"] == identity["project"]
+        # An inert installed API container supplies observed repair sources;
+        # no API health, application credentials or application apply is used.
+        source = command(
+            [
+                "docker",
+                "run",
+                "--detach",
+                "--rm",
+                "--network=none",
+                "--label",
+                f"com.docker.compose.project={project}",
+                "--label",
+                "com.docker.compose.service=api",
+                "--entrypoint",
+                "python",
+                candidate,
+                "-c",
+                "import time; time.sleep(240)",
+            ]
+        )
         command([*compose, "up", "-d", "--pull", "never", "--wait"])
         before = container()
         _, health = update._controller_call(url, secret, "GET", "/v1/healthz")
@@ -134,10 +184,36 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_pat
         seed("preserved-failure", failed=True)
         assert (state / "operations/preserved-failure.json").stat().st_uid == 0
         failed_digest = saved_digest("preserved-failure")
+        (state / "controller-identity.json").unlink()
 
-        update._ensure_controller_journal_transition(
-            record, repo, url, secret, refresh=True
+        # Exercise default endpoint discovery and its real root-owned metadata
+        # repair before ordinary refresh; the application apply is a separate
+        # journey, so this fixture observes the prepared controller endpoint.
+        prepared = []
+        monkeypatch.setattr(
+            update,
+            "_submit_via_controller",
+            lambda _record, _repo, **kwargs: prepared.append(
+                (_record["image"], kwargs["controller_url"])
+            )
+            or 0,
         )
+        assert (
+            update._submit_release(
+                record, repo, controller_url="http://127.0.0.1:8472", secret_file=None
+            )
+            == 0
+        )
+        assert prepared == [(candidate_id, url)]
+        restored_identity = json.loads((state / "controller-identity.json").read_text())
+        assert {
+            key: value
+            for key, value in restored_identity.items()
+            if key != "recordedAt"
+        } == {key: value for key, value in identity.items() if key != "recordedAt"}
+        identity = restored_identity
+        assert (state / "controller-identity.json").stat().st_uid == 0
+        assert (state / "controller-identity.json").stat().st_mode & 0o044 == 0o044
 
         after = container()
         assert before != after
@@ -153,13 +229,42 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_pat
         )
         assert container() == after
 
+        # A rollback target still has journal support but lacks the metadata
+        # lifecycle methods. Its application selection stays requested while
+        # the controller retains the independently selected installed source.
+        (state / "controller-identity.json").unlink()
+        assert (
+            update._submit_release(
+                {"project": project, "image": previous_id},
+                repo,
+                controller_url="http://127.0.0.1:8472",
+                secret_file=None,
+            )
+            == 0
+        )
+        assert prepared == [(candidate_id, url), (previous_id, url)]
+        assert container() == after
+        assert (
+            command(["docker", "inspect", "--format", "{{.Image}}", after])
+            == candidate_id
+        )
+        assert saved_digest("preserved-failure") == failed_digest
+
         # An open record belongs to the capable controller, even when a
         # later caller asks bootstrap for a different release.
         seed("active-work", failed=False)
         active_digest = saved_digest("active-work")
-        update._ensure_controller_journal_transition(
-            {"project": project, "image": previous_id}, repo, url, secret, refresh=True
+        (state / "controller-identity.json").unlink()
+        assert (
+            update._submit_release(
+                {"project": project, "image": previous_id},
+                repo,
+                controller_url="http://127.0.0.1:8472",
+                secret_file=None,
+            )
+            == 0
         )
+        assert prepared == [(candidate_id, url), (previous_id, url), (previous_id, url)]
         assert container() == after
         assert saved_digest("active-work") == active_digest
         assert saved_digest("preserved-failure") == failed_digest
@@ -179,5 +284,7 @@ def test_host_refreshes_capable_controller_and_preserves_root_owned_work(tmp_pat
                 check=False,
             )
         command([*compose, "down", "--remove-orphans"], check=False)
+        if source:
+            command(["docker", "rm", "--force", source], check=False)
         command(["docker", "network", "rm", network], check=False)
         command(["docker", "image", "rm", previous], check=False)

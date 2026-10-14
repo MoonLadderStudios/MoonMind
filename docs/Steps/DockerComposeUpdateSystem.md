@@ -320,18 +320,27 @@ release before submission, even when its journal-transition method is already
 advertised. Method support admits the interface; it does not keep an older
 implementation installed indefinitely. The command extracts the existing stdlib
 bootstrap from the staged target, falling back to an observed installed
-application image when a rollback target predates that lifecycle, without
+application image when a rollback target lacks that lifecycle, without
 requiring a healthy API or worker or changing the host checkout.
 Bootstrap uses the application image's packaged `deploy/controller` source;
 it does not depend on a separately published controller image. The recorded
-Compose project, mounts, network and credentials remain in place. Replacement
-holds the controller's stack lock and verifies the supported method before
+Compose project, mounts, network and credentials remain in place. The controller
+uses the selected repair source image independently of the application target,
+so a rollback does not reinstall a controller that lacks the needed lifecycle.
+Replacement holds the controller's stack lock and verifies the supported method before
 submission continues. A capable controller with open work retains ownership;
 the host observes that operation or receives its existing busy refusal. The
 host runs bootstrap in a temporary trusted image container with the existing
 Docker socket and writable controller state, on the installation's private
 controller network. This keeps root-owned records and locks readable to the
-lifecycle owner without requiring host privilege changes. Native Compose
+lifecycle owner without requiring host privilege changes. Its repository and
+state binds reuse the installed Compose sources; temporary bootstrap files use
+the lifecycle's bind adapter, with Linux paths inside the helper container.
+If the identity file is lost, bootstrap first recovers the existing project,
+port, target and network from that same Compose installation without replacing
+the controller or changing its work. The recovered metadata stays readable to
+the host, and endpoint discovery then continues through ordinary refresh.
+Native Compose
 recreation leaves an unchanged controller running. An explicitly selected
 controller retains its release choice; missing journal support still requires
 the existing prerequisite.
@@ -408,7 +417,8 @@ That job also runs `tests/integration/host_update/test_controller_refresh.py`
 against the candidate image. A disposable controller advertises journal
 support and writes root-owned operation records. The host's actual image
 export and temporary bootstrap container refresh it over its private network,
-preserving its identity, credential and original failure record. Repeating the
+recovering a missing identity before endpoint discovery while preserving its
+configured identity, credential and original failure record. Repeating the
 refresh keeps the same controller container; an open operation prevents a
 different requested image from replacing its capable owner. This exercises
 the host refresh boundary independently of application service recreation.
