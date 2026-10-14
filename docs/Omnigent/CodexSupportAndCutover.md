@@ -4,21 +4,23 @@
 **Support-matrix version:** `codex-omnigent-support-matrix/v1`
 **Source:** MoonLadderStudios/MoonMind#3518; protected-row binding MoonLadderStudios/MoonMind#3564 (observations from MoonLadderStudios/MoonMind#3563)
 
-This is the canonical support, compatibility, and retirement policy for Codex
-through Omnigent. “Supported” means repository evidence or a protected live
+This owns Codex support evidence and retained cutover diagnostic contracts;
+selection and retirement controls stay with their providing code owners.
+“Supported” means repository evidence or a protected live
 artifact independently proves the row. Code presence alone is “implemented” or
 “unverified,” never “supported.” Codex via Omnigent is a first-class runtime in
 the normal Create catalog; readiness may steer an operator to connect OAuth or
-repair a live dependency, but release evidence does not hide or disable the
-runtime. The current default-selection phase is **1 — explicit selection**:
-the repository does not contain the complete protected-live acceptance artifact,
-so promotion to the preselected Codex default remains fail-closed. The end-to-end product-path sequence, field
+repair a live dependency. Missing optional release evidence does not hide or
+disable ordinary admission. Current defaults are resolved by the shared runtime-target selector and
+its surviving rollout controls, not the retained v1 phase calculation. Ordinary
+admission can truthfully record an uncertified tier; explicit strict certification
+still requires its actual evidence. The end-to-end product-path sequence, field
 authority, and complete failure matrix that this support state qualifies are
 reconciled in
 [Normal Codex product-path reconciliation](./NormalCodexProductPathReconciliation.md).
 
-Ownership note: this document owns the Codex exact support rows, cutover
-phases, and operator remediation matrix. The versioned rollout mechanism that
+Ownership note: this document owns the Codex support evidence, retained cutover
+diagnostic/evidence phases, and strict operator remediation matrix. The versioned rollout mechanism that
 promotes every combination (states, canary, rollback, migration status) is
 owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 
@@ -34,8 +36,8 @@ owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 > deployment-owned rollback list
 > `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK`. Lowering a retired phase value
 > no longer rolls back new-work defaults; use the surviving controls. Phase
-> prose below remains as historical reader context for replay and retained
-> history.
+> inputs below still serve the live catalog `cutover` diagnostic/evidence
+> projection and historical interpretation. They do not select new-work defaults.
 
 ## Compatibility inventory
 
@@ -44,9 +46,9 @@ owned by [Runtime-Provider Rollout Policy](./RuntimeProviderRollout.md).
 | Persisted sessions, provenance, event journal, artifacts and checkpoints | required historical-read compatibility | API read model and Workflow Detail render truthful `codex_direct_compat` and legacy evidence without a live worker | `tests/unit/omnigent/test_direct_compat_historical_reads.py` (pure journal read via `OmnigentBridgeSessionStore.list_event_page`) plus configured retention inventory; always readable | retention has elapsed and lossless migration or approved archival is proven | never rewrite provider, host, or runner identity |
 | Recorded and in-flight workflow/activity payloads | required in-flight Temporal-history compatibility | Temporal workers retain decoders, activity bindings, and patch behavior needed by supported histories | `tests/unit/workflows/temporal/test_run_replayer.py::test_github_3518_cutover_runtime_parameter_histories_replay` replays pre-/post-cutover start payloads on one current worker; `::test_github_3518_cutover_selection_never_runs_inside_workflow_code` keeps selection at the submission boundary | no open history can schedule/retry the binding and retention policy permits removal | roll back only to a worker version that replays the same histories |
 | `moonmind.codex_direct_compat.v1` event producer | temporary bridge-event compatibility producer | direct managed-session adapter emits normalized events with direct provenance; it is not Omnigent | explicit `parameters.communication.mode=omnigent_bridge`; parity and deduplication tests | profile-bound Omnigent coverage, projection parity, historical retention, and no schedulable compatibility activity | retain while rollback can restore direct launch |
-| Explicit direct Codex selection | operator-selectable fallback during a bounded migration window | workflow compiler schedules direct only when the operator selected it or an explicit automatic strategy records `selectedPath` and `fallbackReason` | rollout phases 1–4; no implicit fallback from explicit Omnigent | phase 5 promotion evidence passes | phase rollback restores selection for new work without changing existing run snapshots |
+| Explicit direct Codex selection | explicit compatibility choice during a bounded migration window | shared selection and admission owners preserve explicit intent; no implicit fallback from explicit Omnigent | current rollout controls, direct-retirement cutoff, and code-owned admission class | affected new admission is closed and its actual retained consumers are handled | only surviving authorized controls can restore a supported choice; lowering a diagnostic phase does not change defaults |
 | Direct/Omnigent comparison fixtures | test fixture/comparison substrate | conformance owners retain bounded fixtures and `dual_write` comparison diagnostics | hermetic conformance and replay suites | may be archived after direct retirement; keep minimal historical decoder fixtures | no production scheduling authority |
-| Direct launch worker, launch-only UI, readiness/config flags and duplicate capacity paths | obsolete launch/configuration path eligible for removal | runtime owners disable scheduling first; Provider Profile ledger remains the sole mutable credential-capacity owner | phase 5 disables; phase 6 removes after history, rollback, and release gates | no supported new work can schedule direct, rollback no longer needs it, histories replay, and historical reads pass | removal is irreversible within the release; do not promote phase 6 while rollback depends on it |
+| Direct launch worker, launch-only UI, readiness/config flags and duplicate capacity paths | obsolete launch/configuration path eligible for removal | runtime owners stop affected new admission; Provider Profile ledger remains the mutable credential-capacity owner | current admission controls and owner-specific active-work, history, and cleanup checks | no supported new work can schedule the removed path; required histories, reads, and recovery remain safe | retain an executable path only for an actual consumer or authorized rollback; diagnostic phase 6 does not authorize deletion |
 
 ## Versioned rollout
 
@@ -65,8 +67,9 @@ ordinary admission is certificate independent (#4560); see
 5. `direct_launch_disabled`: new direct work is rejected; reads remain.
 6. `direct_launch_removed`: launch/UI/config code is removed; readers remain for their retention contract.
 
+For this retained diagnostic/evidence contract,
 [`moonmind/omnigent/cutover.py`](../../moonmind/omnigent/cutover.py) permits only
-one-step promotion with a fresh, version-matched evidence artifact. It requires
+one-step phase promotion with a fresh, version-matched evidence artifact. It requires
 profile/policy readiness, all required cases, raw-channel secret scans, replay,
 historical reads, single capacity ownership, objective thresholds, and nonempty
 artifact refs. Every ref must also appear exactly once in the provenance-bound
@@ -120,19 +123,20 @@ visibility, schedule, lease, publication, and cleanup queries through
 `run_live_codex_drain`/`operator_drain_sources`, which normalize
 heterogeneous rows to the same four states (raising sources become
 `unknown`); the report itself never terminates workflows, erases evidence,
-or deletes credential volumes. The API publishes desired/deployed/effective phase,
+or deletes credential volumes. The API's `cutover` projection publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in
-`/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults
-advance at `create_default`; schedule and preset defaults advance at
-`schedule_default`. Every created execution stores `runtimeCutover` beside its
-runtime/profile/model evidence. Invalid phases and explicit direct launches at
-or after `direct_launch_disabled` fail before Temporal submission. Rollback
-changes only future default selection and never rewrites existing run evidence.
+`/api/omnigent/codex-catalog-readiness`. Current Create/schedule defaults follow
+the shared selection owner rather than `create_default` or `schedule_default`.
+The API retains the serialized `runtimeCutover` key for passive new-work
+target/policy provenance from `new_work_evidence`, without a phase gate; old
+phase-bearing records keep their meaning. Invalid phase inputs can fail the
+diagnostic reader, not select another execution path. Future admission rollback
+uses the surviving controls; historical run evidence is never rewritten.
 
 Catalog `gateReasons` are operational launch blockers. Protected acceptance
 matrix gaps are published separately as `supportGateReasons`: they qualify
-release support and default promotion, but do not deny an otherwise safe local
+the declared certification scope, but do not independently select defaults or deny an otherwise safe ordinary
 launch. A first ordinary launch does not require prior session observations or
 the protected browser acceptance, exact-artifact, and live-health files; those
 signals remain visible in `admissionReadiness.capabilities` and
@@ -150,6 +154,8 @@ capped backoff; no service restart is required for recovery.
 
 ## Support and conformance matrix v1
 
+This section describes the retained protected v1 certification scope, not
+ordinary admission or a requirement to restore removed runtime capabilities.
 The stable machine-readable row inventory is the versioned catalog
 `moonmind.omnigent.cutover.REQUIRED_ROW_CATALOG` (support-matrix version
 `codex-omnigent-support-matrix/v1`). Each `MatrixRow` binds one protected row
@@ -190,7 +196,7 @@ telemetry, or a failed threshold. Generating the document does not turn a
 pending matrix row into supported evidence; its owning artifact must contain the
 protected observed result.
 
-At promotion time the launch-authority boundary
+At diagnostic phase promotion the retained evidence reader
 (`moonmind.omnigent.cutover.effective_phase`) independently re-resolves every
 manifest ref, binds its bytes to the recorded digest, **and re-parses each
 artifact to re-validate its observed per-row evidence** against the promotion
@@ -213,7 +219,7 @@ and architecture already recorded there.
 | Stock proxy bridge | stock server/host | implemented; live support pending | [`ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md), `tests/integration/omnigent/test_bridge_proxy_fake_server.py`; immutable-image live artifact required |
 | Embedded compatibility bridge | unchanged stock host | experimental, not default | [`EmbeddedHostAuthCompatibility.md`](./EmbeddedHostAuthCompatibility.md), `tests/integration/omnigent/test_embedded_projection_conformance.py`; separate production gate required |
 | Static and on-demand Codex host | Compose, Docker backend | implemented; live support pending | [`CombinedStackValidationAndRollback.md`](./CombinedStackValidationAndRollback.md), `tests/provider/omnigent/test_omnigent_smoke.py` |
-| Create/edit/rerun/schedule/preset | authored external/omnigent request | Create implemented; full matrix pending | [`CodexCreateToHostContract.md`](./CodexCreateToHostContract.md), `tests/unit/docs/test_omnigent_create_to_host_contract.py`; protected end-to-end artifact required |
+| Create/edit/rerun/schedule/preset | authored external/omnigent request | Create implemented; strict full matrix pending | [`CodexCreateToHostContract.md`](./CodexCreateToHostContract.md), `tests/unit/services/test_omnigent_execution_plan_service.py`; protected end-to-end artifact required for the strict claim |
 | Repository read, mutation, publication | workspace locator and mounted tools | implemented; live support pending | [`OmnigentHostMountedTools.md`](./OmnigentHostMountedTools.md), conformance case evidence required |
 | Workflow Detail live/replay/resources/controls | proxy and direct compatibility events | supported hermetically; live Omnigent pending | `tests/integration/omnigent/test_bridge_conformance.py`, `tests/integration/omnigent/test_execute_fake_server.py` |
 | Cancellation, timeout, failure, cleanup, janitor | static/on-demand | implemented; live support pending | `tests/integration/omnigent/test_execute_fake_server.py`, `tests/unit/omnigent/test_oauth_host_janitor.py`; live lifecycle artifact required |
@@ -223,7 +229,7 @@ and architecture already recorded there.
 | Persistent policy and agent-profile UI | immutable selected versions | partial; unsupported as a complete matrix | persisted policy/profile UI and snapshot evidence required |
 | Enforced egress | host/runtime boundary | partial; unsupported | enforcement and denial evidence required; declarations alone do not qualify |
 | Architecture and images | `linux/amd64`; digest-pinned server/host | amd64 evidence contract implemented; other architectures unsupported until proven | `moonmind/omnigent/conformance.py`; each supported architecture requires immutable-image live evidence |
-| Direct runtime reads and fallback | historical read; phases 1–4 explicit fallback | compatibility supported; retirement gated | [`OmnigentBridge.md`](./OmnigentBridge.md), `tests/unit/omnigent/test_direct_compat_historical_reads.py`, `tests/unit/workflows/temporal/test_run_replayer.py` cutover replay tests, compatibility inventory above |
+| Direct runtime reads and compatibility selection | historical read; explicit choices under current admission controls | compatibility retained for actual consumers | [`OmnigentBridge.md`](./OmnigentBridge.md), `tests/unit/omnigent/test_direct_compat_historical_reads.py`, `tests/unit/workflows/temporal/test_run_replayer.py` cutover replay tests, compatibility inventory above |
 
 ## Optional remediation observations and strict v1 certification
 
@@ -350,25 +356,25 @@ failure and attempt exhaustion; egress decisions and attestation failures;
 operator cancellation/takeover; and autonomous/manual origin. The release
 evaluator re-derives that projection and its versioned objective threshold set
 from the validated row records; a missing dimension, wrong kind/risk bucket,
-missing phase latency, or telemetry/threshold divergence blocks promotion. The
-Create UI exposes manual diagnosis/mutation qualification, manual promotion,
-rollback, evidence expiry, telemetry version, and every operator alert in
-addition to the autonomous authorization state.
+missing phase latency, or telemetry/threshold divergence blocks strict promotion.
+The ordinary Create UI shows optional live observations, evidence expiry,
+telemetry availability, and advisory alerts. It does not expose this strict
+matrix's promotion/rollback requirements as ordinary action authority.
 
 **Autonomous rollout stays disabled.** A fully passing manual matrix never
 authorizes autonomous mutating remediation: `autonomousRolloutAuthorized` is
 always `false` and `autonomous_rollout_gate_closed` is a permanent blocker in
 this matrix version (acceptance criterion 9). No workflow is granted
 `admin_auto` by publishing evidence. The normal Create service rejects that
-authority mode from the server-owned release status, and both Workflow Detail
-and Create show it as release-gated. A production-shaped run must still publish
+authority mode through the separately closed admission owner, and Workflow Detail
+and Create keep autonomous mutation disabled. A strict production-shaped run must still publish
 fresh passing live artifacts before this matrix qualifies operator remediation
 as supported; until such evidence is mounted, the classification above stays
 `partial; autonomous gate closed`.
 
 ## Release thresholds and telemetry
 
-Every promotion artifact records launch/readiness totals by host mode and
+Within the retained v1 certification scope, each promotion artifact records launch/readiness totals by host mode and
 architecture; profile-lease, host-ready, first-message, first-event, terminal
 harvest, and cleanup latency; reconnect/replay gaps; control delivery;
 provider/session/host failures; artifact and capture completeness;
@@ -380,7 +386,10 @@ credentials or session identifiers.
 `thresholds.withinLimits=true` is produced only when the versioned release
 threshold set passes. Any secret violation, provenance rewrite, duplicate
 credential-capacity owner, replay failure, historical-read failure, silent
-fallback, or missing required artifact has a zero tolerance and forces rollback.
+fallback, or missing required artifact has zero tolerance and fails that
+certification/promotion verdict. The diagnostic does not perform a deployment
+rollback or rewrite selection; real safety failures remain enforced by their
+action owners and surviving explicit stop controls.
 The release-status projection shows phase, evidence generation/expiry, image
 digests, architecture, profile version, each threshold result, artifact refs,
 and blockers.
