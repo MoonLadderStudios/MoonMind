@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+    RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
@@ -1728,13 +1729,25 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "saved_archive",
-    [True, False],
-    ids=["restores-saved-archive", "restarts-from-admitted-inputs"],
+    ("saved_archive", "interruptions", "prior_restore"),
+    [
+        (True, 1, False),
+        (False, 1, False),
+        (True, 1, True),
+        (True, 2, False),
+    ],
+    ids=[
+        "restores-saved-archive",
+        "restarts-from-admitted-inputs",
+        "prefers-interrupted-save-over-prior-restore",
+        "keeps-inherited-save-across-second-interruption",
+    ],
 )
 async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_successor(
     monkeypatch: pytest.MonkeyPatch,
     saved_archive: bool,
+    interruptions: int,
+    prior_restore: bool,
 ) -> None:
     """A host-loss successor resumes the verified save or restarts honestly."""
 
@@ -1748,6 +1761,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
     # the after-execution evidence stores them; the successor needs a ref.
     archive_id = "art_01INTERRUPTEDSTEPARCHIVE00"
     archive_ref = "artifact://" + archive_id
+    prior_restore_ref = "artifact://checkpoints/prior-verified-head"
 
     async def fake_execute_typed_activity(
         activity_type: str,
@@ -1780,7 +1794,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
             attempt=attempt,
             source_execution_ordinal=None,
         )
-        if len(child_requests) == 1:
+        if len(child_requests) <= interruptions:
             return AgentRunResult(
                 summary="Omnigent session host was replaced.",
                 failureClass="integration_error",
@@ -1793,6 +1807,11 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         request: AgentExecutionRequest,
     ) -> AgentExecutionRequest:
         return request
+
+    def fake_publication_checkpoint_restore_ref(**_kwargs: Any) -> str | None:
+        # An earlier trusted restore (for example a remediation or publication
+        # head) that predates the interrupted attempt's own verified save.
+        return prior_restore_ref if prior_restore else None
 
     async def fake_record_canonical_step_checkpoint(
         logical_step_id: str,
@@ -1831,6 +1850,7 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
         RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
         RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+        RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     }
     workflow_info = type(
         "WorkflowInfo",
@@ -1895,19 +1915,27 @@ async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_suc
         "_record_step_execution_manifest",
         fake_record_step_execution_manifest,
     )
+    monkeypatch.setattr(
+        workflow,
+        "_omnigent_publication_checkpoint_restore_ref",
+        fake_publication_checkpoint_restore_ref,
+    )
 
     await workflow._run_execution_stage(
         parameters={"publishMode": "none"},
         plan_ref="plan-ref",
     )
 
-    assert len(child_requests) == 2
-    predecessor, successor = child_requests
+    assert len(child_requests) == interruptions + 1
+    predecessor, successor = child_requests[0], child_requests[-1]
     assert successor.step_execution is not None
-    assert successor.step_execution.execution_ordinal == 2
+    assert successor.step_execution.execution_ordinal == interruptions + 1
     assert successor.step_execution.reason == "runtime_recovered"
-    assert "workspaceCheckpointRestoreRef" not in (predecessor.workspace_spec or {})
-    successor_workspace = start_workspaces[2]
+    expected_predecessor_ref = prior_restore_ref if prior_restore else None
+    assert (predecessor.workspace_spec or {}).get(
+        "workspaceCheckpointRestoreRef"
+    ) == expected_predecessor_ref
+    successor_workspace = start_workspaces[interruptions + 1]
     assert successor_workspace["evidenceAccepted"] is True
     if saved_archive:
         assert (successor.workspace_spec or {}).get(
@@ -10239,3 +10267,112 @@ async def test_failed_finish_summary_keeps_terminal_publication_evidence(
     assert summary["publish"]["branchName"] == "mm/workflow/recovered-work"
     assert summary["publish"]["remoteVerified"] is True
     assert summary["publish"]["evidenceRef"] == "artifact://terminal-publication"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("verdict,expected", [
+    ("BLOCKED", "verification_blocked"),
+    ("NO_DETERMINATION", "verification_blocked"),
+    (None, "verification_blocked"),
+    ("INVALID", "verification_blocked"),
+    ("ADDITIONAL_WORK_NEEDED", "failed"),
+])
+def test_preserved_draft_projects_unmet_objective_without_changing_lifecycle(
+    mock_run_workflow, monkeypatch, enabled, verdict, expected
+):
+    workflow = mock_run_workflow
+    patches = {
+        RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+        "run-objective-outcome-projection-v1",
+    }
+    if enabled:
+        patches.add("run-incomplete-draft-objective-outcome-v1")
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", patches.__contains__)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": verdict, "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == (expected if enabled else "succeeded")
+    assert ("Workflow completed successfully" in message) is not enabled
+    assert workflow._pull_request_url in message
+    assert workflow._attention_required is True
+
+
+@pytest.mark.parametrize("state,expected", [("failed", "failed"), ("canceled", "cancelled")])
+def test_incomplete_draft_keeps_failed_or_canceled_terminal_objective(
+    mock_run_workflow, monkeypatch, state, expected
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = "BLOCKED"
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._state = state
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == expected
+
+
+@pytest.mark.parametrize("draft,verdict", [(False, "BLOCKED"), (True, "FULLY_IMPLEMENTED")])
+def test_draft_objective_projection_does_not_reclassify_accepted_or_unrelated_work(
+    mock_run_workflow, monkeypatch, draft, verdict
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = verdict
+    if draft:
+        workflow._activate_moonspec_draft_publication("Earlier gate was incomplete.")
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == "succeeded"
+    assert "Workflow completed successfully" in workflow._compose_success_completion_message()
+
+
+@pytest.mark.asyncio
+async def test_preserved_draft_finalization_keeps_publication_and_blocked_objective(
+    mock_run_workflow, monkeypatch
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": "BLOCKED", "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required GPU evidence is unavailable.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_context["objectiveOutcome"] = "succeeded"
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    summary = await _finalize_and_capture_summary(
+        monkeypatch, workflow, parameters={"publishMode": "pr"}, status=status
+    )
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publishContext"]["objectiveOutcome"] == "verification_blocked"
+    assert workflow._summary_ref == "artifact://summary"
+    workflow._set_state("completed", message)
+    assert workflow._state == "completed"
+    assert memos[-1]["objectiveOutcome"] == "verification_blocked"
+    assert "completed successfully" not in memos[-1]["summary"]
+    assert workflow._pull_request_url in memos[-1]["summary"]
+    assert workflow._attention_required is True

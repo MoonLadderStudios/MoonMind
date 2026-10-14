@@ -2516,11 +2516,17 @@ class OmnigentOAuthHostRuntime:
             if attachment_identity:
                 # Stop the immutable container this lease launched on, never
                 # the service by name: an update may have recreated the service
-                # for a successor. A launched container that is already gone is
+                # for a successor. A launched container that is already gone,
+                # even one removed between this check and the stop, is
                 # confirmed stopped by the presence check below.
                 if await self.container_exists(attachment_identity):
                     await self._run(
-                        "docker", "stop", "--time", "20", attachment_identity
+                        "docker",
+                        "stop",
+                        "--time",
+                        "20",
+                        attachment_identity,
+                        check=False,
                     )
             else:
                 await self.stop_static_host(binding=binding)

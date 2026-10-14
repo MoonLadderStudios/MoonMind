@@ -851,6 +851,7 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-gate-v1"
+RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-outcome-v1"
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
 )
@@ -3017,8 +3018,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
         A replaced host leaves no live sandbox to continue. Only the
         after-execution worktree archive, captured with verified digests into
-        artifact storage, is real saved work. Without one the successor
-        restarts from the Step's admitted inputs and says so.
+        artifact storage, is real saved work. When the interrupted attempt
+        produced none, the save it was itself restored from is carried
+        forward. Without either the successor restarts from the Step's
+        admitted inputs and says so.
         """
 
         key = self._step_execution_launch_block_key(logical_step_id, next_attempt)
@@ -3026,7 +3029,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
             or {}
         ).get("after_execution")
-        archive_ref = None
+        archive_ref = ""
         if (
             isinstance(evidence, Mapping)
             and evidence.get("workspaceKind") == "worktree_archive"
@@ -3037,8 +3040,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and str(evidence.get("checkpointManifestRef") or "").strip()
         ):
             # Capture records compact ``art_`` ids; restore takes a durable ref.
-            archive_ref = self._bounded_story_loop_artifact_ref(
-                evidence.get("workspaceArchiveRef")
+            archive_ref = (
+                self._bounded_story_loop_artifact_ref(
+                    evidence.get("workspaceArchiveRef")
+                )
+                or ""
+            )
+        if not archive_ref:
+            # A host lost before its own capture still restored the save it
+            # inherited from an earlier interruption; keep carrying that save.
+            archive_ref = self._interrupted_step_restore_refs.get(
+                self._step_execution_launch_block_key(
+                    logical_step_id, next_attempt - 1
+                ),
+                "",
             )
         if archive_ref:
             self._interrupted_step_restore_refs[key] = archive_ref
@@ -13384,20 +13399,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         node_inputs=node_inputs,
                                     )
                                 )
-                            if (
-                                trusted_remediation_checkpoint_restore_ref is None
-                                and current_step_execution > 1
-                                and workflow.patched(
-                                    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
-                                )
+                            if current_step_execution > 1 and workflow.patched(
+                                RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH
                             ):
-                                trusted_remediation_checkpoint_restore_ref = (
+                                interrupted_restore_ref = (
                                     self._interrupted_step_restore_refs.get(
                                         self._step_execution_launch_block_key(
                                             node_id, current_step_execution
                                         )
                                     )
                                 )
+                                # The interrupted attempt started from any
+                                # earlier trusted restore, so its own verified
+                                # save holds the newer work.
+                                if interrupted_restore_ref:
+                                    trusted_remediation_checkpoint_restore_ref = (
+                                        interrupted_restore_ref
+                                    )
                             request = self._build_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_annotations=self._node_annotations_mapping(node),
@@ -19595,6 +19613,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         reason = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{reason}." if reason else "No repository commit was needed."
 
+    def _incomplete_draft_objective_outcome(self) -> str | None:
+        """Keep preserved output separate from the owning gate's acceptance."""
+        if self._moonspec_draft_publication_reason is None or not (
+            self._patched_or_false_outside_workflow(
+                RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH
+            )
+        ):
+            return None
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            return None
+        if verdict in {"ADDITIONAL_WORK_NEEDED", "FAILED_UNRECOVERABLE"}:
+            return "failed"
+        return "verification_blocked"
+
     def _compose_success_completion_message(
         self,
         *,
@@ -19610,7 +19643,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 or self._coerce_text(self._last_step_summary, max_chars=700)
                 or "No eligible work was selected."
             )
-        parts = ["Workflow completed successfully"]
+        parts = [
+            "Workflow completed with incomplete verification"
+            if self._incomplete_draft_objective_outcome() is not None
+            else "Workflow completed successfully"
+        ]
         detail = self._coerce_text(publish_detail, max_chars=900)
         if detail and detail.lower() not in {
             "completed",
@@ -25373,6 +25410,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         }
                     )
                 finish_summary["publishContext"] = dict(self._publish_context)
+                incomplete_objective = (
+                    self._incomplete_draft_objective_outcome()
+                    if status == "success"
+                    else None
+                )
+                if incomplete_objective is not None:
+                    finish_summary["publishContext"]["objectiveOutcome"] = incomplete_objective
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
                     finish_summary["mergeAutomation"] = merge_automation_summary
@@ -26176,9 +26220,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             }
             if self._issue_search_capacity_retry_enabled:
                 terminal_outcomes[STATE_NO_COMMIT] = "succeeded"
-            memo_dict["objectiveOutcome"] = self._publish_context.get(
-                "objectiveOutcome"
-            ) or terminal_outcomes.get(self._state, "active")
+            incomplete_objective = (
+                self._incomplete_draft_objective_outcome()
+                if self._state == STATE_COMPLETED
+                else None
+            )
+            memo_dict["objectiveOutcome"] = (
+                incomplete_objective
+                or self._publish_context.get("objectiveOutcome")
+                or terminal_outcomes.get(self._state, "active")
+            )
         if workflow.patched("run-objective-progress-v1"):
             if self._remediation_loop_state is not None:
                 budgets = self._remediation_loop_state.consumed_budgets
