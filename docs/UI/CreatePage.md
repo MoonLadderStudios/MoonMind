@@ -107,7 +107,7 @@ Example unexpanded preset:
   "type": "preset",
   "presetId": "jira-orchestrate",
   "title": "Jira Orchestrate",
-  "inputs": {"jira_issue": {"key": "MOON-123"}},
+  "inputs": {"jira_issue": {"key": "PROJ-123"}},
   "expansionState": "not_expanded"
 }
 ```
@@ -174,7 +174,7 @@ The local widget registry provides text, textarea/markdown, numeric, boolean, se
 The shared picker supports authorized search by key, title, status, or assignee where available, safe manual key entry when allowed, and optional display enrichment. Its durable minimum is:
 
 ```json
-{"key": "MOON-123"}
+{"key": "PROJ-123"}
 ```
 
 Optional summary, description, URL, status, and assignee do not become mandatory just because the picker once fetched them. Backend validation obtains required trusted details when needed. Integration errors preserve the entered key and explain setup or permission failures. Issue context can also come from attachments or trusted lookup, but all paths feed the same draft model.
@@ -280,7 +280,7 @@ Static conflicts are rejected before parent launch, issue creation, or child enq
 
 Advanced mode shows meaningful optional Skill inputs, required capabilities, worker routing, Priority, Max Attempts, and a Backend alternative only where supported. Opening or closing disclosure never changes supported authored values. An exceptional Backend remains visible in the collapsed summary. Controls that are genuinely retired or inapplicable follow their owning intent-preserving normalization, not a blanket reset merely because they are hidden.
 
-MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103), so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
+MoonMind does not provide native retrieval, so Create has no context-retrieval/RAG controls in either mode. Edit and rerun never resubmit an inherited `rag` or `followUpRetrieval` value; the server rejects an explicit retired value with an actionable error. Supply context through explicit attachments, artifact refs, or scoped workspace access.
 
 This disclosure rule does not clear or hide the single repository/branch/publishing intent. Those remain ordinary visible context, not optional per-step overrides.
 

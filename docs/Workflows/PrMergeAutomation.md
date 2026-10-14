@@ -1,81 +1,40 @@
 # PR Merge Automation - Child Workflow Resolver Strategy
 
-**Document Class:** Canonical declarative  
-**Viewpoint:** System / Feature Design View  
-**Status:** Proposed  
 **Owner:** MoonMind Platform  
-**Updated:** 2026-09-13
 **Audience:** backend, workflow authors, API, Dashboard  
-**Authority:** Parent-owned PR readiness/review scheduling, resolver-child handoffs, finish-mode lifecycle, and post-merge tracker completion. Portable Skills own resolver semantics; Workflow Publishing and repository-provider contracts own publication policy and evidence.  
-**Owning Surface:** MoonMind.MergeAutomation and its UserWorkflow integration  
-**Related Implementation:** `MoonMind.MergeAutomation`, `.agents/skills/pr-resolver/`, and the existing merge_automation Activities.  
+**Covers:** Parent-owned PR readiness/review scheduling, resolver-child handoffs, finish-mode lifecycle, and post-merge tracker completion. Portable Skills own resolver semantics; Workflow Publishing and repository-provider contracts own publication policy and evidence.  
+**Related Implementation:** `MoonMind.MergeAutomation` (`moonmind/workflows/temporal/workflows/merge_automation.py`), `.agents/skills/pr-resolver/`, and the `merge_automation` Activities.  
 **Related Docs:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Workflows/LoreVcsIntegrationDesign.md`
 
-This is a declarative target, not deployment or implementation evidence. [Workflow Publishing](WorkflowPublishing.md) owns the single authored publication policy and the distinction between authoring Auto and compiled Skill-owned `auto`. All new repository evidence uses the unified provider-neutral contract in [Lore VCS Integration Design section 3.13](LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence); this gate consumes it, not a separate Auto schema.
+[Workflow Publishing](WorkflowPublishing.md) owns the single authored publication policy and the distinction between authoring Auto and compiled Skill-owned `auto`. Repository evidence uses the provider-neutral contract in [Lore VCS Integration Design section 3.13](LoreVcsIntegrationDesign.md#313-unified-repository-publication-evidence); this gate consumes it rather than a separate schema.
 
-## 1. Purpose
+## 1. Purpose and Design
 
-PR merge automation is parent-owned subordinate orchestration. An implementation workflow publishes a PR, waits for external readiness, invokes the resolved `pr-resolver` Skill through ordinary execution, and remains nonterminal until the requested finish and required post-merge effects complete. An existing-PR workflow can enter the same gate without creating another PR. Its review-only finish requests fresh review without invoking a resolver or publishing repository changes.
+PR merge automation is parent-owned subordinate orchestration. An implementation workflow publishes a PR, waits for external readiness, invokes the resolved `pr-resolver` Skill through ordinary execution, and stays nonterminal until the requested finish and required post-merge effects complete. An existing-PR workflow can enter the same gate without creating another PR, and its review-only finish requests fresh review without invoking a resolver or publishing.
 
-Downstream workflows depend on the original parent workflowId, not a second top-level workflow discovered after publication. For resolver modes, required resolver capabilities are hard readiness requirements under the existing Required Capabilities contract.
+`MoonMind.UserWorkflow` owns its `MoonMind.MergeAutomation` child and awaits the result. Merge automation owns durable scheduling, review-request effects, bounded waits, and resolver-child supervision; the resolved portable Skill owns PR diagnosis, remediation, merge gating, and merge effects. Downstream workflows depend on the original parent workflowId, and for resolver modes the required resolver capabilities are hard readiness requirements under [Required Capabilities](RequiredCapabilities.md).
 
-## 2. Design Decision
+One authored publishing selection governs the scope. A PR-and-merge policy derives PR publication for implementation, no direct publication for the gate/coordinator, and Skill-owned `auto` for the resolver. These are internal roles, not user overrides, and a coordinator's compiled `none` never becomes a descendant prohibition.
 
-`MoonMind.UserWorkflow` owns its `MoonMind.MergeAutomation` child and awaits the result. Merge automation owns durable scheduling, review-request effects, bounded waits, and resolver-child supervision. The resolved portable Skill remains the semantic owner of PR diagnosis, remediation, merge gating, and merge effects.
+The design reuses existing publication, execution, credential, and workspace owners rather than adding a parallel merger or policy service. It does not provide a separate top-level follow-up dependency, a native replacement for `pr-resolver`, mid-flight broadening of merge policy, or automation for arbitrary non-PR output. Explicit user None does not authorize pushing or merging just because the adopting coordinator has no deliverable of its own.
 
-One authored publishing selection governs the whole scope. A managed PR-and-merge policy can derive PR publication for implementation, no direct repository publication for the gate/coordinator, and Skill-owned `auto` for the resolver. These are internal roles, not user overrides. A coordinator's compiled `none` never becomes a descendant prohibition or the value inherited by a resolver.
+This GitHub resolver flow never merges a Lore-backed repository through its generated GitHub PR: provider-aware merge automation routes Lore work through the exact-revision coordinator contract in Lore VCS Integration Design, a PR projection is not the mutation target, and a Git-only Skill cannot acquire Lore authority through this gate.
 
-## 3. Goals
+## 2. Strategy Summary
 
-Preserve one parent dependency target, durable awaited completion, state-based rather than fixed-delay gating, ordinary Skill execution, exact-head review/evidence, observability, cancellation, artifacts, and replay compatibility. Reuse existing publication, execution, credential, and workspace owners instead of adding a parallel merger or policy service.
+The compiler resolves the authored policy and finish/review options, pins definition evidence, and admits the relevant effects. Managed PR publication or trusted existing-PR resolution produces durable target context; the parent starts MergeAutomation and stays `awaiting_external`. At the handoff, the canonical GitHub PR URL must name the workflow's authored repository, so a result URL cannot supply repository authority or lend its PR number to a different repository.
 
-## 4. Non-Goals
+For merge and fix-only, the gate waits for configured review/check/Jira state, then starts an ordinary UserWorkflow resolver child that runs the pinned Skill bundle in AgentRun. Its machine-readable result completes the objective, requests review for the exact head, re-enters the gate, or reports a blocker. Review-only uses the owned review-request and evidence operations directly and completes on fresh current-head review.
 
-No separate top-level follow-up dependency model, native replacement for `pr-resolver`, mid-flight broadening of admitted merge policy, or generalization into arbitrary non-PR output. Existing-PR adoption is supported, but explicit user None does not authorize pushing or merging merely because the adopting coordinator has no deliverable of its own.
+After verified merge or already-merged, required Jira/GitHub completion runs through trusted issue Activities, and merge finish succeeds only after those succeed or no-op. Fix-only succeeds at a verified clean gate without merging or post-merge effects. Review-only succeeds with review_complete, including when the review has findings. Blocked, failed, and expired fail the parent; canceled cancels it.
 
-The GitHub PR resolver flow described here is not authority to merge a Lore-backed repository through its generated GitHub PR. Provider-aware merge automation routes Lore work through the exact-revision coordinator contract in LoreVcsIntegrationDesign. A PR projection is not the repository mutation target, and an unqualified Git-only Skill cannot acquire Lore authority through this gate.
+A resolver may repair and merge a newer head than the original candidate. On either merged disposition the gate re-reads the tracked PR through the repository readiness Activity before post-merge effects, because the resolver's success claim or a stale returned head cannot substitute for remote observation. Issue finalization independently checks repository, PR, head, branch, issue association, merge, and completion target.
 
-## 5. Summary of the Strategy
+## 3. Why Child Workflows
 
-The compiler resolves a single authored policy and meaningful finish/review options, pins their definition evidence, and admits the relevant effects. Managed PR publication or trusted existing-PR resolution produces durable target context. The parent starts MergeAutomation and remains `awaiting_external`.
+A separate top-level follow-up would create a second dependency target and make the original parent's success ambiguous. Folding everything into one UserWorkflow would mix implementation/publication, external waits, and repeated resolver attempts into one history and duplicate resolver logic. The child boundary keeps each durable and inspectable.
 
-At the parent handoff, the canonical GitHub PR URL must name the workflow's
-authored repository. A result URL cannot supply repository authority or donate
-its PR number to a different repository. Retained histories preserve their
-recorded handoff through a Temporal patch. This repository check does not replace
-the publication owner's task/candidate provenance requirements.
-
-For merge and fix-only, the gate waits for configured external review/check/Jira state, then starts an ordinary UserWorkflow resolver child. The child executes the pinned resolved Skill bundle in AgentRun. Its machine-readable result either completes the admitted objective, requests review for the exact head, re-enters a durable gate, or reports a blocker/failure. Review-only uses the same owned review-request and evidence operations directly and completes on fresh current-head review.
-
-After verified merge/already-merged, required Jira/GitHub completion runs through trusted issue activities. Merge finish succeeds only after those required effects succeed or no-op. Fix-only finish succeeds at a verified clean gate without merging or post-merge issue completion. Review-only succeeds with review_complete, including when the completed review has findings; it performs no post-merge effects. Blocked/failed/expired fail the parent; canceled cancels it.
-
-A resolver may repair and merge a newer head than the parent's original published
-candidate. On either merged disposition, the gate re-reads the same tracked PR
-through the existing repository readiness Activity before post-merge effects.
-That remote observation confirms the merge and supplies the current head; the
-resolver's success claim or an omitted/stale returned head cannot substitute for
-it. Issue finalization independently checks the exact repository, PR, head,
-branch, issue association, merge, and completion target. The refreshed handoff
-preserves those checks. Histories recorded before the additional read retain
-their original Activity sequence through a workflow patch.
-
-## 6. Why This Uses Child Workflows
-
-### 6.1 Why not a separate top-level follow-up workflow
-
-A separate follow-up creates another dependency target and makes original-parent success ambiguous. The gate is subordinate work owned and awaited by the original workflow, not a separately authored prerequisite.
-
-### 6.2 Why not all inside one giant UserWorkflow
-
-Implementation/publication, external waits, and repeated resolver attempts have distinct responsibilities. The existing child boundary keeps them durable and inspectable without expanding one workflow into a second resolver implementation.
-
-### 6.3 Why the resolver itself is a child UserWorkflow
-
-The child uses ordinary workspace/runtime preparation, logging, artifacts, admission, and Skill snapshots. It materializes the exact `pr-resolver` bundle and executes it through AgentRun. The Skill and packaged helpers own snapshots, comment retrieval/classification, remediation selection, retries, final merge checks, and terminal evidence.
-
-The former `MoonMind.PRResolver` type is historical replay support only where required. New work must not select it or infer a native host from the Skill name or publication mode.
-
-## 7. Workflow Topology
+The resolver is itself a child UserWorkflow so it gets ordinary workspace/runtime preparation, logging, artifacts, admission, and Skill snapshots. It materializes the exact `pr-resolver` bundle and runs it through AgentRun; the Skill and its helpers own snapshots, comment classification, remediation selection, retries, final merge checks, and terminal evidence. The `MoonMind.PRResolver` workflow type remains only for replaying recorded histories; new work does not select it or infer a native host from the Skill name or publication mode.
 
 ```text
 UserWorkflow: one authored PR-and-merge intent
@@ -85,31 +44,26 @@ UserWorkflow: one authored PR-and-merge intent
   |    |- UserWorkflow: resolver attempt 1, compiled Skill-owned auto
   |    |    `- AgentRun: resolved pr-resolver Skill
   |    `- UserWorkflow: resolver attempt 2 when required, same scope intent
-  |         `- AgentRun: resolved pr-resolver Skill
   `- terminal success only after requested finish and required effects
 ```
 
-Existing-PR adoption replaces the initial implementation/publish phase with a trusted target-resolution step. Its coordinator-local None does not change the inherited allowed effects.
+Existing-PR adoption replaces the implementation/publish phase with trusted target resolution; its coordinator-local None does not change inherited allowed effects.
 
-For review-only adoption, the scope itself permits no repository publication. The gate requests and awaits fresh review without resolver children, preparation, or remediation. The shipped single-tool graph is admitted as a native collaboration consumer, independently of whether the selected agent realizer can consume repository credentials. The compiler verifies that graph against the frozen task-input snapshot and grants only read and review_request for the selected connection/repository; native authority cannot be reused by an agent or donated to child work.
+### 3.1 Review-only authority
 
-Readiness and review-request Activities consume the parent plan’s admitted collaboration snapshot through the shared bound credential service. For this objective the frozen snapshot admits both read and review_request, yielding GitHub App pull-requests write and Issues read permission for request-comment and PR reaction polling, without contents-write or branch-write authority. Generic read keeps its existing contents/metadata-only permissions and does not independently grant App access to private PR review APIs. Review-only observations skip unrelated CI APIs. Trusted native Activities link the exact verified plan inputs to their real workflow/run through the existing artifact admission helper, then read as that execution. This also covers tool-only scheduled coordinators without an AgentRun and does not use owner display metadata as artifact authority. The selected connection, repository, operations, and current connection revision remain authoritative; missing or revoked authority never falls back to an ambient account. The GitHub.com gate rejects a different admitted host before acquiring credentials. Restored completed reviews still require a live observation that the originally admitted head remains open before reporting completion.
+For review-only adoption the scope permits no repository publication, and the gate requests and awaits fresh review without resolver children or remediation. The single-tool graph is admitted as a native collaboration consumer regardless of whether the selected agent can consume repository credentials. The compiler verifies it against the frozen task-input snapshot and grants only read and review_request for the selected connection; that native authority cannot be reused by an agent or donated to children.
 
-A forbidden reaction read may still be satisfied by a qualified fresh provider review or clean-review comment. If the selected connection cannot read reactions and no valid alternative evidence exists, the gate returns policy_denied with a sanitized permission diagnostic instead of waiting until expiry. Rate limits and transient provider errors retain their existing retry handling.
+Readiness and review-request Activities consume the parent plan's admitted collaboration snapshot through the shared bound credential service. Read plus review_request yields GitHub App pull-requests write and Issues read (for request comments and reaction polling) without contents or branch write, and review-only skips unrelated CI APIs. Trusted native Activities read artifacts as their real workflow/run through the artifact admission helper. Missing or revoked authority never falls back to an ambient account, and restored completed reviews still need a live observation that the admitted head remains open.
 
-## 8. Workflow Type
+A forbidden reaction read may still be satisfied by a qualified fresh review or clean-review comment. Without either, the gate returns policy_denied with a sanitized permission diagnostic rather than waiting until expiry; rate limits and transient errors keep normal retry handling.
 
-`MoonMind.MergeAutomation` is the existing internal durable owner for this distinct long-lived behavior. It is not an additional user-selectable runtime, preset mode, or dependency type. Definition and rollout evidence belong to their existing implementation owners rather than a second migration framework.
+## 4. Parent Workflow Behavior
 
-## 9. Parent Workflow Behavior
+`MoonMind.MergeAutomation` is an internal durable owner, not a user-selectable runtime, preset mode, or dependency type.
 
-### 9.1 Parent input contract
+### 4.1 Input and entry points
 
-The new authored publication selection is `default`, `none`, `branch`, `pr`, or `pr_with_merge_automation` under the existing authored publish object. Auto is `default` or omission. The compiler preserves this snapshot separately from worker-bound `publishMode` and `mergeAutomation` configuration.
-
-Explicit PR-and-merge, or an Auto default that declares it, compiles to managed `publishMode: pr` plus enabled automation. Existing-PR review/resolution defaults compile the coordinator's own publication to None and separately admit its declared descendant effects. Neither path is legal under an explicit scope-wide None selection when publishing resolver work is required.
-
-A representative **compiled**, not independently authored, configuration is:
+The authored selection (`default`, `none`, `branch`, `pr`, `pr_with_merge_automation`) is preserved separately from worker-bound `publishMode` and `mergeAutomation`. Explicit PR-and-merge, or an Auto default declaring it, compiles to `publishMode: pr` plus enabled automation; existing-PR defaults compile the coordinator's own publication to None and separately admit descendant effects. Neither is legal under explicit scope-wide None when publishing resolver work is required. A representative compiled (not authored) configuration:
 
 ```json
 {
@@ -133,127 +87,61 @@ A representative **compiled**, not independently authored, configuration is:
 }
 ```
 
-Runtime input never contains unresolved authoring `default`. Preset definitions describe requirements/defaults; they do not introduce a second publish selector or overwrite explicit intent. The gate cannot consult the retired workspace publish fallback to modify this frozen selection.
+Runtime input never contains unresolved `default`, and presets describe defaults without adding a second selector.
 
-### 9.1.1 Entry points: publishing a PR versus adopting one
+**Publish:** the implementation path creates a PR through the managed publisher and records target and candidate evidence. **Adopt:** trusted `github.resolve_pull_request_target` resolves one eligible open PR and records its URL, repository, head/base refs, and exact head SHA; `pr-review-resolve` is the preset for this path. Task-queue routing follows the admitted automation requirement and qualified PR target, not `publishMode == pr`, because routing on that literal would strand an adopting coordinator whose local mode is None. Automation configuration lives in the compiled workflow-level policy, not per-step.
 
-**Publish:** the implementation path creates a PR through the managed publisher and records exact target and candidate evidence.
+### 4.2 Finish mode
 
-**Adopt:** a trusted `github.resolve_pull_request_target` operation resolves one eligible existing open PR and records its URL, repository, head/base refs, and exact head SHA. No new PR is created. `pr-review-resolve` is the existing preset for the review-loop form of this path.
-
-Task-queue routing follows the admitted automation requirement and qualified existing/new PR target, not `publishMode == pr` alone. Routing solely on that literal would strand an adopting coordinator whose local mode is None. A non-publishing workflow without admitted automation starts no gate.
-
-Automation configuration belongs to the compiled workflow-level policy. Individual steps contain their declared roles and target handoffs, not independent editable automation policies. The gate owns scheduling/review requests; resolver Skills own their commit/push/merge semantics.
-
-### 9.1.2 Finish mode
-
-`mergeAutomation.finishMode` selects the admitted objective. Merge and fix-only share the required clean gate; review-only requires fresh review completion rather than a clean or merge-ready PR:
-
-| Value | Behavior |
+| `finishMode` | Behavior |
 | --- | --- |
 | `merge` | Resolver has admitted merge authority and returns merged/already_merged on verified success. |
-| `fix_only` | Resolver still remediates, pushes, verifies, and checks gates, but returns review_clean without merging. |
-| `review_only` | Gate requests fresh review of the current head and returns review_complete when the configured reviewer completes, including with findings. No resolver runs. |
+| `fix_only` | Resolver remediates, pushes, verifies, and checks gates, but returns review_clean without merging. |
+| `review_only` | Gate requests fresh review of the current head and returns review_complete when the reviewer completes, including with findings. No resolver runs. |
 
-Only omission takes the historical merge default. Invalid strings, casing, or types fail with `UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE` before a resolver starts. Never broaden an unknown value into merge.
+Only omission takes the merge default. Invalid strings, casing, or types fail with `UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE` before a resolver starts, so an unknown value is never broadened into merge. Fix-only is not None and cannot make blockers, deferred comments, or pending checks successful; the child derives finish authority from the owning gate rather than a Skill override.
 
-Fix-only is not None and cannot make blockers, deferred comments, or pending checks successful. The child derives finish authority from the owning gate, not an independently editable Skill override. Direct standalone resolver task options use the same semantic contract outside this gate. No post-merge Jira/GitHub completion is attempted for fix-only.
+Review-only compiles to publication None and admits only repository read and `review_request`. It requires a supported configured reviewer, rejecting disabled or unsupported review before effects, and admits no writes, destination, work branch, resolver, merge, or post-merge effects. It is a gate finish mode, not a portable `pr-resolver` mode. Its StartInput requires typed `parentExecutionPlan` bound to the admitted parent; caller-supplied tokens, ambient credentials, and arbitrary connections cannot supply or broaden that authority.
 
-Review-only compiles to publication None and admits repository read plus the `review_request` collaboration operation only. It requires a supported configured reviewer and fresh review; disabled or unsupported review is rejected before effects. It admits no repository writes, publication destination, work branch, resolver preparation, remediation, merge, or post-merge effects. This is a gate finish mode, not a new portable `pr-resolver` mode.
+### 4.3 Publish context and parent state
 
-Review-only StartInput requires typed `parentExecutionPlan` bound to the actual admitted parent workflow; readiness and requests consume its immutable selected collaboration repository snapshot and connection for the admitted `read` or `review_request` operation. Caller-supplied tokens, ambient credentials, and arbitrary connections cannot supply that authority or broaden existing admission and parent narrowing.
+PublishContext holds repository, prNumber, prUrl, baseRef, headRef, exact headSha, publishedAt or the adoption observation, optional jiraIssueKey, and artifact provenance, with large evidence artifact-backed. It is a projection of validated target facts, not an alternate publication schema: the accepted `moonmind.publish.repository.v1` artifact remains authoritative, and adoption records target evidence without inventing an earlier publication. A PR URL alone is insufficient, and a resolver's head never becomes the original publication base.
 
-### 9.2 Parent publish output
+The parent records the automation child ID and waits in `awaiting_external`, reaching success only from the admitted terminal outcome. Stage markers use normal search attributes rather than a new root state.
 
-Durable PublishContext includes repository, prNumber, prUrl, baseRef, headRef, exact headSha, publishedAt or the qualified adoption observation, optional jiraIssueKey, and artifact provenance. Keep large evidence artifact-backed with a compact safe projection.
+## 5. MergeAutomation Input and Output
 
-This GitHub-oriented scheduling context is a projection of validated target/publication facts, not an alternate repository-publication schema. New managed and agent-owned publishers emit `moonmind.publish.repository.v1`; the accepted artifact reference and exact-attempt association remain authoritative. Adoption records target evidence without inventing an earlier publication by this run. Provider-discriminated targets and revisions are not replaced by these display fields.
+Inputs include parent workflow/run identity, publishContextRef, frozen mergeAutomationConfig, scoped publication provenance, and, for resolver modes, the resolver launch template. Runtime/Profile identity comes from the parent's admitted selection, and a resolver child receives newly admitted execution ownership rather than the parent's credentials or plan. For Omnigent, compact `parentOmnigentExecutionPlan` is the authority for preparing a fresh child plan, not the child plan itself.
 
-A PR URL alone is insufficient. Base and head are distinct; a resolver's head cannot become the implementation's original publication base. Target context and the inherited scope intent remain linked but separate.
+Jira-backed work carries canonical jiraIssueKey and normally enables post-merge Jira completion; an explicit `postMergeJira.issueKey` is validated independently. GitHub-issue-backed work carries the repository/issue number for post-merge GitHub completion. Neither operation lives inside `pr-resolver`.
 
-### 9.3 Parent state behavior
+### 5.1 Post-merge tracker completion
 
-The parent records the automation child ID and waits in `awaiting_external`. It reaches success only from the admitted terminal outcome. Additional stage markers use the normal search-attribute update contract, not an assumed new root lifecycle state.
+`merge_automation.complete_post_merge_jira` runs through the trusted Jira boundary only after verified merge/already-merged. Target precedence is explicit configured key, canonical jiraIssueKey, validated workflow/publish context, then a strict exact-key PR-metadata fallback — never fuzzy summary search or transitioning every mentioned key. An explicit transition ID must be available; an explicit name matches exactly (case-insensitive); automatic selection requires exactly one transition to Jira's done category. Missing required fields block. Already-done is a successful no-op, and a required failure prevents automation success with a Jira-sourced reason.
 
-## 10. MergeAutomation Input and Output
+The trusted GitHub issue Activity applies configured Done actions — closing, adding `status: done`, removing `status: code-review` — and confirms the result, since PR closing keywords do not prove labels were applied. Repeated updates against a closed issue are idempotent.
 
-### 10.1 Input
+For Jira PR work whose PR output is optional, explicit structured confirmation that the issue is already implemented can invoke the same completion boundary without a PR. An ambiguous no-diff result causes no tracker mutation and explains why.
 
-Inputs include parent workflow/run identity, publishContextRef, frozen mergeAutomationConfig, scoped publication provenance, and, for resolver modes, the resolver launch template. Runtime/Profile identity comes from the parent's admitted selection. Repository/head/base is the validated PR target. A resolver child receives newly admitted execution ownership, not reused credentials or the parent's whole execution plan.
+### 5.2 Output
 
-Jira-backed PR work carries canonical jiraIssueKey and normally enables required postMergeJira completion. An explicit postMergeJira.issueKey is independently validated. GitHub-issue-backed work carries the canonical repository/issue number for required postMergeGithub completion. Neither operation belongs inside `pr-resolver`.
+Summaries record the selected issue and identity source, transitions/actions, outcome, failure reason, and artifact refs, without large tracker payloads or credentials. The full result also keeps target, cycles, resolver child IDs, last head, blockers, and publication disposition. Terminal statuses are merged, already_merged, review_clean (admitted fix-only only), review_complete (admitted review-only only; proves fresh current-head review, not a clean gate or merge), blocked, failed, expired, and canceled.
 
-For Omnigent, compact `parentOmnigentExecutionPlan` is authority for preparing a fresh child plan, not itself the child plan.
+## 6. Lifecycle
 
-### 10.2 Post-merge Jira completion
+States: initializing, awaiting_external, executing, finalizing, completed, failed, canceled.
 
-`merge_automation.complete_post_merge_jira` uses the trusted Jira boundary only after verified merge/already-merged. Target precedence is explicit configured issue key, normalized canonical jiraIssueKey, validated captured workflow/publish context, then strict exact-key PR-metadata fallback. No fuzzy summary search or bulk transition of every mentioned key.
+For merge and fix-only, the loop loads admitted context, evaluates readiness, waits by signal or bounded timer, starts one deterministically identified resolver child, validates its disposition and evidence, then completes required effects or returns to the gate. Child acceptance or process exit is not completion of the PR objective.
 
-An explicit transition ID must be available. An explicit name matches exactly, case-insensitively. Automatic selection requires exactly one available transition to Jira's done category. Required fields must be supplied by configured defaults; otherwise block. Already-done is a successful no-op. Required failed/blocked completion prevents terminal automation success with a Jira-sourced reason.
+A completed CI failure admits the resolver even while other checks are queued or running, so a failed build does not wait for its downstream CI Gate before `pr-resolver` can choose `fix-ci`. Incomplete checks without a confirmed failure keep waiting, and admission does not certify merge readiness; head, policy, evidence, Jira, and active-review barriers still apply. Readiness records `actionableCiFailuresVersion: "v1"` and a `readinessObservationId`, and the workflow records a per-observation patch decision so recorded observations replay with their original wait decision while the next fresh poll adopts the failure-aware rule — without repeating publication or merge effects or requiring an operator signal.
 
-### 10.2.1 Post-merge GitHub completion
+### 6.1 Review-only lifecycle
 
-The trusted GitHub issue activity applies configured Done actions after verified merge, including closing, adding `status: done`, removing `status: code-review`, and confirming resulting state. PR closing keywords do not prove labels were applied. Repeated updates against an already closed issue are idempotent. Required failure remains a GitHub-sourced blocker.
+The gate pins the admitted open PR's current head, requests review through `merge_automation.request_automated_review`, and awaits request-bound completion. Earlier review does not count. CI, conflicts, findings, and Jira readiness neither trigger repair nor delay this objective. A changed head blocks with stale_revision without retargeting. The head is revalidated before returning review_complete. Restored request evidence must match this gate's provider, pinned head, request key, comment ID, timestamp, and cycle, and completion must name that head with a qualifying ID, kind, and timestamp after the request.
 
-### 10.2.2 Already-implemented no-change completion
+## 7. Automated Review Loop
 
-For Jira PR-oriented work whose PR output is optional, explicit structured confirmation that the canonical issue is already implemented can invoke the same trusted completion boundary without manufacturing a PR. Canonical issue context, or the supported single strictly validated issue reference, is required. An ambiguous no-diff result causes no tracker mutation and explains that limitation.
-
-### 10.3 Output
-
-Summaries record selected issue, source of its identity, transition/actions, verified no-op or success, failure reason, and artifact refs without large tracker payloads or credentials. The full result also preserves target, cycles, resolver child IDs, last head, blockers, and observed publication disposition.
-
-### 10.4 Terminal status summary
-
-Allowed statuses are merged, already_merged, review_clean, review_complete, blocked, failed, expired, and canceled. Review-clean is valid only for admitted fix-only. Review-complete is valid only for admitted review-only and proves fresh review completion on the current head, not a clean gate or a merge. Artifact references preserve exact-attempt evidence after projection lag or host removal.
-
-## 11. MergeAutomation Lifecycle
-
-### 11.1 States
-
-Use initializing, awaiting_external, executing, finalizing, completed, failed, and canceled. No extra root state is needed.
-
-### 11.2 Durable loop
-
-For merge and fix-only, load admitted context, evaluate external scheduling readiness, wait by signal/bounded timer when necessary, start one deterministically identified resolver child, await it, validate its disposition/evidence, then complete required effects or return to the gate. Child acceptance/process exit is not completion of the PR objective.
-
-An observed completed CI failure admits the resolver even while other checks are
-queued or running. A failed build must not wait for its queued downstream CI Gate
-before `pr-resolver` can select `fix-ci` or reconcile an infrastructure failure.
-Incomplete checks with no confirmed failure continue to wait. Raw check evidence
-remains incomplete and failing; resolver admission does not certify merge readiness.
-Current-head, policy, unavailable-evidence, Jira, and active automated-review
-barriers still apply. The changed timer-versus-child decision requires producer
-capability and a Temporal replay patch for that recorded observation, preserving
-older waits during replay even when Activity workers upgrade first.
-
-Retained gates keep the earlier wait decision while replaying old observations.
-After upgrading the workflow and readiness Activity workers, their next ordinary
-event or fallback poll reads fresh readiness evidence automatically. The Activity records
-`actionableCiFailuresVersion: "v1"` and `readinessObservationId` from the scheduled
-Activity ID alongside the check, configured review, and Jira evidence. The
-workflow records a separate admission patch decision for each observation. An
-observation already consumed by an older worker retains its earlier wait; the
-next poll has a fresh Activity ID and adopts the failure-aware rule automatically.
-Older observations without both fields keep their historical behavior. This
-automatic migration
-preserves the saved head, resolver attempts, review state, and deadlines, and
-still checks every other readiness barrier before dispatching a resolver. It
-does not repeat publication or merge effects or require an operator signal.
-
-### 11.2.1 Review-only lifecycle
-
-Resolve and pin the admitted open PR's current head, request review through `merge_automation.request_automated_review`, and await its qualifying request-bound completion using the existing durable gate. Earlier review does not satisfy the fresh request. CI state, merge conflicts, actionable findings, and Jira readiness do not trigger repair or delay this review objective. A changed head blocks with stale_revision; preserve the original head without retargeting or requesting review of another revision. Revalidate the current head before returning review_complete and preserve the request and completion evidence. Missing evidence, unavailable review, ownership conflicts, cancellation, and exhausted budgets retain their explicit outcomes.
-
-Restored request evidence must match this gate's provider, pinned head, request key, comment ID, timestamp, and cycle. Completion must name that exact head and carry a qualifying completion ID, kind, and timestamp on or after the request. Neither a restored request nor completion from another gate, cycle, or head can finish this objective.
-
-## 11.3 Automated review loop
-
-### 11.3.1 Purpose
-
-Review evidence must cover the actual admitted head; merge modes require it for the head being merged. A remediation push invalidates earlier head-bound review. `fix-comments` remains one bounded remediation pass and never requests or waits for review. For resolver modes, `pr-resolver` decides the semantic transition; MergeAutomation owns the review-request side effect and durable wait for every mode.
-
-### 11.3.2 Configuration
+Review evidence must cover the admitted head, and merge modes require it for the head being merged, so a remediation push invalidates earlier review. `fix-comments` is one bounded remediation pass and never requests or waits for review. For resolver modes, `pr-resolver` decides the semantic transition while MergeAutomation owns the review request and durable wait.
 
 ```json
 {
@@ -269,139 +157,49 @@ Review evidence must cover the actual admitted head; merge modes require it for 
 }
 ```
 
-Provider is neutral metadata. Trusted `pr_resolver_core.review_providers` defines the command and accepted identities. An explicit command can only restate the registered command exactly. Children cannot supply arbitrary comment text or another provider. In resolver modes, enabled loops pass reviewProvider and requireFreshReview into the pinned Skill's inputs. Disabled loops pass reviewProvider `none` and requireFreshReview false, and the resolver prompt says the gate owns review requirements. The gate rejects a child's review request when it runs no loop, so a child that inferred a review requirement from repository or task prose would otherwise wait on every pass for a review nobody requests.
+Trusted `pr_resolver_core.review_providers` defines each provider's command and accepted identities; an explicit command can only restate it, and children cannot supply comment text or another provider. Enabled loops pass reviewProvider and requireFreshReview to the Skill; disabled loops pass `none`/false and the prompt says the gate owns review. The gate rejects a child's review request when no loop runs, because a child that inferred a review requirement from prose would otherwise wait every pass for a review nobody requests.
 
-### 11.3.3 Request side effect
+### 7.1 Request side effect
 
-`merge_automation.request_automated_review` is the sole review-request operation. The request binds owning automation workflow, repository/PR, expectedHeadSha, provider, and a stable key derived from those identities.
+`merge_automation.request_automated_review` is the only review-request operation. A request binds the automation workflow, repository/PR, expectedHeadSha, provider, and a stable key derived from them. The Activity claims the key, rereads the PR to confirm it is open at that head, returns any recorded request on retry, reconciles matching comments posted after the original attempt began, and posts only when absence is established. Comment ID, time, actor, head, and key are persisted. A lost POST response never triggers a blind repost, and a settled request is never downgraded by a later reporting failure.
 
-The Activity claims that key and original attempt window, rereads the PR to verify open/current head, returns any recorded request on retry, reconciles matching comments by the configured identity after the original attempt began, then posts only when absence is established. Persist comment ID/time/actor/head/key. A lost GitHub POST response must not trigger blind reposting; an unprovable result remains blocked/failed. A settled requested row is never downgraded by later reporting failure.
+### 7.2 Binding results to requests
 
-### 11.3.4 Binding the result to the request
+Without an active request, merge and fix-only let the first resolver decide whether review is needed; review-only always requests. With an active request, only that request's result opens the gate: same head, trusted provider identity, completion after requestedAt, matching review commit where supplied, and a reaction on the exact request comment or a qualified unchanged-head fallback. Older results are never reused because they are recent. A changed head invalidates the request: resolver modes re-enter the gate for the new revision, review-only blocks. Per cycle, MoonMind records provider/head, request key/comment/time, completion identity/kind/time, and outcome.
 
-Without an active request, merge and fix-only may allow the first resolver to decide whether review is needed; review-only always requests fresh review. With an active request, only that request's result opens it: same current head, trusted provider identity, completion after requestedAt, matching review commit where supplied, and reaction on the exact request comment or the qualified unchanged-head after-request fallback. Historical results are not fallback evidence.
+An active request owns the unchanged head until completion; CI failures, conflicts, and older comments do not bypass the wait, and missing completion evidence keeps the gate closed. The portable Skill applies the same precedence after terminal evidence validation and deferred-comment blockers.
 
-A changed head invalidates the pending request. Merge and fix-only use the governed head-update/re-entry path; review-only blocks with stale_revision and preserves its pinned head. Record per-cycle provider/head, request key/comment/time, completion identity/kind/time, and outcome. Never reuse another cycle's evidence merely because it is recent.
+Completion is the provider's submitted review, its request-bound clean comment, or its qualified clean-review reaction. A clean comment opens with the provider's clean-result sentence (for Codex, `Codex Review: Didn't find any major issues.`); the rest of that line is variable flair, and any further text must be P2/medium-or-below findings, which still need a disposition. When the comment names its reviewed commit, that commit must be the current head. Pending, unknown, or dismissed states, eyes reactions, quoted clean messages, responses with P0/P1 findings, and stale responses are not completion. The Skill reads every page, refreshes the comment inventory after completion, and revalidates the head; merges require that head to still match. With multiple provider responses, the latest authoritative one wins.
 
-An active request owns the unchanged head until review completion. CI failures,
-merge conflicts, and older actionable comments do not bypass that wait. Review
-evidence is collected independently of these repairable conditions; missing or
-unknown completion evidence keeps the gate closed. The portable Skill gives
-the same wait precedence over remediation, after terminal evidence validation
-and deferred-comment blockers. A head changed externally invalidates
-the request. Resolver modes re-enter the gate for the new revision; review-only
-blocks without retargeting.
+A provider comment refusing the request on its unchanged head (for Codex, a usage-limit notice such as `You have reached your Codex usage limits for code reviews.`) is authoritative but not completion. The gate and Skill share `pr_resolver_core.review_providers` to classify replies as either the registered clean result or a refusal carrying a registered failure marker; status tables, task replies, and findings are non-authoritative. When the latest authoritative response is a refusal and nothing completes the request, the gate blocks with non-retryable `automated_review_request_failed`, and the Skill's snapshot reports `requestFailed`/`requestFailure` and classifies it as `manual_review` rather than waiting.
 
-Completion includes the provider's submitted review, its request-bound clean
-comment, or its qualified clean-review reaction. A clean comment opens with the
-provider's clean-result sentence (for Codex, `Codex Review: Didn't find any
-major issues.`); the rest of that line is flair the provider varies, and any
-further text must be P2/medium-or-below findings. Completion settles review
-freshness only: those findings still need a disposition like any other current
-finding. When the comment names the
-commit it reviewed (Codex's abbreviated `Reviewed commit` line), that commit
-must be the current head. Ordinary clean comments and PR-level reactions must
-be newer than the request on its unchanged head. Pending, unknown, blank, or
-dismissed review states, eyes reactions, quoted or embedded clean messages,
-responses carrying P0/P1 findings, and stale responses are not completion. The Skill reads every page of review/reaction
-evidence and refreshes the full comment inventory after observing completion,
-then revalidates the remote head. Merge operations require that verified head
-to still match. When a request has multiple provider response comments, the
-latest authoritative response takes precedence over an earlier failure or clean result.
+A newer request supersedes the refusal but consumes the same review-cycle budget before adoption, so an external request cannot bypass an exhausted budget. Superseded records stay visible, and restored request/cycle identities must agree on provider, head, key, comment, and creation time; contradictory known times fail closed.
 
-A provider comment refusing the request on its unchanged head (for Codex, a
-usage-limit notice such as `You have reached your Codex usage limits for code
-reviews.`) is an authoritative response but not completion. The gate and the
-portable Skill read provider replies through the same
-`pr_resolver_core.review_providers` helper: a reply is either the registered
-clean result or a refusal whose opening line carries one of the provider's
-registered failure markers. Status tables, task replies, and findings stay
-non-authoritative. When the latest authoritative response is a refusal and no
-submitted review or clean reaction completes the request, the gate blocks with
-non-retryable `automated_review_request_failed`. The Skill's snapshot reports
-`requestFailed` and `requestFailure` instead of `requestPending`, and it
-classifies `automated_review_request_failed` as `manual_review`, ahead of
-remediation, rather than waiting. A newer request supersedes the refusal. Its adoption consumes the same configured review-cycle budget before either the retained request or cycle is changed. A newer external request cannot bypass an exhausted budget. A request already durably admitted by an older worker may finish or repair its missing metadata after an upgrade without consuming another cycle; any newly selected request still checks the bound. Superseded records remain visible, and restored active request/cycle identities must agree on provider, head, key, comment, and known creation time. Missing times can be recovered only from the exact recorded comment and repaired on that same cycle; contradictory known times fail closed, including disagreement between a retained receipt and its exact GitHub comment. A retained synthetic record cannot override the observed comment's creation time.
+Unavailable evidence is distinct from absence: a refusal becomes terminal only when every completion route was read successfully and none qualified. Retryable quota, service, and transport failures keep waiting; confirmed access denial keeps the policy blocker. Completion and refusal are both rechecked against the current open PR and a refreshed request inventory, and a superseding request leaves the gate pending for a fresh observation.
 
-Unavailable completion evidence is distinct from absence. Review and reaction collections are paginated, malformed or failed reads remain observable, and a refusal becomes terminal only when no qualified completion exists and every relevant completion route was read successfully. A known qualified completion can satisfy an unavailable alternative route. Retryable GitHub quota, service, and transport failures retain a wait; confirmed access denial retains the existing policy blocker. Complete request comments are always required to select the latest request. Missing observed head data never substitutes tracked state as completion proof, and both completion and refusal are rechecked against the current open PR and a refreshed complete request inventory. A superseding request or changed issue-comment reply leaves the gate pending for a fresh observation; it cannot settle the earlier result. Canonical provider-failure class and cooldown metadata remain compact and sanitized through readiness models, continuation state, gate snapshots, and terminal artifacts.
+The portable snapshot reclassifies the refreshed inventory after completion or refusal and fails closed after three refreshes if it keeps changing. A proven refusal settles only the selected cycle as `failed`, recording comment ID, time, and class in `requestFailure`; failed reads, policy denial, and mismatched identity never masquerade as a refusal, and failed, superseded, or stale cycles cannot be reopened.
 
-The portable snapshot reclassifies the refreshed comment inventory after observing completion or refusal, refreshing again when the selected request or terminal result changes. Repeated change fails closed after three refreshes. For an initially open PR, both outcomes require the final head to remain current and the PR to remain open; already merged or closed PRs retain their existing terminal classifications. When the current head's commit timestamp is unavailable, unbound request/comment/reaction history cannot establish freshness; a standalone submitted review explicitly naming the head remains valid only when no unbound request must be reconciled. With no request history to bind, an unavailable optional commit timestamp does not prevent requesting the first fresh review.
-A proven refusal settles only the selected, admitted cycle as `failed` and clears its active request. The cycle's compact `requestFailure` records the issue-comment ID, failure time, and canonical class separately from completion fields, and survives continuation and artifact persistence. Failed reads, policy denial, malformed receipts, and mismatched request identity do not masquerade as a provider refusal. Only a requested cycle can receive a new refusal. Failed, superseded, and stale cycles cannot be reopened by a fresh observation, while supported historical completed-plus-active reconciliation remains valid. Observation-scoped settlement preserves old worker histories during replay, including the published receipt-less refusal marker. Fresh observations require the stronger refusal receipt and never synthesize one from an older blocker.
+Once the head has a completed review, review-only finishes even with findings; merge and fix-only also need no remaining blockers. Completion never triggers another request for the same head.
 
-Once that head has a completed review, review-only finishes even with findings.
-Merge and fix-only also require no remaining blockers before finishing according
-to their finishMode. Completion does not request another review for the same head.
+### 7.3 No-progress and termination
 
-### 11.3.5 No-progress and termination rules
+The Skill emits a progress signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred or unfixable comments, an exhausted cycle budget, an unprovable or refused review request, ownership/head conflicts, and expiry stop with explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
 
-The Skill emits a signature of head plus sorted outstanding actionable/deferred comment IDs. Repeated signatures, unchanged actionable comments, deferred/unfixable comments, exhausted cycle budget, unprovable or provider-refused review request, ownership/expected-head conflict, and expiry stop through explicit reasons such as review_loop_no_progress, deferred_comments, review_cycle_budget_exhausted, automated_review_request_failed, or expired.
+Readiness carries ordered, deduplicated request receipts from the retained active request through the latest one; each unseen receipt consumes a cycle, including requests superseded between polls, and completion is attributed only to the latest adopted request. Contradictory identities remain unavailable evidence, and older observations without receipts keep their recorded interpretation through an observation-scoped patch.
 
-Readiness carries the ordered, deduplicated explicit request receipts from the
-retained active request through the selected latest request. Each unseen receipt
-consumes a cycle, including requests superseded between polls. The gate checks
-the budget before each adoption, retains intermediate requests as superseded,
-and attributes completion only to the latest adopted request. Contradictory
-identities or timestamps remain unavailable evidence. Older observations without
-these receipts and previously recorded decisions retain their interpretation
-through the observation-scoped workflow patch.
+A no-op fix pass succeeds only when the latest required review covers the current head and no actionable comments remain. Neither finish mode changes at runtime to make a gate green.
 
-A no-op fix pass is successful only when the latest required review covers the current head and no actionable comments remain. Merge finish continues until merged/already-merged plus required tracker effects. Fix-only finishes at verified review-clean without merge. Neither changes its finish mode at runtime to make a gate green.
+## 8. Merge Gate Evaluation
 
-## 12. Merge Gate Evaluation
+For merge and fix-only, readiness reads PR state and head, reported and running checks, configured review completion, and optional Jira state. These decide whether to launch the resolver, not whether merging is authorized; only the resolved Skill performs the final semantic merge checks. Review-only uses PR/head and request-bound review evidence only. Readiness is head-sensitive: a new push invalidates prior review and check completion.
 
-### 12.1 Gate inputs
+Confirmed failing checks and merge conflicts are resolver-actionable. A head with no reported check runs or gating statuses has no CI evidence yet — whether CI is still queuing after a push or never runs for the base — so the gate keeps waiting rather than launching a resolver that would read `ci_signal_degraded` and hand straight back. Only advisory status on a base with no required checks counts as clean without gating checks. Gate and Skill share this rule (`pr_resolver_core.github_checks.head_ci_reported`). Repeated confirmed absence on the same head consumes `maxConsecutiveNoProgressCycles`, even with the review loop off, and exhaustion returns `review_loop_no_progress` with a CI-trigger diagnostic; a changed head or newly reported CI resets it. A merge conflict does not skip check observation or required review.
 
-For merge and fix-only, external scheduling reads cover PR state/current head, reported/running checks, configured review completion, and optional Jira state. These compact observations determine whether to launch the resolver, not permission to merge. Review-only uses PR/head and request-bound review evidence; unrelated readiness conditions cannot prevent its review request or completion.
+GitHub/Jira signals are preferred; bounded timer reconciliation and Continue-As-New preserve progress, and no fixed-delay follow-up or unbounded spin substitutes for evidence. Gate results contain status, current head, typed blockers, and readyToLaunchResolver; they never claim merge authorization or serve as input for a different PR.
 
-Confirmed failing checks and merge conflicts are resolver-actionable. A completed
-failure can launch remediation while other checks remain queued or running;
-incomplete checks without a confirmed failure keep waiting. A head that has
-reported no check runs or gating statuses has no CI evidence yet, whether CI is
-still being queued after a push or never runs for the PR's base, so the gate
-keeps waiting instead of launching a resolver that would read the same state as
-`ci_signal_degraded` and hand straight back. Only advisory status on a base
-with no required checks counts as a clean signal without gating checks. The gate
-and the Skill share this rule (`pr_resolver_core.github_checks.head_ci_reported`).
-A successful read explicitly records whether head CI has reported. Repeated
-confirmed absence for the same head consumes the existing
-`maxConsecutiveNoProgressCycles` budget, including when the review loop is off
-and no expiry was configured. Exhaustion returns `review_loop_no_progress` with
-a CI-trigger diagnostic without launching a resolver. A changed head or newly
-reported CI resets that missing-signal wait; queued/running checks and unavailable
-or legacy observations do not consume it. Explicit expiry remains authoritative.
-The observation-scoped Temporal patch preserves old consumer decisions during
-rolling upgrades and adopts this behavior on the next fresh observation.
-With the review loop
-disabled, required automated review is still observed and must complete before
-that resolver dispatch, including when a failed build has a queued downstream
-check. A merge conflict
-does not skip required check observation or configured automated-review
-completion. Unavailable evidence retains its blocker; disabled gates and the
-active-request review-loop contract keep their existing semantics.
+## 9. Resolver Child Workflow
 
-### 12.2 Gate semantics
-
-Readiness is head-sensitive. A new push invalidates prior review/check completion for the affected contract. Only the resolved Skill performs the final fresh semantic merge checks.
-
-### 12.3 Callback-first, polling fallback
-
-GitHub/Jira signals are preferred; bounded timer reconciliation and Continue-As-New preserve durable progress. No fixed-delay follow-up or unbounded spin loop substitutes for evidence.
-
-### 12.4 Gate output contract
-
-Gate results contain status, current head, safe typed blockers, and readyToLaunchResolver. They do not claim merge authorization or become arbitrary input for a different PR.
-
-## 13. Resolver Child Workflow Strategy
-
-### 13.1 Resolver child type
-
-For merge and fix-only, the gate starts an ordinary child UserWorkflow selecting `task.tool = {type: skill, name: pr-resolver}`. Its **compiled publication mode is `auto` with owner agent**, not None. The inherited scope already admits the allowed existing-PR effects. Only the gate/coordinator's own lack of repository deliverable derives local None. Review-only never prepares or starts this child.
-
-This distinction prevents both duplicate managed publishing and false “publishing disabled” semantics. No parent None-to-Auto coercion is used to authorize the resolver. The Skill's metadata, exact target, and evidence contract are validated by the shared compiler.
-
-### 13.2 Resolver child payload
-
-A representative **compiler-produced** child fragment is:
+For merge and fix-only, the gate starts an ordinary child UserWorkflow with `task.tool = {type: skill, name: pr-resolver}` whose **compiled publication mode is `auto` with owner agent**, not None. This avoids both a duplicate managed publisher and false "publishing disabled" semantics: the inherited scope already admits the existing-PR effects, and only the gate's own lack of a deliverable derives local None. Review-only never starts this child. A representative compiler-produced fragment:
 
 ```json
 {
@@ -419,165 +217,58 @@ A representative **compiler-produced** child fragment is:
 }
 ```
 
-This fragment is not an independently authored override and omits the complete repository target, scope provenance, and runtime plan for readability. Repo/PR/head/base and finish values are derived from trusted context. The child timeout covers the Skill's 7200-second default finalize budget plus preparation/artifact time; the default 9000 seconds is carried at workflow and plan-node/task levels.
+Target and finish values come from trusted context. The 9000-second default covers the Skill's 7200-second finalize budget plus preparation and artifact time, and is carried at workflow and task levels.
 
-For Omnigent, a bounded preparation Activity validates parent authority, preserves Runtime/Profile configuration, derives the exact resolver target/workspace and inherited policy, resolves the appropriate pinned Skill closure, and persists a new plan owned by the deterministic child ID. The child carries that plan and resolvedSkillsetRef. A new child-owned snapshot cannot silently substitute changed semantic definitions for the scope's admitted requirements.
+For Omnigent, a bounded preparation Activity validates parent authority, preserves Runtime/Profile configuration, derives the resolver target, workspace, and inherited policy, resolves the pinned Skill closure, and persists a new plan owned by the deterministic child ID; the child carries that plan and resolvedSkillsetRef. The parent plan is never reused as the child's. Missing or ambiguous plan, profile, task, workspace, or Skill authority fails before host creation or credential acquisition.
 
-The parent plan is never reused as the child's plan. Historical inputs without compact parent binding resolve it from canonical parent execution evidence under the versioned decoder. Missing/ambiguous plan, profile, task, workspace, or Skill authority fails before host creation or credential acquisition. A flat profile ID does not select a legacy alternate host.
+### 9.1 Result contract
 
-### 13.3 Resolver child result contract extension
+The resolver artifact, normally `var/pr_resolver/result.json`, includes mergeAutomationDisposition: merged, already_merged, review_clean, reenter_gate, request_review, manual_review, or failed. Missing or malformed required evidence is not generic child success, which matters because review-clean and merged can both exit zero.
 
-The resolver artifact, normally `var/pr_resolver/result.json`, includes mergeAutomationDisposition: merged, already_merged, review_clean, reenter_gate, request_review, manual_review, or failed. Missing/malformed required result evidence is not generic child success.
+Review-clean requires admitted fix_only, an exact remotely verified branch revision in the unified evidence, a permitted non-merge action, and the resolver's own result plus a live observation that the PR remains unmerged. Contradictory merge evidence fails `UNAUTHORIZED_MERGE_EVIDENCE`, and the Skill emits blocked `unmerged_pr_verification_unavailable` when merged or unreadable state prevents no-merge proof. Merge/no-merge semantics belong to the resolver result, while publication mechanics use the shared schema. Review and reaction collection reads every page with the GitHub CLI; a failed or malformed page is a collection failure, never an empty inventory.
 
-Review-clean requires admitted fix_only, an exact remotely verified branch revision in unified repository evidence, a permitted non-merge publication action, and the resolver's own result plus a live PR observation proving that the PR remains unmerged. Contradictory merge evidence fails `UNAUTHORIZED_MERGE_EVIDENCE`; unverified remote revision fails the shared parser. The Skill's live check emits blocked `unmerged_pr_verification_unavailable` when merged or unreadable state prevents no-merge proof. Do not require the retired Auto schema's `merged` boolean in `moonmind.publish.repository.v1`; semantic merge/no-merge fields belong to the resolver result, while publication mechanics use the shared schema. Review-clean and merged may both exit zero, so structured evidence distinguishes them.
+A `manual_review` with reason `merge_gate_requires_human_approval` is a gate decision the parent owns, not a runtime failure: the resolver cleared every blocker it owns but cannot supply a required approving review, so the adapter passes the verdict through and the parent reports it. Failing the child would replace a complete result with a generic error. Other `manual_review` reasons remain agent failures. When a resolver child fails before returning a result, the terminal summary keeps its bounded, redacted error and diagnostic reference without treating the child as successful or relaunching it unchanged.
 
-Review and reaction collection must read every page with the supported GitHub
-CLI. A command failure, malformed page, or incomplete response is an evidence
-collection failure, never an empty review inventory or a pending review.
+`request_review` and `reenter_gate` consume `maxConsecutiveNoProgressCycles` when their progress signature repeats — `reenter_gate` even with the review loop disabled — so a resolver repeatedly reporting the same blocker (such as `ci_signal_degraded` on a base CI never runs for) stops instead of launching identical runs. Handoffs without a signature use head and reason. Changed work resets the counter; elapsed waits do not count as progress. Exhaustion preserves evidence and reports an actionable blocker.
 
-A `manual_review` whose reason is `merge_gate_requires_human_approval` is a gate
-decision the parent owns, not an agent-runtime failure. The resolver has cleared
-every blocker it owns and cannot supply a required approving review, so the host
-adapter passes the validated verdict through instead of failing the resolver child;
-the parent then reports that verdict and its `manual_review` blocker. Failing the
-child there would replace a complete result with a generic execution error and a
-false "failed before returning a result" summary. Every other `manual_review`
-reason remains an agent failure. When a resolver child fails before returning a
-result, the terminal summary preserves its bounded, redacted underlying error
-and diagnostic reference after the existing current-head reconciliation. This
-reporting improvement is versioned for retained Temporal histories; it does not
-reinterpret a failed child as successful or launch another unchanged attempt.
+A reenter_gate result is a durable handoff, not proof of merge. It carries completionDisposition gated_continuation and a normalized gatedContinuation; the gate waits until the Skill-authored notBefore (or fallbackPollSeconds without timing) and does not extend the review-grace deadline. Such a child shows as **Handed off** in the workflow list and detail while its Temporal execution remains completed; failed or canceled runs never get that label. Only the synthetic PR_RESOLVER_REENTER_GATE terminal-contract failure can be cleared by an authorized handoff; provider, auth, rate-limit, infrastructure, timeout, cancellation, and stale or malformed evidence failures remain failures.
 
-Both `request_review` and `reenter_gate` consume the existing review loop's
-`maxConsecutiveNoProgressCycles` budget when their progress signature repeats.
-`reenter_gate` consumes it even when the review loop is disabled, using the
-same default budget, so a resolver that keeps reporting the same blocker (for
-example `ci_signal_degraded` on a PR whose base CI never runs for) stops
-instead of launching identical agent runs indefinitely.
-Historical handoffs without a signature use their head and reason to bound
-repetition. Changed work resets the counter; elapsed waits do not establish
-progress. Budget exhaustion preserves resolver evidence and reports an actionable
-blocker rather than creating additional identical agent runs.
+A request_review `gated-continuation/v2` names only the provider, exact head, Step Execution reference, and progress signature. The parent validates owner workflow/run/type, actual child workflow/run, executionRef, reason, timing, provider, and head against authoritative results, with the publication artifact bound to the same attempt through artifact provenance. Adapters preserve qualified gate-owned continuation, including recorded next_step values such as run_fix_comments_skill, run_fix_ci_skill, run_fix_merge_conflicts_skill, retry_finalize_after_backoff, and wait_for_ci_and_retry_finalize, but never infer a gate owner from a nonzero exit alone. Long waits emit bounded progress so healthy waiting is not mistaken for a stuck process.
 
-A resolver child whose validated terminal disposition is `gated_continuation`
-is displayed as **Handed off** in the workflow list and detail. Its Temporal
-execution remains completed; the owning workflow remains responsible for the
-requested PR outcome. Failed or canceled runs never acquire a successful
-handoff label. Older records without a disposition keep their recorded status.
+### 9.2 Ungated resolver runs
 
-A reenter_gate result is a durable handoff, not proof the PR merged. It carries completionDisposition gated_continuation and normalized gatedContinuation. The gate waits until the Skill-authored notBefore; old handoffs without timing use fallbackPollSeconds. The exact review-grace deadline is not recomputed or extended by the gate. Same-session continuation support is irrelevant to this parent-owned handoff.
+The mergeGate owner names the actual MergeAutomation parent, not the root UserWorkflow. A standalone resolver has no gate, so an ungated continuation disposition cannot report successful PR resolution; it fails or blocks with direction to use automation or finish manually. Verified merge/already-merged and qualified fix-only outcomes keep their meaning.
 
-Only the synthetic PR_RESOLVER_REENTER_GATE terminal-contract failure can be cleared by an authorized handoff. Provider, auth, rate-limit, infrastructure, timeout, cancellation, stale-evidence, and malformed-evidence failures remain their own failures.
+## 10. Re-Gating and Head Changes
 
-A request_review `gated-continuation/v2` names only the configured provider, exact head, Step Execution reference, and progress signature. The parent validates owner workflow/run/type, actual child workflow/run, exact executionRef in the continuation/terminal envelope, reason, timing, provider, and head against authoritative results. The accepted publication artifact is bound to that same current attempt through trusted artifact provenance, not a reintroduced legacy evidence field. Safe evidence exposes accepted/rejected handoffs, timing source, wait/cycle counters, and legacy fallback use.
+A resolver push requires fresh external evidence for the new head when configured; the Skill reports the handoff and MergeAutomation returns to awaiting_external before another attempt. Lost or incomplete results are reconciled against the admitted PR and artifacts before repeating effects. Independently verified already-merged state can satisfy the merge fact subject to remaining evidence and tracker gates. Head advancement can count as progress for a qualified re-entry, but a valid manual_review or failed disposition stays terminal even if the head changed, and a new head cannot upgrade failed compute, validate stale evidence, or authorize a duplicate merge.
 
-Adapters preserve qualified gate-owned continuation, including supported historical next_step values such as run_fix_comments_skill, run_fix_ci_skill, run_fix_merge_conflicts_skill, retry_finalize_after_backoff, or wait_for_ci_and_retry_finalize. They do not infer a gate owner from a nonzero process exit alone. Long transient waits emit bounded progress output so healthy waiting is not confused with a stuck process.
+For resolver modes, the gate schedules the Skill but does not decide the PR may merge; the resolved bundle is the sole semantic implementation. Before any resolver launches, the gate may adopt the latest head through a fresh authorized readiness observation; after launch, changes go through the resolver disposition and re-entry contract. Scope, repository/PR identity, finish authority, and policy stay pinned. Review-only keeps its admitted head and blocks if it changes.
 
-### 13.4 Ungated resolver runs must not report continuation as success
+## 11. Dependencies, Outcomes, Cancellation, and Continue-As-New
 
-The mergeGate owner names the actual MergeAutomation Temporal parent, not the root UserWorkflow. A standalone resolver has no such gate. An ungated continuation disposition cannot report successful PR resolution; it fails/blocks with a direction to use the supported automation path or finish manually. Terminal verified merge/already-merged and qualified fix-only outcomes retain their objective-specific semantics.
+The original parent workflowId is the dependency target and does not complete until its requested automation outcome is satisfied; a dependency edge carries no publication policy. Review-clean satisfies a fix-only objective but does not put code on the base, and review-complete proves neither a clean PR nor code availability, so a dependent batch needing predecessor code requires verified merge or another declared handoff.
 
-## 14. Post-Resolver Re-Gating
+Merge finish succeeds on merged/already-merged with required post-merge effects; fix-only on validated review-clean without merge or post-merge mutation; review-only on current-head, request-bound review_complete without resolver or publication effects. Blocked, failed, and expired fail the parent; canceled cancels it. A push or PR URL never releases a prerequisite.
 
-A resolver push requires fresh external evidence for the new head when configured. The Skill reports the appropriate handoff and MergeAutomation returns to awaiting_external before another resolver attempt.
+Parent cancellation propagates to MergeAutomation and its in-flight resolver through child-workflow controls. Accepted cancellation is not proof of teardown or rollback of a performed push or merge, and required saved work and remote evidence are preserved under admitted authority; explicit None never gets a recovery-push exception.
 
-Lost or incomplete result delivery is reconciled against the exact admitted PR and authoritative artifacts before repeating effects. Independently verified already-merged state can satisfy the merge fact, subject to the remaining required evidence and tracker gates. An observed head advancement can be progress for a qualified retry/re-entry, not blanket proof of success or permission to erase an auth/cancel/manual-review failure.
+Continue-As-New preserves parent lineage, scope intent and definition evidence, publish context, PR identity, latest head, finish and gate policy, issue targets, active review request and cycles, blockers, resolver attempts, and the original expiry. Rollover never refreshes defaults, widens finish authority, or resets review-request idempotency. Recorded None-labelled resolver payloads and older evidence schemas are interpreted only under their original contracts for replay; new resolver children compile to Skill-owned Auto with the unified schema.
 
-Valid manual_review or failed dispositions remain terminal failures even if the head changed. A new head alone cannot upgrade failed compute, validate stale publish evidence, or authorize a duplicate merge.
+## 12. Visibility and Artifacts
 
-## 15. Resolver Skill Authority
+Parent detail shows automation status, PR link, blockers, head, cycle, resolver attempt links, and requested finish, with the authored selection shown separately from coordinator and resolver modes; a local None is not displayed as a root "do not publish" when the scope permits resolver effects. Resolver titles use the deterministic one-based attempt ordinal matching the child ID, such as `Resolve PR #<number> (Attempt 1)`.
 
-For resolver modes, the external gate schedules the Skill; it does not decide that the PR is authorized to merge. The resolved bundle is the sole semantic implementation for fresh PR snapshots, comments, completeness, blockers, remediation, and final merge. Cross-implementation comparison tests cannot justify two competing resolvers. Review-only collects review evidence through the existing trusted gate operations without replacing resolver semantics.
+`reports/merge_automation_summary.json`, gate snapshots, resolver-attempt artifacts, and review-cycle artifacts are kept under `artifacts/merge_automation/`, bounded, safe, and available after host removal. `reports/run_summary.json` includes automation status, target, child IDs, cycles, finish behavior, and tracker outcomes, and does not infer success from projection freshness or omit blocked child work.
 
-For resolver modes, before any resolver child has launched, the gate may adopt the latest head through a fresh authorized readiness observation. After launch, changes use the declared resolver disposition and re-entry/reconciliation contract. Scope, repository/PR identity, finish authority, and policy remain pinned. No arbitrary latest-head substitution changes targets. Review-only preserves its originally admitted head and blocks if it changes.
+## 13. UI Contract
 
-## 16. Dependency Semantics
+There is one publishing control. PR with merge automation is a single compound selection, and Auto may resolve to it with a concrete explanation. Advanced review/wait/Jira settings specialize that behavior without a second enable flag or per-step override, and unsupported selections are corrected before launch.
 
-The original parent workflowId remains the dependency target, and it does not complete until its requested automation outcome is satisfied. A dependency edge itself carries no publication-policy inheritance.
+The `pr-review-resolve` preset (Fix and Review Loop) targets an existing PR through the workflow's repository context with one PR locator; trusted resolution supplies head, base, and URL and rejects ambiguity. Auto uses the existing-PR protocol: local None for the coordinator, Skill-owned Auto for resolver children. The review loop defaults to provider codex. "Merge when ready" is off by default (`fix_only`); on maps to `merge`. Advanced options expose merge method (default squash), resolver repair budget (default 5), review-cycle budget, and expiry, and explicit harness, model, effort, and Provider Profile selections survive compilation. `review_only` (default false) selects review-only with publication None and a required fresh reviewer; the form explains it requests review and reports completion without changing source, publishing, merging, or completing trackers. With review_only false, the form explains that fixes are pushed in both finish choices and merge is optional.
 
-Review-clean satisfies a fix-only parent's stated objective but does not put its code on the PR base. A dependent batch that needs predecessor code must require verified merge or another declared candidate/checkpoint handoff. Changing a batch to PR-only or fix-only cannot silently remove that requirement.
+The `batch-pr-resolver` Skill adopts this preset with `review_provider=none` and merge finish. Its coordinator owns durable CI/provider waits: a resolver pass returns execution-bound `reenter_gate` evidence and releases its agent slot while Temporal waits. Standalone portable runs keep their bounded foreground retry loop.
 
-Review-complete satisfies only the fresh-review objective. It proves neither a clean PR nor predecessor code availability and cannot replace a required code handoff.
+## 14. Rejected Alternatives
 
-## 17. Terminal Outcome Rules
-
-### 17.1 Parent success
-
-Merge finish succeeds on merged/already-merged with required post-merge effects. Fix-only succeeds only on validated review-clean without a merge or post-merge mutation. Review-only succeeds only on current-head, request-bound review_complete, including with findings, without resolver or repository-publication effects. Preserve exact-attempt remote facts separately from compute/save/reporting outcomes.
-
-### 17.2 Parent failure
-
-Blocked, failed, and expired fail the parent; canceled cancels it. Only the dependency contract's successful terminal state releases a normal prerequisite gate. A push or PR URL is not enough.
-
-### 17.3 Future extension
-
-Separate implementation-complete versus full-objective-complete lifecycle states are not introduced here. The existing state and typed result contracts express the distinction without new root states.
-
-## 18. Cancellation Semantics
-
-Parent cancellation propagates to MergeAutomation and its in-flight resolver child through existing child-workflow controls. Cleanup is truthful and bounded. Cancellation acceptance is not proof of process teardown or rollback of an already performed push/merge. Preserve required saved work and remote evidence under admitted authority. Explicit None never acquires a recovery-push exception.
-
-## 19. Continue-As-New
-
-Preserve parent workflow/run lineage, publication-scope intent and definition evidence, publish context, PR identity, latest tracked head, finish/gate policy, issue targets, active review request/cycles, blockers, resolver attempts, and original expiry deadline. Rollover does not refresh defaults, widen finish authority, or reset review-request idempotency.
-
-Historical None-labelled resolver payloads and old publication-evidence schemas remain interpreted only under their original recorded contracts for supported replay. New resolver-child compilation explicitly uses Skill-owned Auto and the unified evidence schema. A new default must not rewrite old history or cause incompatible workers to reinterpret policy. Fresh public resolver authoring uses default/omission, not a claimed legacy auto ingress.
-
-## 20. Visibility and Artifacts
-
-### 20.1 Parent workflow detail
-
-Show automation status, PR link, blockers, head, cycle, resolver attempt links, and requested finish. The authored publication selection remains visible separately from coordinator and resolver modes. A local None is not displayed as a root “do not publish” selection when the scope permits resolver effects.
-
-Resolver titles use the deterministic one-based attempt ordinal, such as Resolve PR #123 (Attempt 1), matching the child ID cycle rather than creating another attempt identity.
-
-### 20.2 Child artifacts
-
-Preserve `reports/merge_automation_summary.json`, gate snapshots, resolver-attempt artifacts, and review-cycle artifacts under `artifacts/merge_automation/`. Evidence is bounded, safe, and available after host removal. The publication result path can remain `artifacts/publish_result.json` while its new payload uses the one provider-neutral schema.
-
-### 20.3 Root terminal summary
-
-`reports/run_summary.json` includes automation enabled/status, target, child IDs, cycles, finish behavior, and required tracker outcomes. It does not infer success from projection freshness or silently omit blocked child work.
-
-## 21. UI Contract
-
-There is one publishing control. PR with merge automation is the single compound selection; Auto can resolve that declared default with a concrete explanation. Advanced review/wait/Jira settings specialize that admitted behavior without a second independent enable flag or per-step publish override.
-
-This is not a new dependency, scheduling, runtime, or profile wizard. Unsupported selections are corrected before launch. Explicit None cannot enter a publishing resolver merely because the coordinator is locally non-publishing.
-
-### 21.1 pr-review-resolve preset
-
-Fix and Review Loop targets an existing PR through the workflow's repository context. It collects one PR locator, not another generic repository selector. Trusted target resolution supplies head/base/URL and rejects ambiguity or unsupported locality.
-
-Auto uses the declared existing-PR review/fix protocol. The coordinator compiles to local None; resolver children compile to Skill-owned Auto. The review loop defaults to provider codex. The meaningful Finish with pr-resolver / Merge when ready option is off by default and maps to fix_only; on maps to merge. Advanced options expose the merge method (default squash), the portable resolver repair budget (default 5), review-cycle budget, and expiry. Explicit selections survive coordinator and resolver-child compilation, including the selected harness, model, effort, and Provider Profile.
-
-The boolean `review_only` defaults to false, preserving that review/fix behavior. True selects finishMode review_only with publication None and requires a supported fresh reviewer. The form explains that this option requests review and reports its completion, including findings, without preparing a resolver, changing source or branches, publishing, merging, or completing trackers. It is an objective option rather than another publication control.
-
-The `batch-pr-resolver` Skill adopts this existing-PR preset with `review_provider=none` and merge finish, preserving its prior no-fresh-review behavior. The coordinator owns durable CI/provider waits; a resolver pass returns execution-bound `reenter_gate` evidence and releases its agent slot while Temporal waits. Standalone portable runs retain their bounded foreground retry loop. Tactics CI stays on the repository's self-hosted runners, including lightweight workflows; queue time is not permission to change runner placement.
-
-With review_only false, the form explanation states that fixes are pushed in both finish choices and that merge is optional. Neither resolver finish is equivalent to user None. Every path requires its normal admission and terminal evidence, not hidden enablement or a claimed implementation based on this document alone.
-
-## 22. Rejected Alternatives
-
-Fixed-delay follow-up, a separate dependency target, a second native resolver, direct semantic execution inside the gate, and two publish selectors are rejected. The existing child substrate and one compiled scope preserve durability and portability without leaking internal roles into authoring.
-
-## 23. Acceptance Criteria
-
-Conformance covers actual parent/compiler/gate/Skill/result boundaries:
-
-1. New-PR and existing-PR entry points use the same admitted gate and correct worker routing.
-2. One authored selection survives expansion, child creation, UI/detail reconstruction, and rerun.
-3. The parent waits for requested finish and required tracker effects.
-4. Resolver children explicitly compile to Skill-owned Auto, with no managed duplicate publisher and no new None-to-Auto coercion.
-5. Explicit None or incompatible finish/target choices fail before prohibited effects.
-6. Head-bound review requests reconcile lost acknowledgements without blind duplicate posting and accept only qualifying request-specific results.
-7. New pushes re-enter the correct gate; no-progress, deferred comments, expiry, and unprovable requests remain explicit terminal outcomes.
-8. Merge and fix-only use the same gates, with disposition-specific no-merge evidence and no post-merge effects for fix-only.
-9. Ungated continuation cannot become false-green success. Malformed/stale/auth/cancel failures are not cleared by handoff metadata or a changed head.
-10. Omnigent children get new child-owned plans preserving parent Runtime/Profile and admitted context without reusing parent plan ownership.
-11. Dependencies require the intended code handoff, not merely an open PR or review-clean status.
-12. Cancellation, Continue-As-New, historical payloads, saved work, and projection lag preserve policy and verified facts without repeated effects.
-13. All new publication consumers accept only the unified provider schema with actual connection/client/attempt/remote proof. Retired Auto booleans/accepted-evidence objects are not reintroduced as live alternatives, and GitHub projection state never authorizes a Lore merge.
-14. Review-only admits only repository read and review_request collaboration under None, requests fresh review for the exact admitted head, and returns review_complete with or without findings independently of CI. It performs no resolver preparation, remediation, publication, merge, or post-merge effects. Moved heads block stale_revision without retargeting; mismatched restored request/completion evidence, unavailable review, cancellation, and expiry retain truthful outcomes.
-
-A documentation or schema update alone does not demonstrate runtime or protected-live conformance.
+Fixed-delay follow-up, a separate dependency target, a second native resolver, direct semantic execution inside the gate, and two publish selectors are all rejected. The child-workflow substrate and one compiled scope provide durability and portability without leaking internal roles into authoring.

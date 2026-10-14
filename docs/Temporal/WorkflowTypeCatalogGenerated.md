@@ -1,7 +1,7 @@
 <!-- GENERATED FROM PRODUCTION REGISTRIES - DO NOT EDIT -->
 # Temporal Workflow Type Reference (Generated)
 
-Mechanical reference for MoonLadderStudios/MoonMind#3959, generated from the production
+Mechanical reference generated from the production
 registration owners. Do not edit by hand; regenerate with:
 
 ```

@@ -1,11 +1,7 @@
 # Omnigent Bridge
 
-Status: Proposed design  
-Document Class: System / Feature Design View
-Owners: MoonMind Platform  
-Last updated: 2026-10-07
-
-**Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
+Document Class: System / Feature Design View  
+Owners: MoonMind Platform
 
 ## Related docs
 
@@ -27,163 +23,32 @@ Last updated: 2026-10-07
 
 ## 1. Purpose and authority
 
-This document defines the **MoonMind Omnigent Bridge**: a MoonMind API capability that exposes Omnigent-shaped session, event, stream, resource, and control communication while preserving MoonMind as the durable orchestration, authorization, policy, and artifact authority.
-
-The bridge supports an unchanged Omnigent host whenever deployment topology and upstream compatibility allow it.
+The **MoonMind Omnigent Bridge** is a MoonMind API capability that exposes Omnigent-shaped session, event, stream, resource, and control communication while MoonMind stays the durable orchestration, authorization, policy, and artifact authority. It works with an unchanged Omnigent host.
 
 ```text
-MoonMind Workflow / UI
-  -> MoonMind Omnigent Bridge
-      -> authorized Omnigent-shaped session/event/resource/control surface
-          -> stock Omnigent Server or embedded-compatible surface
-              -> unchanged Omnigent host / runner
-                  -> Codex, Claude, or another supported harness
+MoonMind Workflow / UI -> Omnigent Bridge -> stock Omnigent Server -> unchanged host / runner -> harness
 ```
 
-MoonMind remains responsible for:
+MoonMind owns Temporal orchestration, Workflow/Step Execution/AgentRun identity, the durable Workflow-to-provider session binding, authorization of every request, capability and approval policy, outbound security scans, artifact refs, and audit evidence. The native Omnigent web application owns the Workflow Detail Chat interaction model (transcript, composer, queue, tool views, approvals, files, terminals, agents, tasks); it is a presentation client behind the bridge, not a control plane or credential boundary. The host owns live execution, harness launch, runtime events, and resource reporting.
 
-- Temporal workflow orchestration,
-- Workflow, Step Execution, and AgentRun identity,
-- durable Workflow-to-provider session binding,
-- authorization of every browser and service request,
-- effective capability and approval policy,
-- outbound security scans,
-- artifact refs and artifact authorization,
-- diagnostics and operator audit evidence,
-- Step Execution evidence.
-
-The native Omnigent web application remains responsible for the Workflow Detail Chat interaction and presentation model: transcript, composer, queue, tool and reasoning views, approvals, files, terminals, agents, tasks, and session-lifecycle affordances.
-
-The host/runtime remains responsible for:
-
-- live runtime execution,
-- harness launch and lifecycle inside its environment,
-- transcript deltas and runtime events,
-- host-side resource discovery,
-- changed-file and session-resource reporting.
-
-The native UI is a provider-maintained presentation client behind the MoonMind bridge. It is not an independent control plane, source of workflow authority, or credential boundary.
-
-MoonMind treats the bundled Omnigent UI as trusted first-party application code. Same-origin presentation is intentional; an opaque iframe or separate-origin isolation redesign is not required by this contract. Server-side binding authorization and untrusted artifact protections still apply. Security changes must preserve resilience and simplicity as equal design requirements, including retries, interrupted sessions, and recovery of saved work.
+MoonMind treats the bundled Omnigent UI as trusted first-party code, so same-origin presentation is intentional; server-side binding authorization and untrusted-artifact protections still apply, and security changes are weighed equally with resilience and simplicity.
 
 ---
 
 ## 2. Design principles
 
-### 2.1 Use Omnigent names at the bridge boundary
-
-The external bridge boundary uses Omnigent-style nouns and operations:
-
-- `session`,
-- `event`,
-- `stream`,
-- `host`,
-- `runner`,
-- `resource`,
-- `snapshot`,
-- `interrupt`,
-- `stop_session`.
-
-Do not introduce a parallel MoonMind protocol or new product vocabulary unless a concern is genuinely MoonMind-only.
-
-### 2.2 Keep MoonMind artifact authority
-
-The bridge may observe live Omnigent resources, but MoonMind artifacts remain the durable evidence boundary.
-
-Provider-native ids, URLs, host paths, and file ids may appear in redacted diagnostics or server-side mapping metadata. They must not replace MoonMind artifact refs in workflow evidence, Step evidence, or terminal `AgentRunResult.outputRefs`.
-
-### 2.3 Keep the host unchanged
-
-A successful design supports a stock Omnigent host. No custom host image or source patch is required.
-
-Deployment configuration may specify server URL, host authentication, endpoint refs, network routing, and standard Omnigent host settings. A custom MoonMind-specific host build is out of scope.
-
-### 2.4 Proxy-only compatibility (embedded transport retired #3955)
-
-The bridge selects:
-
-```yaml
-hostProtocolMode:
-  - upstream_omnigent_server_proxy
-```
-
-`upstream_omnigent_server_proxy` is the production default and the only
-selectable mode because stock Omnigent Server already owns the host/runner
-tunnel.
-
-`embedded_omnigent_compatible_server` is retired and cannot admit new work: an
-enabled bridge that selects it fails fast with the proxy alternative, and live
-embedded host routes answer `410 Gone` (declared in OpenAPI so generated
-clients model the terminal `omnigent_embedded_transport_retired` payload;
-WebSocket denials carry the same code plus the proxy alternative as the close
-reason). The literal survives only so retained session rows and historical
-evidence keep decoding to their recorded mode. Session-scoped controls (read,
-stop, terminal cleanup, delete, elicitation, event and resource reads) dispatch
-by each session row's recorded mode, so retained embedded sessions keep their
-recorded cleanup owner until drained while the deployment runs proxy mode;
-new admission still follows the configured global mode and is never silently
-substituted.
-Its exact auth and protocol contract is owned by
-`EmbeddedHostAuthCompatibility.md`, which now documents the retired transport
-and its drain disposition. The native Workflow Chat `embedded=1` presentation
-option is unrelated to this transport and is preserved.
-
-### 2.5 Preserve native UI, centralize authority
-
-MoonMind should embed or proxy the native Omnigent web application instead of reproducing its interaction components.
-
-All native application requests still cross a binding-scoped MoonMind boundary. Client-side hiding or disabling is an affordance only. The bridge independently authenticates, authorizes, capability-checks, scans, audits, rewrites, and forwards every request.
-
----
+- **Omnigent names at the boundary.** The bridge uses Omnigent nouns and operations (`session`, `event`, `stream`, `host`, `runner`, `resource`, `snapshot`, `interrupt`, `stop_session`) rather than a parallel MoonMind protocol.
+- **MoonMind artifact authority.** Provider-native ids, URLs, host paths, and file ids may appear in redacted diagnostics or server-side mappings, never in place of MoonMind artifact refs in workflow evidence or `AgentRunResult.outputRefs`.
+- **Unchanged host.** A stock Omnigent host works with no custom image or patch; deployment configuration supplies URLs, host auth, endpoint refs, and routing.
+- **Native UI, central authority.** MoonMind serves the native application instead of reproducing it, but every native request crosses a binding-scoped boundary. Client-side hiding is only an affordance; the bridge independently authenticates, authorizes, capability-checks, scans, audits, rewrites, and forwards each request.
 
 ## 3. Topologies
 
-### 3.1 Proxy mode
+**Proxy mode** is the only selectable `hostProtocolMode` (`upstream_omnigent_server_proxy`), because stock Omnigent Server already owns the host/runner tunnel. The bridge persists bindings, idempotency state, and event and artifact refs, and calls stock session/event/resource/control APIs; the host speaks its native protocol, which the bridge treats as a versioned compatibility profile.
 
-```text
-MoonMind UI / API
-  -> MoonMind Omnigent Bridge
-      -> stock Omnigent Server
-          -> unchanged Omnigent Host / Runner
-              -> Codex / Claude / other harness
-```
+**Embedded mode** (`embedded_omnigent_compatible_server`) is retired and admits no new work. Selecting it fails fast naming the proxy alternative, and embedded host routes answer `410 Gone` with `omnigent_embedded_transport_retired` (WebSocket denials use the same code as the close reason). The value remains decodable so retained sessions keep their recorded mode: session-scoped controls dispatch by each row's recorded mode, so retained embedded sessions keep their cleanup owner. See [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). The Workflow Chat `embedded=1` presentation option is unrelated.
 
-Responsibilities:
-
-- MoonMind exposes the browser-safe native UI and bridge facade.
-- The bridge persists MoonMind session bindings, idempotency state, event refs, and artifact refs.
-- The bridge calls stock Omnigent session/event/resource/control APIs.
-- Stock Omnigent Server owns the host/runner tunnel.
-- The unchanged host continues to speak its native protocol.
-
-### 3.2 Embedded compatibility mode (retired #3955)
-
-> Retired: this topology no longer admits new work. The version, route,
-> authentication, lifecycle, evidence, failure, upgrade, and rollback contract
-> below is retained as the authoritative historical record in
-> [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md) for
-> decoding retained sessions until drain completes.
-
-```text
-MoonMind UI / API
-  -> MoonMind Omnigent Bridge
-      -> embedded Omnigent-compatible server surface
-          -> unchanged Omnigent Host / Runner
-              -> Codex / Claude / other harness
-```
-
-Embedded mode must preserve the same browser binding, authorization, capability, scan, audit, and artifact boundaries as proxy mode.
-
-### 3.3 Direct Codex compatibility during migration
-
-```text
-MoonMind UI / API
-  -> MoonMind Omnigent Bridge event model
-      -> direct Codex managed-session adapter
-          -> Codex managed runtime
-```
-
-This is a temporary migration and historical-read path. It emits bridge-shaped diagnostic evidence but does not become a second primary Workflow Chat renderer. Retirement remains governed by [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md).
+**Direct Codex compatibility** routes the bridge event model through the direct Codex managed-session adapter. It is a compatibility and historical-read path that emits bridge-shaped diagnostic evidence, not a second primary Chat renderer; see [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md).
 
 ---
 
@@ -191,754 +56,145 @@ This is a temporary migration and historical-read path. It emits bridge-shaped d
 
 ### 4.1 Provider/service session API facade
 
-MoonMind services and compatibility clients may use these Omnigent-shaped routes behind the bridge:
-
-| Purpose | Route |
-|---|---|
-| List available agents | `GET /api/agents` |
-| Create session | `POST /v1/sessions` |
-| Get session snapshot | `GET /v1/sessions/{session_id}` |
-| List session transcript items | `GET /v1/sessions/{session_id}/items` |
-| Post session event | `POST /v1/sessions/{session_id}/events` |
-| Stream session events | `GET /v1/sessions/{session_id}/stream` |
-| Resolve elicitation | `POST /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve` |
-| List changed files | `GET /v1/sessions/{session_id}/resources/environments/default/changes` |
-| List workspace files | `GET /v1/sessions/{session_id}/resources/environments/default/filesystem` |
-| Get workspace file content | `GET /v1/sessions/{session_id}/resources/environments/default/filesystem/{path}` |
-| Get workspace file diff | `GET /v1/sessions/{session_id}/resources/environments/default/diff/{path}` |
-| List session files | `GET /v1/sessions/{session_id}/resources/files` |
-| Get session file content | `GET /v1/sessions/{session_id}/resources/files/{file_id}/content` |
+MoonMind services and compatibility clients use Omnigent-shaped routes. Every session-scoped operation resolves the durable binding and authorizes the operation before touching upstream state.
 
 #### `omnigent.server.v1` compatibility matrix
 
-All session-scoped operations resolve the durable MoonMind binding and authorize the requested operation before touching upstream state.
+| Operation | Facade route | Policy |
+|---|---|---|
+| Agents / hosts | `GET /api/agents`, `GET /api/hosts` | Bounded catalog and readiness; no credential or caller-selected host authority |
+| Create/reuse | `POST /v1/sessions` | Workflow-owned idempotency, profile/policy resolution, first-message reconciliation |
+| Snapshot / items | `GET /v1/sessions/{id}[/items]` | Bound sessions only; strict cursor pagination; identity virtualization |
+| Attach | `POST /v1/sessions/{id}/attach` | Existing owned binding; conflicts fail closed |
+| Message/interrupt/stop | `POST /v1/sessions/{id}/events` | Capability, expected state, audit, outbound scan |
+| Delete | `DELETE /v1/sessions/{id}` | Terminal cleanup capability and lease ownership |
+| Stream | `GET /v1/sessions/{id}/stream` | Authorization on every connect and reconnect |
+| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Approval authority, expected state, idempotency, audit |
+| Files and diffs | `GET .../resources/environments/default/{changes,filesystem[/{path}],diff/{path}}`, `.../resources/files*` | Bounded, path-safe, traversal rejection, read capability |
 
-| Operation | Facade route | Stock operation | Policy |
-|---|---|---|---|
-| Agent discovery | `GET /api/agents` | `GET /v1/agents` | Authenticated bounded catalog; no credential or host authority. |
-| Host readiness | `GET /api/hosts` | Same | Bounded readiness only; managed routing never accepts caller-selected host identity. |
-| Create/reuse | `POST /v1/sessions` | Same | Workflow-owned idempotency, profile/policy resolution, and first-message reconciliation. |
-| Snapshot | `GET /v1/sessions/{id}` | Same | Bound and authorized provider sessions only. |
-| Transcript items | `GET /v1/sessions/{id}/items` | Same | Bound read capability, strict cursor pagination, and provider-session identity virtualization. |
-| Attach/reconcile | `POST /v1/sessions/{id}/attach` | Snapshot probe plus durable attach | Existing owned binding required; conflicting attachment fails closed. |
-| Message/interrupt/stop | `POST /v1/sessions/{id}/events` | Same | Effective capability, expected-state, audit, and outbound-scan enforcement. |
-| Delete | `DELETE /v1/sessions/{id}` | Same | Terminal cleanup capability and lease ownership required. |
-| Provider stream | `GET /v1/sessions/{id}/stream` | Same | Per-connect authorization; reconnect reauthorizes. |
-| Resolve elicitation | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` | Same | Caller approval authority, expected request state, idempotency, and durable audit required. |
-| File indexes | `GET .../changes`, `GET .../filesystem` | Same | Bound, authorized, bounded, and path-safe. |
-| File content/diff | `GET .../filesystem/{path}`, `GET .../diff/{path}` | Same | One decode/encode boundary, traversal rejection, response limit, read capability. |
-| Session files | `GET .../resources/files*` | Same | Bound, authorized, bounded, capability-gated. |
-
-These are transport results. Raw provider paths and identifiers never become authoritative workflow evidence.
+These are transport results; raw provider paths and ids never become authoritative workflow evidence.
 
 ### 4.2 Workflow-bound native Chat facade
 
-The browser does not call the public provider facade with a caller-selected provider session id. It receives an opaque MoonMind `chatBindingId` and uses:
+The browser never names a provider session. It receives an opaque `chatBindingId` and uses `GET /omnigent-ui/workflow-chat/{chatBindingId}` and `/api/workflow-chat-bindings/{chatBindingId}/omnigent/{path}`. For every document, HTTP, SSE, WebSocket, resource, message, approval, terminal, and control request, including reconnects, the facade authenticates the caller, loads the binding, authorizes the operation against the Workflow Execution, verifies that any session reference maps to the bound session, rejects caller-supplied endpoint/session/host/runner/workspace/profile/credential identity, recomputes capabilities (§11), validates expected state, scans and audits mutations, strips MoonMind credentials, and forwards only to the server-resolved target. The full-page **Open in Omnigent** view uses the same facade, so it cannot bypass MoonMind authority.
 
-```text
-GET /omnigent-ui/workflow-chat/{chatBindingId}
-*   /api/workflow-chat-bindings/{chatBindingId}/omnigent/{path}
-```
+The native HTTP surface admits only fields reviewed against the pinned server and runner entrypoints. Unknown fields, duplicate keys, and unreviewed media types are rejected before any mutation or upstream I/O; uploads contain exactly one `file` part; terminal creation cannot inject bootstrap flags, runtime specs, workspace roots, or sandbox overrides. A route without a verified upstream counterpart is not served.
 
-The scoped facade virtualizes provider session identity for the native application and maps requests to the one durable server-side binding.
+#### Versioned native-UI compatibility map
 
-For every HTML/bootstrap, HTTP, SSE, WebSocket, resource, message, approval, terminal, reconnect, and control request, including every reconnect, the facade must:
-
-1. authenticate the MoonMind caller,
-2. load the durable `chatBindingId`,
-3. authorize the caller against the Workflow Execution and requested operation,
-4. verify that any route, query, or payload session reference maps to the bound provider session,
-5. reject caller-supplied endpoint, alternate session, host, runner, workspace, profile, or credential identity,
-6. recompute effective capabilities from upstream support, immutable Agent Profile snapshot, Provider Profile and launch policy, Workflow/Step/session state, and caller permission,
-7. validate expected workflow, run, Step Execution, bridge session, provider session, session epoch, active turn, or elicitation state where relevant,
-8. run required outbound security scans before provider sends,
-9. record mutation audit evidence,
-10. strip MoonMind credentials and forward only to the server-resolved upstream target.
-
-The full-page **Open in Omnigent** experience uses this same scoped facade. It must not navigate directly to an upstream server and bypass MoonMind authority.
-
-The additional native HTTP surface admits only fields reviewed against the pinned server and runner entrypoints. Unknown body or query fields, duplicate keys, unreviewed media types and incompatible operation shapes are rejected before mutation claims or upstream I/O. Multipart uploads contain exactly one `file` part. Terminal creation admits declared terminal identity and session key; browser input cannot inject bootstrap flags, runtime specifications, workspace roots or sandbox overrides. MoonMind compare-and-set inputs are consumed locally and excluded from upstream requests. A route without a verified upstream counterpart is not served; recognized internal browser actions remain closed until their field and ownership contracts are reviewed.
-
-#### Versioned native-UI compatibility map (MoonLadderStudios/MoonMind#3635)
-
-The native UI is more than an HTTP transcript: it opens WebSockets and drives terminal/PTY, execution-log, browser-pane, sub-agent/task, and reconnect/wake surfaces. Transport and route coverage for that surface is a single **versioned compatibility map** pinned to the `omnigent.server.v1` profile (`moonmind/omnigent/native_ui_compat.py`). Each recognized route/transport declares one of two dispositions:
-
-- **served** — the HTTP + SSE surface the scoped facade actively serves (§4.2 step list), single-sourced from the facade route allowlist so there is no second source of truth;
-- **compatibility_review_required** — a reserved quarantine disposition for a recognized route whose rewrite has not yet been reviewed. The pinned `omnigent.server.v1` HTTP, SSE, global-session-update WebSocket, terminal-attach WebSocket, and dictation WebSocket routes are reviewed and served. A future recognized-but-unreviewed transport is authenticated and binding-validated before upgrade, then fails closed with an explicit compatibility diagnostic. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
-
-Terminal create/attach/input/resize/close and browser-pane control require capabilities the facade never grants, so a nonowner or read-only viewer is denied before any transport opens; terminal viewing/execution-log inspection is a distinct read capability. Unknown or changed transports fail closed with a non-enumerating diagnostic rather than being generically proxied, and a terminal/revoked binding cannot open a new live transport.
-
-Read-only terminal attachments enforce their input boundary in the MoonMind
-relay: output is delivered, but any browser text or binary data frame closes
-the attachment without forwarding or claiming a mutation. The upstream
-`read_only=true` flag is defense in depth, not the authorization boundary.
+Route and transport coverage is one versioned map pinned to `omnigent.server.v1` (`moonmind/omnigent/native_ui_compat.py`). A route is either **served** (single-sourced from the facade allowlist, including the reviewed global session-update, terminal-attach, and dictation WebSockets) or **compatibility_review_required** (authenticated and binding-validated, then failed closed with a compatibility diagnostic). An earlier HTTP bootstrap never authorizes a later WebSocket, and a terminal or revoked binding cannot open a new live transport. Terminal input/resize/close and browser-pane control require capabilities the facade does not grant; terminal viewing uses a separate read capability. Read-only terminal attachments are enforced in the MoonMind relay, which closes the attachment on any browser data frame; the upstream `read_only=true` flag is defense in depth.
 
 #### Browser transport API preservation
 
-A host adapter that rebases native browser requests must preserve the browser API contract used by the pinned application, not just produce the correct URL. An adapted `WebSocket` preserves constructor arguments, subprotocol handling, native instance/prototype behavior, event delivery, and the static ready-state constants `CONNECTING = 0`, `OPEN = 1`, `CLOSING = 2`, and `CLOSED = 3`. An adapted `EventSource` likewise preserves its constructor options, instance behavior, and `CONNECTING`, `OPEN`, and `CLOSED` constants. Copying only an instance prototype is not sufficient constructor compatibility.
-
-Transport verification executes the served adapter with its real native consumer. A null or non-open socket cannot send, while an authorized open socket must send normally. Avoid hiding a failed guard by suppressing exceptions while leaving valid sends broken. URL rebasing remains idempotent and binding-scoped across fetch, XHR, SSE, and WebSocket use. Prefer a supported upstream embedding seam when it removes the need for a wrapper without changing the authority boundary.
+An adapter that rebases native browser requests preserves the browser API the pinned application uses, not just the URL. An adapted `WebSocket` keeps constructor arguments, subprotocols, instance/prototype behavior, events, and the static constants `CONNECTING = 0`, `OPEN = 1`, `CLOSING = 2`, `CLOSED = 3`; an adapted `EventSource` keeps its options, behavior, and constants. Copying an instance prototype alone is not constructor compatibility. Verification runs the served adapter with its real native consumer: null or non-open sockets cannot send and authorized open sockets send normally, so a failed guard cannot be hidden by swallowing exceptions. Rebasing is idempotent and binding-scoped across fetch, XHR, SSE, and WebSocket.
 
 #### Scoped bootstrap and compiled assets
 
-The reviewed compatibility surface includes the exact compiled application's startup requests and response shapes, not only routes declared in source or exercised after a session is already open. Each boot metadata, session, transcript, environment, child-session, and optional workspace request has an explicit scoped operation or an explicit unsupported disposition. The existing compatibility map is the single inventory owner. A new route is never admitted merely because a newer standalone UI requests it.
-
-Boot metadata exposes only the selected binding's authorized presentation information. Global-looking catalogs and update watch sets must be reduced to authorized binding-local projections, with identity virtualization and per-frame validation where needed. They must not enumerate unrelated harnesses, sessions, hosts, or provider authority. Child-session relationships and resource identifiers require their own reviewed scoping. Unknown routes and unreviewed payload variants remain denied. Optional features may be disabled through the supported native host/capability interface, but a missing required transcript route cannot be disguised as a successful empty response.
-
-Asset compatibility covers HTML references, JavaScript-imported images, CSS URLs, module preloads, and lazy-loaded chunks in both presentations. These resolve through the authorized scoped asset surface with the expected content type. An HTML attribute rewrite or base tag alone does not establish that references inside unchanged JavaScript or CSS are scoped. Use supported build/runtime asset-base behavior or a bounded reviewed asset mapping, not an unrestricted root proxy or arbitrary rewriting of application source. Hashed assets and the document must belong to one coherent qualified bundle.
+The reviewed surface covers the compiled application's actual startup requests and response shapes, each with an explicit scoped operation or unsupported disposition in the compatibility map; a route is never admitted just because a newer UI requests it. Boot metadata and global-looking catalogs are reduced to binding-local projections so they never enumerate unrelated harnesses, sessions, or hosts, and a missing required transcript route is never disguised as an empty success. Assets (HTML references, JS-imported images, CSS URLs, preloads, lazy chunks) resolve through the scoped asset surface; because a base tag does not scope references inside compiled JS or CSS, the bridge uses supported asset-base behavior or a bounded reviewed mapping rather than a root proxy or source rewriting.
 
 #### Readiness and denial evidence
 
-The workflow shell's application-readiness and failure behavior is owned by [Workflow Chat Panel sections 4.1 and 11.1](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). Serving authorization, compatibility eligibility, successful document delivery, rendered conversation readiness, and live transport health are separate facts. None grants authority at a later request boundary.
-
-For an authorized binding, failures expose bounded stable reason codes that distinguish verified capability denial, missing/stale immutable authority, unsupported operations, and required-asset or application failure where safe. Unknown or unauthorized bindings retain non-enumerating responses. Detailed diagnostics remain behind their existing authorization boundary. The bridge never repairs a 403 by trusting browser flags, granting missing authority by default, or substituting a raw provider session id. A denied optional feature must not prevent an otherwise authorized transcript from rendering.
-
-Qualification binds the actual API/dashboard build, native UI/server artifacts, facade contract, and relevant host/runtime support identity to executable browser evidence. A configured version string, immutable image reference, route inventory, or successful HTML request alone does not prove successful native rendering. The protected acceptance and evidence-freshness rules in sections 16 and 20 remain authoritative.
-
-### 4.3 Host/runner channel
-
-The host/runner channel is the persistent bidirectional control and event channel used by a host to register, advertise capabilities, heartbeat, and deliver runtime events.
-
-In proxy mode:
-
-```text
-unchanged host -> stock Omnigent Server host/runner channel
-MoonMind Bridge -> stock Omnigent Server public session API
-```
-
-In embedded mode:
-
-```text
-unchanged host -> MoonMind embedded-compatible host/runner channel
-MoonMind Bridge -> local session/event/resource state
-```
-
-The bridge treats the host channel as a versioned compatibility profile, not an ad hoc MoonMind protocol.
+Readiness and failure behavior is described in [Workflow Chat Panel sections 4.1 and 11.1](../UI/WorkflowChatPanel.md#41-application-readiness-and-failure-containment). Serving authorization, compatibility, document delivery, rendered readiness, and transport health are separate facts, none of which grants later authority. Authorized bindings get stable reason codes distinguishing capability denial, stale authority, unsupported operations, and asset failure; unknown bindings get non-enumerating responses. The bridge never repairs a 403 by trusting browser flags or substituting a raw session id, and a denied optional feature does not block an authorized transcript. Qualification ties the build, UI and server artifacts, facade contract, and support identity to executable browser evidence (§20.5).
 
 ---
 
-## 5. Bridge component model
+## 5. Components
 
-```text
-MoonMind Omnigent Bridge
-  ├─ Session API Facade
-  ├─ Workflow Chat Binding / Policy Facade
-  ├─ Host Protocol Facade / Proxy
-  ├─ Bridge Session Store
-  ├─ Event Normalizer
-  ├─ Resource Harvester
-  ├─ Artifact Publisher
-  ├─ Diagnostic Chat Projection
-  └─ Direct Codex Compatibility Producer (temporary)
-```
+| Component | Responsibility |
+|---|---|
+| Session API Facade | Omnigent-shaped service routes |
+| Workflow Chat Binding / Policy Facade | Opaque bindings, native UI serving, identity virtualization, per-request authority |
+| Host Protocol Proxy | Forwarding to stock Omnigent Server |
+| Bridge Session Store | Bindings, profile and launch refs, first-message idempotency, event/snapshot/diagnostic refs |
+| Event Normalizer | MoonMind-safe event records plus redacted raw JSONL |
+| Resource Harvester / Artifact Publisher | Copies resources into artifacts and returns only MoonMind refs |
+| Diagnostic Chat Projection | Read-only debug transcript from normalized events, falling back to legacy managed-run logs |
+| Direct Codex Compatibility Producer | Bridge-shaped events from the direct Codex path |
 
-### 5.1 Session API Facade
+## 6. Configuration
 
-Owns Omnigent-shaped service routes and provider compatibility.
-
-### 5.2 Workflow Chat Binding / Policy Facade
-
-Resolves opaque browser-safe bindings, serves/proxies the native application, virtualizes provider session identity, projects filtered capabilities, and enforces per-request MoonMind authority.
-
-### 5.3 Host Protocol Facade / Proxy
-
-Forwards to stock Omnigent Server in proxy mode or implements the compatible host-facing surface in embedded mode.
-
-### 5.4 Bridge Session Store
-
-Persists MoonMind-to-provider session bindings, browser binding identity, immutable profile and launch refs, first-message idempotency, event refs, terminal refs, snapshots, and diagnostics refs.
-
-### 5.5 Event Normalizer
-
-Converts provider events into MoonMind-safe normalized records while preserving redacted raw events in artifact-backed JSONL.
-
-### 5.6 Resource Harvester
-
-Copies changed files, workspace files, diffs, session files, child-session snapshots, and diagnostics into MoonMind artifacts.
-
-### 5.7 Artifact Publisher
-
-Publishes bridge evidence through the MoonMind artifact system and returns only MoonMind artifact refs to workflow-visible results.
-
-### 5.8 Diagnostic Chat Projection
-
-Feeds the read-only compatibility/debug transcript from normalized bridge events before falling back to legacy managed-run logs. It is not the primary Workflow Detail Chat renderer when a native binding is available.
-
----
-
-## 6. Declarative bridge configuration
-
-```yaml
-schemaVersion: moonmind.omnigent_bridge.v1
-
-enabled: true
-
-authority:
-  temporal: moonmind
-  artifacts: moonmind
-  workflowChatRequests: moonmind_bridge
-  liveExecution: omnigent_host
-
-compatibility:
-  profile: omnigent.server.v1
-  hostUnchanged: true
-  hostProtocolMode: upstream_omnigent_server_proxy
-
-publicApi:
-  mountPath: /api/omnigent
-  exposeOmnigentCompatibleRoutes: true
-  routes:
-    agents: /api/agents
-    hosts: /api/hosts
-    createSession: /v1/sessions
-    getSession: /v1/sessions/{session_id}
-    attachSession: /v1/sessions/{session_id}/attach
-    deleteSession: /v1/sessions/{session_id}
-    postEvent: /v1/sessions/{session_id}/events
-    streamEvents: /v1/sessions/{session_id}/stream
-    changedFiles: /v1/sessions/{session_id}/resources/environments/default/changes
-    workspaceFiles: /v1/sessions/{session_id}/resources/environments/default/filesystem
-    workspaceFile: /v1/sessions/{session_id}/resources/environments/default/filesystem/{path:path}
-    workspaceDiffs: /v1/sessions/{session_id}/resources/environments/default/diff/{path:path}
-    sessionFiles: /v1/sessions/{session_id}/resources/files
-    sessionFile: /v1/sessions/{session_id}/resources/files/{file_id}/content
-
-workflowChat:
-  presentation: native_omnigent
-  uiMountPath: /omnigent-ui/workflow-chat/{chat_binding_id}
-  scopedApiMountPath: /api/workflow-chat-bindings/{chat_binding_id}/omnigent
-  exposeProviderSessionId: false
-  authorizeEveryRequest: true
-  stripMoonMindCredentialsUpstream: true
-  injectUpstreamCredentialsServerSide: true
-  effectiveCapabilities: immutable_policy_intersection
-  highSecurityOutboundScan: inherit
-  diagnosticProjectionEnabled: true
-
-hostConnection:
-  mode: upstream_omnigent_server_proxy
-  upstreamServerUrlRef: default
-  embedded:
-    bindAddress: 0.0.0.0
-    port: 8000
-    authMode: upstream_runner_tunnel
-    protocolProfile: omnigent.runner_tunnel.983c93c6
-
-sessionDefaults:
-  hostType: managed
-  deleteProviderSessionAfterHarvest: false
-  capture:
-    stream: true
-    snapshots: true
-    changedFiles: true
-    workspaceFiles: true
-    workspaceDiffs: capability_probe
-    sessionFiles: true
-    childSessions: true
-
-idempotency:
-  firstMessageStateMachine:
-    - not_prepared
-    - prepared
-    - posting
-    - posted
-    - terminal
-  includeIdempotencyMarker: true
-  reconcilePostingState: true
-
-observability:
-  writeRawEventJournal: true
-  writeNormalizedEventJournal: true
-  feedWorkflowChat: true # diagnostic/compatibility projection, not primary native UI
-  feedAgentRunObservability: true
-  fallbackToLegacyManagedRunLogs: true
-```
-
-The Session API Facade resolves this document from `OMNIGENT_BRIDGE_CONFIG_PATH` before registering routes. An unreadable path or invalid document fails fast. Environment configuration cannot disable request authorization, credential separation, or required high-security scanning for an otherwise enabled browser-facing native Chat surface.
+The bridge reads a `moonmind.omnigent_bridge.v1` document from `OMNIGENT_BRIDGE_CONFIG_PATH` (parsed by `moonmind/omnigent/bridge_config.py`) before registering routes; an unreadable or invalid document fails fast. It declares authority (Temporal and artifacts to MoonMind, live execution to the host), the `omnigent.server.v1` profile and proxy mode, public route mounts, the Workflow Chat mounts with `exposeProviderSessionId: false`, `authorizeEveryRequest`, credential stripping and server-side injection, `immutable_policy_intersection` capabilities and inherited high-security scanning, session defaults (managed host, capture of stream, snapshots, files, capability-probed diffs, child sessions), the first-message state machine, and journal and observability feeds. Environment configuration cannot disable request authorization, credential separation, or required high-security scanning for an enabled native Chat surface.
 
 ---
 
 ## 7. Durable data model
 
-### 7.1 `omnigent_bridge_sessions`
+**`omnigent_bridge_sessions`** (ORM in `api_service/db/models.py`) is keyed by `bridge_session_id` with unique `idempotency_key` and optional unique `chat_binding_id`. It records MoonMind workflow, run, AgentRun, and Step Execution ids; profile, launch, and policy snapshot refs; Omnigent endpoint, session, host, runner, and agent identity; host type, workspace, and coarse status (`declared`, `creating`, `active`, `completed`, `failed`, `canceled`, `timed_out`); first-message state, digest, marker, and provider item ids; and event, snapshot, manifest, diagnostic, external-state, and terminal refs. `chat_binding_id` is an opaque lookup key, not a bearer capability. The table replaced the former `omnigent_external_runs` mapping; canonical session authority lives in `omnigent_sessions` and the control-plane repositories, while bridge rows keep attempt identity and evidence.
 
-```text
-omnigent_bridge_sessions
-  bridge_session_id text primary key
-  chat_binding_id text unique null
-  provider text not null
-  compatibility_profile text not null
-  moonmind_workflow_id text not null
-  moonmind_run_id text null
-  moonmind_agent_run_id text not null
-  step_execution_id text null
-  idempotency_key text not null unique
+**`omnigent_bridge_session_events`** rows are a bounded index (sequence, direction, type, status, preview, artifact ref); full redacted bodies live in `runtime.omnigent.sse.raw.jsonl` and `runtime.omnigent.sse.normalized.jsonl`.
 
-  agent_profile_snapshot_ref text null
-  provider_profile_ref text null
-  effective_launch_snapshot_ref text null
-  policy_snapshot_ref text null
-
-  omnigent_endpoint_ref text not null
-  omnigent_session_id text null
-  omnigent_host_id text null
-  omnigent_runner_id text null
-  omnigent_agent_id text null
-  omnigent_agent_name text null
-
-  host_type text not null
-  workspace text null
-  status text not null
-
-  first_message_state text not null
-  first_message_digest text null
-  first_message_marker text null
-  first_message_post_attempted_at timestamptz null
-  first_message_posted_at timestamptz null
-  first_message_pending_id text null
-  first_message_item_id text null
-
-  raw_events_ref text null
-  normalized_events_ref text null
-  initial_snapshot_ref text null
-  final_snapshot_ref text null
-  capture_manifest_ref text null
-  diagnostics_ref text null
-  external_state_ref text null
-
-  terminal_refs jsonb not null default '{}'
-  metadata jsonb not null default '{}'
-  created_at timestamptz not null
-  updated_at timestamptz not null
-```
-
-`chat_binding_id` is an opaque authorization lookup key, not a bearer capability. The provider session id and upstream endpoint remain server-side. Caller permissions and effective capabilities are recomputed per request rather than trusted from mutable browser state.
-
-`omnigent_bridge_sessions` is the canonical bridge binding and idempotency store within the bridge scope. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper. Canonical session authority lives in `omnigent_sessions` and its control-plane repositories and turn commands; bridge rows retain attempt identity, evidence, and compatibility consumers.
-
-The coarse session `status` preserves `declared`, `creating`, `active`, `completed`, `failed`, `canceled`, and `timed_out`. Full non-lossy provider state remains per event.
-
-### 7.2 `omnigent_bridge_session_events`
-
-```text
-omnigent_bridge_session_events
-  event_id text primary key
-  bridge_session_id text not null
-  sequence bigint not null
-  timestamp timestamptz not null
-  direction text not null
-  event_type text not null
-  normalized_status text null
-  text_preview text null
-  artifact_ref text null
-  metadata jsonb not null default '{}'
-```
-
-DB rows are a bounded index. Full redacted raw and normalized event bodies live in MoonMind artifacts:
-
-```text
-runtime.omnigent.sse.raw.jsonl
-runtime.omnigent.sse.normalized.jsonl
-```
-
-### 7.3 Mutation audit evidence
-
-Every message/control/approval/terminal/workspace mutation records or references:
-
-```text
-actor
-operation
-idempotency_key
-workflow_id / run_id / step_execution_id
-bridge_session_id / provider_session_id
-session_epoch / active_turn_id / elicitation_id as applicable
-agent_profile_snapshot_ref / policy_snapshot_ref
-normalized_outcome
-upstream_correlation
-created_at
-audit_artifact_ref
-```
-
-A normalized provider event without this evidence may be displayed diagnostically but cannot become authoritative approval, control, or side-effect evidence.
+**Mutation audit.** Every message, control, approval, terminal, or workspace mutation records the actor, operation, idempotency key, workflow/run/step and session ids, expected epoch/turn/elicitation, snapshot refs, normalized outcome, upstream correlation, and audit artifact ref. A provider event without this evidence can be displayed but never becomes authoritative approval or side-effect evidence.
 
 ---
 
-## 8. Session creation contract
+## 8. Session creation
 
-### 8.1 Request
+A create request carries `agent_id`, title, `moonmind.*` labels (workflow, AgentRun, Step Execution, idempotency key), `host_type`, workspace (for example `https://github.com/org/repo#main`), optional model override and reasoning effort, and terminal launch args. The bridge validates principal and workflow authority, resolves immutable profile, policy, and launch snapshots, creates or reuses the row by idempotency key, resolves endpoint and agent server-side, forwards to Omnigent Server, persists provider session identity before the first message, allocates `chat_binding_id` only after the durable binding exists, and emits `session.created`.
 
-```json
-{
-  "agent_id": "ag_abc123",
-  "title": "Implement auth fix",
-  "labels": {
-    "moonmind.workflow_id": "mm:...",
-    "moonmind.agent_run_id": "ar_...",
-    "moonmind.step_execution_id": "step:...",
-    "moonmind.idempotency_key": "..."
-  },
-  "host_type": "managed",
-  "workspace": "https://github.com/org/repo#main",
-  "model_override": null,
-  "reasoning_effort": "high",
-  "terminal_launch_args": []
-}
-```
-
-### 8.2 Bridge behavior
-
-1. Validate the MoonMind principal and workflow authority.
-2. Resolve immutable Agent Profile, Provider Profile, policy, and launch snapshots.
-3. Create or reuse the bridge row by `idempotency_key`.
-4. Resolve endpoint and target agent server-side.
-5. Forward to stock Omnigent Server or the embedded-compatible backend.
-6. Persist provider session identity before preparing or posting the first message.
-7. Allocate the opaque `chat_binding_id` only after the durable binding exists.
-8. Emit `session.created` into the bridge journal.
-9. Return an Omnigent-shaped service response or browser-safe binding projection as appropriate.
-
-### 8.3 Managed/external host validation
-
-For `host_type = managed`:
-
-- caller-authored `host_id` is forbidden,
-- repository workspace intent may be a repository URL with optional branch,
-- local absolute paths are invalid.
-
-For `host_type = external`:
-
-- an authorized existing host binding is required,
-- workspace must satisfy the external-host locator contract,
-- browser-authored absolute paths remain forbidden on Workflow Chat routes.
+For `host_type = managed`, caller-authored `host_id` and local absolute paths are rejected. For `host_type = external`, an authorized existing host binding and a valid external-host locator are required, and browser-authored absolute paths are still rejected on Chat routes.
 
 ---
 
 ## 9. Event posting contract
 
-### 9.1 First message event
+### 9.1 First message
 
-```json
-{
-  "type": "message",
-  "data": {
-    "content": [
-      {"type": "text", "text": "Implement the auth fix and open a PR."}
-    ]
-  },
-  "metadata": {
-    "moonmindFirstMessageDigest": "sha256:...",
-    "moonmindIdempotencyKey": "..."
-  }
-}
-```
+The first message is a `type: message` event whose metadata carries `moonmindFirstMessageDigest` and `moonmindIdempotencyKey`, and whose text includes a `MoonMind-Omnigent-Run:` marker block with correlation id, idempotency key, and digest. Its state moves `not_prepared -> prepared -> posting -> posted -> terminal`: the digest is computed and `prepared` persisted before any POST, `posting` immediately before forwarding, and `posted` after confirmed success. A retry that sees `posted` skips the POST; one that sees `posting` reconciles snapshots, pending inputs, item ids, stream events, and the marker. When absence cannot be proven the bridge fails closed rather than reposting, and a digest conflict under one key fails fast.
 
-Event dispatch has a 150-second transport budget because a native message can
-synchronously ensure the runner terminal before the provider accepts it. This
-budget covers a connect-time bootstrap and one serialized recovery attempt with
-margin. The enclosing `omnigent.submit_turn` Activity allows 180 seconds per
-attempt and 600 seconds across retries. Ordinary JSON and non-message control
-events retain a 60-second budget, while the SSE read remains unbounded and is
-governed by the marked-turn progress budgets below. The budget assumes the
-OpenCode host image's warm plugin SDK npm cache
-(`docs/Omnigent/OpenCodeHost.md`); a cold `@opencode-ai/plugin` download from
-the registry during native-terminal ensure is a host image defect to fix at the
-image boundary, not a reason to raise this budget.
+Message dispatch has a 150-second transport budget because a native message can synchronously ensure the runner terminal before acceptance; it covers a connect-time bootstrap and one recovery attempt. The `omnigent.submit_turn` Activity allows 180 seconds per attempt and 600 across retries; other events use 60 seconds. The budget assumes the OpenCode host image's warm plugin npm cache ([`OpenCodeHost.md`](./OpenCodeHost.md)), so a cold `@opencode-ai/plugin` download is treated as a host image defect.
 
-### 9.2 First-message marker
+### 9.2 Native follow-up messages
 
-```text
-MoonMind-Omnigent-Run:
-  correlationId: <correlation_id>
-  idempotencyKey: <idempotency_key>
-  firstMessageDigest: <sha256>
-```
+Every native composer message passes through the scoped facade, which validates authority and expected state, assigns or checks an idempotency key, and applies `MOONMIND_HIGH_SECURITY_MODE` to extracted text (messages, slash-command arguments, approval text, textual attachments). A blocked scan stops the upstream request and reports only redacted category and location. In high-security mode an unparsable schema, unavailable scanner, or uninspectable required payload fails closed; the bridge never forwards first and diagnoses later.
 
-### 9.3 State transitions
+### 9.3 Marked-turn terminal authority
 
-```text
-not_prepared -> prepared -> posting -> posted -> terminal
-```
+A native runner acknowledges the injection itself: `running`, `response.in_progress`, and `response.completed` can arrive within a second while the harness has not begun the turn. A terminal SSE frame is therefore only a candidate, and the ordered session snapshot decides:
 
-Rules:
+1. **Boundary and progress.** The marked user item (or the item-id frontier captured before dispatch) fixes where the turn begins. Progress is a `function_call`, `function_call_output`, or assistant `message` after it.
+2. **Quiescence.** A complete turn (no unmatched tool call) must stay unchanged for 60s after final assistant text, or 300s after a tool result, and the snapshot must project an inactive turn; neither elapsed time nor a generic `response.completed` overrides an active projection. For `codex-native` snapshots, the mirrored `turn_diff` call is evidence-only rather than tool work, and status `running` (mirrored from Codex's own turn lifecycle) counts as active. If a live completion event is followed by 300s of unchanged, fully matched tool output while still active, the bridge emits `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED`; a profile-bound repository run then claims a continuation turn and keeps its session, host, credential, and workspace authority.
+3. **Turn start.** One watchdog per attempt, anchored at acceptance (or reattach) and evaluated on every observation (snapshots, heartbeats, idle ticks, stream close), bounds the wait at 300s while nothing follows the boundary and no live response remains. A response id already named by a terminal event is stale and cannot defer it, and retries rebuild that set from the durable raw journal. Expiry fails with `OMNIGENT_CURRENT_TURN_NOT_STARTED` (`integration_error`, `retry_step_execution`): the provider dropped the turn and there is no work to preserve. The execution boundary finalizes it (snapshot captured, row marked `failed`, typed result returned) so every path releases host and credential authority through normal cleanup, and the retry is a new Step Execution attempt with a fresh idempotency key.
+4. **Host loss.** A Docker engine restart stops on-demand hosts without restarting them, and Omnigent then projects `runner_online`, `host_online`, and `host_resumable` as false while the turn stays frozen. After 180s of such observations with no final assistant text, the attempt fails with `OMNIGENT_SESSION_HOST_LOST` and `retry_step_execution`. A successor is allowed only once the lost host is confirmed stopped; otherwise the attempt reports `successorBlocked` with `do_not_retry` and the lease stays fenced for the janitor. The successor runs on a fresh host under the same workflow and logical step, restoring the verified worktree archive when one exists or recording `restartLimitation: no_verified_workspace_checkpoint`, within the remaining execution ceiling; cancellation starts no successor. Any observation without a lost host restarts the grace.
+5. **Stalls.** An active turn whose ordered-work signature does not change cannot extend its execution budget through heartbeats and records `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED`. A profile-bound continuation owner whose policy permits interruption may make one bounded interrupt/probe, and only a confirmed inactive projection admits same-session continuation. Otherwise the ambiguous-session cleanup fence holds and unresolved shapes report `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS`.
+6. **Native rejection.** A post-dispatch `session.status: failed` with an explicit error ends the turn when the marked message is still the latest user item and no response is active; the redacted error is preserved. Omnigent's `codex_reauth_required` maps to `reauthenticate`, which blocks automatic retries because provider authorization is an operator decision. A harness that never starts reports `response.failed` marked `undelivered` with the message left in `pending_inputs`, so the attempt fails immediately with Omnigent's code (for example `agent_startup_pending`). Because `codex login status` only checks that tokens exist, a never-started profile-bound Codex attempt confirms its binding and credential generation are unchanged, then inspects the stored token in a network-less read-only container; only a provider-issued refreshed token with no lifetime (`exp <= iat`) converts the failure to `codex_reauth_required`.
 
-1. Compute the canonical digest before any provider POST.
-2. Persist `prepared` after digest calculation.
-3. Persist `posting` immediately before forwarding.
-4. Persist `posted` immediately after confirmed success.
-5. Store provider pending/item identity when available.
-6. A retry that sees `posted` skips the POST.
-7. A retry that sees `posting` reconciles snapshots, pending inputs, item ids, stream events, and marker evidence.
-8. If absence cannot be proven, fail closed instead of reposting.
-9. A digest conflict under one idempotency key fails fast.
-
-### 9.4 Native follow-up messages
-
-Every native composer message passes through the binding-scoped facade.
-
-Before forwarding, the bridge validates request authority and expected session state, assigns or validates a MoonMind idempotency key, and applies `MOONMIND_HIGH_SECURITY_MODE` to canonical extracted text.
-
-The scan covers text-bearing message fields, supported slash-command arguments, approval response text, and textual attachment content forwarded by MoonMind. A blocked scan prevents the upstream request and reports only redacted finding category and location.
-
-When high-security mode is enabled, an unknown or unparsable native event schema, unavailable scanner, or required textual payload that cannot be inspected fails closed. The bridge never forwards first and diagnoses later.
-
-### 9.5 Marked-turn terminal authority
-
-A native runner acknowledges the message injection itself: `session.status running`, `response.in_progress`, and `response.completed` can all arrive within a second of `Turn started` while the harness has not begun the turn. A successful terminal SSE frame is therefore only a completion candidate. Without ordered provider progress, the bridge keeps consuming the live stream under the turn-start budget instead of entering the terminal quiet-period poll. The ordered session snapshot owns the success decision:
-
-1. **Boundary.** The marked user item (or, when the bounded snapshot evicted it, the item-id frontier captured before dispatch) fixes where the current turn begins.
-2. **Progress.** Provider work is a `function_call`, `function_call_output`, or assistant `message` ordered after the boundary. Resource events and the marked message itself are not progress.
-3. **Quiescence.** A structurally complete turn (no unmatched tool call) must stay unchanged for 60s after a final assistant text, or 300s when the turn ended on a tool result. The `turn_diff` call and output that native Codex mirrors after its final answer are evidence-only instrumentation, not a tool result, both here and when the profile-bound repository gate decides whether a turn ended on a final answer. This exemption requires the provider session snapshot's canonical `harness=codex-native` identity; other or unknown harnesses retain calls named `turn_diff` as real tool work. Terminal success always requires the provider snapshot to project an inactive turn; elapsed time and a generic `response.completed` event never override an explicitly active projection. Native Codex mirrors its own turn lifecycle into session status (`running` from `turn/started` until `turn/completed` posts `idle`) while its injection response completes immediately, so a `codex-native` snapshot with status `running` is active even without an active response id; a commentary message followed by a long reasoning pause is not a finished turn and never requests same-session continuation. When a live post-dispatch completion event is followed by 300s of unchanged, fully matched tool output while the snapshot remains active, the bridge emits the typed `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED` recovery signal instead. A profile-bound repository run claims a distinct continuation turn and retains its session, host, credential, workspace, and bridge authority until that continuation reaches an inactive terminal boundary. Callers without that durable continuation owner preserve the existing ambiguous-session cleanup fence.
-4. **Turn-start budget.** One watchdog per execution attempt is anchored at the instant the provider accepts the marked message (or at reattach, when a prior attempt posted it) and is evaluated wherever the snapshot is observed: the reattach snapshot, provider heartbeats, idle-stream ticks while the SSE stream is open but silent, the stream-closed snapshot, and the terminal poll. It depends on neither a terminal SSE frame nor any SSE frame at all. While the boundary is visible, no live active response remains, and no item follows the boundary, the wait is bounded at 300s; only an observation initiated after the deadline can fire it. A current active response temporarily defers the check, except when a post-dispatch terminal response event identifies that exact response id: retaining an id after completion, failure, policy denial, incompleteness, error, or cancellation is then a stale projection and cannot extend the budget. Activity retry rebuilds that terminal-response set from the durable redacted raw-event journal as well as the latest heartbeat, so a crash between journal commit and heartbeat cannot restore stale live-work authority. Only ordered progress after the boundary permanently disarms the watchdog. This distinction is required because the message-injection response can briefly project an active response id, can retain that id after its terminal event, and can do either without starting the harness; a generic session-level `running` status is likewise not correlated evidence that the marked turn started. Native Codex is the harness-specific exception described above: its `running` turn lifecycle also defers the turn-start watchdog and remains subject to the no-progress stall budget. Exceeding the budget fails with `OMNIGENT_CURRENT_TURN_NOT_STARTED` (`integration_error`, remediation `retry_step_execution`): the provider accepted the turn and dropped it, and no work exists to preserve. The execution boundary finalizes this failure itself: the decisive no-work snapshot is captured into the evidence bundle, the durable bridge row is marked terminal `failed`, and the typed result is returned rather than raised, so the generic-host realizer, the profile-bound coordinator, and the unprofiled path all release host, credential, and provider authority through their normal cleanup instead of deferring it for live work that does not exist. The failed attempt's runtime binding is cleaned and its canonical turn command settled, both immutably, so the retry is a new step execution attempt with a fresh idempotency key, never a same-key redispatch. The parent workflow treats the explicit `retry_step_execution` recommendation as retry authority even though the failure class is `integration_error`; credential, authorization, permanent, and terminal-contract failures remain non-retryable.
-5. **Host loss.** The same observations bound an unfinished turn whose host is gone. A Docker engine restart stops on-demand host containers without restarting them, and Omnigent then projects the session with `runner_online`, `host_online`, and `host_resumable` all false while the turn stays frozen, typically on a tool call whose output can never arrive. When every observation across 180s projects that lost host and the marked turn has no final assistant text, the attempt fails with `OMNIGENT_SESSION_HOST_LOST` and `retry_step_execution`. It is finalized at the execution boundary like a never-started turn. That result licenses a successor only after the lost attempt's host is confirmed stopped: an unacknowledged stop is retried within bounds, and if it stays unconfirmed the attempt reports `successorBlocked` with `do_not_retry` while the host lease stays fenced for the janitor. A static OAuth host lease whose stop is unconfirmed stays `draining`, so the Provider Profile's next host waits for the janitor. The step then reruns as a new Step Execution on a fresh host under the same workflow and logical step. The successor restores the interrupted attempt's verified after-execution worktree archive when one was captured. Otherwise it restarts from the step's admitted inputs and records `restartLimitation: no_verified_workspace_checkpoint` in its Step Execution workspace evidence. Work after the last saved boundary may be repeated. Each successor receives only the hard execution ceiling the interrupted attempts left; an exhausted ceiling fails the step instead of starting another attempt, and cancellation starts no successor. Any observation that does not project a lost host restarts the grace, including a host reconnecting after an Omnigent server restart or a resumable host. A snapshot without the liveness fields never counts as lost.
-6. **No-progress budget and recovery.** The execution budget determines the marked-turn wait, with its existing 120s recovery reserve; the progress-extension grace does not shorten a quiet build's base budget. An active turn with an unchanged ordered-work signature cannot renew this wait through liveness heartbeats. Its `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED` observation and last-progress clock are preserved in the existing journals and diagnostic artifacts. A profile-bound continuation owner whose compiled session policy permits interruption may make one bounded interrupt/probe. Only a confirmed inactive projection admits `OMNIGENT_SAME_SESSION_CONTINUATION_REQUIRED`, retaining the session, leases, workspace, and original request for the existing bounded continuation loop. An unavailable probe or still-active projection preserves the ambiguous-session cleanup fence. Other unresolved terminal shapes retain `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS`.
-
-Bridge event index fields replace NUL with U+FFFD because PostgreSQL text and JSONB cannot store it; the raw journal retains the original payload. NUL-bearing event identities are hashed from their original value before both lookup and insertion, preserving replay deduplication without collapsing distinct provider identities.
-7. **Native rejection.** A live post-dispatch `session.status: failed` event with an explicit error can terminate the marked turn before any assistant or tool output exists. Its conversation must match, the marked message must remain the latest user item, and no active response may remain. The error is redacted and preserved in terminal artifacts and the result even if a trailing idle snapshot clears it. Omnigent's native `codex_reauth_required` wire code applies across native harnesses; the adapter returns `reauthenticate`, which prevents automatic step retries. Model consent and provider authorization remain operator decisions. Existing durable failure codes and summaries preserve this disposition across Activity retry; older terminal records without a code retain their previous generic failure behavior.
-8. **Undelivered startup failure.** A native harness that never starts, for example Codex parked on its sign-in screen, fails the turn with a live post-dispatch `response.failed` whose error is marked `undelivered`. The marked message then stays queued in the snapshot's `pending_inputs` and is never projected as a user item. That queued message, with no active response remaining, makes the event the marked turn's native rejection, so the attempt fails with Omnigent's own code (for example `agent_startup_pending`) and remediation instead of waiting out the turn-start budget. `codex login status` only checks that tokens are present, so a ChatGPT login whose session has ended still looks signed in. When a profile-bound Codex attempt fails as never started (`agent_startup_pending` or `OMNIGENT_CURRENT_TURN_NOT_STARTED`), the execute Activity first confirms that the profile's current host binding and credential generation are the ones the attempt recorded. It then inspects the stored access token in the profile-owned credential home, using a network-less, read-only container that prints only a verdict. An access token that merely aged out proves nothing, because Codex may still refresh it once started. When OpenAI refreshes an ended session, though, it mints a token with no lifetime (`exp <= iat`), and only that provider-issued proof turns the result into `codex_reauth_required` with `reauthenticate`. Any other verdict, or a binding or generation that has since changed, keeps the original failure and its retry.
-
-Heartbeats expose `currentTurnProgress`, `terminalEventToolOnlyCandidate`, `turnEverActive`, `turnCurrentlyActive`, `turnActiveResponseKnownTerminal`, `turnProgressSignature`, `turnLastProgressAt`, `turnStartWaitSeconds`, `turnQuietSeconds`, and their budgets on every observation path (including heartbeat and idle-stream reconciliation, reported as `markedTurnObservationSource`) so an operator can tell a transient injection response, a stale terminal response projection, a slow turn, a same-session recovery candidate, and a dropped turn apart while the Activity is alive.
+Heartbeats expose turn progress, activity, wait and quiet durations, budgets, and `markedTurnObservationSource`, so operators can tell an injection echo, slow turn, and dropped turn apart. Event index fields replace NUL with U+FFFD for PostgreSQL, while the raw journal keeps the original and identities are hashed from it.
 
 ---
 
 ## 10. Stream and event normalization
 
-The normalized journal records `metadata.reconciliation.postDispatchRawEventIndex`
-for each event observed after message dispatch, pointing into its paired raw
-journal. This provenance is committed with the journal refs before terminal
-snapshot reads or artifact harvesting. On Activity reattachment, a journaled
-native failure is evaluated against the current marked-turn snapshot before
-opening another stream. A crash before final terminal publication therefore
-preserves the original provider code and summary. Older journals remain
-readable, but missing dispatch provenance never authorizes treating a replayed
-failure as live; they retain snapshot-based reconciliation.
+The normalized journal records `postDispatchRawEventIndex` provenance for events after dispatch, committed before terminal reads, so on reattachment a journaled native failure is evaluated before reopening the stream and keeps its original code. Journals without this provenance use snapshot-based reconciliation.
 
-### 10.1 Raw event retention
+**Retention.** Raw and normalized journals default to seven-day retention and are written in bounded chunks (at most 256 events or about 4 MiB), so per-event work does not grow with turn length. Each chunk version commits before the index rows that locate it, so a crash can leave an unindexed tail but never an index row without evidence. Every event commits before the loop waits on the provider or acts on a turn-ending or approval status; up to 32 queued events may share a commit. Longer chunk versions commit before shorter ones are reclaimed, and Activity retry restores chunk history and continues in a new chunk. The terminal capture bundle publishes complete journals, and terminal index rows are repointed in the same transaction. Deployment transitions compact sealed chunk history into the full JSONL prefix older readers understand without terminalizing the turn ([Docker Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services)). Canonical refs, non-terminal chunk history, pins, and live use claims are protected from reclamation, and failed deletions are reconciled by the hourly lifecycle sweep.
 
-Provider frames are redacted and copied into:
+**Shape.** Normalized events (`moonmind.omnigent_bridge.event.v1`) carry sequence, timestamp, bridge and Omnigent session ids, MoonMind workflow and AgentRun ids, direction, type (for example `response.delta`), normalized status, data, artifact refs, and `metadata.moonmind` (diagnostic visibility and source).
 
-```text
-runtime.omnigent.sse.raw.jsonl
-```
-
-Raw and normalized journals default to seven-day troubleshooting retention.
-During execution the bridge persists them in bounded chunks, so durable work per
-event does not grow with the length of the turn. A flush rewrites only the open
-chunk, at most 256 normalized events or about 4 MiB, named by the chunk's first
-normalized event and its length. Each chunk version commits before the index
-rows that locate events in it: a crash can leave an unindexed journal tail, but
-never an index row whose evidence does not exist. The stream loop commits every
-event before it waits for the provider or acts on a turn-ending or approval
-status. Only while further provider frames are already queued may up to 32
-events share one commit, which bounds loss on a crash while letting a fast
-stream amortize fixed artifact and database overhead instead of falling behind.
-
-Within a chunk, the bridge commits the longer version before reclaiming the
-preceding one. It refuses an incomplete replacement, a shorter version, or a
-different chunk that would drop verified progress. Starting the next chunk
-retains the completed pair unchanged in the bridge session row's chunk history,
-and the row's current refs name the open chunk. Activity retry restores the
-chunk history followed by the current pair, locates each restored event in its
-chunk, and continues in a new chunk. The terminal capture bundle publishes the
-complete journals, which then replace the chunk history as the canonical refs.
-Terminal event-index rows point to the complete normalized journal in the same
-transaction that publishes terminal status, so expired chunks can be reclaimed
-without invalidating the terminal payload locators.
-
-Deployment transitions stop the observed journal writers and retention workers
-through the existing deployment owner, then compact any sealed history once
-into the full JSONL prefix understood by older readers. The bridge store keeps
-the old chunks until the complete pair and current-attempt index locators commit
-atomically; it does not terminalize the provider turn or change dispatch intent.
-Raw frames and event order/provenance survive unchanged. The compacted normalized
-stream restores the original provider `artifactRef` projection from `artifactRefs`,
-so a legacy decoder cannot resurrect transient chunk locators. Lost acknowledgments
-reuse completed compaction uploads and reconcile current refs before repeating.
-The update and rollback sequence is owned by
-[Docker Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services).
-
-Current canonical refs, the chunk history of a non-terminal bridge session,
-operator pins and live artifact use claims remain protected; a non-terminal
-session's journal survives ordinary expiry. The artifact service records
-recoverable deletion intents for failed physical cleanup, which the existing
-hourly lifecycle sweep reconciles. Proxy and retained embedded journal writers
-share this same reclamation owner; the retired embedded writer still publishes
-accumulated prefixes. Bridge event-index payload locators advance with the
-committed version of their chunk, including when an older version remains
-pinned or in use. Delayed event appends use the current version of their chunk.
-Append-only control-plane observations preserve their original artifact
-references and protect those exact versions from reclamation.
-
-### 10.2 Normalized event shape
-
-```json
-{
-  "schemaVersion": "moonmind.omnigent_bridge.event.v1",
-  "sequence": 42,
-  "timestamp": "2026-07-08T12:00:00Z",
-  "bridgeSessionId": "brs_...",
-  "omnigentSessionId": "sess_...",
-  "moonmindWorkflowId": "mm:...",
-  "moonmindAgentRunId": "ar_...",
-  "direction": "host_to_moonmind",
-  "type": "response.delta",
-  "normalizedStatus": "running",
-  "data": {"text": "Editing the auth callback..."},
-  "artifactRefs": {},
-  "metadata": {
-    "moonmind": {
-      "diagnosticChatVisible": true,
-      "source": "omnigent_stream"
-    }
-  }
-}
-```
-
-### 10.3 Recognized inbound event classes
-
-Minimum classes include:
-
-- `session.created`,
-- `session.started`,
-- `session.codex_approval_mode` (native Codex configuration observation),
-- `session.item.*`,
-- `session.input.*`,
-- `response.delta`,
-- `response.output`,
-- `response.completed`,
-- `response.failed`,
-- `response.elicitation_request`,
-- `session.child.*`,
-- `resource.changed_file`,
-- `resource.session_file`,
-- `host.heartbeat`,
-- `host.capabilities`.
-
-Unsupported event types are captured in diagnostics. Execution-critical drift fails closed; optional resource drift may degrade explicitly.
-
-Credential redaction preserves protocol event names. Authentication-path
-redaction applies to path-shaped values, including relative and Windows paths;
-the `.codex` fragment in `session.codex_approval_mode` is not a credential path.
-Recognizing this observation grants no approval or mutation authority.
+**Classes.** Recognized classes include `session.created`, `session.started`, `session.codex_approval_mode`, `session.item.*`, `session.input.*`, `response.delta`, `response.output`, `response.completed`, `response.failed`, `response.elicitation_request`, `session.child.*`, `resource.changed_file`, `resource.session_file`, `host.heartbeat`, and `host.capabilities`. Unsupported types are captured in diagnostics; execution-critical drift fails closed and optional resource drift may degrade. Credential redaction preserves event names and targets path-shaped values, so the `.codex` in `session.codex_approval_mode` is not treated as a credential path; that observation grants no authority.
 
 ---
 
 ## 11. Control and capability contract
 
-The bridge uses Omnigent-style controls while retaining MoonMind authority.
-
-| Intent | Bridge control | Required authority |
+| Intent | Control | Required authority |
 |---|---|---|
-| Send message | `type=message` | `sendMessage`, expected session state, outbound scan, audit. |
-| Interrupt turn | `type=interrupt` | `interruptTurn`, expected active turn, idempotency, audit. |
-| Stop session | `type=stop_session` | `stopSession`, expected session, workflow policy, audit. |
-| Resolve elicitation | native resolve route | Caller approval authority, expected elicitation, policy, audit. |
-| Request harvest | bridge-local `harvest_session` | Artifact/diagnostic authority; no provider mutation implied. |
-| Clear/reset | capability-mapped native or new-session action | Explicit clear/reset policy and session-boundary evidence. |
-| Create/write terminal | native terminal route | Separate terminal create/input capability, caller role, audit. |
-| Read/mutate workspace | resource/file route | Separate read/write capability, path containment, audit for mutation. |
-| Change model/effort/goal | native configuration route | Only when immutable profile and launch policy permit per-session change. |
+| Send message | `type=message` | `sendMessage`, expected state, outbound scan, audit |
+| Interrupt / stop | `type=interrupt`, `type=stop_session` | `interruptTurn` / `stopSession`, expected turn or session, audit |
+| Resolve elicitation | native resolve route | Approval authority, expected elicitation, audit |
+| Request harvest | bridge-local `harvest_session` | Artifact authority; no provider mutation |
+| Clear/reset | native or new-session action | Explicit policy and session-boundary evidence |
+| Terminal / workspace | native terminal and file routes | Separate create/input or read/write capability, path containment, audit |
+| Model/effort/goal | native configuration route | Only when profile and launch policy permit per-session change |
 
-The effective capability set is:
+Effective capabilities are upstream capability ∩ immutable Agent Profile snapshot ∩ Provider Profile and launch policy ∩ Workflow/Step/session state ∩ caller permission. The native client receives the filtered set for UX, but the server recomputes it on every request, because upstream support never grants MoonMind permission.
 
-```text
-upstream capability
-∩ immutable Agent Profile snapshot
-∩ Provider Profile and effective launch policy
-∩ Workflow / Step / session state
-∩ caller permission
-```
+## 12. Resource harvesting and artifacts
 
-The native client receives the filtered set to preserve a clean UX. The server recomputes it on every request. Upstream support never grants MoonMind permission.
-
----
-
-## 12. Resource harvesting contract
-
-### 12.1 Changed files
-
-```http
-GET /v1/sessions/{id}/resources/environments/default/changes
-GET /v1/sessions/{id}/resources/environments/default/filesystem/{path}
-```
-
-Store:
-
-```text
-output.omnigent.changed_files.index.json
-output.omnigent.changed_files/<path>
-```
-
-### 12.2 Workspace files
-
-```http
-GET /v1/sessions/{id}/resources/environments/default/filesystem
-GET /v1/sessions/{id}/resources/environments/default/filesystem/{path}
-```
-
-Store:
-
-```text
-output.omnigent.workspace_files.index.json
-output.omnigent.workspace_files/<path>
-```
-
-### 12.3 Workspace diffs
-
-```http
-GET /v1/sessions/{id}/resources/environments/default/diff/{path}
-```
-
-Diff capture is capability-probed. If unavailable, publish diagnostics instead of failing solely because optional patch capture is unavailable.
-
-```text
-output.omnigent.workspace_diffs/<path>.diff
-output.omnigent.patch_unavailable.json
-```
-
-### 12.4 Session files
-
-```http
-GET /v1/sessions/{id}/resources/files
-GET /v1/sessions/{id}/resources/files/{file_id}/content
-```
-
-```text
-output.omnigent.session_files.index.json
-output.omnigent.session_files/<file_id>/<filename>
-output.omnigent.session_files/<file_id>/metadata.json
-```
-
-### 12.5 Child sessions
-
-```text
-runtime.omnigent.child_sessions.jsonl
-runtime.omnigent.child_sessions/<child_session_id>.json
-```
-
-Live resource browsing through native Chat remains bound, authorized, bounded, and non-authoritative. Artifact publication creates the durable workflow evidence.
-
----
+The harvester copies changed files (`output.omnigent.changed_files*`), workspace files (`output.omnigent.workspace_files*`), diffs (`output.omnigent.workspace_diffs/<path>.diff`), session files (`output.omnigent.session_files*`), and child sessions (`runtime.omnigent.child_sessions*`) into artifacts. Diff capture is capability-probed and publishes `output.omnigent.patch_unavailable.json` rather than failing when unsupported. Live resource browsing in Chat is bound and non-authoritative; artifacts are the durable evidence.
 
 ## 13. Artifact outputs
 
-Each terminal bridge session produces at least:
-
-```text
-runtime.omnigent.sse.raw.jsonl
-runtime.omnigent.sse.normalized.jsonl
-runtime.omnigent.snapshot.initial.json
-output.omnigent.snapshot.final.json
-output.omnigent.capture_manifest.json
-runtime.omnigent.diagnostics.json
-checkpoint.omnigent.external_state.json
-runtime.omnigent.control_audit.jsonl
-```
-
-Optional resource artifacts include changed-file, workspace-file, session-file, diff, patch-unavailable, and child-session indexes.
-
-Artifact references preserve their content across attempts, including when a new admission publishes the same evidence filename. The local gateway derives its object path from content and metadata; the durable gateway retains its service-owned artifact identity. Previously returned local references remain readable at their original paths.
-
-Generic-host runs additionally publish `generic-host-cleanup.json` (`evidence.cleanup`): the fenced cleanup results for the provider session, host container, volumes, and credentials. Before the ephemeral host container is removed, cleanup captures a bounded, redacted tail of its stdout/stderr (last 2000 lines, of which the final 64 KiB is retained, so the newest output is always kept) and publishes it as `generic-host-logs.txt` (`evidence.host_logs`), linked from the cleanup evidence as `results.host.hostLogsRef`. The same tail is captured when the host runtime removes a host that failed registration or attestation; that evidence travels on the failure to the realizer's single publication point so it is published with the cleanup evidence rather than lost with the container. The runner and harness inside that container are the only source for why a provider dropped or rejected a turn; capture failures are recorded as `hostLogsCaptureError` and never block or fail cleanup. Janitor recovery of a stale binding has no admitted request and publishes no evidence artifacts.
+Each terminal session produces the raw and normalized journals, initial and final snapshots, `output.omnigent.capture_manifest.json`, `runtime.omnigent.diagnostics.json`, `checkpoint.omnigent.external_state.json`, and `runtime.omnigent.control_audit.jsonl`. Artifact references keep their content across attempts even when a new admission reuses a filename. Generic-host runs also publish `generic-host-cleanup.json` with fenced cleanup results and, captured before the host container is removed, a redacted output tail (last 2000 lines, final 64 KiB) as `generic-host-logs.txt`, because the runner and harness inside that container are the only source for why a provider dropped or rejected a turn. Capture failures are recorded as `hostLogsCaptureError` and never block cleanup. Janitor recovery of a stale binding publishes no evidence.
 
 ---
 
@@ -946,258 +202,83 @@ Generic-host runs additionally publish `generic-host-cleanup.json` (`evidence.cl
 
 ### 14.1 Request shape
 
-```json
-{
-  "agentKind": "external",
-  "agentId": "omnigent",
-  "parameters": {
-    "omnigent": {
-      "endpointRef": "default",
-      "session": {
-        "hostType": "managed",
-        "workspace": "https://github.com/org/repo#main"
-      },
-      "capture": {
-        "stream": true,
-        "snapshots": true,
-        "changedFiles": true,
-        "sessionFiles": true
-      }
-    }
-  }
-}
-```
-
-A direct managed runtime that temporarily emits bridge events declares the mode under `parameters.communication`; it does not invent a top-level field outside the request schema.
-
-The direct compatibility producer publishes typed runtime-neutral events before terminal synthesis. Approval and control events are rejected unless actor, idempotency, expected session/epoch/turn, outcome, and durable audit evidence are retained.
-
-For parity validation, `communication.comparisonMode = dual_write` compares independently persisted event evidence. The primary Workflow Detail Chat still renders the native Omnigent application. Comparison and diagnostic projections never create a second primary timeline or claim host identity.
-
-The direct producer may be removed only after production coverage, conformance parity, historical retention, and durable Temporal-history gates pass.
+An AgentRun uses `agentKind: external`, `agentId: omnigent`, with `parameters.omnigent` naming `endpointRef`, session host type and workspace, and capture flags. A direct managed runtime that emits bridge events declares that under `parameters.communication`; its approval and control events are rejected without full audit evidence. `communication.comparisonMode = dual_write` compares independently persisted event evidence for parity without creating a second primary timeline.
 
 ### 14.2 Terminal result
 
 ```json
 {
-  "outputRefs": [
-    "art_final_snapshot",
-    "art_normalized_stream",
-    "art_capture_manifest"
-  ],
+  "outputRefs": ["art_final_snapshot", "art_normalized_stream", "art_capture_manifest"],
   "summary": "Implemented the change and opened PR ...",
   "diagnosticsRef": "art_diagnostics",
   "failureClass": null,
-  "metadata": {
-    "providerName": "omnigent",
-    "normalizedStatus": "completed",
-    "captureManifestRef": "art_capture_manifest",
-    "externalStateRef": "art_external_state"
-  }
+  "metadata": {"providerName": "omnigent", "normalizedStatus": "completed", "captureManifestRef": "art_capture_manifest", "externalStateRef": "art_external_state"}
 }
 ```
 
-Provider-native refs must not appear in top-level `outputRefs`.
+Provider-native refs never appear in top-level `outputRefs`.
 
 ---
 
 ## 15. Native Workflow Chat integration
 
-The product contract is owned by [`docs/UI/WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md).
+Product behavior is described in [`WorkflowChatPanel.md`](../UI/WorkflowChatPanel.md). The backend resolves the session from Workflow, run, Step Execution, AgentRun, and bridge state and returns a browser-safe `WorkflowChatBinding`: `chatBindingId`, workflow and run ids, optional logical step and Step Execution ids, `chatUrl`, `apiBase`, `state` (`starting`, `available`, `ended`, `unavailable`), `readOnly`, `capabilities`, and `unavailableReason`. Provider, bridge, endpoint, host, runner, credential, and profile identities stay server-side. The native application is the primary renderer, and ordinary messages use the scoped facade rather than Temporal or `SubmitChatInstruction`. The bridge-event routes `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` and `/stream` are read-only diagnostic APIs, not a second composer.
 
-The backend resolves the authoritative session server-side from Workflow, run, Step Execution, AgentRun, and bridge state. It returns a browser-safe binding:
-
-```ts
-type WorkflowChatBinding = {
-  chatBindingId: string;
-  workflowId: string;
-  runId: string;
-  logicalStepId?: string;
-  stepExecutionId?: string;
-  chatUrl: string;
-  apiBase: string;
-  state: 'starting' | 'available' | 'ended' | 'unavailable';
-  readOnly: boolean;
-  capabilities: Record<string, boolean>;
-  unavailableReason?: string;
-};
-```
-
-Provider session, bridge session, endpoint, host, runner, credential, and immutable profile identities remain server-side unless an authorized diagnostic endpoint exposes bounded safe refs.
-
-The native Omnigent application is the primary Workflow Chat renderer. Ordinary messages use the binding-scoped facade and do not pass through Temporal or `SubmitChatInstruction`.
-
-The existing bridge-event routes remain canonical read-only diagnostic/compatibility APIs:
-
-| Purpose | Route |
-|---|---|
-| List bridge events | `GET /api/omnigent/bridge-sessions/{bridge_session_id}/events` |
-| Stream bridge events | `GET /api/omnigent/bridge-sessions/{bridge_session_id}/stream` |
-
-They support diagnostics, historical fallback, evidence inspection, and runtimes without a native session. They do not define a second ordinary composer or replace the native primary surface.
-
-For terminal work, the native transcript is read-only. MoonMind may expose **Continue in a new workflow** using pinned source identity and authorized artifact refs; this is an explicit Workflow action, not a native message or chat-instruction compatibility path.
-
-Terminal captured evidence and linked continuation are Workflow-scoped, owner-authorized routes (not binding-scoped facade routes):
-
-| Purpose | Route |
-|---|---|
-| View captured evidence | `GET /api/executions/{workflowId}/captured-evidence` |
-| Continue in a new workflow | `POST /api/executions/{workflowId}/continue` |
-| List linked continuations | `GET /api/executions/{workflowId}/continuations?direction=outbound\|inbound` |
-
-`captured-evidence` returns MoonMind artifact refs (final/initial snapshots, capture manifest, diagnostics, raw/normalized event journals, external/checkpoint state, finish summary, output artifacts) served by the existing artifact authorization/preview/download contracts — never provider-native paths or live upstream resource ids. `continue` is admitted only from a *terminal* source, requires a stable client `idempotencyKey` (a duplicate returns the same linked Workflow), pins the source Workflow/run/Step and the selected authorized evidence refs server-side under `relationshipType = linked_continuation`, reuses the ordinary create/compiler path to resolve fresh authority, and never mutates the source Workflow input, Step ledger, terminal status, provider session, artifacts, or publication result. The browser authors only new intent and which already-authorized evidence to carry; it never authors the source run, provider session, host, profile, credential, workspace path, or evidence ownership. Both source and continuation Workflows present the durable bidirectional relationship.
+For terminal work the transcript is read-only. `GET /api/executions/{workflowId}/captured-evidence` returns MoonMind artifact refs, never provider paths. `POST /api/executions/{workflowId}/continue` is admitted only from a terminal source with a stable `idempotencyKey`; it pins the source run and selected evidence under `relationshipType = linked_continuation`, resolves fresh authority through the ordinary create path, and never mutates the source. `GET .../continuations?direction=outbound|inbound` lists the relationship from either side.
 
 ### 15.1 Serving the native UI through MoonMind-scoped routes
 
-MoonMind serves the provider-maintained native Omnigent web application through its own origin at the binding-scoped route `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]` (and its SPA sub-paths). It reverse-proxies the stock UI assets from the upstream server, serves the SPA document with an injected browser-safe bootstrap, and never copies the native React source or lets the browser connect directly to the upstream server. Before the stock application renders, the host boundary temporarily presents its expected `/c/{chatBindingId}` route and rebases root-relative HTTP, SSE, and WebSocket traffic onto the binding-scoped facade; after the router mounts, the displayed URL returns to the authorized, reloadable scoped route without changing the mounted virtual location. Stock boot probes receive bounded local server/user/project projections, while the session catalog contains exactly the one virtualized bound session and its paginated transcript route. After provider cleanup, those reads use the captured final session snapshot as read-only evidence. The same scoped surface backs both the embedded Workflow Detail view and the full-page **Open in Omnigent** view; the full-page view drops only the `embedded` presentation flag and uses the same binding, facade, credentials, and policy.
+MoonMind serves the native application at `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]`, reverse-proxying stock assets and injecting a bootstrap, so the browser never reaches the upstream server. The host boundary presents the application's expected `/c/{chatBindingId}` route and rebases HTTP, SSE, and WebSocket traffic onto the facade, then restores the reloadable scoped URL. Boot probes get bounded local projections, the session catalog contains only the bound session, and after provider cleanup reads use the captured final snapshot. Embedded and full-page views share binding, facade, credentials, and policy.
 
-The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; scoped API and WebSocket bases (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full_page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. The WebSocket stream uses the same binding-scoped session-stream path as SSE and repeats binding authorization while connected. The bootstrap never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Asset resolution follows section 4.2, including references inside compiled JavaScript and CSS. The `connect-src 'self'` policy confines fetch, XHR, SSE, and WebSocket connections to the MoonMind origin. It does not by itself scope same-origin paths or govern image, script, and stylesheet loading. The scoped asset contract therefore requires browser-enforced CSP as well as URL mapping. `worker-src 'none'` prevents the upstream application from installing a service worker outside that scoped lifecycle.
+`window.__MOONMIND_OMNIGENT_CHAT__` carries only the binding id, scoped API and WebSocket bases, presentation mode, read-only state, filtered capabilities with disabled reasons, labels, and a compatibility version, never a provider session id, upstream URL, host id, credential, profile, or workspace authority.
 
-The document CSP must deny undeclared resource types with `default-src 'none'` and explicitly restrict scripts, styles, images, fonts, and media to the reviewed same-origin asset sources (`script-src`, `style-src`, `img-src`, `font-src`, and `media-src`). The injected inline bootstrap/adapter requires a fresh unpredictable document nonce matched by its script element and `script-src`, or a hash of the exact emitted bytes. Any required inline style needs equivalent reviewed authorization; broad `unsafe-inline`, `unsafe-eval`, wildcard, or external-origin grants are not substitutes. Require `object-src 'none'` and `worker-src 'none'`. Same-origin CSP does not authorize a binding or constrain every path: the scoped routes still enforce access and the asset inventory. Absolute external URLs left unchanged by rebasing must be blocked by the browser. Qualification must prove external script, stylesheet, and image requests are rejected while the nonce/hash-authorized adapter and qualified compiled assets still load in both presentations.
+The document CSP uses `default-src 'none'`, same-origin sources for scripts, styles, images, fonts, and media, `connect-src 'self'`, `object-src 'none'`, `worker-src 'none'`, and a nonce or exact hash for the inline bootstrap rather than `unsafe-inline`, `unsafe-eval`, wildcards, or external origins. CSP complements URL mapping because `connect-src` neither scopes same-origin paths nor governs asset loading, and it blocks absolute external URLs that rebasing leaves. Embedded documents allow `frame-ancestors 'self'`; full-page refuses framing. Documents are `no-store` with `Vary: Cookie` so one caller's bootstrap cannot leak to another; hashed assets are privately cacheable.
 
-Security policy for the served responses is explicit: embedded documents allow `frame-ancestors 'self'` (`X-Frame-Options: SAMEORIGIN`); the full-page view refuses framing (`frame-ancestors 'none'` / `DENY`). Documents carry the caller's bootstrap and are never cached (`Cache-Control: no-store` + `Vary: Cookie`), so one binding's bootstrap or private session state cannot leak to another caller; hashed assets carry no binding data and are privately cacheable. Upstream redirects are re-based inside the scoped route and never expose upstream topology.
-
-Serving requires a known-compatible native UI/server version qualified for the actual deployed artifacts. `OMNIGENT_NATIVE_UI_ENABLED` defaults to enabled. Before admitting a document or asset, the server-side compatibility gate must resolve the exact deployed `OMNIGENT_IMAGE_REF` digest against the existing protected qualification evidence in sections 16 and 20. The resolved evidence must bind that digest to the Omnigent source version, native UI bundle, MoonMind API/dashboard build, and reviewed facade compatibility profile, and pass the existing integrity, support-combination, and freshness checks. The same immutable image and artifact authorities are reused; no second operator-maintained digest registry is required.
-
-A syntactically valid sha256 digest must never be translated unconditionally into `PINNED_OMNIGENT_COMMIT`. The compatible version comes from the validated evidence. An explicit `OMNIGENT_NATIVE_UI_VERSION` pin constrains that version and must match the same qualified artifacts; it cannot bypass evidence validation. Mutable tags, absent or stale evidence, mismatched digests, and unsupported versions fail closed with a stable, actionable `omnigent_native_chat_unavailable` state. Qualification must cover arbitrary unqualified digests and explicit-version mismatches as denied serving cases, as well as omitted/default configuration with matching evidence as the successful path.
-
-Launch readiness or a configured image digest alone does not establish native UI bundle compatibility, authorized transcript access, or rendered application readiness. The exact-artifact and browser evidence in section 4.2 and the acceptance gates below qualify compatibility; each live request still needs authorization and each application load still needs its own readiness evidence. Readiness reports native-UI serving, the compatibility version, the scoped HTTP/SSE routes, and credential separation under `compatibilityDiagnostics.nativeUi`.
+`OMNIGENT_NATIVE_UI_ENABLED` defaults to enabled, but serving requires the deployed `OMNIGENT_IMAGE_REF` digest to resolve against protected qualification evidence (§20.5) binding it to the Omnigent source, native bundle, MoonMind build, and facade profile with passing integrity and freshness checks. A digest is never translated unconditionally into `PINNED_OMNIGENT_COMMIT`, and an explicit `OMNIGENT_NATIVE_UI_VERSION` only constrains the validated version. Mutable tags, missing or stale evidence, and mismatches fail closed with `omnigent_native_chat_unavailable`. Readiness reports serving state under `compatibilityDiagnostics.nativeUi`.
 
 ---
 
 ## 16. Security and authentication
 
-Rules:
+- Every request is authenticated and authorized against its Workflow, AgentRun, bridge session, and operation, on every connect and reconnect.
+- `chatBindingId` is a lookup key, not a bearer capability; any session id in a request must map exactly to the bound session.
+- Capabilities are recomputed server-side, and no control exceeds MoonMind policy even when upstream supports it.
+- Mutations retain full audit evidence (§7). In high-security mode, text-bearing sends are scanned and fail closed when enforcement is unavailable.
+- Omnigent endpoint credentials never enter browser or Temporal payloads. MoonMind cookies, tokens, CSRF tokens, and internal headers are stripped before forwarding; only allowlisted headers and server-injected credentials go upstream.
+- Raw provider events are redacted before persistence.
 
-1. Every browser and service request is authenticated and authorized against its Workflow, AgentRun, bridge session, and requested operation.
-2. `chatBindingId` is an opaque lookup key, not a bearer capability.
-3. Every HTTP, SSE, and WebSocket connect or reconnect repeats authorization and binding validation.
-4. Any session id in route, query, or payload must map exactly to the bound provider session; substitution fails closed.
-5. Effective capabilities are recomputed server-side from immutable snapshots and current caller/workflow/session state.
-6. Model, effort, goal, terminal, browser, file mutation, approval, interrupt, stop, clear, cleanup, and other controls cannot exceed MoonMind policy even when upstream supports them.
-7. Mutations retain actor, idempotency, expected identities/state, normalized outcome, upstream correlation, and durable audit evidence.
-8. Text-bearing provider sends run the canonical outbound secret scan when high-security mode is enabled; unavailable enforcement fails closed.
-9. Omnigent endpoint credentials are service-side secrets and never enter browser or Temporal payloads.
-10. MoonMind cookies, bearer tokens, CSRF tokens, and internal auth headers are stripped before upstream forwarding. Only allowlisted transport headers and server-injected upstream credentials are forwarded.
-11. Raw provider events are redacted before persistence.
-12. MoonMind artifact refs remain the durable evidence boundary.
-13. Embedded mode must pass stock-host auth conformance before production enablement.
-
-Native Workflow Chat rollout evidence uses
-`moonmind.omnigent.workflow-chat-acceptance/v2`. The controlling artifact is
-commit- and immutable-image-bound, covers every claimed native-chat support
-combination and every required browser-to-stock-host row within each of them,
-and contains SHA-256 bindings for independently resolvable case evidence, typed
-source records, per-combination conformance reports, the durable operator
-timeline, and the logs, Temporal history, screenshot, and archive secret-scan
-results. The required source records bind browser traces to the
-`/api/executions` creation receipt, binding/capability snapshots, facade
-requests, resource and receipt inventories, denial/scan/credential audits,
-terminal evidence, continuation receipts, replay snapshots, and the
-release-last cleanup receipt. A bare pass flag, repository-only test result,
-unresolved artifact ref, mutable image tag, stale report, self-asserted secret
-scan, or silently omitted support combination is not rollout evidence.
-`tools/build_omnigent_workflow_chat_acceptance.py` builds and validates the
-artifact produced by the protected controller against its required current
-`--expected-commit`; the provider gate independently requires the same commit
-through `MOONMIND_OMNIGENT_SOURCE_COMMIT`. The provider test
-`test_live_native_workflow_chat_release_matrix` is the release gate.
-
-```text
-MoonMind user -> MoonMind request authorization
-MoonMind scoped facade -> server-side Omnigent credential
-Omnigent host -> host/runner auth profile
-```
-
-No configuration may turn a direct upstream browser URL into an authority bypass for native Workflow Chat.
+Authentication is layered: the MoonMind user is authorized by MoonMind, the scoped facade uses a server-side Omnigent credential, and the host uses its host/runner auth profile. No configuration turns a direct upstream browser URL into an authority bypass.
 
 ---
 
 ## 17. Error classification
 
-| Failure | Failure class / response posture | Notes |
+| Failure | Class / posture | Notes |
 |---|---|---|
-| Binding absent or stale | typed unavailable/retry state | Never select another session implicitly. |
-| Caller unauthorized | `403` / audit | Do not reveal whether an alternate provider session exists. |
-| Session or endpoint substitution | `403` or `409` / audit | Fail closed before upstream. |
-| Capability or immutable-policy denial | typed policy rejection | Upstream support does not override policy. |
-| Native application boot timeout or fatal render failure | visible native-chat-unavailable presentation | Preserve safe retry and independently authorized evidence. This is not Workflow terminal authority. |
-| Essential transcript read denied | visible access/unavailable state | Do not fabricate an empty transcript or bypass capability authority. |
-| Optional native feature denied or unsupported | feature-local unavailable state | Preserve otherwise authorized conversation rendering. |
-| High-security scan blocked | typed security rejection | Redacted category/location only. |
-| Scan/parser unavailable in high-security mode | typed fail-closed rejection | No provider send occurs. |
-| Upstream unavailable before create | `integration_error` | Retry according to transport policy. |
-| Omnigent server refusing connections during an execution (for example while Docker restarts it) | `integration_error` after the grace | The execution client re-sends requests that never connected for up to 120s per attempt; a request the server answered, including a broken read, is never replayed. |
-| Host cannot register/connect | `integration_error` or `system_error` | Preserve redacted diagnostics. |
-| Upstream authentication failure | `integration_error` | Non-retryable until configuration is corrected. |
-| Invalid create payload | `user_error` | Reject caller-selected managed host/path authority. |
-| First-message digest mismatch | `user_error` | Conflicting replay. |
-| Ambiguous `posting` reconciliation | `integration_error` | Fail closed instead of duplicate post. |
-| Stream disconnect while session active | `integration_error` | Reauthorize and reconcile. |
-| Accepted turn never started (no live active response remains, including an exact response id already known completed; no item after marker; 300s; session-level `running` is not turn evidence) | `integration_error` / `OMNIGENT_CURRENT_TURN_NOT_STARTED` | No provider work exists; `retry_step_execution` as a new attempt. Finalized at the execution boundary (decisive snapshot captured, bridge row terminal) and returned as a typed result on every execution shape. See §9.5. |
-| Native harness never started and Omnigent reported the marked message undelivered (`response.failed`, message still in `pending_inputs`) | Omnigent's code, for example `agent_startup_pending` | Fails without waiting out the turn-start budget. A stored Codex login whose session has ended becomes `codex_reauth_required` / `reauthenticate`. See §9.5. |
-| Marked turn's host lost (runner and host offline and not resumable for 180s, turn unfinished) | `integration_error` / `OMNIGENT_SESSION_HOST_LOST` | The host cannot finish the turn; `retry_step_execution` as a new attempt on a fresh host that restores the verified saved archive, or restarts from admitted inputs with a recorded limitation, within the remaining step ceiling. Finalized at the execution boundary like a never-started turn. See §9.5. |
-| Active turn with no new ordered work within its execution budget | `integration_error` / `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED` | Preserve diagnostics; bounded interrupt and same-session continuation only after an inactive projection is confirmed. |
-| Turn progressed but terminal state remains unproven | `integration_error` / `OMNIGENT_CURRENT_TURN_TERMINAL_AMBIGUOUS` | Defer cleanup; provider work may be live. |
-| Runtime/harness failure | `execution_error` | Preserve provider evidence. |
-| Session/host timeout | `system_error` | Keep `timed_out` distinct. |
-| Optional resource harvest failure | primary result plus diagnostics | Unless policy requires full evidence. |
-| Required artifact persistence failure | `system_error` | MoonMind evidence authority failed. |
+| Binding absent or stale | typed unavailable/retry | Never selects another session. |
+| Caller unauthorized; session or endpoint substitution | `403`/`409` with audit | Fails closed before upstream without revealing other sessions. |
+| Capability or policy denial; scan blocked or unavailable | typed rejection | Redacted findings; no provider send. |
+| Native boot or render failure; required transcript denied | visible unavailable state | Never an empty transcript; optional denials stay feature-local. |
+| Upstream unavailable, unreachable host, upstream auth failure | `integration_error` (auth non-retryable until fixed) | Requests that never connected are re-sent for up to 120s; answered requests are never replayed. |
+| Invalid create payload; first-message digest mismatch | `user_error` | |
+| Ambiguous `posting`; stream disconnect | `integration_error` | Reconcile instead of reposting. |
+| Turn never started | `OMNIGENT_CURRENT_TURN_NOT_STARTED` | `retry_step_execution` (§9.3). |
+| Harness never started | Omnigent's code, e.g. `agent_startup_pending` | Ended Codex login becomes `reauthenticate`. |
+| Host lost for 180s | `OMNIGENT_SESSION_HOST_LOST` | Retry on a fresh host within the remaining ceiling. |
+| Stalled or ambiguous turn | `OMNIGENT_CURRENT_TURN_PROGRESS_STALLED`, `..._TERMINAL_AMBIGUOUS` | Cleanup deferred while work may be live. |
+| Harness failure; timeout | `execution_error`; `system_error` | `timed_out` stays distinct. |
+| Optional harvest failure | result plus diagnostics | Unless policy requires full evidence. |
+| Required artifact persistence failure | `system_error` | |
 
 ---
 
-## 18. Target module boundaries
+## 18. Module boundaries
 
-The disposable delivery sequence lives in [`docs/tmp/OmnigentBridgeRollout.md`](../tmp/OmnigentBridgeRollout.md).
+Bridge code lives in `moonmind/omnigent/` rather than a parallel package: `bridge_config.py` (configuration), `bridge_store.py` (binding and idempotency store), `bridge_proxy.py` with `api_service/api/routers/omnigent_bridge.py` (facades), `bridge_events.py` (normalizer), `bridge_artifacts.py` (harvest and publication), and `native_ui_compat.py` (compatibility map). Schemas are in `moonmind/schemas/omnigent_bridge_models.py`. When a native binding exists, the native application replaces the custom MoonMind transcript and composer as the primary Chat; the MoonMind projection serves diagnostics, history, and compatibility fallback.
 
-### 18.1 Canonical package placement
+## 19. Non-goals
 
-Bridge code lives in the existing `moonmind/omnigent/` package. A parallel package would duplicate ownership.
-
-### 18.2 Component-to-module ownership
-
-| Component | Owning module | Notes |
-|---|---|---|
-| Bridge configuration | `moonmind/omnigent/bridge_config.py` | Parses §6. |
-| Bridge Session Store | `moonmind/omnigent/bridge_store.py` | Canonical bridge binding/idempotency store; canonical session authority lives in the control-plane session repositories. |
-| Bridge schemas | `moonmind/schemas/omnigent_bridge_models.py` | Session/event/config/binding models. |
-| Durable ORM/migration | `api_service/db/models.py` plus migrations | §7 persistence. |
-| Session and Workflow Chat facades | `api_service/api/routers/omnigent_bridge.py`, `moonmind/omnigent/bridge_proxy.py` | Provider compatibility plus binding-scoped native UI/API. |
-| Event Normalizer | `moonmind/omnigent/bridge_events.py` | §10. |
-| Artifact Publisher / Harvester | `moonmind/omnigent/bridge_artifacts.py` | §12–13. |
-| Native Workflow Chat presentation | stock Omnigent web application | Primary interaction UI under the MoonMind scoped facade. |
-| Diagnostic Chat projection | API + MoonMind diagnostic UI | Read-only bridge-event and legacy fallback surface. |
-
-### 18.3 Superseded patterns
-
-`bridge_store.py` and `omnigent_bridge_sessions` supersede the former `omnigent_external_runs` mapping without an alias or parallel table.
-
-The custom MoonMind transcript/composer/session-controls combination is superseded as the primary Chat product when a native binding is available. The projection remains only for diagnostics, history, and explicit compatibility fallback.
-
----
-
-## 19. Acceptance criteria
-
-A successful implementation satisfies:
-
-1. A stock Omnigent host participates without a custom build.
-2. MoonMind creates or attaches an Omnigent-shaped session with first-message idempotency.
-3. Workflow Detail opens the native Omnigent application through an opaque authorized binding.
-4. Every native UI, HTTP, SSE, WebSocket, resource, message, approval, terminal, and control request is reauthorized against that binding.
-5. Substituting provider session or upstream identity fails closed.
-6. Native controls cannot exceed immutable Agent Profile, Provider Profile, launch, approval, billing, workflow-state, or caller policy.
-7. High-security mode scans outbound native text before send and fails closed when enforcement is unavailable.
-8. MoonMind credentials never reach upstream and upstream credentials never reach the browser.
-9. MoonMind streams and captures provider events while keeping the native UI as the primary renderer.
-10. The event projection remains read-only diagnostic/compatibility evidence.
-11. MoonMind copies snapshots/resources/audits into artifacts.
-12. First-message retries do not duplicate the prompt.
-13. Failed launch paths create visible diagnostics and a fallback timeline.
-14. Provider-native refs do not replace MoonMind artifact refs.
-15. Terminal native Chat is read-only and linked continuation is an explicit Workflow action.
-16. The served browser adapter preserves native transport constants and behavior, and exact compiled boot requests and dynamic assets remain within their reviewed scoped contracts.
-17. Native readiness and post-load failure behavior meet the Workflow Chat Panel contract. Rendering and live/deployed support are established by executable evidence, not document delivery or a configured version alone.
+The bridge does not fork the Omnigent host, recreate the native Chat UI, expose the upstream server to bypass authorization, turn provider ids or states into Workflow ids or states, make provider resources authoritative over artifacts, let native controls override policy, skip outbound scanning, or blindly repost first messages.
 
 ---
 
@@ -1205,121 +286,24 @@ A successful implementation satisfies:
 
 ### 20.1 Unit and policy tests
 
-- bridge config validation,
-- binding allocation and lookup,
-- per-request authorization across HTTP/SSE/WebSocket reconnects,
-- alternate session/endpoint/host/runner substitution rejection,
-- effective capability intersection,
-- pinned model/effort and approval-policy denial,
-- actor/idempotency/expected-state/outcome/audit validation,
-- MoonMind header stripping and upstream credential injection,
-- high-security message extraction, block, and fail-closed behavior,
-- first-message state transitions and reconciliation,
-- event normalization and redaction,
-- artifact ref validation,
-- diagnostic projection resolution,
-- executable served-adapter tests for native constructor constants, instance behavior, valid sends, and idempotent scoped URL rebasing.
+Unit tests cover configuration, authorization and substitution rejection, capability intersection, audit validation, credential separation, high-security scanning, first-message reconciliation, normalization, and the served adapter's constants, sends, and rebasing.
 
 ### 20.2 Fake Omnigent server tests
 
-Cover successful native UI bootstrap, message/stream flow, queued/steered turns, approvals, resource reads, terminal controls, stream reconnect, provider-session substitution attempts, policy-denied controls, security-scan blocks, first-message retries, child sessions, and terminal evidence.
+These cover bootstrap, message and stream flow, queued turns, approvals, resources, terminals, reconnect, substitution attempts, policy denials, scan blocks, first-message retries, child sessions, and terminal evidence.
 
 ### 20.3 Browser journey tests
 
-Prove that:
-
-- `/workflows/{workflowId}/chat` opens the bound native session,
-- native composer, transcript, queue, approvals, and workspace rail function through the scoped facade,
-- hidden controls are also rejected by direct API invocation,
-- full-page Open in Omnigent retains the scoped boundary,
-- an unauthorized user or altered binding cannot read or control another session,
-- terminal Chat is read-only,
-- diagnostic fallback does not expose a second composer,
-- the actual injected adapter and compiled native consumer handle null/non-open/open sockets, reconnect, and stop/start correctly,
-- embedded and full-page startup loads required scoped assets and reads before reporting the bound conversation ready,
-- required-read denial, missing required assets, readiness timeout, and fatal post-load errors produce visible safe recovery while optional denied features remain nonfatal,
-- stale or forged readiness signals, replacement bindings, and retries cannot leak listeners, revive an old frame, duplicate mutations, or bypass authorization.
+Browser journeys show that `/workflows/{workflowId}/chat` opens the bound native session through the scoped facade; hidden controls are also rejected by direct API calls; full-page view keeps the boundary; altered bindings cannot reach other sessions; terminal Chat is read-only with no second composer; the real adapter handles socket states and reconnects; required assets load before readiness; failures recover visibly while optional denials stay nonfatal; and stale readiness signals or replacement bindings cannot revive frames or duplicate mutations.
 
 ### 20.4 Stock host smoke tests
 
-Verify host registration, heartbeat/capabilities, session creation, harness launch, message posting, stream capture, final snapshot, resource harvest, credential separation, no duplicate first message, and durable cleanup/audit evidence against a real unchanged host.
+Smoke tests against a real unchanged host verify registration, capabilities, session creation, harness launch, messaging, stream capture, snapshots, harvest, credential separation, no duplicate first message, and cleanup and audit evidence.
 
 ### 20.5 Native Workflow Chat rollout gate
 
-The protected browser-to-stock-host matrix runs one journey per claimed native
-Workflow Chat support combination. Every combination MoonMind claims appears in
-the matrix; a combination it does not claim appears as `unsupported` with a
-stable code-owned reason. Each combination's journey covers the live native
-conversation (created through the normal `/api/executions` and Temporal path),
-scoped transports and resources, authority/security denials (including
-cross-user and cross-workflow denials), and terminal evidence, linked
-continuation, and release-last cleanup. Each row records browser-originated
-observations against an unchanged digest-pinned stock host and resolves its
-source evidence before the `moonmind.omnigent.workflow-chat-acceptance/v2`
-manifest can pass. Every raw evidence channel is secret-scanned, and the
-manifest is valid only for its recorded source commit, compatibility profile,
-image digests, bundle digests, scenario and route-inventory versions, and
-freshness window. Each combination binds its evidence to the exact
-support-combination identity — harness implementation, vendor runtime,
-materializers, Host Class, architecture, launch policy, normalized model
-configuration, execution realizer, required capabilities, and Provider Profile
-class — and the recorded `supportCombinationKey` must recompute from it. The
-Provider Profile class, credential materializer, authentication mode, and the
-digest-pinned host image that executed the combination are pinned by the claimed
-inventory, so evidence gathered under one credential authority or host image can
-never qualify another.
+Native Workflow Chat support is qualified by a protected browser-to-stock-host matrix with one journey per claimed support combination; unclaimed combinations appear as `unsupported` with a code-owned reason. Each journey creates a live conversation through `/api/executions` and Temporal and covers scoped transports, resources, authority and security denials (including cross-user and cross-workflow), terminal evidence, linked continuation, and release-last cleanup against an unchanged digest-pinned host. Evidence is bound to the exact support-combination identity, and the recorded `supportCombinationKey` must recompute from it, so evidence from one credential authority or host image cannot qualify another.
 
-Every source record carries an observation timestamp, immutable image digests,
-and one server-owned correlation envelope containing the Workflow, chat binding,
-bridge session, provider session, and browser trace identities. All records in a
-row bind to the same envelope; all rows bind to the same Workflow/binding/session;
-and every record request id resolves to the row's browser network trace. The
-record-specific observed facts are:
+Every source record carries an observation timestamp, image digests, and one server-owned correlation envelope: `workflowId`, `chatBindingId`, `bridgeSessionId`, `providerSessionId`, and `browserTraceId`. All records in a row share the envelope, and every record's request ids resolve to the row's browser trace. The records (`browserTrace`, `bindingSnapshot`, `nativeConversation`, `nativeControls`, `facadeRequests`, `resourceInventory`, `mutationReceipts`, `denialAudit`, `executionCreation`, `capabilitySnapshot`, `scanAudit`, `credentialBoundary`, `terminalSnapshot`, `capturedEvidence`, `continuationReceipt`, `replaySnapshot`, `cleanupReceipt`) and their required facts are defined and validated in `moonmind/omnigent/workflow_chat_acceptance.py`. Each `facadeRequests` record correlates to the bound `providerSessionId`.
 
-| Record | Required observed facts |
-|---|---|
-| `browserTrace` | Workflow Chat route, path-segment-scoped network events, success or operation-specific denial statuses, no direct upstream requests or provider identity exposure, and a screenshot digest owned by the scanned screenshot channel |
-| `bindingSnapshot` | authoritative binding, run/state/read-only projection, capability digest |
-| `nativeConversation` | native renderer, transcript, composer request, queued message, native application version |
-| `nativeControls` | native approval/tool/file/terminal/agent/task controls and no MoonMind composer |
-| `facadeRequests` | every compatibility route bound to an observed request path/method/transport, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
-| `resourceInventory` | request-correlated approval/tool/file/terminal/agent/task resources |
-| `mutationReceipts` | exactly one receipt for every mutation derived from the compatibility map, including actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
-| `denialAudit` | alternate-binding, provider-session, hidden-control, immutable-policy, cross-user, and cross-workflow denials before upstream forwarding; each cross-scope denial records the authorized and attempted user and Workflow identities and varies exactly the scope it claims to isolate |
-| `executionCreation` | the browser-originated `POST /api/executions` create — cross-checked against the matching browser trace event's method and normalized path — the Temporal workflow/run/task-queue routing it produced, the resolved Agent Profile snapshot, execution plan, and Provider Profile, and the live bridge session it resolved to |
-| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs, their recomputed intersection digest over exactly the combination's advertised capability contract, and one observed enforcement outcome per advertised capability; a denied capability's enforcement request is expected to be denied in the browser trace |
-| `scanAudit` | blocked-content and unavailable-enforcement sends, neither forwarded |
-| `credentialBoundary` | every traced request verified to expose no upstream credential in the browser and forward no MoonMind credential upstream, plus a server-side credential injection ref |
-| `terminalSnapshot` | terminal state, read-only projection, denied mutation requests |
-| `capturedEvidence` | packaged MoonMind artifact and capture-manifest refs resolved and digest-bound into the acceptance manifest |
-| `continuationReceipt` | production destination-creation receipt, pinned source run, durable outbound `linked_continuation` relationship identity, idempotency, and matching source before/after digests |
-| `replaySnapshot` | host unavailable and replay resolved from the captured MoonMind artifacts |
-| `cleanupReceipt` | the consecutively ordered cleanup steps the combination's cleanup mode can truthfully emit — live-host stop for `remove`, live-host drain for `drain` — then provider-session removal, workspace publication, and Provider Profile release last, plus the observed host mode, launch-policy cleanup mode, live-resource disposition, and cleanup state |
-
----
-
-## 21. Open questions
-
-1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile? *(Resolved for `omnigent.server.v1` by MoonLadderStudios/MoonMind#3635: the global session-update, terminal-attach, and dictation transports are inventoried, identity-scoped, capability-gated, and relayed through the binding facade. Any route absent from a future reviewed profile fails closed.)*
-2. Which upstream host auth modes are supported in embedded mode?
-3. Which binary attachment types are allowed under high-security mode when their content cannot be text-scanned?
-4. What is the minimum stock-host conformance suite before embedded mode is enabled?
-5. Which native clear/reset operations require a new session and explicit reset-boundary artifact?
-
----
-
-## 22. Non-goals
-
-This design does not:
-
-- fork or custom-build the Omnigent host,
-- recreate the native Omnigent Chat UI in MoonMind,
-- expose the upstream Omnigent server directly to bypass MoonMind authorization,
-- make provider session ids become Workflow ids,
-- expose raw provider session states as Workflow states,
-- make provider resources authoritative over MoonMind artifacts,
-- allow native controls to override immutable MoonMind policy,
-- bypass outbound secret scanning for native messages,
-- blindly repost first messages on retry,
-- require embedded host mode before proxy mode proves the contract,
-- replace all direct Codex compatibility code in the first bridge slice.
+The resulting `moonmind.omnigent.workflow-chat-acceptance/v2` artifact is bound to a source commit, compatibility profile, image and bundle digests, scenario and route-inventory versions, and a freshness window, and holds SHA-256 bindings for case evidence, source records, conformance reports, the operator timeline, and secret-scan results for every raw channel. A bare pass flag, repository-only test, unresolved ref, mutable tag, stale report, self-asserted scan, or omitted combination does not qualify. The builder validates against `--expected-commit`, the provider gate requires the same commit through `MOONMIND_OMNIGENT_SOURCE_COMMIT`, and `test_live_native_workflow_chat_release_matrix` is the release gate.

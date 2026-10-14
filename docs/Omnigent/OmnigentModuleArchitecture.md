@@ -6,8 +6,6 @@
 **Last updated:** 2026-08-29
 **Authority:** The dependency and ownership map for the implemented Omnigent packages, the boundaries CI enforces, and the bounded exemptions that remain.
 
-**Issue:** [MoonLadderStudios/MoonMind#3711](https://github.com/MoonLadderStudios/MoonMind/issues/3711).
-
 ## Related documents
 
 - [`docs/Omnigent/README.md`](./README.md) — module entrypoint and contract owners
@@ -131,7 +129,7 @@ Additional enforced rules:
   as it is a Docker SDK import. Assembling one is owned by `host_services/`,
   `bootstrap/`, `credential_materializers.py`,
   `opencode_runtime_validation.py`, and `production.py`; every other Omnigent
-  module needs a bounded exemption that names its #3712 retirement path.
+  module needs a bounded exemption that names its retirement path.
 - Deterministic session/turn identity has one owner,
   `control_plane/identities.py`.
 - Production modules never import test doubles or acceptance fixtures.
@@ -222,7 +220,7 @@ cancellation, cleanup, replay, or reads for already-recorded plans.
 
 ### 5.2 Removing a retained path
 
-Removal is an ordinary change sized to the component (#3932). Delete the code,
+Removal is an ordinary change sized to the component. Delete the code,
 its row, any exemption that names the row, and the tests that existed only for
 it; keep the behavior tests of the surviving owner. There is no removal stage,
 retirement-criterion ledger, or deployment-wide drain census. Protections stay

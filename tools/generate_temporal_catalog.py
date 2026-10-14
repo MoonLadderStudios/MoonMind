@@ -36,7 +36,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 GENERATED_MARKER = "<!-- GENERATED FROM PRODUCTION REGISTRIES - DO NOT EDIT -->"
-ISSUE_REF = "MoonLadderStudios/MoonMind#3959"
 
 CANONICAL_DOC = Path("docs/Temporal/WorkflowTypeCatalogAndLifecycle.md")
 OPERATOR_SURFACE_DOC = Path("docs/Temporal/SourceOfTruthAndProjectionModel.md")
@@ -397,7 +396,7 @@ def render_reference(
         GENERATED_MARKER,
         "# Temporal Workflow Type Reference (Generated)",
         "",
-        f"Mechanical reference for {ISSUE_REF}, generated from the production",
+        "Mechanical reference generated from the production",
         "registration owners. Do not edit by hand; regenerate with:",
         "",
         "```",

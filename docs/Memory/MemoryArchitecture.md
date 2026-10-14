@@ -38,7 +38,7 @@ MoonMind already has the core primitives we extend:
 - **Durable execution state**: Temporal-backed workflow executions plus Postgres-backed execution/projection records used by the dashboard and execution APIs.
 - **Durable artifacts and run evidence**: S3-compatible workflow artifacts plus managed-run observability artifacts and workspace-backed log spools.
 - **Background orchestration**: Temporal workflows and activities running across specialized worker fleets.
-- **Curated project knowledge (Plane C)**: retired with MoonLadderStudios/MoonMind#4109 (hosted Mem0 removed; see Plane C below).
+- **Curated project knowledge (Plane C)**: not provided; there is no hosted long-term memory service (see Plane C below).
 - **Exact context assembly**: workflow intent, attachments, artifact refs, and run history composed into a bounded context bundle with budgets and provenance.
 
 This architecture does not replace these primitives. It adds a thin “memory layer” that:
@@ -80,7 +80,7 @@ MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and
 
 **Question:** “What do we know / how do we do this here?”
 
-**Status (MoonLadderStudios/MoonMind#4109):**
+**Status:**
 - Hosted Mem0 long-term memory is retired and has no adapter, settings, or
   package requirement in the shipped application. The resolved Mem0 SDK
   mandatorily depends on a managed vector-database client, so no Mem0
@@ -175,8 +175,7 @@ Minimum fields:
 - `trust_class` (e.g., `raw`, `derived`, `approved`)
 
 ### 6.3 Long-term memories (retired integration)
-MoonLadderStudios/MoonMind#4109 retired the hosted Mem0 integration. There is
-no long-term memory service: curated entries live in reviewable repo surfaces
+MoonMind has no hosted Mem0 integration and no long-term memory service: curated entries live in reviewable repo surfaces
 and durable artifacts with namespace/repo scoping and provenance pointers
 (`workflowId`, `agentRunId` when applicable, commits, doc refs).
 
@@ -210,8 +209,8 @@ Minimal flags (fail-open by default):
 - `MEMORY_FAIL_OPEN=true|false` (default `true`)
 - `MEMORY_CONTEXT_BUDGET_TOKENS=<int>`
 
-`MEMORY_LONG_TERM`/`MEM0_API_KEY`/`MEM0_USER_ID` are retired
-(MoonLadderStudios/MoonMind#4109): stale values fail fast instead of enabling
+`MEMORY_LONG_TERM`/`MEM0_API_KEY`/`MEM0_USER_ID` are not
+supported: stale values fail fast instead of enabling
 a removed integration.
 
 ## 9) Operational Expectations

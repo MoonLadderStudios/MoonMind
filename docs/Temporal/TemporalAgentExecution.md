@@ -14,8 +14,7 @@ receive agent work - whether a registered **tool** invocation (currently a
 execute it end to end.
 
 It maps every step from HTTP submission through the Temporal workflow, into the
-relevant activity workers, and back. Completed migration cutovers are recorded in
-the [`MM-730 hard-switch cutover release note`](../ReleaseNotes/MM-730-hard-switch-cutover.md).
+relevant activity workers, and back.
 
 For broader architecture context see
 [TemporalArchitecture.md](TemporalArchitecture.md). Required execution capability semantics
@@ -187,7 +186,7 @@ agent callbacks, and auth-profile controls, see
     "targetRuntime": "codex",
     "requiredCapabilities": ["gh"],
     "task": {
-      "instructions": "Resolve PR #42 on branch `feature/test`.",
+      "instructions": "Resolve the open PR on branch `feature/test`.",
       "tool": {
         "type": "skill",
         "name": "pr-resolver"
@@ -277,15 +276,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 
 ---
 
-## 5. Remaining Work
-
-The execution-stage work items formerly listed here are now implemented. Open
-product and rollout sequencing, if any, belongs in `docs/tmp/` or the owning
-module tracker — not in a `RemainingWork.md` file that no longer exists.
-
----
-
-## 6. Architecture Diagram
+## 5. Architecture Diagram
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐

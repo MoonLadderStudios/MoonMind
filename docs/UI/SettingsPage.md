@@ -2,106 +2,58 @@
 
 **Related design documents:** [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md), [SettingsSystem.md](../Security/SettingsSystem.md), [SecretsSystem.md](../Security/SecretsSystem.md), [ProviderProfiles.md](../Security/ProviderProfiles.md), [ProviderProfileCreation.md](./ProviderProfileCreation.md), [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [DashboardDesignSystem.md](./DashboardDesignSystem.md), [DashboardSPAArchitecture.md](./DashboardSPAArchitecture.md)
 
-Status: **Desired-State UI Contract**  
-Owners: MoonMind Engineering  
-Last Updated: 2026-10-01
+Owners: MoonMind Engineering
 
 > [!NOTE]
-> This document supersedes the single `/settings` page with a three-way tab, radio, or segmented section switcher. The existing Settings dropdown remains the only cross-page navigation surface. Its **Configuration** group exposes the three former Settings sections as separate pages.
+> The Settings dropdown is the only cross-page navigation surface for configuration. Its **Configuration** group exposes three separate pages rather than one `/settings` page with a tab, radio, or segmented section switcher.
 >
-> Security, persistence, resolution, validation, and authorization remain owned by [SettingsSystem.md](../Security/SettingsSystem.md) and the related domain documents.
+> Security, persistence, resolution, validation, and authorization are described in [SettingsSystem.md](../Security/SettingsSystem.md) and the related domain documents.
 
 ---
 
 ## 1. Purpose
 
-MoonMind Settings is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
+MoonMind Settings is the human-facing configuration plane for instance, provider, secret, and operational configuration.
 
-Settings is a family of sibling dashboard pages, not one large page with a second navigation layer.
+Settings is a family of sibling dashboard pages, not one large page with a second navigation layer:
 
-The central information-architecture decision is:
+> **Providers & Secrets**, **Instance**, and **Operations** are separate pages in the Settings dropdown's **Configuration** group. None of them repeats the three destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local page switcher.
 
-> **Providers & Secrets**, **Instance**, and **Operations** are separate pages in the Settings dropdown's **Configuration** group. None of those pages repeats the three destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local page switcher.
+This gives every configuration surface a durable URL, page title, loading boundary, authorization state, and browser-history entry, removes redundant navigation, and lets each page load only the data it owns.
 
-This gives every configuration surface a durable URL, page title, loading boundary, authorization state, and browser-history entry. It also removes redundant navigation and lets each page load only the data it owns.
-
-The existing rendering decision remains:
-
-> Settings is a **data-driven control plane**, not a manually maintained collection of one-off setting forms.
-
-Ordinary user and workspace settings come from backend descriptors. Provider Profiles, Managed Secrets, OAuth state, and Operations remain specialized backend resources or commands.
+Settings is also a **data-driven control plane**, not a hand-maintained collection of one-off forms. Ordinary instance settings come from backend descriptors. Provider Profiles, Managed Secrets, OAuth state, Source Control connections, and Operations are specialized backend resources or commands.
 
 ---
 
-## 2. Scope and Authority
+## 2. Scope
 
-This document owns:
+This document covers placement of configuration pages in the Settings dropdown, routes and redirects, the shared page shell, page-level loading and failure boundaries, descriptor-driven settings rendering, edit/preview/save/reset UX, placement of Provider Profile, Managed Secret, OAuth, Source Control, and Operations surfaces, and permission, redaction, accessibility, and unsaved-change behavior.
 
-- placement of configuration pages in the Settings dropdown;
-- the Configuration group and its ordering;
-- canonical routes, the default entry point, and legacy path redirects;
-- active destination and dropdown-trigger behavior;
-- shared page-shell rules;
-- page-level loading and failure boundaries;
-- descriptor-driven settings rendering;
-- filtering, editing, preview, save, discard, and reset UX;
-- Provider Profile, Managed Secret, OAuth, and Operations placement;
-- permissions, credential-redacted behavior, accessibility, and unsaved-change navigation; and
-- migration and acceptance criteria for removing the old page-local switcher.
-
-The detailed Provider Profile create and edit form is owned by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Model and effort tier editing is owned by [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md).
-
-This document does not redefine backend setting eligibility, resolution, persistence, secret storage, provider execution semantics, operational command semantics, authorization, or server validation.
-
-This is a desired-state contract. The current implementation may still use one Settings component, `?section=` routing, and a segmented or radio-based switcher.
+The detailed Provider Profile create and edit form is described in [ProviderProfileCreation.md](./ProviderProfileCreation.md), and model/effort tier editing in [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md). Backend setting eligibility, resolution, persistence, secret storage, provider execution, operational command semantics, authorization, and server validation are described in the backend documents linked above.
 
 ---
 
-## 3. Design Principles
+## 3. Design principles
 
-### 3.1 One navigation owner
+**One navigation owner.** The Settings dropdown owns navigation among configuration pages. A page-local control only changes state inside the current page, such as a Harness filter, a category filter, or an operation subview.
 
-The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as a Harness filter, a category filter, or an operation subview.
+**Pathname owns page identity.** The pathname selects the configuration page. Query parameters may select filters or scope within a page but never select among the three pages.
 
-### 3.2 Pathname owns page identity
+**Backend-owned truth.** The backend owns which settings exist and are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent. Provider Profile creation follows the same rule: Harness, Provider, authentication, and creation capabilities determine backend-owned presets, and Harness choices keep canonical `runtime_id` values in API payloads, because different providers materialize credentials differently and the browser cannot assume one strategy.
 
-The pathname selects the configuration page. Query parameters may select approved filters or scope within that page. Query parameters must not select among the three configuration pages.
+**Data-driven rows.** The Instance page renders ordinary settings from catalog descriptors. The frontend branches on descriptor shape (`type`, `ui`, `constraints`, `options`, `read_only`, `sensitive`), not on individual setting keys, so adding a setting does not require frontend work.
 
-### 3.3 Backend-owned truth
+**Specialist surfaces.** Provider Profiles, Managed Secrets, OAuth credentials, Source Control connections, and Operations controls are not generic setting rows. They use specialized managers, but their options, capabilities, readiness, and policy constraints still come from backend APIs.
 
-The backend owns which settings exist, which are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent.
+**Progressive disclosure.** Forms lead with understandable choices and reveal low-level details on request. In Provider Profile creation, credential connection and max parallel runs stay visible, while raw SecretRefs, volume metadata, materialization details, secondary rate-limit controls, routing metadata, and launch shaping sit behind `Show advanced options`. Refinements stay within this single form rather than adding a wizard, route, or parallel credential flow.
 
-Provider Profile creation follows the same rule. Harness, Provider, authentication, and creation capabilities determine backend-owned presets. Harness choices retain canonical `runtime_id` values in API payloads. The browser must not assume one materialization strategy for every provider.
+**References over secrets.** Stored secret plaintext is never rendered, and generic settings do not accept raw credentials. Sensitive relationships use SecretRef pickers, Provider Profile secret-role bindings, or one-way Managed Secret creation and replacement.
 
-### 3.4 Data-driven rows
-
-The Instance page renders ordinary settings from catalog descriptors. The frontend may branch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not branch on individual setting keys except for documented transitional exceptions.
-
-### 3.5 Explicit specialist surfaces
-
-Provider Profiles, Managed Secrets, OAuth credentials, and Operations controls are not generic setting rows. They may use specialized managers, but options, capabilities, readiness, and policy constraints should still come from backend APIs.
-
-### 3.6 Progressive disclosure
-
-Forms should lead with understandable choices and hide low-level implementation details until requested.
-
-For Provider Profile creation, credential connection remains visible, while raw SecretRefs, volume metadata, materialization details, secondary rate-limit controls, routing metadata, and launch shaping belong behind `Show advanced options`. Max parallel runs remains visible.
-
-Provider Profile refinements stay within this single form. Clearer choices, action wording, and policy summaries do not introduce a separate wizard, another route, or a parallel credential flow.
-
-### 3.7 References over secrets
-
-Stored secret plaintext is never rendered. Generic settings do not accept raw credentials. Sensitive relationships use SecretRef pickers, provider-profile secret-role bindings, or one-way Managed Secret creation and replacement flows.
-
-### 3.8 Independent failure isolation
-
-Failure on one configuration page must not make the other two unavailable unless the shared dashboard shell itself is unavailable.
+**Independent failure.** A failure on one configuration page does not make the other two unavailable unless the shared dashboard shell itself is down.
 
 ---
 
-## 4. Information Architecture
-
-The Settings dropdown retains its existing grouped structure. The configuration portion is:
+## 4. Information architecture
 
 ```text
 Settings dropdown
@@ -111,38 +63,11 @@ Settings dropdown
     Operations
 ```
 
-The three entries are sibling dashboard destinations. They are not sections rendered by a parent Settings page.
+The three entries are sibling dashboard destinations, not sections of a parent Settings page. The dropdown renders the `Configuration` label once, lists the entries in this order as route links, marks one active entry with `aria-current="page"`, closes after selection, supports the dashboard's keyboard menu behavior, and renders the same group and order in the mobile drawer. The group label is omitted when none of its destinations is visible. Group membership is explicit metadata (not inferred from one destination key) so the label is never repeated or dropped.
 
-### 4.1 Configuration group contract
+While any Configuration page is active, the masthead trigger stays `Settings` with the Settings icon; the active page is communicated by the active menu item, URL, document title, and page header.
 
-The dropdown must:
-
-1. render the label `Configuration` once;
-2. place the entries in this order: Providers & Secrets, Instance, Operations;
-3. render every entry as a route link;
-4. expose one active entry with `aria-current="page"` or equivalent route semantics;
-5. close after selection;
-6. support the dashboard's keyboard menu behavior;
-7. render the same group and order in the mobile drawer; and
-8. omit the group label when none of its destinations is visible.
-
-Group membership must be explicit or deterministically derived. The implementation must not attach `Configuration` only to one destination key and accidentally repeat or omit the label when multiple children exist.
-
-### 4.2 Dropdown trigger
-
-When any Configuration page is active, the masthead trigger remains:
-
-```text
-Settings
-```
-
-with the Settings icon.
-
-It does not expand to `Providers & Secrets` or `Instance`. The active page is communicated by the active menu item, URL, document title, and page header.
-
-### 4.3 No Settings landing page
-
-The dropdown is the configuration index. MoonMind does not need another page that repeats the same three choices as cards. The bare `/settings` route resolves to the first configuration page the current user is authorized to see, as defined in section 5.2.
+There is no Settings landing page, because the dropdown already is the configuration index.
 
 ---
 
@@ -150,105 +75,48 @@ The dropdown is the configuration index. MoonMind does not need another page tha
 
 ### 5.1 Canonical routes
 
-| Destination | Canonical route | Suggested destination key |
-|---|---|---|
-| Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` |
-| Instance | `/settings/instance` | `settings-instance` |
-| Operations | `/settings/operations` | `settings-operations` |
+| Destination | Route | Destination key | Document title |
+|---|---|---|---|
+| Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` | `Providers & Secrets \| MoonMind` |
+| Instance | `/settings/instance` | `settings-instance` | `Instance \| MoonMind` |
+| Operations | `/settings/operations` | `settings-operations` | `Operations \| MoonMind` |
 
-All three destinations belong to the Settings dropdown's Configuration group and use the dashboard's utility-page classification.
-
-The route registry may map them to three page modules or one shared bundle with three route-owned components. The user-visible contract is three distinct pages.
+All three use the dashboard's utility-page classification. They may share one bundle with three route-owned components; the user-visible result is three distinct pages.
 
 ### 5.2 Default entry point
 
-`/settings` is an entry point, not a destination. It resolves to the first
-destination the backend authorizes for the current user, evaluated in the
-canonical Configuration order:
+`/settings` is an entry point, not a destination. It resolves, with replacement history so it is not a back-button trap, to the first destination the backend authorizes in Configuration order: Providers & Secrets, then Instance, then Operations. It does not assume Providers & Secrets is available.
 
-1. `/settings/providers-secrets`;
-2. `/settings/instance`; then
-3. `/settings/operations`.
+When no destination is accessible, `/settings` renders the Configuration unavailable state (section 10) instead of redirecting to a forbidden page. This fallback applies only to `/settings`; a direct request for a specific unauthorized destination shows that destination's own unavailable or forbidden state and is never rerouted to a sibling.
 
-Resolution uses replacement history so `/settings` does not become a back-button
-trap. The default must never assume Providers & Secrets is available: when that
-destination is `hidden` or `unavailable` and another destination is `shown`,
-`/settings` resolves to that accessible destination instead.
+### 5.3 `section` query parameter
 
-When no Configuration destination is accessible, `/settings` renders the
-Configuration unavailable state described in section 10 rather than redirecting
-to a forbidden page. This resolution applies only to `/settings` itself; a direct
-request for a specific unauthorized destination still shows that destination's
-own unavailable or forbidden state and is never silently rerouted to a sibling.
+`section` carries no page identity in client routing. A `?section=` value on `/settings` or a canonical route is ignored and does not select, restore, or override the page; `/settings?section=operations` simply resolves through the default entry point. No redirect table maps old `?section=` values, because doing so would let stale internal links keep working and hide them.
 
-### 5.3 Retired `?section=` routing
+The settings API separately uses `section=user-workspace` as catalog classification (section 8). That server-side parameter is unrelated to client routing.
 
-`?section=` is a superseded internal routing contract, not a supported legacy
-route. MoonMind is pre-release, so the rename is completed rather than aliased:
-the change that introduces the canonical paths also updates every internal
-caller, test, and document that still builds a `?section=` Settings link, and
-deletes the old section-routing code. No redirect table preserves `?section=`,
-because a redirect would let a partial migration keep working and hide the
-remaining callers.
+### 5.4 Redirected paths
 
-After the rename, `section` carries no page identity. A `section` query
-parameter arriving on a canonical route is ignored and does not select, restore,
-or override the page.
+Standalone paths users may have bookmarked redirect with replacement history:
 
-Section 8 covers the separate, still-valid backend use of `section=` as catalog
-classification on the settings API. That server-side parameter is unrelated to
-client routing and is not affected by this rule.
-
-### 5.4 Legacy path redirects
-
-Standalone paths that users may have bookmarked keep a redirect, because they
-are user-visible URLs rather than an internal routing contract:
-
-| Legacy path | Canonical target |
+| Path | Target |
 |---|---|
 | `/secrets` | `/settings/providers-secrets` |
 | `/workers` | `/settings/operations` |
 | `/settings/user-workspace` | `/settings/instance` |
-| an unknown older Settings alias | the default entry point in section 5.2 unless an approved specific mapping exists |
+| an unknown older Settings alias | the default entry point |
 
-These redirects use replacement history, preserve approved page-relevant query
-parameters, and drop parameters that no longer have meaning on the target page.
-A redirect never lands on a destination the user is not authorized to see; when
-the mapped destination is unavailable, resolution falls back to section 5.2.
+Redirects keep page-relevant query parameters, drop ones that no longer mean anything on the target, and never land on a destination the user cannot see; an unavailable mapped target falls back to the default entry point.
 
 ### 5.5 Page-local URL state
 
-Page-local filters may use query parameters:
-
-```text
-/settings/providers-secrets?runtime=codex
-/settings/instance
-/settings/operations?status=paused
-```
-
-The Instance page keeps no URL-owned filters: stale human-scope params
-(`scope`, `q`) are dropped on redirect and navigation after the account-free
-cutover (MoonMind#4353). The backend may continue using
-`section=user-workspace` as catalog classification; it no longer represents a
-client-side Settings tab.
+Page-local filters may use query parameters, for example `/settings/providers-secrets?runtime=codex` or `/settings/operations?status=paused`. The Instance page has no URL-owned filters; stale `scope` and `q` parameters are dropped on redirect and navigation.
 
 Sensitive values never enter paths, query parameters, browser history, page titles, or navigation telemetry.
 
-### 5.6 Page titles
-
-Recommended document titles are:
-
-```text
-Providers & Secrets | MoonMind
-Instance | MoonMind
-Operations | MoonMind
-```
-
 ---
 
-## 6. Shared Page Shell
-
-Recommended structure:
+## 6. Shared page shell
 
 ```text
 ConfigurationPage
@@ -260,333 +128,158 @@ ConfigurationPage
 
 There is no `SectionSwitcher`, tab list, segmented destination control, destination radio group, or duplicate Settings sidebar.
 
-### 6.1 Header
+The header has an optional `Settings` or `Configuration` overline, the page title (`Providers & Secrets`, `Instance`, or `Operations`), a short description, optional deployment context, a page-scoped warning when persistence, catalog loading, authorization, or operational state is degraded, and optional authorized diagnostic or audit links.
 
-Each page header includes:
-
-- an optional `Settings` or `Configuration` overline;
-- the page-specific title;
-- a short page-specific description;
-- optional deployment or workspace context;
-- a page-scoped warning when persistence, catalog loading, authorization, or operational state is degraded; and
-- optional diagnostic or audit links where authorized.
-
-Required titles are `Providers & Secrets`, `Instance`, and `Operations`.
-
-### 6.2 Page-specific status summaries
-
-| Page | Summary emphasis |
+| Page | Status summary emphasis |
 |---|---|
 | Providers & Secrets | launch readiness, profile validity, secret and OAuth health, blocked profiles |
 | Instance | overrides, pending application, locked settings, validation diagnostics |
 | Operations | worker state, drain or pause status, queue and runtime health, pending commands |
 
-Do not load all three pages' detailed datasets to reproduce one global health summary on every route. A compact cross-configuration alert may use a dedicated aggregate endpoint.
+Pages do not load all three datasets to build a global health summary on every route; a compact cross-configuration alert would use a dedicated aggregate endpoint.
 
-### 6.3 Unsaved changes
+### 6.1 Unsaved changes
 
-Dropdown navigation is real route navigation. When the current page has unsaved changes:
+Dropdown navigation is real route navigation. When the current page has a dirty draft, the page offers `Stay` and `Discard and leave`, does not mark the destination active until navigation succeeds, preserves the draft on cancel, and navigates immediately when the page is clean or saved.
 
-1. detect the dirty draft;
-2. offer `Stay` and `Discard and leave`;
-3. do not mark the destination active until navigation succeeds;
-4. preserve the draft when navigation is canceled; and
-5. navigate immediately when the page is clean or changes were saved.
+### 6.2 Responsive behavior
 
-### 6.4 Responsive behavior (MoonMind#4559)
+Configuration pages follow the shared responsive design in [DashboardDesignSystem.md](./DashboardDesignSystem.md): one modest phone gutter, restrained section padding, shrinkable single-column grids, and viewport-bounded overlays. Native `fieldset`/`legend` grouping is kept, but fieldsets opt out of the intrinsic `min-content` minimum so forms fit narrow viewports; inputs are `min-width: 0` and `max-width: 100%`; generated-settings rows pair a `minmax(0, 1fr)` description column with the control column; and long keys, SecretRefs, and digests wrap instead of stretching the grid. Enrollment drawers, confirmations, and tier dialogs are viewport-bounded with a single scroll container and wrapping footer actions.
 
-Configuration pages follow the shared responsive contract in
-[DashboardDesignSystem.md](./DashboardDesignSystem.md): native
-`fieldset`/`legend` grouping is preserved, but fieldsets opt out of the
-intrinsic `min-inline-size: min-content` minimum so single-column forms stay
-inside narrow viewports. Inputs, selects, and textareas are `min-width: 0 /
-max-width: 100%`, generated-settings rows pair a `minmax(0, 1fr)` description
-column with the control column, and long mono keys, SecretRefs, and digests
-wrap (`overflow-wrap: anywhere`) instead of stretching the grid. Enrollment
-drawers, confirmations, and tier dialogs stay viewport-bounded
-(`max-width: calc(100vw - 1.5rem)`, `max-height: calc(100dvh - 2rem)`) with a
-single scroll container and wrapping footer actions.
-
-```bash
-npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
-```
+On narrow viewports, saved Provider Profile records stack each label above its value with actions in a full-width wrapping area below. This is CSS on the same table, not a second list, so records keep one data and action owner. Tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. A browser test under `frontend/src/browser/` checks these pages for mobile overflow.
 
 ---
 
-## 7. Page Responsibilities
+## 7. Page responsibilities
 
 ### 7.1 Providers & Secrets
 
 This page contains:
 
-- Provider Profiles as the durable Harness/Provider connection and launch contract;
-- model and effort tier policy editing inside the normal Provider Profile editor;
-- Managed Secrets and secret-health surfaces;
-- SecretRef role bindings and validation;
+- Provider Profiles, the durable Harness/Provider connection and launch configuration, with model and effort tier policy editing inside the normal profile editor;
+- Managed Secrets, secret health, and SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
-- provider credential health and readiness;
-- Harness and Provider binding diagnostics, with Backend provenance in execution details; and
+- provider credential health and readiness, and Harness/Provider binding diagnostics (Backend provenance lives in execution details); and
 - **Source Control** connections for repository access, kept separate from Provider Profiles.
 
 The page explains that profiles contain references and launch metadata, Managed Secrets contain encrypted values or external references, OAuth volumes contain runtime-specific credential state, and readiness combines profile validity with secret or OAuth resolvability.
 
-A page-local Harness filter offers **All harnesses** and backend-supported Harness choices. It narrows the visible Provider Profile collection while global readiness counts use the complete collection unless explicitly labeled as filtered. Existing `runtime` URL parameters and `runtime_id` API values remain compatibility inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) owns this vocabulary and authoring defaults.
+A page-local Harness filter offers **All harnesses** plus backend-supported Harness choices. It narrows the visible profiles, while readiness counts use the full collection unless labeled as filtered. The `runtime` URL parameter and `runtime_id` API values remain the inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) describes this vocabulary and authoring defaults.
 
-On narrow viewports the saved-profile records stack each label above its value and give actions their own full-width wrapping area below the values (MoonLadderStudios/MoonMind#4559). The create/edit form stays single-column with shrinkable fieldsets, and tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. The shared contract lives in [DashboardDesignSystem.md](./DashboardDesignSystem.md).
+#### 7.1.1 Source Control connections
 
-#### 7.1.0 Source Control connections
+The Source Control section lists the repository connections the operator can manage, including disabled ones, with each connection's name, credential kind (personal access token, GitHub App installation, or deployment credential), validated App account and installation, lifecycle, and explicitly assigned repositories. A connection with no assigned repositories grants no repository access, and the section says so.
 
-The Source Control section lists the named repository connections the operator may manage, including disabled ones, with each connection's name, credential kind (personal access token, GitHub App installation, or deployment credential), validated App account and installation, lifecycle, and explicitly assigned repositories. A connection with no assigned repositories grants no repository access, and the section says so.
-
-- **Add token connection** asks for a name, a GitHub personal access token, and whether publishing is allowed. That choice grants the read, write, branch-write, review-request and issues operations on the connection and its publishing assignments; issue collaboration (labels, comments and issue reads) uses the default connection's `issues` operation. A connection or assignment recorded with the first four operations still shows as publishing, and turning publishing off removes every publishing operation except read. The server stores the token as a Managed Secret in the same transaction as the connection (`POST /api/v1/repository-connections/pat`). The connection ID is derived from the name and is never suffixed; a clash is a conflict the operator resolves by renaming.
-- **Connect GitHub App** asks for a name, the App name from its GitHub URL, the App ID, and explicit `owner/repo` names this connection may use, then sends the operator to GitHub through the existing enrollment begin/callback. The App identity and managed signing-key reference are derived server-side unless supplied on the advanced path. When GitHub returns with `installation_id` and `state`, the page completes the callback once and removes those parameters from the URL. The server verifies each authored repository against the same App, installation, and account using GitHub’s installation metadata endpoints before persisting only those names. An empty scope, mismatched installation, unavailable repository, or redirect never becomes wildcard authority.
-- **Edit connection** renames, changes whether publishing is allowed, or replaces a token with compare-and-set on the loaded policy revision. A conflict keeps the non-sensitive draft and reloads the current connection. After an ambiguous update, the form checks the existing audit receipt for its exact request identity; another editor’s revision increase is not proof that this update committed.
+- **Add token connection** asks for a name, a GitHub personal access token, and whether publishing is allowed. Publishing grants the read, write, branch-write, review-request, and issues operations on the connection and its publishing assignments; issue collaboration (labels, comments, issue reads) uses the default connection's `issues` operation. A connection recorded with the first four operations still shows as publishing, and turning publishing off removes every publishing operation except read. The server stores the token as a Managed Secret in the same transaction as the connection (`POST /api/v1/repository-connections/pat`). The connection ID is derived from the name and never suffixed; a clash is a conflict the operator resolves by renaming.
+- **Connect GitHub App** asks for a name, the App name from its GitHub URL, the App ID, and explicit `owner/repo` names, then sends the operator through the existing enrollment begin/callback. The App identity and signing-key reference are derived server-side unless supplied on the advanced path. On return, the page completes the callback once and strips `installation_id` and `state` from the URL. The server verifies each repository against the same App, installation, and account before persisting it. An empty scope, mismatched installation, unavailable repository, or redirect never becomes wildcard authority.
+- **Edit connection** renames, toggles publishing, or replaces a token with compare-and-set on the loaded policy revision. A conflict keeps the non-sensitive draft and reloads the connection. After an ambiguous update, the form checks the audit receipt for its exact request identity, because another editor's revision increase is not proof that this update committed.
 - **Disable connection** stops new use without deleting records, secrets, or shared App installations.
-- **Assign repository** verifies `owner/repo` through the connection's own credential before saving the provider repository ID. If GitHub is unavailable, existing assignments and the draft stay unchanged.
-- **Test connection** reads one repository with only the selected connection (`POST /api/v1/settings/github/token-probe` with `connectionId`). It reads only a repository the connection admits: a token connection's saved assignments, or a GitHub App connection's permitted repositories, compared case-insensitively. Any other repository is reported as not checked before the credential is read or GitHub is contacted, because a token can usually see more repositories than its connection admits. It acquires the selected PAT or bound App installation credential and keeps every probe on that connection’s deployment-trusted API host. It reports read access as verified, denied, not found (GitHub hides unshared private repositories), or unavailable, and distinguishes an empty repository from a missing branch. Outages and throttling are unavailable rather than denied, including on the read that tells an empty repository from a missing branch; a throttle stops the remaining checks and shows a retry delay based on GitHub's retry signal when available, or MoonMind's bounded fallback otherwise. It shows the remote default branch, separates GitHub-reported permission metadata from tested reads, and labels write access as untested because the test never writes. A request without `connectionId` is rejected instead of using an ambient token.
+- **Assign repository** verifies `owner/repo` through the connection's own credential before saving the provider repository ID. If GitHub is unavailable, existing assignments and the draft are unchanged.
+- **Test connection** (`POST /api/v1/settings/github/token-probe` with `connectionId`) reads one repository using only the selected connection. It checks only repositories the connection admits (a token connection's assignments or a GitHub App's permitted repositories, compared case-insensitively); anything else is reported as not checked before any credential is read, because a token can usually see more repositories than its connection admits. Probes stay on the connection's deployment-trusted API host. Results distinguish verified, denied, not found (GitHub hides unshared private repositories), and unavailable, and tell an empty repository from a missing branch. Outages and throttling are unavailable rather than denied; a throttle stops remaining checks and shows a retry delay from GitHub's retry signal or a bounded fallback. The result shows the remote default branch, separates GitHub-reported permission metadata from tested reads, and labels write access as untested because the probe never writes. A request without `connectionId` is rejected rather than falling back to an ambient token.
 
-Each create, save, disable, and assignment carries a stable `requestId`. A retry after an uncertain outcome reuses it. After a lost acknowledgment the page reads the connection back and shows the committed record before offering another create; it never blindly resubmits a POST. Test results and late responses are tied to the selected connection, its policy and credential revisions, its current permitted repositories and assignment identities/revisions/operations, and the test inputs: a response for a connection that is no longer selected, or for an earlier request, is discarded, and changed inputs mark a displayed result as stale. Tokens live only in the password field until submission and are cleared after transfer, cancellation, or a lost session. They never appear in URLs, query caches, or responses, and responses never include SecretRefs. Active PAT, App, edit and assignment drafts participate in the shared Settings Stay/Discard guard; save or explicit cancellation clears the corresponding draft.
+Each create, save, disable, and assignment carries a stable `requestId`, reused on retry after an uncertain outcome. After a lost acknowledgment the page reads the connection back and shows the committed record before offering another create, instead of blindly resubmitting a POST. Test results are tied to the selected connection, its policy and credential revisions, its permitted repositories and assignments, and the test inputs: responses for a deselected connection or an earlier request are discarded, and changed inputs mark a displayed result as stale. Tokens live only in the password field until submission and are cleared after transfer, cancellation, or session loss; they never appear in URLs, query caches, or responses, and responses never include SecretRefs. Active token, App, edit, and assignment drafts participate in the Stay/Discard guard.
 
-#### 7.1.1 Provider Profile creation
+#### 7.1.2 Provider Profile creation
 
-Provider Profile creation uses one standard form with progressive disclosure as defined by [ProviderProfileCreation.md](./ProviderProfileCreation.md). Improving this form does not add an onboarding route or replace the existing credential lifecycle.
+Creation uses one standard form with progressive disclosure, described in [ProviderProfileCreation.md](./ProviderProfileCreation.md). The visible decisions are: Profile ID (auto-suggested, reviewed before creation), Harness and Provider (backend-owned choices, Provider scoped to Harness), optional account label, authentication method and connection action, model and effort tier policy, max parallel runs, and an optional `Use as Harness default` intent when readiness permits.
 
-The standard form keeps these user-facing decisions visible:
+- Selectors show friendly labels but submit canonical IDs. Choice discovery reuses creation-capability authority, so it works before any profile or launch-ready host exists. The Settings Harness filter can seed a permitted creation Harness but does not redefine saved ownership.
+- The Harness control submits `runtime_id` such as `codex_cli`, `claude_code`, or `opencode`. Omnigent is a Backend, so it never becomes `runtime_id=omnigent`, and choosing a profile default does not change the deployment Backend default.
+- Profile ID suggestions follow backend constraints and stop updating once the user edits them; refreshes and account-label changes do not overwrite a user-authored ID. Format or uniqueness conflicts keep the draft and require reviewed resubmission rather than an automatically suffixed retry.
+- `Show advanced options` (an unchecked native checkbox) reveals credential source and materialization metadata, structured SecretRef bindings, volume reference and mount metadata, cooldown after provider 429 responses, rate-limit policy, command behavior, routing tags and priority, and launch-shaping diagnostics. OAuth and API-key actions remain visible.
+- `clear_env_keys` is backend-owned launch-security metadata, displayed read-only rather than as a freeform preference.
+- Creation uses backend presets or omits untouched advanced values instead of submitting frontend defaults. A profile missing required credentials is saved disabled; successful guided setup may enable it when policy permits.
 
-- Profile ID, with an auto-generated suggestion and review before creation;
-- Harness selected from backend-owned choices;
-- Provider selected from backend-owned choices scoped to that Harness;
-- optional account label;
-- high-level authentication method and connection action;
-- model and effort tier policy;
-- max parallel runs; and
-- optional `Use as Harness default` intent when readiness permits.
+The primary button names the real operation: `Create and connect` when creation continues into guided enrollment, `Create profile` when no setup continuation is needed, and `Save disabled profile` only for a supported manual outcome; editing uses `Update provider profile`. Missing prerequisites disable the action with an explanation, and an in-flight save cannot be resubmitted.
 
-Harness/Provider selectors display friendly labels but submit existing canonical IDs. Choice discovery reuses creation-capability authority and works before any profile or launch-ready host exists. The Settings Harness filter can seed a permitted creation Harness but does not redefine saved profile ownership. The Harness control submits `runtime_id`, such as `codex_cli`, `claude_code`, or `opencode`; Omnigent is a Backend and must not become `runtime_id=omnigent`. Choosing a profile default does not change the deployment Backend default.
+Persistence, connection, activation, and launch readiness are separate outcomes. If creation succeeds but enrollment fails or is canceled, the page identifies the saved profile and offers its setup recovery action instead of prompting another creation.
 
-Profile ID suggestions follow the existing backend constraints, remain visible, and stop updating automatically after the user edits them. Refreshes and account-label changes do not overwrite a user-authored ID. Format or uniqueness conflicts preserve the draft and require a reviewed resubmission, never an automatically suffixed retry. Section 4 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns selection changes, unknown saved values, and explicit manual-path behavior.
+#### 7.1.3 Provider Profile editing
 
-One unchecked `Show advanced options` checkbox reveals:
+On edit, advanced options start expanded when the profile has non-default, unknown, incompatible, or invalid advanced values; otherwise they may start collapsed with an effective-policy summary. Collapsing preserves every draft value, and a validation error on a hidden field expands the region and focuses the control.
 
-- credential source and materialization metadata;
-- structured SecretRef bindings;
-- volume reference and mount metadata;
-- cooldown after provider 429 responses;
-- rate-limit policy;
-- command behavior;
-- routing tags and priority; and
-- launch-shaping diagnostics.
-
-Credential setup itself does not disappear behind the checkbox. OAuth and API-key actions remain visible, while low-level credential plumbing stays advanced or system-generated.
-
-`clear_env_keys` is backend-owned launch-security metadata. The normal Settings UI may display it read-only, but must not present a freeform textarea as an ordinary preference.
-
-Creation must use backend presets or omit untouched advanced values. It must not blindly submit global React defaults. A profile with required missing credentials is saved disabled, while successful guided setup may enable it when policy permits.
-
-The primary button describes the supported operation: `Create and connect` when creation continues into guided enrollment, `Create profile` when no setup continuation is needed, and `Save disabled profile` only for an explicitly supported manual outcome. Editing uses `Update provider profile`. Missing prerequisites disable the action with an explanation, and an in-flight save cannot be submitted again. Action wording and post-save continuation consume the same submitted capability/preset identity.
-
-Persistence, connection, activation, and launch readiness are separate outcomes. If creation succeeds but enrollment fails or is canceled, the page identifies the saved profile and offers its existing setup recovery action instead of prompting another creation. Ordinary copy describes the user's next action. Internal preset versions and normalization details remain in advanced diagnostics. The complete action contract is in section 4.9 of [ProviderProfileCreation.md](./ProviderProfileCreation.md).
-
-#### 7.1.2 Provider Profile edit behavior
-
-On edit, advanced options start expanded when the profile has non-default, unknown, incompatible, or invalid advanced values. Otherwise they may start collapsed with an effective-policy summary.
-
-Collapsing the region preserves every draft value. A validation error targeting a hidden field automatically expands the region and moves focus to the affected control.
-
-The collapsed summary distinguishes a confirmed recommendation, known custom overrides, and unavailable or invalid comparison state. An authentication capability alone is not evidence that every advanced field uses recommended values. Summaries reflect unsaved edits, applied resets, discard, normalized saves, and metadata changes without modifying the draft. Generated credential-volume and isolation metadata are not counted as user overrides merely because they differ from empty creation fields.
-
-Connection and readiness remain visible independently. `Using recommended settings` does not mean connected or launch ready, and custom settings are not automatically unhealthy. Summaries contain bounded safe labels, not credential references, host paths, command JSON, or secret values. Section 5.3 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns comparison, source, warning, and uncertainty semantics.
+The collapsed summary distinguishes a confirmed recommendation, known custom overrides, and unavailable or invalid comparison state. An authentication capability alone is not evidence that every advanced field is recommended, and generated credential-volume and isolation metadata do not count as user overrides. Connection and readiness are shown independently: `Using recommended settings` does not mean connected or launch ready, and custom settings are not automatically unhealthy. Summaries contain bounded safe labels, never credential references, host paths, command JSON, or secret values. Section 5.3 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) covers comparison and uncertainty semantics.
 
 ### 7.2 Instance
 
-This page contains descriptor-driven settings for the single-operator instance,
-including former workspace defaults, feature flags, non-secret integration
-defaults, authorized policy controls, and SecretRef bindings not owned by a
-Provider Profile. The backend may continue using `section=user-workspace` as
-catalog classification and `scope=workspace` as the instance read/write scope;
-retained user-scope overrides migrate under the backend unified surface
-(MoonMind#4350) and are not silently edited from this page.
+This page holds descriptor-driven settings for the single-operator instance: workspace defaults, feature flags, non-secret integration defaults, authorized policy controls, and SecretRef bindings not owned by a Provider Profile. It reads and writes the backend `workspace` scope and has no user-versus-workspace switch, because MoonMind has one operator per instance. Retained user-scope overrides are handled by the backend and are not edited from this page.
 
-This is the canonical generated-settings surface. Adding an eligible ordinary setting should require backend catalog metadata and validation, not a new hard-coded React row.
-
-There is no user-versus-workspace scope switch on this page: the Instance page
-reads and writes the backend `workspace` scope, and `scope`/`q` are not
-page-owned URL state.
+This is the generated-settings surface: adding an eligible ordinary setting needs backend catalog metadata and validation, not a new React row.
 
 ### 7.3 Operations
 
-This page contains explicit administrative commands and statusful controls for:
+This page holds explicit administrative commands and statusful controls for worker pause and resume, drain and quiesce, queue and runtime health, maintenance mode, authorized deployment or runtime updates, recent operational audit actions, and bounded diagnostic switches.
 
-- worker pause and resume;
-- drain and quiesce;
-- queue and runtime health;
-- maintenance mode;
-- deployment or runtime updates where authorized;
-- recent operational audit actions; and
-- bounded diagnostic switches.
+Each command card shows current state, expected impact, permitted actions, disabled reasons, confirmation and reason requirements, pending transitions, last actor and time, failure state, and recovery or resume action. Commands are not modeled as boolean preferences.
 
-Each command card shows current state, expected impact, permitted actions, disabled reason, confirmation requirements, reason input where required, pending transitions, last actor and time, failure state, and recovery or resume action.
+The MoonMind update card submits to the standalone deployment controller ([Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md)). Each update intent carries one request identity, reused when resubmitting after an unanswered or server-error response so the controller reattaches instead of starting a second operation. History shows each operation's identity, requested and installed image, status (`UNKNOWN` when unreadable), original error, attempt log, and verification checks, with Retry for a failed operation. The card keeps polling with bounded reads while an operation is queued or running, so a reload or API restart reconnects to the same operation. When no controller is installed or it does not answer, the card says so, disables dashboard submission, and points to `./tools/update-moonmind.sh`. Updates recorded by the earlier workflow-based updater appear as read-only history with run and log links and no rollback.
 
-The MoonMind update card submits to the standalone deployment controller ([Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md)). Each submission carries one request identity per update intent; resubmitting after an unanswered or server-error response reuses it, so the controller reattaches instead of starting a second operation. Its history shows each controller operation's identity, requested and installed image, status (`UNKNOWN` when the controller's status is unreadable), original error, attempt log, and verification checks, and offers Retry for a failed operation. It keeps polling with ordinary bounded reads while an operation is queued or running, so a reload or API restart reconnects to the same operation. When no controller is installed, or the installed controller does not answer, the card says so, disables dashboard submission, and points to the host command `./tools/update-moonmind.sh`. Workflow-backed updates from the retired workflow updater remain read-only history with their run and log links; they offer no rollback.
-
-The page title `Operations` is distinct from any broader dropdown group also labeled Operations. The group classifies destinations. This page specifically owns configuration and administration controls.
+The page title `Operations` is distinct from any broader dropdown group with the same label; the group classifies destinations, while this page owns configuration and administration controls.
 
 ---
 
-## 8. Data Loading Boundaries
+## 8. Data loading boundaries
 
 | Page | Primary data |
 |---|---|
 | Providers & Secrets | Provider Profiles, Managed Secret metadata, Source Control connections, OAuth state, readiness diagnostics, permitted Harness/Provider choices, profile creation capabilities and presets |
-| Instance | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
+| Instance | catalog descriptors, effective values, overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
-On route load:
+On route load, the page is resolved from the pathname and loads only what its first screen needs. Sibling-page collections are not fetched; expensive diagnostics, audit timelines, and graphs are deferred; route-level and region-level loading states are shown; and page-local filters survive browser navigation.
 
-1. resolve the page from the pathname;
-2. load only the minimum data needed for that page's first screen;
-3. do not fetch sibling-page collections by default;
-4. defer expensive diagnostics, audit timelines, and graphs until needed;
-5. show route-level and region-level loading states; and
-6. preserve page-local scope and filters across browser navigation.
+Provider creation queries are keyed to their runtime/provider/authentication identity, so a stale response cannot restore incompatible selections or authorize a submission. A failed choice query preserves unrelated profile and Managed Secret content and does not invent a manual-entry fallback the backend has not offered.
 
-Provider creation queries are scoped to their canonical runtime/provider/authentication identity as applicable. A stale response cannot restore incompatible selections or authorize a new submission. A failed choice query preserves unrelated profile and Managed Secret content and does not introduce a manual-entry fallback without explicit backend capability.
-
-The backend may continue using `section=user-workspace` as catalog classification. It no longer represents a client-side Settings tab.
-
-Desired generated-settings endpoints remain:
+Generated-settings endpoints (`api_service/api/routers/settings.py`), used by Instance with `scope=workspace`:
 
 ```http
-GET /api/v1/settings/catalog?section=user-workspace&scope=workspace
-GET /api/v1/settings/catalog?section=user-workspace&scope=user
-GET /api/v1/settings/effective?scope=workspace
-GET /api/v1/settings/effective?scope=user
-GET /api/v1/settings/diagnostics?scope=workspace
-GET /api/v1/settings/audit?key=workflow.default_runtime
-POST /api/v1/settings/preview
-PATCH /api/v1/settings/workspace
-PATCH /api/v1/settings/user
-DELETE /api/v1/settings/workspace/{key}
-DELETE /api/v1/settings/user/{key}
+GET    /api/v1/settings/catalog?section=user-workspace&scope=workspace
+GET    /api/v1/settings/effective?scope=workspace
+GET    /api/v1/settings/diagnostics?scope=workspace
+GET    /api/v1/settings/audit?key=<key>
+POST   /api/v1/settings/validate
+POST   /api/v1/settings/preview
+PATCH  /api/v1/settings/{scope}
+DELETE /api/v1/settings/{scope}/{key}
 ```
 
 ---
 
-## 9. Descriptor-Driven Instance Contract
+## 9. Descriptor-driven Instance rows
 
-A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic. The backend owns this shape; the fields below are the ones the row contract in this document depends on, and a consumer must not drop a field it renders:
+A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic. The backend owns the shape; the fields the UI depends on are:
 
 ```yaml
 SettingDescriptor:
-  key: string
-  title: string
-  description: string | null
-  category: string
-  section: user-workspace
+  key, title, description, category, section, order
   type: boolean | string | integer | number | enum | string_list | object | secret_ref
   ui: toggle | input | number | select | tag_editor | key_value | secret_ref_picker | provider_profile_picker | readonly
-  scopes: [user | workspace | system | operator]
-  default_value: any
-  effective_value: any
-  override_value: any | null
-  source: string
-  source_explanation: string
-  options: array | null
-  constraints: object | null
-  sensitive: boolean
-  secret_role: string | null
-  read_only: boolean
-  read_only_reason: string | null
-  apply_mode: string
-  activation_state: string
-  active: boolean
-  pending_value: any | null
-  affected_process_or_worker: string | null
-  completion_guidance: string | null
-  requires_reload: boolean
-  requires_worker_restart: boolean
-  requires_process_restart: boolean
-  applies_to: [string]
-  depends_on: array
-  order: integer
-  audit: object
-  value_version: integer
-  diagnostics: array
+  scopes, default_value, effective_value, override_value, source, source_explanation
+  options, constraints, sensitive, secret_role, read_only, read_only_reason
+  apply_mode, activation_state, active, pending_value, affected_process_or_worker, completion_guidance
+  requires_reload, requires_worker_restart, requires_process_restart, applies_to
+  depends_on, audit, value_version, diagnostics
 ```
 
-These fields are load-bearing for the behavior this document requires:
+Several fields drive specific row behavior: `active` and `pending_value` separate an applied value from an accepted-but-pending one; `affected_process_or_worker` and `completion_guidance` say what a pending change is waiting on and what completes it; the `requires_*` flags produce application warnings before and after save; `order` makes row order deterministic; `secret_role` enables role-aware SecretRef controls; `depends_on` produces dependency warnings; and `audit` decides whether an audit link is offered. The backend can add fields, but removing one the UI renders breaks these behaviors.
 
-| Field | Row behavior that depends on it |
-|---|---|
-| `active` | distinguishing an applied value from an accepted-but-pending one |
-| `pending_value` | showing the accepted value awaiting activation |
-| `affected_process_or_worker` | naming the system a pending change is waiting on |
-| `completion_guidance` | telling the operator what completes the activation |
-| `requires_reload`, `requires_worker_restart`, `requires_process_restart` | application-requirement warnings before and after save |
-| `order` | deterministic row ordering within a category |
-| `secret_role` | role-aware SecretRef controls |
-| `depends_on` | dependency warnings in preview and validation |
-| `audit` | whether and how an audit link is offered |
+Controls follow descriptor shape: toggles for booleans, selects from backend options for enums, constrained number inputs, text inputs (unless sensitivity requires a specialist control), tag editors for string lists, a safe structured editor for objects, a SecretRef picker, a Provider Profile selector backed by backend data, and a read-only value with a reason for read-only or unsupported types.
 
-This block is the contract the UI consumes, not an exhaustive mirror of the
-backend model. The backend may add fields; it may not remove one this document
-renders without updating this section in the same change.
+Each row exposes title, description, control or value, stable key, scope, source, inherited or override state, active or pending state, validation, diagnostics, reset when allowed, application semantics, affected systems, and an audit link where authorized. Filtering covers text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters; filtering is never the authorization boundary.
 
-Control selection follows descriptor shape:
-
-| Descriptor | Control |
-|---|---|
-| boolean or `toggle` | Toggle |
-| enum or `select` | Select from backend options |
-| integer, number, or `number` | Constrained number input |
-| string or `input` | Text input unless sensitivity requires a specialist control |
-| string list or `tag_editor` | Tag or list editor |
-| object or `key_value` | Safe structured editor |
-| secret ref or `secret_ref_picker` | SecretRef picker |
-| `provider_profile_picker` | Provider Profile selector using backend data |
-| read-only or unsupported editable type | Read-only value with reason or diagnostic |
-
-Every row should expose title, description, control or value, stable key, scope, source, inherited or override state, active or pending state, validation, diagnostics, reset when allowed, application semantics, affected systems, and audit link where authorized.
-
-Filtering should support text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters where authorized. Filtering is never the authorization boundary.
-
-Before save, show changed keys, old and proposed values, validation, target scope, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior. The backend preview is authoritative where available.
-
-Draft state is keyed by setting key and scope. Clear it after successful save, explicit discard, confirmed scope change, confirmed route departure, or incompatible catalog-version change. Do not persist drafts to local storage without a separate sensitive-metadata design.
+Before save, the page shows changed keys, old and proposed values, validation, target scope, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior; the backend preview is authoritative. Drafts are keyed by setting key and scope and cleared after a successful save, explicit discard, confirmed route departure, or incompatible catalog-version change. Drafts are not persisted to local storage, since they can contain sensitive metadata.
 
 ### 9.1 Version conflicts
 
-Saves submit `expected_versions` alongside the changed keys, so the authoritative
-`PATCH` contract can reject the write with `version_conflict` when another
-operator changed the same setting after this page loaded. That is a normal
-concurrency outcome, not a generic failure, and the UI must make it recoverable:
-
-1. stop the save and apply no partial write locally;
-2. reload the affected descriptors;
-3. tell the user that another change occurred, identifying the affected keys;
-4. show the latest value next to the user's proposed value so the user can
-   review the difference; and
-5. require explicit resubmission with refreshed `expected_versions`.
-
-Never auto-retry a `version_conflict` with the stale expected version, and never
-silently overwrite the concurrent change. Unaffected keys in the same submission
-keep their drafts so the user does not lose unrelated edits.
+Saves submit `expected_versions` with the changed keys, so `PATCH` rejects the write with `version_conflict` when another change landed after the page loaded. This is a normal concurrency outcome, and the page handles it by stopping the save without partial local writes, reloading the affected descriptors, naming the affected keys, showing the latest value beside the proposed value, and requiring explicit resubmission with refreshed versions. It never auto-retries with the stale version or silently overwrites the concurrent change. Unaffected keys keep their drafts.
 
 ---
 
-## 10. Permissions and Failure States
+## 10. Permissions and failure states
 
-The backend controls authorization. The UI reflects it without treating client checks as a security boundary.
+The backend controls authorization; the UI reflects it without treating client checks as a security boundary.
 
-Each destination should have an independent state when permissions differ:
-
-- `shown` for meaningful accessible content;
-- `unavailable` when product policy wants a visible explanation; or
-- `hidden` when the destination should not be advertised.
-
-The Configuration label appears when at least one child is shown or intentionally unavailable. A direct unauthorized route shows a clear unavailable or forbidden state rather than silently redirecting to a sibling page.
-
-In-page behavior includes:
+Each destination has an independent state: `shown` for accessible content, `unavailable` when a visible explanation is wanted, or `hidden` when it should not be advertised. The Configuration label appears when at least one child is shown or intentionally unavailable. A direct unauthorized route shows an unavailable or forbidden state rather than silently redirecting.
 
 | Backend state | UI behavior |
 |---|---|
@@ -596,196 +289,70 @@ In-page behavior includes:
 | operation not invokable | Current state visible, action disabled with reason |
 | permission error during mutation | Structured error, no automatic destructive retry |
 
-Loading placeholders must not imply values are default, unset, permitted, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and preserve unrelated content where possible.
+Loading placeholders do not imply values are default, unset, permitted, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and keep unrelated content.
 
 ---
 
-## 11. Secret Security, Validation, and Explainability
+## 11. Secrets, validation, and explainability
 
-Generic settings never accept raw secret values. Managed Secret creation and replacement may accept plaintext only for one-way submission. After submission, clear the field and display metadata and validation state, not the value.
+Generic settings never accept raw secret values. Managed Secret creation and replacement accept plaintext only for one-way submission; afterwards the field is cleared and only metadata and validation state are shown. The UI may display an authorized SecretRef such as `db://github-token` or `env://GITHUB_TOKEN`, never its plaintext target. Provider Profile advanced fields use role-aware SecretRef controls rather than raw JSON, and OAuth volume identifiers and paths come from dedicated backend flows.
 
-The UI may display an authorized SecretRef such as `db://github-token` or `env://GITHUB_TOKEN`, but never its plaintext target.
+Client validation may use descriptor metadata for required values, bounds, option membership, length, simple patterns, SecretRef shape, and obvious type errors; backend validation is authoritative.
 
-Provider Profile advanced fields use role-aware SecretRef controls rather than raw JSON as the primary UX. OAuth volume identifiers and paths are normally generated or imported through dedicated backend-supported flows.
-
-Client validation may use descriptor metadata for required values, numeric bounds, option membership, length, simple patterns, SecretRef shape, and obvious type errors. Backend validation remains authoritative.
-
-Source and application labels come from backend metadata. Recommended source labels include Default, Config, Environment, Workspace override, User override, Provider Profile, Secret reference, and Operator locked.
-
-The UI explains inherited sources and application boundaries such as immediate, next request, next workflow, next launch, worker reload, process restart, or manual operation. Pending accepted values remain visible until active.
+Source and application labels come from backend metadata (for example Default, Config, Environment, Workspace override, Provider Profile, Secret reference, Operator locked). The UI explains inherited sources and when a change applies (immediately, next request, next workflow, next launch, worker reload, process restart, or manual operation), and pending accepted values stay visible until active.
 
 ---
 
 ## 12. Accessibility
 
-The configuration experience must support:
+The configuration pages provide keyboard access to the dropdown, route links, page-local controls, and dialogs; visible focus and Escape-to-close; the same destination order on desktop and mobile; one active route exposed with route semantics; focus moved to the new page heading where appropriate; associated labels, descriptions, and errors; no reliance on color alone; confirmation and focus restoration for destructive operations; and readable long keys, SecretRefs, and profile identifiers.
 
-- keyboard access to the dropdown, every route link, page-local controls, and dialogs;
-- visible focus and Escape-to-close behavior;
-- consistent destination order on desktop and mobile;
-- one active route exposed with route semantics;
-- focus movement to the new page heading where appropriate;
-- associated labels, descriptions, and errors;
-- no reliance on color alone;
-- confirmation and focus restoration for destructive operations; and
-- readable long keys, SecretRefs, and Provider Profile identifiers.
-
-The three destination links must not use `role="tab"` or radio semantics. They navigate to documents and behave as links.
-
-The Provider Profile `Show advanced options` control is a native checkbox connected to an expandable form region. It is local form state, not cross-page navigation.
+The destination links are links, not `role="tab"` or radio controls, because they navigate to separate documents. The Provider Profile `Show advanced options` control is a native checkbox tied to an expandable form region; it is local form state, not navigation.
 
 ---
 
-## 13. Extensibility Rules
+## 13. Extending Settings
 
-Adding a normal user or workspace setting should require:
+Adding an ordinary instance setting needs a stable backend key, explicit exposure metadata, the descriptor fields from section 9, persistence and resolution where needed, and catalog and save/reset tests. Frontend work is needed only for a new reusable control type.
 
-1. a stable backend key;
-2. explicit exposure metadata;
-3. title, description, category, scopes, type, UI control, constraints, options, sensitivity, application semantics, and audit policy;
-4. persistence and resolution where needed; and
-5. catalog and save/reset tests.
+A fourth Configuration page makes sense only for a distinct user goal with its own route identity, permission model, loading boundary, and enough durable content; a category or small group of settings stays inside an existing page.
 
-Frontend work is required only for a new reusable control type.
+Patterns the design avoids, and why:
 
-A fourth Configuration page is justified only when it has a distinct user goal, route identity, permission model, loading boundary, and enough durable content to stand alone. A category or small settings group stays within an existing page.
-
-Forbidden patterns include:
-
-- page-local tabs, radio cards, pills, segmented controls, sidebars, or cards that repeat the three destinations;
-- `?section=` as page identity;
-- eager loading of every configuration dataset on every route;
-- one hard-coded React row per setting key;
-- frontend copies of backend defaults or authoritative validation;
-- a second provider-creation wizard or a duplicate Harness/Provider catalog for the same form;
-- recommended-policy summaries inferred solely from authentication-method availability;
-- unconditional client-side `enabled: true` for a credential-required Provider Profile;
-- a global fallback credential source or materialization mode for every provider;
-- plaintext credential inputs in generic settings;
-- raw SecretRef JSON as the primary credential setup UX;
-- freeform `clear_env_keys` as an ordinary Provider Profile preference;
-- frontend-only authorization filtering;
-- silent fallback for broken SecretRefs; and
-- boolean-preference treatment for operational commands.
+- page-local tabs, radio cards, pills, segmented controls, sidebars, or cards repeating the three destinations, and `?section=` as page identity — they duplicate the dropdown's navigation;
+- eager loading of every configuration dataset — it breaks independent failure and page-scoped loading;
+- hard-coded React rows per setting key, frontend copies of backend defaults or validation, and frontend-only authorization filtering — the backend owns these;
+- a second provider-creation wizard or duplicate Harness/Provider catalog — one form and one choice authority;
+- policy summaries inferred only from authentication-method availability, unconditional `enabled: true` for credential-required profiles, or a global fallback credential source — each misreports readiness;
+- plaintext credential inputs in generic settings, raw SecretRef JSON as the primary credential UX, freeform `clear_env_keys`, and silent fallback for broken SecretRefs — they weaken secret handling; and
+- boolean-preference treatment for operational commands — commands have state, impact, and confirmation.
 
 ---
 
-## 14. Ownership Invariants
+## 14. Ownership structure
 
-These are the durable structural rules the three pages must satisfy. They
-describe the target state, not a sequence of migration steps, and they hold for
-any future change to the Configuration pages.
+**Destination registry.** Configuration is exactly three sibling destinations with the keys and routes in section 5.1. The client registry (`frontend/src/lib/dashboardRoutes.ts`) and the server destination registry agree on entries, group membership, and order.
 
-**Destination registry.** Configuration is exactly three sibling destinations,
-each with its own destination key and canonical route as listed in section 5.1.
-The client-side registry and any server-provided registry must agree on those
-entries, their Configuration group membership, and their order. Group membership
-is explicit metadata or deterministically derived, never inferred from a single
-destination key.
+**Route ownership.** Each destination is a route-matched component. Sharing a bundle is fine; sharing page identity is not. A page does not mount managers, panels, or loaders belonging to a sibling, and no parent component chooses among the three by internal state.
 
-**Route ownership.** Each destination is owned by a route-matched component.
-Sharing one bundle is allowed; sharing page identity is not. A page must not
-mount managers, panels, or data loaders belonging to a sibling destination, and
-no parent component may select between the three by internal state.
+**State ownership.** Page-scoped state lives on its page: Harness filtering on Providers & Secrets, worker command state on Operations. There is no cross-page selection state; browser navigation moves between destinations.
 
-**State ownership.** Page-scoped state lives on the page that owns it: Harness
-filtering on Providers & Secrets and worker command state on Operations. No
-cross-page selection state exists, and browser navigation — not local state —
-moves between destinations.
+**Component ownership.** Provider Profile create/edit belongs to Providers & Secrets, generated settings to Instance, and operational commands to Operations.
 
-**Component ownership.** Provider Profile creation and edit behavior belongs to
-Providers & Secrets and follows `docs/UI/ProviderProfileCreation.md`. The
-generated user and workspace settings surface belongs to Instance and
-follows section 9. Operational commands belong to Operations and are never
-modeled as ordinary boolean preferences.
-
----
-
-## 15. Acceptance Criteria
-
-The design is satisfied when:
-
-1. The existing Settings dropdown contains one Configuration group.
-2. It contains route links for Providers & Secrets, Instance, and Operations in that order.
-3. Each destination has its own canonical `/settings/...` pathname.
-4. `/settings` resolves to the first Configuration destination the current user is authorized to see, and renders the unavailable state when none is accessible.
-5. `?section=` selects nothing: no client route honors it, and no internal caller, test, or document still builds a `?section=` Settings link.
-6. No configuration page repeats the destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local switcher.
-7. The masthead trigger remains `Settings` with the Settings icon while any Configuration page is active.
-8. Desktop and mobile expose the same group and order.
-9. Each page has its own title, header, loading boundary, authorization state, and failure state.
-10. Each page loads only its required primary datasets by default.
-11. Providers & Secrets keeps Provider Profiles, Managed Secrets, OAuth, tier policy, and readiness as first-class surfaces.
-12. Provider Profile creation starts with one collapsed `Show advanced options` control.
-13. Credentials & Volumes, cooldown, rate-limit policy, command behavior, tags, and priority are advanced.
-14. Max parallel runs remains visible in the standard Provider Profile form.
-15. Account label remains a visible user-facing identity aid.
-16. Credential connection remains visible while credential implementation details stay advanced or system-generated.
-17. Clear environment keys are backend-owned launch-security metadata.
-18. Provider Profile creation uses contextual backend presets or omission rather than global frontend guesses.
-19. A credential-required profile is not silently created enabled without successful setup.
-20. Instance renders ordinary settings from backend descriptors at the backend `workspace` scope without a scope switch.
-21. Operations uses explicit statusful command cards with confirmation and audit context.
-22. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
-23. Route navigation protects unsaved drafts.
-24. Unsupported descriptors degrade predictably.
-25. A failure on one page does not break sibling Configuration destinations.
-26. Backend authorization, defaults, validation, source resolution, and secret-handling decisions remain authoritative.
-27. Navigation tests and telemetry use canonical destination keys instead of the removed `section` state.
-28. A concurrent-change `version_conflict` stops the save, refreshes the affected descriptors, shows the conflict, and requires explicit resubmission.
-29. Rendered rows keep the descriptor fields section 9 declares load-bearing, including active state, activation guidance, application requirements, and ordering.
-30. Harness/Provider creation choices work for the first profile, submit canonical IDs, and cannot be restored from stale metadata after a selection change.
-31. Profile ID suggestions preserve user edits and require review after format or uniqueness conflicts.
-32. Creation actions match supported save/setup behavior, and collapsed summaries distinguish recommendations, overrides, and uncertainty without implying credential readiness.
-
-### 15.1 Conformance suite
-
-Tests for these contracts cross the routing, navigation, page-boundary,
-draft-guard, and Provider Profile boundaries:
+### 14.1 Tests
 
 | File | Covers |
 |---|---|
-| `frontend/src/entrypoints/settingsRedesignConformance.test.tsx` | canonical route resolution and document titles, legacy `/settings`, `?section=`, `/secrets`, `/workers`, and retained-alias replacement redirects, dirty-draft departure after successful and failed saves, and the architecture guards for sections 12 and 14 |
-| `frontend/src/components/settings/providerProfileRedesignConformance.test.tsx` | the Provider Profile standard-creation matrix, progressive disclosure, model-tier integration, existing-profile compatibility, and the generated-contract guard described in `docs/UI/ProviderProfileCreation.md` |
-| `tests/unit/api/routers/test_dashboard_destination_registry_agreement.py` | exact agreement between the server destination registry and `frontend/src/lib/dashboardRoutes.ts`, including Configuration group membership and order |
+| `frontend/src/entrypoints/settingsRedesignConformance.test.tsx` | route resolution and titles, `/settings`, `?section=`, `/secrets`, `/workers`, and alias redirects, dirty-draft departure after successful and failed saves, and the structural guards in sections 12 and 14 |
+| `frontend/src/components/settings/providerProfileRedesignConformance.test.tsx` | Provider Profile creation matrix, progressive disclosure, tier integration, existing-profile compatibility |
+| `tests/unit/api/routers/test_dashboard_destination_registry_agreement.py` | agreement between the server destination registry and `frontend/src/lib/dashboardRoutes.ts` |
+| `frontend/src/entrypoints/settingsRoutes.test.tsx`, `settingsDraftNavigation.test.tsx`, `settingsInstance.test.tsx`, `dashboard.test.tsx` | per-page routing, draft navigation, Instance rows, and shell behavior |
 
-Provider Profile coverage must also exercise identity selection, non-destructive ID suggestions, truthful action/summary states, and creation-to-enrollment recovery as specified in section 14 of [ProviderProfileCreation.md](./ProviderProfileCreation.md). Test-file presence is not a claim that every desired-state criterion already passes. Component tests do not substitute for backend contract tests or live credential verification.
-
-Focused local commands:
+Focused commands:
 
 ```bash
-# Both frontend conformance files.
 npm run ui:test:settings-redesign
-
-# Server/frontend destination registry agreement.
 ./tools/test_unit.sh --python-only tests/unit/api/routers/test_dashboard_destination_registry_agreement.py
 ```
 
-The suite runs in required CI through the frontend and unit suites; it is not a
-substitute for the per-page unit tests, which remain in
-`frontend/src/entrypoints/settingsRoutes.test.tsx`,
-`frontend/src/entrypoints/settingsDraftNavigation.test.tsx`, and
-`frontend/src/entrypoints/dashboard.test.tsx`.
-
----
-
-## 16. Decision Summary
-
-- Settings is a configuration namespace and dropdown group, not one page with three tabs.
-- Providers & Secrets, Instance, and Operations are sibling pages.
-- Canonical routes are `/settings/providers-secrets`, `/settings/instance`, and `/settings/operations`.
-- `/settings` resolves to the first authorized Configuration destination rather than assuming Providers & Secrets.
-- The Settings dropdown is the single cross-page navigation owner.
-- The Settings trigger remains stable on all three pages.
-- Query parameters represent page-local state, not page identity.
-- Every page owns its title, status, authorization, loading, queries, and failures.
-- Provider Profile creation uses one collapsed advanced-options region and no separate wizard.
-- Harness/Provider selectors use existing backend authority and do not require memorized IDs or an existing profile.
-- Suggested Profile IDs stay reviewable and respect user edits.
-- Creation actions describe the real setup continuation. Policy summaries do not imply credential readiness.
-- Max parallel runs remains visible.
-- Credential plumbing, volumes, secondary rate limits, routing metadata, and launch shaping are advanced or backend-derived.
-- Account label remains visible.
-- Enabled state follows successful credential activation and policy.
-- Existing managers can be reused, but the old local section state and switcher are removed.
-- Settings pages share the dashboard responsive contract (MoonMind#4559): one modest phone gutter, restrained section padding, stacked record presentation with full-width details/actions on phones, shrinkable single-column grids, and viewport-bounded overlays. Saved Provider records keep one data/action owner; the responsive presentation is CSS on the same table, not a second list.
+These run in CI through the frontend and unit suites. Component tests do not replace backend contract tests or live credential verification.

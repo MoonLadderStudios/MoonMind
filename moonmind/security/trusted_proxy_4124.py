@@ -1,7 +1,7 @@
 """Trusted-header advanced identity source (MoonLadderStudios/MoonMind#4124).
 
-Parent: #4116. Depends on #4118, #4119, #4120, #4121. Plan coverage: K4
-trusted-proxy mode in ``docs/tmp/KeycloakRemovalPlan.md``.
+Parent: #4116. Depends on #4118, #4119, #4120, #4121. Covers
+trusted-proxy mode.
 
 Portable, runtime-neutral capability: trust is defined by the connecting
 proxy/network (explicit trusted ingress + trusted proxy set), never by a

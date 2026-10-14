@@ -1,203 +1,117 @@
 # Provider Profile Model and Effort Tier Settings
 
-Status: **Desired-state UI and implementation contract**
+This document describes the Settings experience for inspecting and editing a
+Provider Profile's `model_tiers` and `default_model_tier`.
 
-Owners: MoonMind Engineering
+**Related design documents:** [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md), [Provider Profiles](../Security/ProviderProfiles.md), [Provider Profile Creation](./ProviderProfileCreation.md), [Settings Page](./SettingsPage.md), [Dashboard Design System](./DashboardDesignSystem.md)
 
-Last updated: 2026-10-01
+The browser authors and previews tier policy. The backend validates it,
+normalizes compatibility, and resolves model and effort at launch; that
+resolution contract lives in
+[Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md).
+Profile activation, credentials, and selection are described in
+[Provider Profiles](../Security/ProviderProfiles.md), and the surrounding form in
+[Provider Profile Creation](./ProviderProfileCreation.md).
 
-Canonical for: the Settings experience used to inspect and edit `model_tiers` and `default_model_tier` on a Provider Profile
-
-**Related design documents:** [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md), [Provider Profiles](../Security/ProviderProfiles.md), [Settings Page](./SettingsPage.md), [Dashboard Design System](./DashboardDesignSystem.md), [Secrets System](../Security/SecretsSystem.md)
-
-**Related implementation issue:** [#3348 Model tier system should have a clear UI representation in settings](https://github.com/MoonLadderStudios/MoonMind/issues/3348)
-
-**Implementation tracking:** phased delivery sequencing lives in [`docs/tmp/ProviderProfileTierSettingsRollout.md`](../tmp/ProviderProfileTierSettingsRollout.md). This document defines the durable desired state and remains readable without it.
-
-> [!NOTE]
-> This document defines the durable desired-state UI contract. It does not replace the backend tier-resolution contract in `ProviderProfileModelEffortTiers.md`.
->
-> The frontend authors and previews tier policy. The backend remains authoritative for validation, compatibility normalization, and launch-time model and effort resolution.
+Implementation: `frontend/src/components/settings/ProviderProfilesManager.tsx`
+(editor) and `frontend/src/utils/providerProfileTiers.ts` (normalization, payload,
+renumbering, and error-mapping helpers).
 
 ---
 
 ## 1. Purpose
 
-Provider Profiles already define an ordered model and effort policy through `model_tiers` and `default_model_tier`. Settings must make that policy easy to understand and resistant to accidental policy changes.
+Settings makes tier policy easy to understand and hard to change by accident. At
+a glance a user can see how many tiers a profile defines, which is the default,
+which model and effort each selects, whether a tier inherits a runtime default,
+and what adding or removing a tier will change.
 
-A user should be able to answer these questions at a glance:
+A user with write permission can add or remove a tier with one obvious action,
+choose model and effort from backend-provided options, keep a custom value where
+the runtime permits it, choose exactly one default, and save ordered tier policy
+without editing JSON.
 
-1. How many tiers does this profile define?
-2. Which tier is the default?
-3. Which model and effort level does each tier select?
-4. Does a tier inherit a runtime default?
-5. What will change if a tier is added or removed?
+The central design choice:
 
-A user with write permission should also be able to:
-
-1. add a tier with one obvious action,
-2. remove a tier with one obvious action,
-3. select a model from backend-provided options,
-4. select an effort level from backend-provided options,
-5. keep a custom model or effort value when the runtime permits it,
-6. choose exactly one default tier, and
-7. save canonical ordered tier policy without editing raw JSON.
-
-The primary product decision is:
-
-> Model and effort tiers are shown as an ordered, numbered vertical stack of tier cards. The number is structural, the default is explicit, and add or remove actions never hide the effect that array changes have on future tier-number requests.
+> Tiers are an ordered, numbered vertical stack of cards. The number is
+> structural, the default is explicit, and add or remove actions never hide their
+> effect on future tier-number requests.
 
 ---
 
-## 2. Current State and Gap
+## 2. Scope and Authority
 
-The Provider Profile API already accepts and validates:
+The editor covers the tier summary in the Provider Profiles collection, tier
+editing in the profile form, model and effort selectors, add/duplicate/remove and
+default selection, structural change warnings, draft state and save payloads,
+capability loading and degradation, layout, accessibility, and error placement.
 
-```yaml
-model_tiers:
-  - label: str | null
-    model: str | null
-    effort: str | null
-    parameters: object
-    annotations: object
+It does not change resolution order, launch-time fallback, command construction,
+profile selection or leasing, credentials, run diagnostics, or historical audit.
 
-default_model_tier: int
-```
-
-The current Settings table can display tier mappings. The current edit form still centers legacy `default_model` and `default_effort` fields and does not author `model_tiers` or `default_model_tier`.
-
-That produces four gaps:
-
-1. The tier mapping is visible but not directly editable.
-2. The default tier cannot be changed through the form.
-3. Adding or removing tiers requires API or database-level work.
-4. A frontend-only hard-coded model list would become stale and would duplicate provider policy.
-
-This design closes those gaps without moving launch-time authority into the browser.
+The browser submits ordered tier intent. The backend validates the full tier
+array and `default_model_tier`, applies provider and runtime constraints, rejects
+secret-like data in tier `parameters` or `annotations`, persists one coherent
+policy, and returns the normalized profile. The editor replaces its draft with
+that response rather than trusting its local copy.
 
 ---
 
-## 3. Scope and Authority
+## 3. Product Principles
 
-### 3.1 This document owns
+### 3.1 Order is visible
 
-This document owns the Settings contract for:
+Tier numbers are array positions, not labels or database identities. Tiers
+render in ascending order with an ordered-list treatment, and the number is
+never an editable input.
 
-- tier summary display in the Provider Profiles collection,
-- tier editing within the Provider Profile form,
-- model and effort selectors,
-- add, duplicate, remove, and default-selection behavior,
-- structural change warnings,
-- draft state and canonical save payloads,
-- capability loading and predictable degradation,
-- responsive layout,
-- accessibility,
-- frontend validation,
-- error presentation, and
-- UI acceptance criteria.
+### 3.2 The default is unmistakable
 
-### 3.2 This document does not own
+Exactly one tier is the default. It has a selected native radio, a visible
+`Default` badge, stronger border or surface emphasis, and a section summary such
+as `Default: Tier 2`. Color is never the only signal.
 
-This document does not redefine:
+### 3.3 Common actions stay light
 
-- model and effort resolution order,
-- tier fallback behavior at launch,
-- runtime command construction,
-- Provider Profile selection or leasing,
-- credential storage or materialization,
-- secret validation,
-- run diagnostics, or
-- historical execution audit semantics.
+Appending a tier, and removing a last tier that renumbers nothing, are
+lightweight. Changes that alter existing tier numbers explain their impact first.
 
-Those contracts remain owned by the Provider Profile, model tier, runtime, and Secrets designs.
+### 3.4 Runtime defaults are explicit
 
-### 3.3 Backend authority
+A null model or effort appears as an explicit `Runtime default` option, not a
+blank. Supporting text may show the inherited value when known (`Runtime default:
+gpt-5.5`); the stored value stays null.
 
-The browser submits ordered tier intent. The backend must:
+`Runtime default` is honest only if a null tier value actually resolves to the
+runtime default, so the inherited value shown in supporting text and in the
+effective preview comes from backend-reported resolution for that tier, not a
+frontend assumption. When the backend reports an inherited value from a source
+other than the runtime, the card names that source.
 
-1. validate the full tier array,
-2. validate `default_model_tier`,
-3. validate provider and runtime capability constraints,
-4. reject secret-like data in tier parameters or annotations,
-5. resolve tier policy without consulting a second persisted representation of model or effort,
-6. persist one coherent profile policy, and
-7. return the normalized Provider Profile.
+### 3.5 Choices come from the backend
 
-The frontend must replace its saved draft with the normalized response rather than assuming its local representation is authoritative.
+Model names and effort values change, so React holds no product-wide list. The
+backend supplies choices, constraints, support status, and custom-value policy
+for the profile, and existing unknown values stay visible and round-trippable.
 
----
+### 3.6 No casual reordering
 
-## 4. Product Principles
+There is no drag and drop. Reordering looks harmless but changes the meaning of
+every affected future `modelTier` request. Add appends; remove is always visible.
+Any future insertion or reordering would need the same renumbering preview as
+middle-tier removal.
 
-### 4.1 Order must be visible
+### 3.7 Future launches change, history does not
 
-Tier numbers are array positions. They are not labels and they are not independent database identities.
-
-The UI must always render tiers in ascending order with a persistent visual rail or equivalent ordered-list treatment. A tier number cannot be typed or edited directly.
-
-### 4.2 The default must be unmistakable
-
-Exactly one tier is the profile default. It must have all of the following:
-
-- a selected native radio control,
-- a visible `Default` badge,
-- a stronger border or surface emphasis, and
-- a section-level summary such as `Default: Tier 2`.
-
-Color alone must not communicate default state.
-
-### 4.3 Common actions stay easy
-
-Appending a tier and removing a last tier that does not renumber remaining tiers should be lightweight. Structural changes that alter existing tier numbers must explain their impact before applying.
-
-### 4.4 Runtime defaults are explicit values
-
-A null model or null effort is not shown as an unexplained blank. The selector exposes an explicit `Runtime default` option.
-
-When the runtime default is known, supporting text may show the current inherited value:
-
-```text
-Runtime default: gpt-5.5
-```
-
-The stored value remains null.
-
-`Runtime default` is only honest when a null tier value actually resolves to the runtime default. This contract therefore requires that no profile-level compatibility field sits between tier selection and the runtime default: a null tier `model` or `effort` must never resolve through `default_model` or `default_effort`. That resolution order is owned by [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md); removing the compatibility step is a prerequisite of this UI contract and lands with the tier-only persistence contract in §15.2.
-
-Two rules keep the editor honest regardless of resolver state:
-
-1. The inherited value shown in supporting text and in the §8.6 effective preview comes from backend-reported resolution for that tier, never from a frontend assumption about which source supplies it.
-2. When the backend reports an inherited value whose source is not the runtime, the card names that source instead of showing `Runtime default`.
-
-### 4.5 Backend-provided choices, not React constants
-
-Model names and effort values change. The frontend must not maintain a product-wide hard-coded list.
-
-The backend supplies choices, constraints, support status, and custom-value policy for the selected runtime and provider. Existing unknown values must remain visible and round-trippable.
-
-### 4.6 Controlled structural changes without unnecessary friction
-
-The initial design does not use drag and drop. Reordering tier cards looks harmless but changes the meaning of every affected future `modelTier` request.
-
-The primary add action appends. The primary remove action is always visible. Advanced insertion or reordering may be added later only with the same explicit renumbering preview required for middle-tier removal.
-
-### 4.7 Future launches change, historical runs do not
-
-The editor must state that saved profile policy affects future resolution. Existing run records retain the concrete model and effort captured at launch.
+The editor states that saved policy affects future resolution. Existing runs keep
+the concrete model and effort captured at launch.
 
 ---
 
-## 5. Placement in Settings
+## 4. Placement
 
-The canonical route remains:
-
-```text
-/settings/providers-secrets
-```
-
-No new Settings destination is required.
-
-Within the Provider Profile form, the desired section order is:
+The editor lives on `/settings/providers-secrets`, inside the Provider Profile
+form, ordered as:
 
 ```text
 Identity
@@ -209,23 +123,19 @@ Advanced profile options
 Save actions
 ```
 
-`Model and effort tiers` must be a full-width section. It must not be compressed into the existing three-column grid used for small scalar fields.
-
-The superseded `Default model` and `Default effort` inputs leave the primary form and are not replaced by a read-only mirror. The selected default tier is the only place a profile's default model and effort are authored or displayed.
-
-A profile row may expose an `Edit tiers` action that opens the normal profile editor and focuses this section. It does not create a second tier-specific persistence path.
+`Model and effort tiers` is a full-width section, not part of the compact grid
+used for scalar fields. The form has no separate `Default model` or `Default
+effort` input or read-only mirror; the selected default tier is the only place a
+profile's default model and effort are authored or shown. A profile row may offer
+`Edit tiers`, which opens the normal editor focused on this section rather than
+a second persistence path.
 
 ---
 
-## 6. Provider Profile Collection Summary
+## 5. Collection Summary
 
-The collection view must communicate tier policy without forcing the user to enter edit mode.
-
-### 6.1 Desktop summary
-
-Use a dedicated `Model policy` column when table width permits. Do not bury the full mapping inside an unrelated identity field.
-
-Compact state:
+The collection shows tier policy without entering edit mode. On desktop a
+dedicated `Model policy` column shows:
 
 ```text
 3 tiers
@@ -235,535 +145,285 @@ T2  Implementation     gpt-5.5 / xhigh
 +1 more
 ```
 
-Rules:
+The collapsed row shows the count, default tier, up to two mappings, and `+N
+more`; a row expansion or native `details` reveals every mapping. Null values read
+`Runtime default`, the default has an accessible text badge, exact values use
+monospace, and read-only users see the same mapping without edit controls.
 
-1. Show the total tier count.
-2. Show the default tier number.
-3. Show up to two tier mappings in the collapsed table row.
-4. Show `+N more` when additional tiers exist.
-5. Let the user expand the row or a native `details` region to inspect all mappings.
-6. Show `Runtime default` rather than an empty model or effort.
-7. Use a `Default` text badge or star with an accessible label in the expanded mapping.
-8. Keep exact model and effort values in monospace where practical.
-9. A read-only user can inspect the same mapping without edit controls.
+On narrow screens rows become cards (`Profile name`, `Harness / Provider`, `3
+model tiers · Default Tier 2`, `[Show tier mapping]`). The disclosure state is
+local and not persisted.
 
-### 6.2 Narrow screens
-
-On narrow screens, the Provider Profile table may become cards. Each card shows:
-
-```text
-Profile name
-Harness / Provider
-3 model tiers · Default Tier 2
-[Show tier mapping]
-```
-
-Expanding `Show tier mapping` reveals the ordered tier list. The disclosure state is local UI state and is not persisted.
-
-### 6.3 Profiles without usable tier data
-
-`model_tiers` is always populated by the Provider Profile contract, including for rows the backend migration converted from superseded default fields. The frontend never reconstructs tier policy from another persisted field.
-
-A response with missing or empty `model_tiers` is therefore a backend contract violation rather than a profile variant. The summary says so instead of inventing a tier:
-
-```text
-Tier policy unavailable · needs repair
-```
-
-The row keeps its `Edit tiers` action so a user with write permission can reach the repair state in §18.3.
+`model_tiers` is always populated by the profile contract, including rows
+converted from pre-tier fields, and the frontend never reconstructs tiers from
+another field. A missing or empty array is a backend contract violation, so the
+summary reads `Tier policy unavailable · needs repair` and keeps `Edit tiers` so
+a writer can reach the repair state (section 15.3).
 
 ---
 
-## 7. Tier Editor Overview
+## 6. Tier Editor
 
-### 7.1 Section anatomy
+### 6.1 Anatomy
 
 ```text
-┌ Model & effort tiers ───────────────────────────────────────────────────────┐
-│ Map workflow tier requests to a model and effort for this profile.         │
-│ Future launches use the saved policy. Historical runs keep their record.   │
-│ 3 tiers · Default: Tier 2                                                  │
-│                                                                            │
-│  ●  Tier 1  Plan and verify                                                │
-│  │  [○ Use as default]                                      [Remove tier]  │
-│  │  Model [gpt-5.5                         ▾]                               │
-│  │  Effort level [medium                   ▾]                               │
-│  │  Resolves to gpt-5.5 · medium                                           │
-│  │                                                                         │
-│  ●  Tier 2  Implementation                              [Default]           │
-│  │  [● Default tier]                                       [Remove tier]  │
-│  │  Model [gpt-5.5                         ▾]                               │
-│  │  Effort level [max                     ▾]                               │
-│  │  Resolves to gpt-5.5 · max                                             │
-│  │                                                                         │
-│  ●  Tier 3  Documentation audit                                           │
-│     [○ Use as default]                                      [Remove tier]  │
-│     Model [gpt-5.3-codex-spark             ▾]                              │
-│     Effort level [xhigh                    ▾]                              │
-│                                                                            │
-│ [+ Add tier]                                                               │
-└────────────────────────────────────────────────────────────────────────────┘
+┌ Model & effort tiers ───────────────────────────────────────────────┐
+│ Map workflow tier requests to a model and effort for this profile. │
+│ Future launches use the saved policy. Historical runs keep theirs. │
+│ 3 tiers · Default: Tier 2                                          │
+│                                                                    │
+│  ●  Tier 1  Plan and verify                                        │
+│  │  [○ Use as default]                 [Duplicate] [Remove tier]   │
+│  │  Model [gpt-5.5            ▾]  Effort level [medium       ▾]    │
+│  │  Resolves to gpt-5.5 · medium                                   │
+│  ●  Tier 2  Implementation                        [Default]        │
+│  │  [● Default tier]                   [Duplicate] [Remove tier]   │
+│  │  Model [gpt-5.5            ▾]  Effort level [max          ▾]    │
+│  ●  Tier 3  Documentation audit                                    │
+│     ...                                                            │
+│ [+ Add tier]                                                       │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-The circles and connecting line are illustrative. An ordered list with equally clear numbering is acceptable.
+An ordered list with equally clear numbering is an acceptable alternative to the
+rail.
 
-### 7.2 Surface hierarchy
+### 6.2 Surfaces and header
 
-The section follows the Dashboard Design System:
+Following the Dashboard Design System, the section body is a matte data slab,
+each tier card a grounded satin form surface with standard satin inputs; the
+default uses restrained violet emphasis, warnings amber, destructive confirmation
+rose, and no decorative glass appears in the stack.
 
-- the section body is a matte data slab,
-- each tier card is a grounded satin form surface,
-- inputs use the standard satin input treatment,
-- the default tier uses restrained violet emphasis,
-- warning states use amber,
-- destructive confirmation uses rose,
-- `Add tier` is a single full-width add action after the stack, and
-- decorative glass is not used inside the tier stack.
-
-### 7.3 Section header
-
-The header contains:
-
-- title: `Model & effort tiers`,
-- a one-sentence explanation,
-- tier count,
-- default tier summary,
-- capability loading or warning state when relevant.
-
-The header carries no actions. The section has exactly one `Add tier` action: a full-width button after the final card, where the appended tier appears. Each card puts its default-tier choice and its `Duplicate tier` / `Remove tier` actions on one wrapping row.
+The header holds the title `Model & effort tiers`, a one-sentence explanation,
+the tier count, the default summary, and any capability loading or warning
+state. It has no actions. The single `Add tier` action is a full-width button
+after the last card, where the new tier appears.
 
 ---
 
-## 8. Tier Card Contract
+## 7. Tier Card
 
-Each tier is one list item and one fieldset.
+Each tier is one list item and one fieldset. The legend names the tier only; the
+default choice and the `Duplicate tier` / `Remove tier` actions share a separate
+wrapping action row below the heading, so long labels never compete with actions.
 
-### 8.1 Tier number
+### 7.1 Number
 
-The tier number is visually dominant and derived from the current array index:
+The number is visually dominant and derived from the array index (index 0 is
+Tier 1). It is not an input, updates immediately after a confirmed structural
+change, and renumbering is announced. The React key is a stable draft-only client
+ID, never the index.
 
-```text
-index 0 -> Tier 1
-index 1 -> Tier 2
-index 2 -> Tier 3
-```
+### 7.2 Default selection
 
-Rules:
+Every card has a radio in one group named `Default model tier`, labelled `Default
+tier` when selected and `Use Tier N as default` otherwise. Choosing a default is
+immediate in the draft and never reorders cards.
 
-1. The number is not an input.
-2. The number updates immediately in local draft state after a confirmed structural change.
-3. The user receives an announcement when removal causes renumbering.
-4. The internal React key must not be the array index. Use a stable draft-only client ID.
+### 7.3 Label
 
-### 8.2 Default selection
+The optional label (`Plan and verify`, `Implementation`, `Escalation`) explains
+intended use and is never used for routing. A blank label shows as `Tier N`,
+whitespace is trimmed on save, and duplicates are allowed because order and
+number are authoritative.
 
-Every card contains a radio control in one group named `Default model tier`.
+### 7.4 Model
 
-Labels:
+The model control is a keyboard-filterable searchable combobox that always offers
+`Runtime default` followed by backend-provided choices. Custom entry is available
+only when capabilities allow it.
 
-- selected: `Default tier`,
-- unselected: `Use Tier N as default`.
-
-Selecting a new default is immediate in draft state and does not reorder cards.
-
-### 8.3 Label
-
-The optional label explains intended use.
-
-Examples:
-
-```text
-Plan and verify
-Implementation
-Escalation
-Documentation audit
-```
-
-Rules:
-
-1. The label is not used for routing.
-2. A blank label displays as `Tier N` in summaries.
-3. Leading and trailing whitespace is removed before save.
-4. Duplicate labels are allowed because order and number remain authoritative.
-5. The UI should recommend a concise label rather than enforce hidden semantic categories.
-
-### 8.4 Model
-
-The model control is a searchable combobox.
-
-It always exposes:
-
-```text
-Runtime default
-```
-
-It then exposes backend-provided model choices. Custom entry is available only when capability metadata allows it.
-
-Display behavior:
-
-- null value: `Runtime default`,
-- known value: backend-provided label plus exact value when they differ,
-- deprecated value: keep selectable with a `Deprecated` warning,
-- unknown existing value: show `Custom or unavailable` and preserve it,
-- incompatible value after runtime or provider change: keep it visible, show an error, and require a valid choice before save unless the backend explicitly permits it.
-
-The combobox must support keyboard filtering and must not require a mouse.
-
-### 8.5 Effort level
-
-The visible label is `Effort level`.
-
-The control shape comes from backend capabilities:
-
-| Capability | UI control |
+| Value | Display |
 | --- | --- |
-| Supported with a closed option set | Select |
-| Supported with custom values | Searchable combobox |
-| Metadata only | Select or combobox plus `Metadata only` explanation |
+| null | `Runtime default` |
+| known | backend label, plus exact value when they differ |
+| deprecated | selectable with a `Deprecated` warning |
+| unknown existing | `Custom or unavailable`, preserved |
+| incompatible after a Harness/Provider change | visible with an error; a valid choice is required before save unless the backend permits it |
+
+### 7.5 Effort level
+
+The control shape follows backend capabilities:
+
+| Capability | Control |
+| --- | --- |
+| Closed option set | Select |
+| Custom values allowed | Searchable combobox |
+| Metadata only | Select or combobox with a `Metadata only` explanation |
 | Unsupported | Disabled field reading `Not supported by this runtime` |
-| Capability unavailable | Preserve current value and show catalog warning |
+| Capabilities unavailable | Current value preserved with a catalog warning |
 
-A supported effort control always includes `Runtime default` as the null option. Options are listed in ascending order of effort; the default catalog offers `low`, `medium`, `high`, `xhigh`, and `max`, with `max` above `xhigh`. While capabilities are unavailable, the editor offers the same values as a fallback and shows a saved value outside them only once, as custom or unavailable. Once capabilities load, an unavailable option or one whose `compatible_models` excludes the selected model is disabled. A null model uses the backend-reported runtime default for this check. Changing a model or effort to an incompatible pair blocks saving with a field error and preserves the draft; an unchanged saved pair remains inspectable and round-trippable. OpenCode capability responses derive compatibility from the same model support catalog used at launch, so seeded models ending at `xhigh` never advertise `max` as compatible. Without a compatible observed model, the OpenCode draft catalog marks `max` unavailable.
+A supported control always includes `Runtime default`. Options ascend in effort;
+the default catalog is `low`, `medium`, `high`, `xhigh`, `max`, and the same values
+serve as a fallback while capabilities are unavailable, with an out-of-catalog
+saved value shown once as custom or unavailable. Once capabilities load, an
+unavailable option, or one whose `compatible_models` excludes the selected model
+(using the backend-reported runtime default for a null model), is disabled.
+Changing to an incompatible pair blocks save with a field error but keeps the
+draft; an unchanged saved pair stays round-trippable. OpenCode derives
+compatibility from the same model support catalog used at launch, so seeded
+models that top out at `xhigh` never advertise `max`, and without a compatible
+observed model the draft catalog marks `max` unavailable.
 
-When effort support depends on the selected model, changing the model refreshes the compatible effort choices. The UI does not silently clear an incompatible effort. It marks the field and asks the user to choose a valid value.
+When effort support depends on the model, changing the model refreshes effort
+choices; an incompatible effort is marked for the user to fix, never cleared.
 
-### 8.6 Effective preview
+### 7.6 Effective preview
 
-When enough information is available, each card shows a compact preview:
+When enough information is available, a card shows an advisory preview such as
+`Resolves to gpt-5.5 · medium`, from capability metadata or a backend preview.
+Fallbacks are labelled honestly: `Model uses runtime default: gpt-5.5`, `Effort is
+stored as xhigh but this runtime reports metadata-only support`, or `Runtime
+default is not currently known`. The editor distinguishes effort applied
+natively, through config, through environment, metadata only, unsupported, and
+unknown, and never labels a stored effort as applied when the runtime says
+otherwise.
 
-```text
-Resolves to gpt-5.5 · medium
-```
+### 7.7 Advanced tier data
 
-The preview is advisory. It may use capability metadata or a backend preview endpoint. The UI must label fallback, unsupported effort, or unresolved runtime defaults honestly.
+`parameters` and `annotations` belong to the tier object but are not primary
+fields. An `Advanced tier options` disclosure offers constrained structured
+editors for non-secret parameters, annotations, and server diagnostics. Collapsed
+data is preserved exactly, unknown keys are kept, credentials and credential
+references are rejected, JSON parse errors stay local to the card, and the normal
+model and effort workflow never requires opening it.
 
-Examples:
+### 7.8 Duplicate
 
-```text
-Model uses runtime default: gpt-5.5
-Effort is stored as xhigh but this runtime reports metadata-only support
-Runtime default is not currently known
-```
-
-### 8.7 Advanced tier data
-
-`parameters` and `annotations` remain part of the canonical tier object. They are not shown as primary fields.
-
-Each card may expose an `Advanced tier options` disclosure containing constrained structured editors for:
-
-- non-secret runtime parameters,
-- annotations, and
-- server validation diagnostics.
-
-Rules:
-
-1. Collapsed advanced data must be preserved exactly through ordinary edits.
-2. Unknown keys must not be dropped.
-3. Raw credentials and credential references are not accepted here.
-4. JSON parse errors remain local to the tier card.
-5. The primary model and effort workflow must not require opening this disclosure.
-
-### 8.8 Card actions
-
-Each card exposes:
-
-- `Remove tier`,
-- `Duplicate tier` (accessible name `Duplicate Tier N as new last tier`), in a secondary action area or button, and
-- optional `Reset model and effort to runtime defaults`.
-
-Duplicate behavior copies label, model, effort, parameters, and annotations, appends the copy, and does not make it the default. The copied label may gain `copy` in draft state to reduce ambiguity.
-
-Duplicate and Remove live in their own wrapping action area below the tier
-heading (MoonMind#4559), not inside the legend competing with the tier name
-and default badge. The legend names the group only. On phones the tier list
-uses restrained nesting (one card border, unstyled inner fieldset) with
-stacked label/model/effort fields.
+`Duplicate tier` (accessible name `Duplicate Tier N as new last tier`) copies the
+label, model, effort, parameters, and annotations, appends the copy, and does not
+make it the default. The draft label may gain `copy` to reduce ambiguity. A card
+may also offer `Reset model and effort to runtime defaults`.
 
 ---
 
-## 9. Add Tier Behavior
+## 8. Adding a Tier
 
-The `Add tier` action appends one tier. Appending preserves every existing tier number.
-
-Default new tier:
-
-```yaml
-label: null
-model: null
-effort: null
-parameters: {}
-annotations: {}
-```
-
-Interaction sequence:
-
-1. Append the tier to local draft state.
-2. Assign a stable draft-only client ID.
-3. Update the visible count.
-4. Scroll the new card into view when needed.
-5. Move focus to the new tier label or model control.
-6. Announce `Tier N added` through a polite live region.
-7. Leave the current default unchanged.
-
-When the backend advertises a maximum tier count, `Add tier` is disabled at that maximum with an explanation.
-
-The UI must never auto-populate a new tier by guessing that higher numbers mean higher quality, higher cost, or higher effort.
+`Add tier` appends a runtime-default tier (`label`, `model`, `effort` null; empty
+`parameters` and `annotations`) with a new client ID, preserving every existing
+number and the current default. The count updates, the card scrolls into view,
+focus moves to its label or model control, and `Tier N added` is announced
+politely. At a backend-advertised maximum the action is disabled with an
+explanation. New tiers are never pre-filled on the assumption that higher numbers
+mean more quality, cost, or effort.
 
 ---
 
-## 10. Remove Tier and Renumbering Behavior
+## 9. Removing a Tier
 
-A profile must always contain at least one tier.
+A profile always has at least one tier.
 
-### 10.1 Removal matrix
-
-| Requested removal | Required behavior |
+| Removal | Behavior |
 | --- | --- |
-| Only remaining tier | Disable removal and explain the minimum-one-tier rule |
-| Last tier, not default | Remove immediately in draft state and offer Undo |
-| Any default tier | Confirm removal and require or confirm the new default |
-| Any non-last tier | Confirm removal and show every tier-number change |
-| Tier with unsaved advanced edits | Include that fact in the confirmation |
+| Only remaining tier | Disabled, with the minimum-one-tier explanation |
+| Last tier, not default | Removed immediately in the draft, with Undo |
+| Default tier | Confirmation requiring a reviewed new default |
+| Non-last tier | Confirmation listing every number change |
+| Tier with unsaved advanced edits | The confirmation says so |
 
-### 10.2 Middle-tier confirmation
-
-Removing a non-last tier changes the meaning of later tier numbers. The confirmation must show the mapping, not only a generic warning.
-
-Example:
+Removing a non-last tier changes what later numbers mean, so the confirmation
+shows the mapping:
 
 ```text
 Remove Tier 2?
 
 This changes future tier-number resolution for this profile:
-
 Tier 3: Documentation audit -> becomes Tier 2
 Tier 4: Escalation          -> becomes Tier 3
 
 Existing historical runs do not change.
-
 [Cancel] [Remove and renumber]
 ```
 
-### 10.3 Removing the default tier
+Removing the default adds a required `New default tier` choice. The editor may
+preselect the tier that will occupy the removed position, else the previous one,
+but the user reviews it; a new default is never assigned silently.
 
-When the removed tier is the default, the confirmation includes a required `New default tier` choice among surviving cards.
-
-The UI may preselect the nearest surviving tier:
-
-1. choose the tier that will occupy the removed ordinal after removal,
-2. otherwise choose the previous tier.
-
-The user must be able to review or change that choice before confirming.
-
-The UI must not silently assign a new default after a destructive action.
-
-### 10.4 Undo
-
-After a last-tier removal that does not renumber remaining tiers, show an Undo notice while the form remains open. Undo restores:
-
-- the tier at its former position,
-- its stable draft client ID,
-- its field values, and
-- the former default selection if applicable.
-
-Undo is local draft behavior. It does not create a second backend write.
+Undo after a non-renumbering last-tier removal restores the tier at its position
+with its client ID, values, and former default status. Undo is local and makes no
+backend write.
 
 ---
 
-## 11. Reordering and Insertion Policy
+## 10. Editor Capabilities
 
-The initial Settings design does not expose drag and drop, editable tier numbers, or a casual `Move up` action.
+### 10.1 Why capabilities are profile-scoped
 
-Rationale:
-
-- tier order is execution policy,
-- reordering changes existing numeric references,
-- drag and drop is difficult to make predictable and accessible, and
-- appending satisfies the common add-tier case without changing existing numbers.
-
-A later implementation may add `Insert after`, `Move up`, or `Move down` only when all of these are true:
-
-1. it uses the same renumbering impact preview as middle-tier removal,
-2. keyboard operation is complete,
-3. the save diff shows old and new mappings, and
-4. the user confirms the structural policy change.
-
-Users can still change the model, effort, and label of any existing tier without reordering it.
-
----
-
-## 12. Backend-Driven Editor Capabilities
-
-### 12.1 Requirement
-
-Settings needs profile-aware selector metadata. The current boot payload default model map is not enough to define model choices, effort support, compatibility, or custom-value policy.
-
-Runtime and provider identity alone cannot answer the question the editor asks. Two profiles can share a runtime and provider while holding different credentials, credential generations, or pinned host images. MoonMind already persists model-catalog evidence per Provider Profile in `ProviderProfile.model_catalog_evidence_json` and treats that evidence as current only when it matches the profile's `credential_generation` and the pinned host image ref. A runtime-and-provider-only answer can therefore offer a model the edited profile cannot launch and defer the failure until launch time.
-
-Capabilities are consequently scoped to the profile being edited:
+Runtime and provider alone cannot say what the edited profile can launch. Two
+profiles may share both but differ in credentials, credential generation, or
+pinned host image. MoonMind stores model-catalog evidence per profile
+(`model_catalog_evidence_json`) and treats it as current only when it matches the
+profile's `credential_generation` and pinned image. A runtime/provider answer
+could offer a model the profile cannot launch and defer the failure to launch.
 
 ```http
 GET /api/v1/provider-profiles/{profile_id}/capabilities
-```
-
-A create form has no profile yet, so it supplies the draft runtime and provider instead:
-
-```http
 GET /api/v1/provider-profiles/capabilities?runtime_id={runtime_id}&provider_id={provider_id}
 ```
 
-The draft response is advisory: it is not bound to any profile's evidence, and the editor refetches profile-scoped capabilities once the profile exists. The static `capabilities` route must be registered before a dynamic `/{profile_id}` route where framework routing requires it.
+The second form serves the create form, which has no profile yet. Its result is
+advisory and not bound to any evidence; the editor refetches profile-scoped
+capabilities once the profile exists. Both are built by
+`api_service/services/provider_profile_tier_capabilities.py`.
 
-### 12.2 Suggested response contract
+### 10.2 Response shape
 
-```yaml
-ProviderProfileEditorCapabilities:
-  version: string
-  profile_id: string | null
-  runtime_id: string
-  provider_id: string
+The response carries an opaque `version`; the `profile_id`, `runtime_id`, and
+`provider_id`; an `evidence` block (`source` of `profile_catalog_evidence` or
+`runtime_draft`, `credential_generation`, `image_ref`, `observed_at`, `stale`);
+`tier_constraints` (`min_count`, `max_count`); a `model` block
+(`runtime_default`, `allow_custom`, and `options` with value, label, description,
+status `available | deprecated | unavailable`, and `recommended`); an `effort`
+block (`supported`, `runtime_default`, `allow_custom`, `application` of `native |
+config | environment | metadata_only | unsupported | unknown`, and options with
+`compatible_models`); and `diagnostics`. The backend response, not this
+document, is the source of truth for values.
 
-  evidence:
-    source: profile_catalog_evidence | runtime_draft
-    credential_generation: int | null
-    image_ref: string | null
-    observed_at: string | null
-    stale: bool
+`version` changes whenever the option sets or evidence identity change, so a
+client can detect stale choices without parsing it. Options with
+`profile_catalog_evidence` are valid only for the named profile, generation, and
+image, and never reused for another profile sharing runtime and provider.
 
-  tier_constraints:
-    min_count: 1
-    max_count: int | null
+### 10.3 Rules
 
-  model:
-    runtime_default: string | null
-    allow_custom: bool
-    options:
-      - value: string
-        label: string
-        description: string | null
-        status: available | deprecated | unavailable
-        recommended: bool
+- The endpoint contains no credentials.
+- Options are advisory for existing values and authoritative for whether new
+  custom values are allowed. Existing values missing from the catalog stay
+  visible; deprecated values stay round-trippable until changed or rejected;
+  removed values show an actionable warning.
+- The write endpoint still validates everything. `version` and evidence may be
+  sent as advisory metadata to detect stale choices.
+- The frontend never infers model options from runtime name or effort support
+  from provider name.
+- A saved profile's capabilities are fetched by `profile_id`, never substituted
+  by a draft response. A response whose profile, generation, or image no longer
+  matches the loaded profile is stale: the editor refetches and meanwhile treats
+  observed options as unavailable for new selections.
+- `evidence.stale = true` means the catalog needs re-validation: existing values
+  stay, observed choices are disabled, and an explicit `model.allow_custom =
+  true` still permits manual entry.
 
-  effort:
-    supported: bool
-    runtime_default: string | null
-    allow_custom: bool
-    application: native | config | environment | metadata_only | unsupported | unknown
-    options:
-      - value: string
-        label: string
-        description: string | null
-        status: available | deprecated | unavailable
-        compatible_models: [string] | null
+### 10.4 Degradation
 
-  diagnostics:
-    - code: string
-      level: info | warning | error
-      message: string
-```
-
-Illustrative response:
-
-```json
-{
-  "version": "codex_cli:openai:42",
-  "profile_id": "codex-cli-openai",
-  "runtime_id": "codex_cli",
-  "provider_id": "openai",
-  "evidence": {
-    "source": "profile_catalog_evidence",
-    "credential_generation": 3,
-    "image_ref": "ghcr.io/example/codex-host@sha256:0f1e2d3c",
-    "observed_at": "2026-08-26T18:04:11Z",
-    "stale": false
-  },
-  "tier_constraints": {
-    "min_count": 1,
-    "max_count": null
-  },
-  "model": {
-    "runtime_default": "gpt-5.5",
-    "allow_custom": true,
-    "options": [
-      {
-        "value": "gpt-5.5",
-        "label": "GPT-5.5",
-        "description": "General coding model",
-        "status": "available",
-        "recommended": true
-      }
-    ]
-  },
-  "effort": {
-    "supported": true,
-    "runtime_default": "medium",
-    "allow_custom": false,
-    "application": "native",
-    "options": [
-      {"value": "low", "label": "Low", "status": "available", "compatible_models": null},
-      {"value": "medium", "label": "Medium", "status": "available", "compatible_models": null},
-      {"value": "high", "label": "High", "status": "available", "compatible_models": null},
-      {"value": "xhigh", "label": "Extra high", "status": "available", "compatible_models": null},
-      {"value": "max", "label": "Max", "status": "available", "compatible_models": null}
-    ]
-  },
-  "diagnostics": []
-}
-```
-
-`version` is an opaque option-catalog identity. It changes whenever the option sets or the `evidence` identity behind them change, so a client can detect that the choices it authored against are stale without interpreting the string.
-
-`model.options` and `effort.options` are the catalog observed for the reported `evidence` identity. A response with `evidence.source = profile_catalog_evidence` is valid only for the named `profile_id`, credential generation, and image ref; it is never reused for another profile that happens to share a runtime and provider.
-
-The example values are illustrative. The backend response, not this document, is the current source of truth.
-
-### 12.3 Capability rules
-
-1. The endpoint contains no credentials.
-2. Options are advisory for existing values and authoritative for whether new custom values are allowed.
-3. An existing value missing from the catalog remains visible.
-4. A deprecated existing value remains round-trippable until the user changes it or backend policy rejects it.
-5. A removed or unavailable value is shown with an actionable warning.
-6. The response `version` and its `evidence` identity are submitted as optional advisory metadata, or used with a preview request, to detect stale choices.
-7. The write endpoint still validates everything.
-8. The frontend must not infer effort support from provider name.
-9. The frontend must not infer model options from runtime name.
-10. Capabilities for a saved profile are requested by `profile_id`. A runtime-and-provider draft response must not be substituted for a saved profile.
-11. A response whose `profile_id`, `credential_generation`, or `image_ref` no longer matches the loaded profile is stale. The editor refetches, and until that succeeds it treats observed catalog options as unavailable for new selections rather than authoritative.
-12. `evidence.stale = true` means the profile's catalog evidence needs re-validation. Existing values stay visible, observed catalog choices are disabled, and an explicit `model.allow_custom = true` remains authoritative for manual entry.
-
-### 12.4 Safe degradation
-
-If capabilities fail to load:
-
-- current values remain visible,
-- `Runtime default` remains available,
-- no existing value is erased,
-- an inline warning states that model choices could not be refreshed,
-- custom entry follows the loaded capability policy independently of catalog freshness,
-- `model.allow_custom = true` keeps manual entry available while observed catalog choices are stale,
-- unknown new custom entry is disabled when no authoritative capability response allows it,
-- saving unchanged tier values remains possible when server validation permits it, and
-- server validation errors are mapped back to the affected tier and field.
-
-The same rules apply when the profile's catalog evidence is missing or stale.
-The editor states that observed choices reflect no current profile evidence and
-preserves existing values. Manual entry is permitted only when the
-profile-scoped capability response explicitly sets `model.allow_custom = true`;
-the write and launch boundaries remain responsible for validation.
-
-A capability failure must not turn the whole Provider Profiles section into an empty state.
+When capabilities fail to load, or evidence is missing or stale, current values
+stay visible, `Runtime default` remains available, nothing is erased, and an
+inline warning reads "Model choices could not be refreshed. Existing values are
+preserved. Server validation remains authoritative." Manual entry follows the
+loaded `model.allow_custom` policy and is disabled when no authoritative response
+allows it. Unchanged values remain saveable when the server permits, and server
+errors map back to the affected tier and field. A capability failure never turns
+the Provider Profiles section into an empty state, and the rest of the editor
+stays usable.
 
 ---
 
-## 13. Declarative Frontend State
+## 11. Draft State
 
-Array indexes are unstable during editing. The frontend draft needs stable client identities.
-
-Suggested model:
+Indexes shift during editing, so the draft gives each tier a stable client ID:
 
 ```ts
-export type ProviderProfileTierDraft = {
+type ProviderProfileTierDraft = {
   clientId: string;
   label: string;
   model: string | null;
@@ -771,511 +431,194 @@ export type ProviderProfileTierDraft = {
   parameters: Record<string, unknown>;
   annotations: Record<string, unknown>;
 };
-
-export type ProviderProfileTierEditorDraft = {
-  tiers: ProviderProfileTierDraft[];
-  defaultTierClientId: string;
-  sourceProfileUpdatedAt: string | null;
-  optionCatalogVersion: string | null;
-  structuralChanges: TierStructuralChange[];
-};
-
-export type TierStructuralChange =
-  | { type: 'append'; clientId: string }
-  | { type: 'remove'; clientId: string; previousIndex: number }
-  | { type: 'restore'; clientId: string; index: number };
 ```
 
-Rules:
-
-1. `clientId` exists only in frontend draft state.
-2. The canonical payload never persists `clientId`.
-3. The selected default follows `clientId`, not an array index, while editing.
-4. On save, `default_model_tier` is computed as the selected tier index plus one.
-5. Server validation paths such as `model_tiers.2.effort` map back to the matching draft card.
-6. Cancel restores the profile response, not a partially normalized local copy.
-7. `optionCatalogVersion` holds the `version` of the capability response the draft was authored against, so a refetch can report that the available choices moved.
+The editor draft also tracks `defaultTierClientId`, the source profile's
+`updated_at`, the capability `version` it was authored against, and a log of
+structural changes (append, remove, restore). Client IDs never reach the payload.
+The default follows the client ID while editing and becomes `index + 1` on save.
+Server paths such as `model_tiers.2.effort` map back to the matching card. Cancel
+restores the server profile, not a partially normalized copy.
 
 ---
 
-## 14. Load and Normalization
+## 12. Load and Normalization
 
-### 14.1 Canonical profile
+A non-empty `model_tiers` array produces one card per entry in order, preserving
+parameters and annotations and selecting `default_model_tier`. An internally
+invalid response surfaces an error; a malformed default is not silently clamped,
+though the editor may select Tier 1 temporarily so controls stay usable while it
+shows that the profile needs repair.
 
-When `model_tiers` is a non-empty array:
-
-1. create one draft card for each entry,
-2. preserve array order,
-3. preserve parameters and annotations,
-4. select `default_model_tier`, and
-5. surface an error if the server response is internally invalid.
-
-The UI must not silently clamp a malformed saved default during editing. It may choose Tier 1 temporarily to keep controls usable, but it must show that the profile requires repair.
-
-### 14.2 One canonical source
-
-The backend migration owned by [Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md) converts pre-tier rows into canonical `model_tiers`, so every Provider Profile response carries tier policy. The editor loads that one source and derives tier drafts from nothing else.
-
-Missing or empty `model_tiers` is a contract violation, not a profile shape to normalize. Load the repair state in §18.3, keep the rest of the section usable, and do not synthesize a tier from any other profile field or present a synthesized value as saved policy.
+The backend migration described in
+[Provider Profile Model and Effort Tiers](../Security/ProviderProfileModelEffortTiers.md)
+converts pre-tier rows, so every response carries tier policy and the editor
+derives drafts from nothing else. Missing or empty `model_tiers` loads the repair
+state (section 15.3) rather than a synthesized tier presented as saved policy.
 
 ---
 
-## 15. Save Contract
+## 13. Save Contract
 
-### 15.1 Canonical payload
-
-The editor submits ordered canonical fields:
+### 13.1 Payload
 
 ```json
 {
   "model_tiers": [
-    {
-      "label": "Plan and verify",
-      "model": "gpt-5.5",
-      "effort": "medium",
-      "parameters": {},
-      "annotations": {}
-    },
-    {
-      "label": "Implementation",
-      "model": "gpt-5.5",
-      "effort": "xhigh",
-      "parameters": {},
-      "annotations": {}
-    }
+    {"label": "Plan and verify", "model": "gpt-5.5", "effort": "medium", "parameters": {}, "annotations": {}},
+    {"label": "Implementation", "model": "gpt-5.5", "effort": "xhigh", "parameters": {}, "annotations": {}}
   ],
   "default_model_tier": 2
 }
 ```
 
-For a focused tier save, use a partial PATCH containing only tier policy fields and optional concurrency metadata. This avoids overwriting credentials, activation state, or limits that changed elsewhere.
+A focused tier save is a partial PATCH containing only tier fields (and optional
+concurrency metadata), so it cannot overwrite credentials, activation, or limits
+changed elsewhere. The whole-profile form may submit the same fields with the
+rest of the profile.
 
-The whole-profile form may submit the same fields with the rest of the profile payload.
+<a id="152-tier-only-persistence"></a>
 
-### 15.2 Tier-only persistence
+### 13.2 Tier-only persistence
 
-`model_tiers` and `default_model_tier` are the only persisted representation of a profile's model and effort policy:
+`model_tiers` and `default_model_tier` are the authored representation of a
+profile's model and effort policy. The editor submits them and nothing else that
+expresses a default model or effort, and never derives `default_model` or
+`default_effort` client-side. A second authored representation is what would let
+canonical and mirrored values disagree. The backend still exposes scalar
+`default_model` and `default_effort` fields on the profile; they are not authored
+by this editor, and a null tier value is meant to resolve to the runtime default
+rather than through them (see
+[Provider Profiles](../Security/ProviderProfiles.md#55-default-model-ownership)).
+Runs persist the concrete model and effort resolved at launch, so history never
+depends on current profile policy.
 
-1. the frontend submits `model_tiers` and `default_model_tier`, and nothing else that expresses a model or effort default,
-2. the backend validates and persists that policy, and
-3. the backend returns the normalized profile without a derived default model or default effort mirror.
+### 13.3 Structural change summary
 
-There is no client-side derivation of `default_model` or `default_effort`, and no compatibility period in which the editor writes both representations. A second persisted representation is what lets canonical and mirrored values disagree at all, and MoonMind's pre-release policy removes a superseded contract together with its callers instead of extending it with an alias.
-
-That cohesive change removes:
-
-- `default_model` and `default_effort` from the Provider Profile read and write contracts,
-- the compatibility step between tier selection and runtime defaults in launch-time resolution (§4.4), and
-- the remaining callers, fixtures, and tests that assert the mirrored behavior.
-
-No persisted-history cutover is required. Runs persist the concrete model and effort resolved at launch, so historical audit never reads current profile policy (§4.7). Tier policy for existing rows comes from the backend migration described in §14.2, not from a retained mirror.
-
-### 15.3 Structural change summary
-
-When a draft contains structural changes or a new default, show a compact summary above the final Save action:
+When the draft has structural changes or a new default, a summary appears above
+Save:
 
 ```text
 Tier policy changes
-
 Added Tier 4
 Removed former Tier 2
 Former Tier 3 becomes Tier 2
 Default changes from Tier 1 to Tier 2
-
 These changes affect future launches that resolve this Provider Profile.
 ```
 
-Ordinary model, effort, or label edits may appear in the same diff without requiring a second confirmation modal.
+Ordinary model, effort, or label edits may appear in the same diff without
+another confirmation.
 
-### 15.4 Concurrency
+### 13.4 Concurrency
 
-Where the Provider Profile API exposes an ETag, profile version, or expected update timestamp, the save must include it.
+Where the API exposes an ETag, version, or expected update timestamp, the save
+sends it. A stale write returns a conflict rather than overwriting newer policy,
+and the editor offers `Reload latest profile` (and `Review my draft against
+latest` when a merge view exists). A save is never reported as successful when
+the profile changed concurrently.
 
-A stale write returns a conflict response rather than silently overwriting newer policy. The UI then offers:
+### 13.5 Completion
 
-- `Reload latest profile`, and
-- `Review my draft against latest` when a merge view exists.
-
-The initial implementation may begin with reload-on-conflict. It must not claim a save succeeded when the profile changed concurrently.
-
-### 15.5 Save completion
-
-On success:
-
-1. replace local state with the server response,
-2. clear the structural change log,
-3. update the Provider Profiles query cache,
-4. announce `Model tier policy saved`, and
-5. keep the user near the tier section.
-
-Do not optimistically replace the collection summary before the server accepts and normalizes the policy.
+On success the editor replaces local state with the server response, clears the
+structural log, updates the Provider Profiles query cache, announces `Model tier
+policy saved`, and keeps the user near the section. The collection summary is not
+updated optimistically before the server normalizes the policy.
 
 ---
 
-## 16. Validation and Error Placement
+## 14. Validation
 
-### 16.1 Frontend validation
+Before submit the editor checks: at least one tier; exactly one default that
+exists in the draft; trimmed labels; model and effort null or permitted;
+`parameters` and `annotations` are objects; capability-blocked values resolved
+where required. This aids usability and does not replace backend validation.
 
-Before submit, enforce:
-
-```text
-tiers.length >= 1
-exactly one default tier is selected
-default tier exists in the draft array
-label is trimmed
-model is null or a permitted string
-effort is null or a permitted string
-parameters is an object
-annotations is an object
-capability-blocked values are resolved when required
-```
-
-Frontend validation improves usability. It does not replace backend validation.
-
-### 16.2 Backend validation mapping
-
-Map errors to the smallest relevant surface:
-
-| Error path | UI location |
+| Error path | Shown at |
 | --- | --- |
-| `model_tiers` | Section-level error |
-| `model_tiers.1.model` | Tier 2 model control |
-| `model_tiers.1.effort` | Tier 2 effort control |
+| `model_tiers` | Section error |
+| `model_tiers.1.model` / `.effort` | Tier 2 model / effort control |
 | `model_tiers.1.parameters` | Tier 2 advanced disclosure |
-| `default_model_tier` | Default radio group and section summary |
+| `default_model_tier` | Default radio group and summary |
 | capability or stale version | Section warning or conflict panel |
 
-The first invalid control receives focus after a failed save. A section-level summary links to every invalid tier.
-
-### 16.3 Unsupported effort
-
-The UI must distinguish these states:
-
-- `Applied natively`,
-- `Applied through config`,
-- `Applied through environment`,
-- `Metadata only`,
-- `Unsupported`, and
-- `Unknown`.
-
-It must not label a stored effort as applied when the runtime reports otherwise.
+After a failed save the first invalid control receives focus, a section summary
+links to every invalid tier, and every draft value is kept; the editor never
+closes or resets.
 
 ---
 
-## 17. Harness or Provider Changes
+## 15. Harness/Provider Changes and Other States
 
-Harness and Provider selection determine tier capabilities through their existing
-canonical `runtime_id` and `provider_id` values. The
-[selection design](./HarnessProfileBackendSelection.md) owns identity labels and
-Backend disclosure; tier inheritance and serialized runtime defaults retain the
-model-policy meanings defined here.
+### 15.1 Harness or Provider changes
 
-When either field changes in a create form:
+Harness and Provider determine capabilities through canonical `runtime_id` and
+`provider_id`; the [selection design](./HarnessProfileBackendSelection.md) owns
+their labels and Backend disclosure. When either changes in a create form, the
+editor fetches new capabilities, keeps tier drafts, revalidates every value,
+marks incompatible ones in place without replacing them, offers `Reset
+incompatible values to runtime defaults` (listing affected tiers, such as `Tier 1
+model -> Runtime default`, before applying), and blocks save only for values the
+new policy rejects. On an existing profile `runtime_id` is immutable, so
+capability changes come only from Provider edits or catalog changes.
 
-1. fetch new capabilities,
-2. preserve tier drafts temporarily,
-3. revalidate every model and effort,
-4. mark incompatible values in place,
-5. never silently replace a model or effort,
-6. offer `Reset incompatible values to runtime defaults`, and
-7. block save only for values the new backend policy cannot accept.
+### 15.2 Loading
 
-When editing an existing profile, immutable `runtime_id` ownership remains authoritative. If Harness is not editable, capability changes come only from Provider edits or backend catalog changes.
+While profile data loads, the section header and tier skeletons render; no
+default model or effort input appears. While capabilities load, current values
+show immediately and only the choice menus are disabled, so cards do not jump.
 
-A reset action must list the affected tiers before applying:
+### 15.3 Empty tier data (repair)
 
-```text
-Tier 1 model -> Runtime default
-Tier 2 effort -> Runtime default
-```
+An empty tier array is invalid, so the editor shows "This profile has no model
+tiers and cannot be saved in this state." with `[Create runtime-default Tier 1]`,
+which creates one local runtime-default tier selected as default.
 
----
+### 15.4 Read-only users
 
-## 18. Loading, Empty, Read-Only, and Failure States
-
-### 18.1 Loading profile data
-
-Show the section header and tier-card skeletons. Do not render a superseded default model or default effort input while canonical tier data loads.
-
-### 18.2 Loading capabilities
-
-Show current model and effort values immediately. Disable only the choice menu while options load. Preserve text and layout so cards do not jump.
-
-### 18.3 Empty tier data
-
-A truly empty tier array is invalid. The UI renders a repair state rather than a blank section:
-
-```text
-This profile has no model tiers and cannot be saved in this state.
-[Create runtime-default Tier 1]
-```
-
-The repair action creates one local runtime-default tier and selects it as default.
-
-### 18.4 Read-only permission
-
-Read-only users see:
-
-- the full ordered stack,
-- default state,
-- model and effort values,
-- runtime-default explanations,
-- capability diagnostics, and
-- advanced metadata where authorized.
-
-They do not see enabled add, duplicate, remove, reset, or save controls. Inputs render as values rather than disabled low-contrast form fields.
-
-### 18.5 Capability error
-
-Show a scoped warning:
-
-```text
-Model choices could not be refreshed. Existing values are preserved. Server validation remains authoritative.
-```
-
-The rest of the Provider Profile editor remains usable.
-
-### 18.6 Save error
-
-Keep every draft value. Do not close or reset the editor. Show field errors inline and a concise top summary.
+Read-only users see the full ordered stack, default, values, runtime-default
+explanations, capability diagnostics, and authorized advanced metadata, rendered
+as values rather than low-contrast disabled inputs, with no add, duplicate,
+remove, reset, or save controls.
 
 ---
 
-## 19. Responsive Layout
+## 16. Layout and Accessibility
 
-### 19.1 Wide desktop
+On wide screens model and effort share one row, with label, default radio, and
+actions in the card header; on tablets they stay side by side only while each
+keeps a usable width. On phones each tier is a full-width card with the number at
+the top, stacked full-width controls, text-labelled destructive actions, and the
+trailing full-width `Add tier`. The ordered list drops its indentation at narrow
+widths, tier fieldsets opt out of their intrinsic `min-content` minimum, and
+nesting is restrained (one card border, unstyled inner fieldset), so the editor
+never scrolls horizontally.
 
-A tier card uses a compact two-column control row:
+Accessibility:
 
-```text
-Model combobox                 Effort select
-```
-
-The label, default radio, and actions share the card header.
-
-### 19.2 Tablet
-
-Model and effort may remain side by side when each control retains a usable width. Otherwise they stack.
-
-### 19.3 Mobile
-
-Each tier is a full-width card:
-
-```text
-Tier 2  [Default]
-Implementation
-[Default tier radio]
-Model
-[combobox]
-Effort level
-[select]
-[Remove tier]
-```
-
-Rules:
-
-1. Preserve ascending visual order.
-2. Keep the tier number visible at the top of every card.
-3. Use full-width controls.
-4. Do not use horizontal scrolling for the tier editor.
-5. Keep destructive actions labeled with text.
-6. The single `Add tier` action after the final card remains full width.
-
-Mobile implementation note (MoonMind#4559): tier legends hold the group
-name only — `Duplicate tier` / `Remove tier` live in a separate wrapping
-action area below the heading, beside the default-tier choice, so long labels no longer compete with actions
-inside the legend. The ordered list drops its indentation on phones
-(`margin: 0; padding: 0; list-style: none` at `max-width: 720px`), tier
-fieldsets opt out of the intrinsic `min-inline-size: min-content` minimum,
-and the tier save payload still carries only `model_tiers` plus one-based
-`default_model_tier` (see `frontend/src/utils/providerProfileTiers.test.ts`).
-
-```bash
-npm run ui:test:browser -- frontend/src/browser/mobileOverflow4559.browser.test.tsx
-```
+- the stack is an ordered list and each tier a fieldset with a legend such as
+  `Tier 2`;
+- default selection is one native radio group;
+- model, effort, remove (`Remove Tier 2`), and duplicate controls have
+  tier-specific names;
+- add moves focus to the new tier and announces it; confirmed removal announces
+  the removal and any renumbering;
+- dialogs take and trap focus, close on Escape, and return focus to the trigger;
+- default, warning, deprecated, and error states are never conveyed by color
+  alone, and deprecated or unavailable options say so in accessible text;
+- everything works without drag and drop, and reduced-motion preferences disable
+  rail or card animation.
 
 ---
 
-## 20. Accessibility
+## 17. Structure and Tests
 
-The tier editor must satisfy these requirements:
-
-1. Render the tier stack as an ordered list.
-2. Render each tier as a fieldset with a legend such as `Tier 2`.
-3. Use one native radio group for default selection.
-4. Give every model and effort control a tier-specific accessible name.
-5. Give remove actions labels such as `Remove Tier 2`.
-6. Give duplicate actions labels such as `Duplicate Tier 2 as new last tier`.
-7. After add, move focus to the new tier and announce its number.
-8. After confirmed removal, announce the removed tier and any renumbering.
-9. Confirmation dialogs receive focus, trap focus, close with Escape, and return focus to the initiating action.
-10. Color is never the sole signal for default, warning, deprecated, or error state.
-11. Selector options expose deprecated or unavailable status in accessible text.
-12. The editor remains fully usable without drag and drop.
-13. Reduced-motion preferences disable animated rail or card movement.
-
----
-
-## 21. Component Boundaries
-
-Recommended component decomposition:
-
-```text
-ProviderProfilesManager
-  ProviderProfilesTable
-    ProviderProfileModelPolicySummary
-  ProviderProfileForm
-    ProviderProfileTierSection
-      TierPolicyHeader
-      TierOrderedList
-        ProviderProfileTierCard
-          DefaultTierControl
-          ModelCombobox
-          EffortControl
-          TierResolutionPreview
-          AdvancedTierOptions
-          TierActions
-      TierStructuralChangeSummary
-      AddTierButton
-    RemoveTierDialog
-    CapabilityErrorNotice
-```
-
-Suggested hooks and helpers:
-
-```text
-useProviderProfileTierCapabilities
-normalizeProviderProfileTiers
-buildProviderProfileTierPayload
-validateProviderProfileTierDraft
-computeTierRenumberingImpact
-mapTierApiErrorsToClientIds
-```
-
-Rules:
-
-1. Keep normalization and payload construction outside JSX.
-2. Unit test structural helpers without rendering the full Settings page.
-3. Do not let ProviderProfilesManager accumulate more provider-specific model constants.
-4. Reuse shared combobox, select, dialog, notice, and disclosure primitives.
-5. Keep runtime and provider capability policy in backend responses.
-
----
-
-## 22. Test Contract
-
-### 22.1 Normalization tests
-
-- A canonical three-tier profile preserves order and default Tier 2.
-- A response with missing or empty `model_tiers` loads the repair state instead of a synthesized tier.
-- A profile with null values shows explicit runtime defaults.
-- Parameters and annotations survive an ordinary label edit.
-- An invalid default index produces a repair diagnostic.
-
-### 22.2 Add tests
-
-- Add appends one runtime-default tier.
-- Add preserves every existing tier number.
-- Add does not change the default.
-- Add moves focus to the new card.
-- Add is disabled at a backend-provided maximum.
-- Duplicate appends a copy and does not duplicate default state.
-
-### 22.3 Remove tests
-
-- The only tier cannot be removed.
-- The last non-default tier can be removed and restored with Undo.
-- Removing a middle tier shows all renumbering effects.
-- Cancel leaves the draft unchanged.
-- Confirm removes the tier and updates displayed numbers.
-- Removing the default requires a new default selection.
-- The saved default index matches the selected surviving client ID.
-
-### 22.4 Selector tests
-
-- Model options come from capability data.
-- Capabilities for a saved profile are requested by `profile_id`.
-- A capability response bound to different profile evidence is refetched rather than applied.
-- Stale profile catalog evidence blocks new values without erasing existing ones.
-- Runtime default stores null.
-- A custom model is accepted only when allowed.
-- An unknown existing model remains visible.
-- A deprecated model displays a warning.
-- Effort options filter by selected model when compatibility metadata exists.
-- Unsupported effort is not presented as applied.
-- Capability failure preserves existing values.
-
-### 22.5 Payload tests
-
-- Card order becomes `model_tiers` order.
-- The selected client ID becomes a one-based `default_model_tier`.
-- Draft client IDs do not enter the payload.
-- The payload contains no `default_model` or `default_effort` field.
-- Advanced objects are preserved.
-- A tier-only PATCH does not include credentials or unrelated profile fields.
-
-### 22.6 Permission and accessibility tests
-
-- Read-only users can inspect every tier and the default.
-- Read-only users cannot add, remove, duplicate, or save.
-- Default controls use radio semantics.
-- Tier cards have ordered-list and fieldset semantics.
-- Add and remove announcements are exposed to assistive technology.
-- Every dialog returns focus correctly.
-- Keyboard-only users can select model, effort, default, add, duplicate, remove, cancel, and save.
-
-### 22.7 Responsive tests
-
-- Wide layout keeps model and effort aligned.
-- Mobile layout stacks controls without horizontal scrolling.
-- Tier number and default remain visible at every breakpoint.
-- The trailing Add action remains reachable after a long tier list.
-- The tier group heading names the tier (legend holds the group name only); Duplicate/Remove live in a separate wrapping action area, never inside the legend as a toolbar.
-- Tier cards use restrained nesting and padding so fields keep usable width on phones.
-
----
-
-## 23. Acceptance Criteria
-
-The design is correctly implemented when all of the following are true:
-
-1. Every Provider Profile summary clearly shows tier count and default tier.
-2. A user can expand the summary to inspect every tier in order.
-3. The edit form has a dedicated full-width `Model & effort tiers` section.
-4. Every tier visibly shows number, label, model, effort, and default state.
-5. Model and effort controls use backend-provided capability data bound to the edited profile's catalog evidence.
-6. Null values are shown as explicit runtime defaults.
-7. A user can append a tier with one obvious action.
-8. A user can remove a tier with one obvious action.
-9. The only tier cannot be removed.
-10. Removing a middle tier previews every renumbering effect.
-11. Removing the default tier requires a reviewed new default.
-12. The frontend stores draft identity separately from array index.
-13. Save submits ordered `model_tiers` and one-based `default_model_tier`.
-14. The save payload carries tier policy only, with no default model or default effort mirror.
-15. Existing unknown model or effort values are never silently erased.
-16. Read-only users receive a clear non-form representation.
-17. Server validation errors appear on the correct tier and field.
-18. The editor works with keyboard navigation and narrow screens.
-19. Historical run records are not presented as changing when profile policy changes.
-20. The implementation adds no hard-coded provider model catalog to React.
-
----
-
-## 24. Decision Summary
-
-- Provider Profile tiers use an ordered vertical stack of numbered cards.
-- The default tier is a native radio selection with redundant visible emphasis.
-- Model and effort values use backend-driven selectors with explicit runtime-default options.
-- Editor capabilities are scoped to the edited Provider Profile's catalog evidence, not to runtime and provider alone.
-- The primary add action appends so existing tier numbers remain stable.
-- The primary remove action stays visible on every card.
-- Removing the only tier is blocked.
-- Removing a middle tier requires a renumbering impact preview.
-- Removing the default requires a reviewed replacement default.
-- Drag and drop is intentionally excluded from the initial design.
-- Draft cards use stable client IDs while persisted tier identity remains array order.
-- Canonical saves write `model_tiers` and `default_model_tier`.
-- Tier policy is the only persisted representation of profile model and effort defaults; the superseded default fields and their launch-time compatibility step are removed together.
-- A null tier value means the runtime default, so nothing resolves through a profile-level compatibility field first.
-- The browser previews policy, while the backend validates and resolves it authoritatively.
+Normalization, payload construction, renumbering impact, and error mapping live
+as pure helpers in `frontend/src/utils/providerProfileTiers.ts`, outside JSX, so
+they are unit-tested without rendering Settings
+(`frontend/src/utils/providerProfileTiers.test.ts`). The editor reuses shared
+combobox, select, dialog, notice, and disclosure primitives and keeps runtime and
+provider policy in backend responses rather than accumulating model constants in
+`ProviderProfilesManager`. Component behavior is covered by
+`frontend/src/components/settings/ProviderProfilesManager.test.tsx` and the
+Settings conformance and mobile-layout tests in the same directory.

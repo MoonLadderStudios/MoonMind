@@ -5,7 +5,6 @@
 Status: **Operator walkthrough — pre-release**
 Owners: MoonMind Engineering
 Last Updated: 2026-05-17
-Ticket: **MM-713**
 
 This document explains how a fresh, single-operator MoonMind deployment can
 go from a clean database to a working Settings configuration **through

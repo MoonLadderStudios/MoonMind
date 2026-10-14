@@ -2,7 +2,6 @@
 Status: Active Decision
 Owners: MoonMind Engineering
 Last Updated: 2026-06-23
-Jira: MM-734
 
 ## 1. Purpose
 

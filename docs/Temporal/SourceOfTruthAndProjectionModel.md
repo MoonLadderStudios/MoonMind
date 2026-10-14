@@ -205,7 +205,7 @@ parameters (stored values win; new parameter keys may be introduced). When
 canonical and projection rows disagree, the canonical admission record wins
 for protected identity/parameters even if the projection row carries a newer
 timestamp — protected values are never copied from the divergent projection
-row (MoonLadderStudios/MoonMind#3946). A
+row. A
 canonical write supplies API fields but still may not move an existing
 execution to a different owner/namespace/type or rewrite immutable creation
 keys — those raise and must go through the existing API owner/coordination
@@ -215,7 +215,7 @@ backwards. Repair-status bookkeeping (`sync_state`/`sync_error`/`source_mode`
 only) and artifact-linkage rows are narrow bookkeeping writes that never touch
 lifecycle, identity, parameters, or memo.
 
-Read-boundary error semantics (MoonLadderStudios/MoonMind#3946): the locked
+Read-boundary error semantics: the locked
 reads require the supported `AsyncSession` contract (`SELECT ... FOR UPDATE`
 via `session.get(..., with_for_update=True)`). Genuine absence returns `None`
 and repairs the missing projection inside a savepoint; any other
@@ -241,11 +241,11 @@ share a transaction.
 The canonical workflow registry explicitly assigns `product`, `operator`, or
 `excluded` projection scope. `MoonMind.UserWorkflow` belongs in product
 execution views. Retired product types listed in
-`HISTORICAL_PRODUCT_WORKFLOW_TYPES` (currently `MoonMind.ManifestIngest`,
-retired by MoonLadderStudios/MoonMind#4192) have `historical` scope: they are
+`HISTORICAL_PRODUCT_WORKFLOW_TYPES` (currently `MoonMind.ManifestIngest`)
+have `historical` scope: they are
 never registered or launchable, but their old-release rows stay readable
-through the DB-backed list, detail, projection sync, and artifact readers
-(MoonLadderStudios/MoonMind#4189). `require_product_projection` admits only
+through the DB-backed list, detail, projection sync, and artifact readers.
+`require_product_projection` admits only
 registered product types unless a reader passes `include_historical=True`.
 The executions router's owned-execution loader denies historical rows by
 default and only read routes opt in, so every mutating route (signal, cancel,
@@ -267,7 +267,7 @@ to `product_workflow_types()`; the DB-backed list filters
 `product_read_workflow_types()` (product plus historical) in SQL.
 
 Direct-Temporal list totals are always `estimated_or_unknown` with a null
-count (MoonLadderStudios/MoonMind#3947): the page is filtered per row through
+count: the page is filtered per row through
 the registry policy, so an upstream visibility count is not the product total
 — an excluded type may sit entirely on a later page. An excluded-only page
 legitimately returns zero items with the underlying continuation token
@@ -290,7 +290,7 @@ merge/publication recovery, and the rest of the operator catalog in
 `WorkflowTypeCatalogGenerated.md`) stay out of ordinary product task cards and
 remain reachable only through their existing authorized diagnostics/detail
 surfaces and parent links; registry scope alone grants no route. The
-per-child mapping (MoonLadderStudios/MoonMind#3947) is:
+per-child mapping is:
 
 | Operator child | Authorized detail route / read model | Parent link from product execution |
 | --- | --- | --- |

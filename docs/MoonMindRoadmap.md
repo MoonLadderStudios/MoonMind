@@ -7,7 +7,7 @@
 **Authority:** Product destinations, sequencing, and durable acceptance-claim meaning; module technical contracts stay with their providing owners
 **Owning Surface:** Product roadmap direction (this document)
 **Related Docs:** [AGENTS.md](../AGENTS.md), [single-user design](SingleUserApplicationDesign.md), [Documentation Architecture](DocumentationArchitecture.md)
-**Related Implementation:** Implementation is tracked in GitHub issues (notably [#3965](https://github.com/MoonLadderStudios/MoonMind/issues/3965)); this roadmap is not implementation evidence
+**Related Implementation:** Implementation is tracked in GitHub issues; this roadmap is not implementation evidence
 
 MoonMind is a secure, resilient, and observable single-user application for agentic work. **Reliability through simplification is the first priority.** Make the ordinary execution, chat, saved-work, recovery, and update paths work before expanding the machinery around them.
 
@@ -90,7 +90,7 @@ Network-active internal/lab assessment remains a later capability with explicit 
 
 **Completion:** an authorized operator can run the supported guided analysis, understand its limitations, produce remediation, and verify the outcome without a scanner-specific MoonMind architecture. The main application does not become a security-tool distribution.
 
-**First implementation owner:** [#3970](https://github.com/MoonLadderStudios/MoonMind/issues/3970). Passive work may proceed during runtime convergence when its actual job/source/artifact dependencies suffice. It does not displace concrete reliability repairs or depend on all App/CLI work.
+Passive work may proceed during runtime convergence when its actual job/source/artifact dependencies suffice. It does not displace concrete reliability repairs or depend on all App/CLI work.
 
 # Milestone 3: Make MoonMind Feel Smaller
 
@@ -122,7 +122,7 @@ Prefer partner-maintained runtimes, tools, and connectors. Record real provenanc
 
 **Completion:** the extension approach works with multiple connections, at least one non-GitHub Git/code-host provider, one non-version-control connector, useful alternative output destinations, and an externally maintained tool/plugin without a second core workflow engine.
 
-**Providing owners:** [repository-access design](RepositoryAccessAndWorkspaceDesign.md), [Secrets System](Security/SecretsSystem.md), [Workflow Publishing](Workflows/WorkflowPublishing.md), and [#3967](https://github.com/MoonLadderStudios/MoonMind/issues/3967) for the first event path. Production App acquisition remains with [#4022](https://github.com/MoonLadderStudios/MoonMind/issues/4022).
+**Providing owners:** [repository-access design](RepositoryAccessAndWorkspaceDesign.md), [Secrets System](Security/SecretsSystem.md), and [Workflow Publishing](Workflows/WorkflowPublishing.md).
 
 ## Milestone sequencing
 
@@ -146,16 +146,10 @@ These references retain unresolved product obligations from the earlier roadmap.
 
 | Identifier | Retained outcome | Existing implementation/evidence owners |
 | --- | --- | --- |
-| **5.1 Checkpoint boundary and completeness** | Scoped, independently readable saved content and required references support restoration after source disposal. | Checkpoint/artifact owners and #4015, #4016, #4017. |
-| **5.4 Resume-from-checkpoint default flow** | The real product chooses validated reattach, cold restore, branch-required, or explicit unavailable behavior without repeating accepted work. | #3510 and current workspace/session recovery owners. |
-| **5.5 Checkpoint Branch UI and runtime-profile gaps** | Isolated corrected-instruction turns, normal Profile selection, continue/fork, comparison, promotion/publication, and archive retain exact source/result authority. | #3621, #3622, #4016 and the existing Workflow Detail/branch owners. |
-| **6.2 Omnigent remediation context enrichment** | Bounded authorized evidence, useful typed actions, result-bound verification, cumulative progress, and retained qualification support recovery. | #3512, #3622, #3624, #3626 and their existing action/verification owners. |
-| **7.1 Initial context injection for Omnigent** | Durable evidence identifies the authorized ContextPack actually delivered with the first message and its verification. Native RAG is not restored to satisfy this claim. | Existing context delivery/evidence owners; historical #3513 and remaining handoff in #3965. |
+| **5.1 Checkpoint boundary and completeness** | Scoped, independently readable saved content and required references support restoration after source disposal. | Checkpoint/artifact owners. |
+| **5.4 Resume-from-checkpoint default flow** | The real product chooses validated reattach, cold restore, branch-required, or explicit unavailable behavior without repeating accepted work. | Current workspace/session recovery owners. |
+| **5.5 Checkpoint Branch UI and runtime-profile gaps** | Isolated corrected-instruction turns, normal Profile selection, continue/fork, comparison, promotion/publication, and archive retain exact source/result authority. | Existing Workflow Detail/branch owners. |
+| **6.2 Omnigent remediation context enrichment** | Bounded authorized evidence, useful typed actions, result-bound verification, cumulative progress, and retained qualification support recovery. | Existing action/verification owners. |
+| **7.1 Initial context injection for Omnigent** | Durable evidence identifies the authorized ContextPack actually delivered with the first message and its verification. Native RAG is not restored to satisfy this claim. | Existing context delivery/evidence owners. |
 
 Documentation is reviewed, not unit-tested for wording, headings, counts, or checkbox state. Preserve actual executable schema, parser, security, replay, and generated-catalog tests with their code owners. No new semantic-prose validator is required.
-
-## Where the imperative tracker lives
-
-The [temporary execution tracker](tmp/MoonMindRoadmapExecutionTracker.md) retains historical observations and unresolved handoff material. Its old PR statuses, role models, exact-version matrices, and promotion mechanics do not override the current direction. [#3965](https://github.com/MoonLadderStudios/MoonMind/issues/3965) owns transferring the remaining real obligations to current issues before disposal. This roadmap revision does not declare that handoff complete or any deployment migrated.
-
-The [earlier roadmap](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/MoonMindRoadmap.md) remains available as historical context. Long-term module contracts stay with their providers, not in a second roadmap or growing status ledger.

@@ -7,20 +7,16 @@
 typed inputs, the closed decision vocabulary, the stable reason codes, the
 evidence rules, and the authority boundary of
 `moonmind.omnigent.reconciler.reconcile`. It does not own orchestration, side
-effects, or the durable schema; those remain with the existing execution path
-until the dedicated session workflow issue consumes this reducer.
-**Traceability:** MoonLadderStudios/MoonMind#3702
-([Omnigent control plane 1/11]); parent #3701; related escaped failures #3698,
-#3683.
+effects, or the durable schema; those remain with the existing execution path.
 
 ## 1. Purpose and authority boundary
 
-Correctness for an Omnigent session was previously distributed across event
-handlers, retry branches, snapshot probes, store mutations, host runtime code,
-and terminal heuristics (for example the missed-terminal-edge snapshot poller in
-`moonmind/omnigent/execute.py` from #3698 and the expanded terminal vocabulary
-from #3683). Each new provider timing or retry ordering therefore required
-another special case.
+Without a single decision boundary, correctness for an Omnigent session is
+distributed across event handlers, retry branches, snapshot probes, store
+mutations, host runtime code, and terminal heuristics (for example the
+missed-terminal-edge snapshot poller in `moonmind/omnigent/execute.py` and the
+expanded terminal vocabulary), and each new provider timing or retry ordering
+requires another special case.
 
 This contract defines **one** side-effect-free decision boundary:
 
@@ -54,8 +50,8 @@ construction; `reconcile` additionally fails closed to
 unknown version.
 
 - **`CompiledSessionIntent`** — compact domain view of the immutable execution
-  contract needed for a decision (the full artifact-backed contract is owned by
-  #3701). Its `provider` field is declarative and is never used as authority for
+  contract needed for a decision (the full artifact-backed contract is owned
+  elsewhere). Its `provider` field is declarative and is never used as authority for
   a side effect.
 - **`DurableSessionState`** — canonical identity and revision, owner token and
   fencing generation, desired lifecycle, provider-session attachment, current
@@ -90,7 +86,7 @@ The decision `kind` is a closed, versioned enum:
 | `ensure_provider_session` | Create/attach the provider session. |
 | `submit_turn` | Submit the current turn attempt (at most once). |
 | `record_provider_terminal` | Record a terminal that the provider reported explicitly. |
-| `synthesize_terminal_from_snapshot` | Recover a missed terminal from snapshot/transcript evidence (#3698/#3683). |
+| `synthesize_terminal_from_snapshot` | Recover a missed terminal from snapshot/transcript evidence. |
 | `harvest_evidence` | Collect terminal evidence/artifacts. |
 | `begin_cleanup` | Start cleanup (distinct from task completion). |
 | `release_leases` | Release leases last, after cleanup and once no consumer remains. |

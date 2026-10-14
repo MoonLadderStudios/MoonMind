@@ -5,8 +5,6 @@ Document Class: System / Feature Design View
 Owners: MoonMind Platform
 Last updated: 2026-09-16
 
-**Issue:** [MoonLadderStudios/MoonMind#3707](https://github.com/MoonLadderStudios/MoonMind/issues/3707) ([Omnigent control plane 7/11]).
-
 ## Related docs
 
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
@@ -310,7 +308,7 @@ boundary.
 
 ## Non-goals
 
-- Reimplementing the hosted Omnigent SPA or route inventory owned by #3635.
+- Reimplementing the hosted Omnigent SPA or route inventory.
 - Granting new terminal, browser, file-write, model-control, or subagent
   capabilities.
 - Treating direct Codex as an implicit continuation fallback.

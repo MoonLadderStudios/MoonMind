@@ -216,7 +216,7 @@ def _side_effect_resume_block_reason(
     so a blocked non-idempotent effect, or an accepted non-idempotent external
     mutation that has not yet been compensated, would be re-applied. Resume must
     stay ineligible until the side-effect policy in
-    ``docs/Steps/StepExecutionsAndCheckpointing.md`` §11 has accounted for the
+    ``docs/Steps/StepExecutionsAndCheckpointing.md`` §10 has accounted for the
     non-repeatable mutation (recorded as a completed ``compensationRef``).
     """
 

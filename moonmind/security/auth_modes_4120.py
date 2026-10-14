@@ -2,8 +2,7 @@
 
 Source issue: MoonLadderStudios/MoonMind#4120 (parent #4116, depends on
 #4117/#4118, integrates the migration contract from #4119).
-Plan coverage: K3 configuration and deployment defaults in
-``docs/tmp/KeycloakRemovalPlan.md``.
+Covers configuration and deployment defaults.
 
 This module is the single correctly scoped configuration owner for the
 MoonMind application-authentication selector ``AUTH_PROVIDER``. The

@@ -1,2520 +1,622 @@
 # Provider Profiles
 
+**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md), [Provider Profile Creation](../UI/ProviderProfileCreation.md)
+
 Omnigent compatibility and capacity are governed by an
 [immutable policy version](../Omnigent/PolicyAuthority.md). The Codex product path
-this profile serves is the canonical external-agent identity `agentKind=external`,
-`agentId=omnigent`, nested harness `codex-native`, reconciled end-to-end by
+a profile serves is the external-agent identity `agentKind=external`,
+`agentId=omnigent`, nested harness `codex-native`, described end-to-end in
 [NormalCodexProductPathReconciliation.md](../Omnigent/NormalCodexProductPathReconciliation.md).
 
-**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Provider Profile Model and Effort Tiers](./ProviderProfileModelEffortTiers.md), [Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md)
+A Provider Profile is the durable connection and capacity identity for a managed
+launch. It records which Harness and upstream Provider a connection supports,
+the credential source and the secret references or OAuth volume behind it, how
+provider configuration is materialized into the runtime, concurrency and
+cooldown policy, model/effort tiers, and whether Settings has activated it.
 
-Status: **Desired-State Design**
-Owners: MoonMind Engineering
-Last Updated: 2026-10-01
-
-> [!NOTE]
-> This document replaces the older **Auth Profiles** framing with **Provider Profiles**.
->
-> A Provider Profile is broader than authentication alone. It defines:
->
-> - which Harness and upstream Provider the connection supports,
-> - which compatible execution configuration applies through the shared selection boundary,
-> - which credential source class is used,
-> - which secret references or OAuth volume back the launch,
-> - how provider-specific configuration is materialized into the runtime environment,
-> - which concurrency and cooldown policy applies, and
-> - whether the profile is launchable after Settings-driven activation.
->
-> This document does **not** define secret storage, encryption, backend taxonomy, or secret-resolution internals. Those belong to [SecretsSystem.md](./SecretsSystem.md).
->
-> This document also does **not** define browser-terminal OAuth transport. That belongs to [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md).
+Secret storage and resolution belong to [SecretsSystem.md](./SecretsSystem.md),
+browser OAuth transport to [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md),
+the Settings form to [Provider Profile Creation](../UI/ProviderProfileCreation.md),
+and the tier editor to
+[Provider Profile Tier Settings](../UI/ProviderProfileModelEffortTierSettings.md).
 
 ---
-
-## Unified Provider Profile selection
-
-[Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md)
-owns the accepted product vocabulary and ordinary selection behavior. Provider
-Profile is this existing credential and capacity identity. Its stored `runtime_id`
-identifies Harness ownership, such as `codex_cli`, `claude_code`, or `opencode`;
-it does not choose the Backend or become `omnigent`. It also
-owns model tiers and an optional `execution_configuration` reference containing
-an immutable configuration id, version and digest. New workflow and schedule
-submissions supply the Profile id; API admission resolves compatible execution
-behavior and records the immutable snapshot transactionally. Existing consumer
-snapshots remain authoritative for continuations. Profile selection never changes
-because model discovery expires or a host image changes. Disabled and disconnected
-Profiles remain visible with an actionable setup state. Credentials, trust,
-capability compatibility and actual-host model verification remain launch gates.
-
-Ordinary authoring selects Harness and one Provider Profile. The shared target
-and profile-selection owners reconcile them with the defaulted or explicit
-Backend and compatible execution configuration before credential acquisition
-or host effects. Omitted Backend and its documented default equivalent resolve
-consistently to the deployment's supported default, normally Omnigent. A profile
-without a compatible Omnigent configuration reports the setup or compatibility
-gap; omission is not permission to select a direct launcher. A meaningful,
-supported alternative Backend can be selected explicitly under Advanced. An
-explicit nondefault choice or alternative deployment default remains disclosed.
-
-A selected profile from a saved draft, preset, deep link, or other supported
-entrypoint establishes its compatible Harness. A new unconfigured draft may use
-an authorized default or sole compatible profile. After a deliberate Harness
-change, retain the selected profile only when compatible; otherwise require a
-compatible Provider Profile without silently choosing another account. Preserve
-explicit configuration pins, model/effort intent, and source execution identity.
-An unavailable or incompletely validated pinned configuration cannot silently
-fall back to direct execution.
 
 ## 1. Summary
 
-MoonMind-managed runtimes such as Claude Code and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.
+Managed Harnesses do not map one-to-one to a provider or an auth method.
+`claude_code` can run against Anthropic via OAuth or API key, or against MiniMax
+or Z.AI through Anthropic-compatible environment shaping. `codex_cli` can run
+against OpenAI via OAuth or API key, or against MiniMax through config plus
+environment materialization. A Provider Profile answers the full question: which
+Harness launches against which provider, with which credential source,
+materialized how, under which concurrency and cooldown policy.
 
-Examples:
+Profiles are visible in Settings before credentials exist but are not launchable
+until credentials are verified. Disabled-by-default is a security control for
+unconfigured providers, not an extra step after setup: successful user-initiated
+setup enables the profile.
 
-- `claude_code` may run against:
-  - Anthropic via OAuth
-  - Anthropic via API key
-  - MiniMax via Anthropic-compatible environment shaping
-  - Z.AI via Anthropic-compatible environment shaping
-- `codex_cli` may run against:
-  - OpenAI via OAuth
-  - OpenAI via API key
-  - MiniMax via config + environment materialization
-
-The old question, “which auth method does this runtime use?”, is too narrow.
-
-MoonMind instead needs to answer:
-
-> For this run, which runtime should launch against which provider, using which credential source, materialized in which runtime-specific way, with which concurrency and cooldown policy?
-
-The Provider Profile system is the durable execution contract that answers that question.
-
-The Settings experience has one additional product rule:
-
-> Claude and Codex provider profiles should be easy to find and configure in Settings. OAuth profiles must default to not launchable until the user successfully authenticates OAuth. API-key profiles seeded from configured environment secrets are connected and enabled by default.
-
-This means “disabled by default” is a security control for unconfigured providers. It is not an extra manual step after setup succeeds.
-
-On a fresh installation with no provider credentials configured, the persisted
-profile set contains exactly `claude_anthropic_oauth` and
-`codex_openai_oauth`. Both profiles are disabled and not configured so Settings
-can offer OAuth or API-key setup without implying launch readiness. Credential-
-backed API and alternative-provider profiles are added and enabled only when
-their corresponding credentials are configured.
+A fresh installation with no provider credentials persists exactly
+`claude_anthropic_oauth` and `codex_openai_oauth`, both disabled and not
+configured. API-key and alternative-provider profiles are added and enabled only
+when their credentials are configured.
 
 ---
 
-## 2. Document Boundaries
+## 2. Responsibilities and Boundaries
 
-Provider Profiles depend on, but do not replace, other MoonMind systems.
+| System | Owns |
+| --- | --- |
+| Provider Profiles | Harness ownership, provider selection, routing metadata, tier policy, credential source class, materialization, launch shaping, concurrency and cooldown, `enabled`, `auth_state`, `disabled_reason` |
+| [Secrets System](./SecretsSystem.md) | `SecretRef` semantics, backends, encryption, key custody, launch-time resolution, audit, rotation, proxy-first handling |
+| [OAuth Terminal](../ManagedAgents/OAuthTerminal.md) | PTY/WebSocket sessions, OAuth session lifecycle, auth containers, verification and registration of OAuth-backed profiles |
+| Settings | Provider discovery and setup on `/settings/providers-secrets` |
 
-### 2.1 What Provider Profiles own
+A profile stores references to secrets but does not define `SecretRef`; it may be
+written by the OAuth session workflow but never stores terminal transport details.
 
-Provider Profiles are the semantic owner of:
-
-- Harness ownership and compatibility
-- provider selection
-- profile-level routing metadata
-- default model intent for the runtime/provider combination
-- credential source class
-- runtime materialization strategy
-- launch shaping
-- profile-level concurrency and cooldown policy
-- launchable state (`enabled`) and activation metadata (`auth_state`, `disabled_reason`)
-
-### 2.2 What the Secrets System owns
-
-The Secrets System is the semantic owner of:
-
-- `SecretRef` semantics
-- supported secret backend classes
-- encryption-at-rest behavior
-- root key custody
-- launch-time resolution semantics
-- audit and rotation behavior
-- proxy-first secret handling rules
-
-Provider Profiles may reference secrets, but they do not define what a `SecretRef` means beyond “this field points to one.”
-
-### 2.3 What OAuth Terminal owns
-
-OAuth Terminal is the semantic owner of:
-
-- browser terminal transport
-- PTY/WebSocket session architecture
-- OAuth session lifecycle
-- auth container behavior
-- terminal session metadata
-- verification and profile registration flow for OAuth-backed profiles
-
-Provider Profiles may be created or updated by the OAuth session workflow, but they do not store terminal-session transport details.
-
-### 2.4 What Settings owns
-
-Settings is the product surface for provider discovery and setup.
-
-Settings should expose first-party provider cards for:
-
-- Claude Code / Anthropic
-- Codex CLI / OpenAI
-
-Those cards may be backed by disabled setup-stub Provider Profiles or by a separate provider-offerings catalog, but the user experience must be the same:
-
-1. The provider is visible before credentials exist.
-2. The user can connect OAuth or add an API key from Settings.
-3. Successful user-initiated setup makes the profile connected and enabled by default.
-4. Failed setup leaves the profile disabled with clear readiness diagnostics.
-
-Settings is the one configuration exception to Harness-scoped selection.
-It owns an explicit **All harnesses** view of every Provider Profile plus a
-Harness filter over that table, while global configuration health stays computed
-from the complete unfiltered collection. The filter and creation control retain
-canonical `runtime_id` values in their API payloads. See
-[10.5 Harness-owned selection scope](#105-harness-owned-selection-scope).
+Settings is the one surface that is not Harness-scoped: it offers an **All
+harnesses** view plus a Harness filter, computes configuration health from the
+unfiltered collection, and submits canonical `runtime_id` values. Execution
+surfaces are Harness-scoped (section 8.4).
 
 ---
 
-## 3. Goals
+## 3. Key Concepts
 
-The Provider Profile system must support all of the following:
+### 3.1 Harness vs Provider
 
-1. **More than one profile per runtime**
-   - Example: multiple `claude_code` profiles with different providers, accounts, or policies.
+A **Harness** is the agent software (`claude_code`, `codex_cli`, `opencode`),
+stored as `runtime_id`; that field is not a Backend selector. **Backend** is the
+system managing the Harness, normally Omnigent. A **Provider** is the upstream
+service (`anthropic`, `openai`, `minimax`, `zai`). They are separate identities:
+`claude_code + minimax` and `codex_cli + minimax` are both valid.
 
-2. **More than one provider per runtime**
-   - Example: `claude_code` with Anthropic, MiniMax, or Z.AI.
+### 3.2 Credential source and materialization
 
-3. **More than one credential source class per provider**
-   - Example: Anthropic OAuth vs Anthropic API key.
+`credential_source` is `oauth_volume` (a mounted auth volume managed outside the
+row), `secret_ref` (resolved from the Secrets System at launch), or `none` (no
+secret, or setup not completed). The concrete secret backend is a Secrets System
+concern.
 
-4. **More than one runtime materialization strategy**
-   - Example:
-     - OAuth home directory
-     - single API key environment variable
-     - multi-variable environment bundle
-     - generated config file
-     - composite file + env materialization
+`runtime_materialization_mode` describes how the runtime is prepared:
+`oauth_home` (mount volume, set home variables), `api_key_env` (a few secret
+environment variables), `env_bundle` (a provider-specific environment block),
+`config_bundle` (generated config files), or `composite`.
 
-5. **Profile-level concurrency and cooldown**
-   - Example: one MiniMax profile allows 4 parallel runs and a 10-minute cooldown after provider 429s.
+### 3.3 Secret roles
 
-6. **Explicit or selector-based routing**
-   - A run may request an exact profile or select from compatible profiles using provider, tags, or materialization constraints.
+A profile names the secret roles a launch needs (`anthropic_api_key`,
+`openai_api_key`, `provider_api_key`, …) and binds each to a `SecretRef` in
+`secret_refs`; templates refer to roles with `from_secret_ref`.
 
-7. **No raw credentials in workflow payloads or persistent profile rows**
-   - Provider Profiles store references, templates, and volume metadata, not raw secret values.
+<a id="55-default-model-ownership"></a>
 
-8. **Correct separation between profile semantics and secret semantics**
-   - Provider Profiles decide *which* secret role is needed.
-   - Secrets System decides *how* the secret is stored and resolved.
+### 3.4 Default model ownership
 
-9. **Correct separation between OAuth transport and OAuth-backed profile state**
-   - Provider Profiles store the resulting OAuth-backed profile metadata.
-   - OAuth session rows store terminal/session transport metadata.
+Model and effort policy lives in `model_tiers` and `default_model_tier`, a
+one-based tier index rather than a separate model/effort pair. Null tier fields
+mean the compatible runtime default; full-pair Custom intent follows the
+[canonical resolution contract](./ProviderProfileModelEffortTiers.md#92-resolution-order).
+The schema and API still carry scalar `default_model` and `default_effort`;
+pre-tier rows are converted into tiers (`moonmind/provider_profiles/model_tiers.py`),
+seeding writes tiers, and materializers consume the resolver's result rather
+than the scalars. Runs keep the concrete values resolved at launch.
 
-10. **Secure Settings-first activation**
-    - First-party Claude and Codex providers are discoverable in Settings.
-    - They are not launchable until first successful OAuth or API-key setup.
-    - A successful Settings setup action enables the profile by default.
-    - Manual user/admin disables are not silently undone by passive background validation.
+### 3.5 Enabled vs launch ready
 
----
-
-## 4. Non-Goals
-
-This design does **not** attempt to:
-
-- normalize every provider into an identical logical API,
-- store raw access tokens, API keys, or refresh tokens in the profile row,
-- replace runtime-specific strategy code entirely,
-- eliminate the need for per-runtime launch shaping such as Claude or Codex command construction,
-- define the browser-terminal OAuth UX,
-- redefine secret backends, encryption, or rotation semantics,
-- solve pricing or billing attribution by itself,
-- make an unconfigured first-party provider launchable just because its runtime is installed.
-
-Provider Profiles define **selection, activation, and materialization**, not a universal provider protocol and not a general-purpose secret-management system.
-
----
-
-## 5. Key Concepts
-
-### 5.1 Harness vs Provider
-
-A **Harness** is the agent software performing the work. Provider Profile schemas
-retain `runtime_id` for this ownership; the serialized field is not a Backend
-selector. **Backend** identifies the system managing the Harness, normally
-Omnigent.
-
-Examples:
-
-- `claude_code`
-- `codex_cli`
-
-A **Provider** is the upstream service the Harness talks to.
-
-Examples:
-
-- `anthropic`
-- `openai`
-- `minimax`
-- `zai`
-
-Harness and Provider are separate identities.
-
-Examples:
-
-- `claude_code` + `anthropic`
-- `claude_code` + `minimax`
-- `claude_code` + `zai`
-- `codex_cli` + `openai`
-- `codex_cli` + `minimax`
-
-This distinction is foundational.
-
-### 5.2 Credential Source Class
-
-A Provider Profile may source credentials from one of the following classes:
-
-- `oauth_volume`
-- `secret_ref`
-- `none`
-
-Examples:
-
-- Claude Code using Anthropic OAuth: `oauth_volume`
-- Claude Code using Anthropic API key: `secret_ref`
-- Claude Code using MiniMax env bundle: `secret_ref`
-- Codex CLI using MiniMax config + env key: `secret_ref`
-
-The credential source class is intentionally high-level. It does **not** encode the concrete secret backend. For `secret_ref`, the actual backend may be `env`, `db_encrypted`, `exec`, or another supported backend as defined by [SecretsSystem.md](./SecretsSystem.md).
-
-### 5.3 Runtime Materialization Mode
-
-A Provider Profile may materialize provider access into the runtime in one or more ways:
-
-- `oauth_home`
-- `api_key_env`
-- `env_bundle`
-- `config_bundle`
-- `composite`
-
-These modes describe **how** MoonMind prepares the runtime, not where the credential ultimately comes from.
-
-### 5.4 Secret Roles vs Secret References
-
-A Provider Profile may define one or more **secret roles** needed for launch, such as:
-
-- `anthropic_api_key`
-- `provider_api_key`
-- `openai_api_key`
-- `google_api_key`
-
-The `secret_refs` map binds those roles to `SecretRef` values.
-
-Example:
-
-```yaml
-secret_refs:
-  provider_api_key:
-    secret_id: sec_minimax_m27
-    backend_type: db_encrypted
-```
-
-The exact persisted `SecretRef` schema is owned by the Secrets System. The examples in this document are illustrative.
-
-### 5.5 Default Model Ownership
-
-Provider Profiles express model and effort policy through `model_tiers` and `default_model_tier`. The default is a tier index, not a separately persisted model/effort pair. Null tier fields use compatible runtime defaults, and full-pair Custom intent follows the [canonical resolution contract](./ProviderProfileModelEffortTiers.md#92-resolution-order).
-
-The current implementation still exposes scalar `default_model` and `default_effort` readers and writers. The desired-state schema, persistence, and examples below supersede those fields under [Provider Profile Tier Settings §15.2](../UI/ProviderProfileModelEffortTierSettings.md#152-tier-only-persistence); their removal remains implementation work. Backfill genuinely pre-tier rows once, preserve existing tier arrays/defaults, and remove scalar API/database fields and their callers together. Seeding writes canonical tiers, and materializers/strategies consume the existing resolver's result instead of a scalar mirror. Historical attempt values and active work remain intact.
-
-Examples of tier-owned model intent:
-
-- Claude Code + MiniMax defaulting to `MiniMax-M2.7`
-- Codex CLI + MiniMax defaulting to profile `m27`
-
-How that model intent gets translated into environment variables, config files, or CLI flags is runtime-specific launch shaping.
-
-### 5.6 Enabled vs Launch Ready
-
-`enabled` is the durable operator/user intent that a profile may be used for launches.
-
-`launch_ready` is the computed execution predicate.
-
-A profile is launch ready only when all of the following are true:
+`enabled` is durable operator intent. `launch_ready` is computed:
 
 ```text
-launch_ready =
-  enabled == true
+launch_ready = enabled
   AND auth_state == connected
-  AND credential bindings are valid
-  AND OAuth volume metadata is present when OAuth is required
-  AND SecretRefs resolve to active secrets when SecretRefs are required
-  AND provider-specific validation does not block launch
-  AND workspace policy allows the profile
+  AND credential bindings are valid (OAuth volume present / SecretRefs resolve)
+  AND provider-specific validation and policy do not block launch
 ```
 
-For legacy or non-authenticated profiles where `auth_state` is absent, readiness may temporarily fall back to the existing credential-source checks during migration. New first-party profiles must use explicit activation state.
-
-### 5.7 Provider Profile
-
-A **Provider Profile** is a named, persistent record that binds:
-
-- runtime
-- provider
-- default model intent
-- credential source class
-- secret references and/or OAuth volume reference
-- runtime materialization strategy
-- concurrency and cooldown policy
-- routing metadata
-- runtime-specific launch behavior
-- activation state and launchability
-
-into one reusable execution target.
+Profiles without `auth_state` fall back to credential-source checks.
 
 ---
 
-## 6. Provider Profile Model
+## 4. Provider Profile Model
 
-### 6.1 Canonical Contract
+### 4.1 Contract
 
 ```yaml
 ManagedAgentProviderProfile:
-  profile_id:                    str
-  runtime_id:                    str            # claude_code | codex_cli | ...
-  provider_id:                   str            # anthropic | openai | minimax | zai | ...
-  provider_label:                str | null
-
-  credential_source:             str            # oauth_volume | secret_ref | none
-  runtime_materialization_mode:  str            # oauth_home | api_key_env | env_bundle | config_bundle | composite
-
-  account_label:                 str | null
-  enabled:                       bool
-  is_default:                    bool
-  default_selected_by_operator:  bool
-  tags:                          [str]
-  priority:                      int
-
-  # Settings / activation state
-  auth_state:                    str            # not_configured | oauth_pending | api_key_pending | connected | validation_failed | disconnected
-  disabled_reason:               str | null     # missing_credentials | auth_invalid | user_disabled | policy_disabled | disconnected | null
-  first_authenticated_at:        timestamp | null
-  last_validated_at:             timestamp | null
-  last_auth_method:              str | null     # oauth_volume | secret_ref | manual | null
-
-  # canonical runtime/provider model and effort policy
-  model_tiers:                   [ProviderModelEffortTier] # non-empty; owned by the tier design
-  default_model_tier:            int           # one-based index within model_tiers
-  model_overrides:               dict[str, str] # runtime-specific named configuration
-
-  # concurrency / rate limiting
-  max_parallel_runs:             int
-  cooldown_after_429_seconds:    int
-  rate_limit_policy:             str            # backoff | queue | fail_fast
-  max_lease_duration_seconds:    int
-
-  # credential source bindings
-  volume_ref:                    str | null
-  volume_mount_path:             str | null
-  secret_refs:                   dict[str, SecretRef]
-
-  # runtime materialization
-  clear_env_keys:                [str]
-  env_template:                  dict[str, object]
-  file_templates:                [RuntimeFileTemplate]
-  home_path_overrides:           dict[str, str]
-  command_behavior:              dict[str, object]
-
-  # ownership / audit-friendly metadata
-  owner_user_id:                 str | null
-  created_at:                    timestamp
-  updated_at:                    timestamp
-
-RuntimeFileTemplate:
-  path:                          str
-  format:                        str            # json | toml | yaml | text
-  merge_strategy:                str            # replace | deep_merge | append
-  content_template:              object
-  permissions:                   str | null
+  profile_id, runtime_id, provider_id:  str
+  provider_label, account_label:        str | null
+  credential_source:             oauth_volume | secret_ref | none
+  runtime_materialization_mode:  oauth_home | api_key_env | env_bundle | config_bundle | composite
+  enabled, is_default, default_selected_by_operator: bool
+  tags: [str]
+  priority: int
+  auth_state:       not_configured | oauth_pending | api_key_pending | connected | validation_failed | disconnected
+  disabled_reason:  missing_credentials | auth_invalid | user_disabled | policy_disabled | disconnected | null
+  first_authenticated_at, last_validated_at: timestamp | null
+  last_auth_method: str | null
+  model_tiers: [ProviderModelEffortTier]   # non-empty
+  default_model_tier: int                  # one-based
+  model_overrides: dict[str, str]
+  max_parallel_runs, cooldown_after_429_seconds, max_lease_duration_seconds: int
+  rate_limit_policy: backoff | queue | fail_fast
+  volume_ref, volume_mount_path: str | null
+  secret_refs: dict[str, SecretRef]
+  clear_env_keys: [str]
+  env_template: dict[str, object]
+  file_templates: [{path, format, merge_strategy, content_template, permissions}]
+  home_path_overrides: dict[str, str]
+  command_behavior: dict[str, object]
+  owner_user_id, created_at, updated_at
 ```
 
-### 6.2 Important Semantics
+The table is `managed_agent_provider_profiles` (`api_service/db/models.py`).
+Defaults: `enabled` false, `auth_state` `not_configured`, `priority` 100,
+`max_parallel_runs` 1, `cooldown_after_429_seconds` 300, `rate_limit_policy`
+`backoff`, `max_lease_duration_seconds` 7200.
 
-#### `profile_id`
+### 4.2 Field semantics
 
-Stable identifier referenced by workflows, APIs, and UI.
-
-Examples:
-
-- `claude_anthropic_oauth_nsticco`
-- `claude_anthropic_api_team`
-- `claude_minimax_m27`
-- `claude_zai_default`
-- `codex_openai_oauth_team`
-- `codex_openai_api_team`
-- `codex_minimax_m27`
-- `claude_anthropic_oauth`
-- `codex_openai_oauth`
-
-#### `provider_id`
-
-Required. This is what makes the model provider-aware rather than runtime-only.
-
-#### `credential_source`
-
-Defines the credential source class:
-
-- `oauth_volume`: credentials live in a mounted auth volume managed outside the profile row
-- `secret_ref`: credentials resolve from the Secrets System at launch time
-- `none`: no provider secret is required
-
-First-party setup stubs for Claude and Codex should use `credential_source = none` until the user successfully completes OAuth or adds a validated API key.
-
-#### `runtime_materialization_mode`
-
-Defines how the runtime is prepared:
-
-- `oauth_home`: mount auth volume and set runtime home variables
-- `api_key_env`: inject a small number of environment variables containing resolved secrets
-- `env_bundle`: inject a provider-specific environment block
-- `config_bundle`: generate provider-specific config file(s)
-- `composite`: combine multiple techniques
-
-#### `enabled`
-
-`enabled` means “eligible for launch selection if readiness checks pass.”
-
-For first-party Claude and Codex setup stubs, the default must be:
-
-```yaml
-enabled: false
-auth_state: oauth_pending
-disabled_reason: missing_credentials
-```
-
-When a user successfully completes OAuth or adds a validated API key in Settings, MoonMind should set:
-
-```yaml
-enabled: true
-auth_state: connected
-disabled_reason: null
-```
-
-unless the profile is policy-blocked or the requested action is passive/background validation of a profile that was explicitly disabled by the user or an admin.
-
-#### `is_default`
-
-`is_default` marks the default profile for a runtime.
-
-A disabled or not-launch-ready setup stub must not become the runtime default. If no launch-ready profile exists for a runtime, default normalization should clear the runtime default instead of choosing a disabled setup stub.
-
-#### `default_selected_by_operator`
-
-`default_selected_by_operator` records **why** a profile holds `is_default`.
-
-Runtime-default ownership has two sources. An operator selects a default explicitly (the create/update `is_default` field, or the `make_default` action on a credential-ready endpoint). Automatic reconciliation — startup seeding, deployment credential enrollment — settles the default when nothing else claims it. Only the first sets this flag, and only default normalization writes it, so the two sources stay distinguishable in the persisted row.
-
-Default normalization is the single authority for the flag:
-
-- an automatic preference settles an unclaimed default, but never takes one away from a launchable profile that carries an operator claim;
-- whichever profile loses `is_default` also loses the claim, so at most one profile per runtime carries it;
-- when no profile is launch-ready the runtime default is cleared, but the claim survives, because transient unlaunchability is not a revocation of operator intent.
-
-This is the runtime-default counterpart of `disabled_reason = user_disabled` for enablement: both record explicit operator intent that automatic reconciliation must respect.
-
-#### `auth_state`
-
-`auth_state` describes credential activation state:
-
-- `not_configured`: no successful OAuth or API key has been recorded
-- `oauth_pending`: an OAuth session is active but not finalized
-- `api_key_pending`: an API key setup flow is active but not validated
-- `connected`: credentials have been verified and the profile may be enabled
-- `validation_failed`: the last attempted credential validation failed
-- `disconnected`: credentials were explicitly disconnected or removed
-
-#### `disabled_reason`
-
-`disabled_reason` explains why `enabled` is false:
-
-- `missing_credentials`: default state before setup
-- `auth_invalid`: credentials failed validation or became invalid
-- `user_disabled`: user intentionally disabled a connected profile
-- `policy_disabled`: workspace/admin policy blocks launch
-- `disconnected`: user disconnected OAuth or removed credentials
-
-This field protects user intent. Background repair, migration, or passive validation must not convert `user_disabled` to enabled. A direct user-initiated Settings action such as **Connect OAuth**, **Reconnect OAuth**, or **Add API key** may enable the profile by default because that action expresses setup intent.
-
-#### `secret_refs`
-
-Maps secret roles to `SecretRef` values.
-
-The Provider Profile does not own the exact serialized `SecretRef` shape; it only stores and names the references it needs.
-
-#### `clear_env_keys`
-
-Keys that must be removed or blanked before launch to prevent accidental fallback to another provider or auth path.
-
-This is required for correctness and security.
-
-#### `env_template`
-
-Structured environment declaration. Values are literals or secret placeholders, never raw secrets stored in the profile row.
-
-Example:
-
-```yaml
-env_template:
-  ANTHROPIC_BASE_URL: "https://api.minimax.io/anthropic"
-  ANTHROPIC_AUTH_TOKEN:
-    from_secret_ref: provider_api_key
-  API_TIMEOUT_MS: "3000000"
-```
-
-`from_secret_ref` refers to a key in the profile’s `secret_refs` map.
-
-#### `file_templates`
-
-Provider-specific config files to generate before launch.
-
-Examples:
-
-- Codex TOML provider stanza
-- runtime-local JSON settings
-- generated config fragments under `.moonmind/`
-
-#### `command_behavior`
-
-Runtime strategy hints that are profile-dependent rather than global.
-
-Examples:
-
-- `suppress_cli_model_flag_when_env_model_present: true`
-- `default_codex_profile_name: "m27"`
-- `auth_actions: ["connect_oauth", "use_api_key"]`
-- `auth_readiness: {"connected": false, "launch_ready": false}`
-
-#### `max_lease_duration_seconds`
-
-Maximum time a slot lease is valid. The `ProviderProfileManager` may evict leases exceeding this bound as a recovery guard when a workflow terminates without explicitly releasing its slot.
-
-#### `priority`
-
-Higher values mean “prefer this profile first.”
-
-When multiple profiles match a selector and have available slots, the highest-priority compatible profile is selected. Ties are broken by most available slots.
-
-Recommended convention:
-
-- `100` = normal default
-- `110`–`130` = preferred alternatives
-- `50`–`90` = fallback or lower-priority profiles
+- **`is_default`** marks a runtime's default. A disabled or not-launch-ready
+  profile never becomes default; with no launch-ready profile, normalization
+  clears the default.
+- **`default_selected_by_operator`** records *why* a profile is default. An
+  operator choice (`is_default`, or `make_default` on a credential endpoint) sets
+  it; automatic reconciliation (seeding, enrollment) only settles an unclaimed
+  default. Default normalization is the only writer: automation never takes the
+  default from a launchable profile with an operator claim, the profile that
+  loses `is_default` loses the claim, and when nothing is launch-ready the
+  default clears but the claim survives, because transient unlaunchability is
+  not a revocation of intent.
+- **`disabled_reason`** explains `enabled: false` and protects user intent;
+  background work does not convert `user_disabled` to enabled.
+- **`clear_env_keys`** are blanked before launch so a run cannot fall back to
+  another provider or auth path.
+- **`env_template`** values are literals or `from_secret_ref` placeholders.
+- **`command_behavior`** holds profile-dependent strategy hints such as
+  `suppress_cli_model_flag_when_env_model_present`,
+  `default_codex_profile_name`, `auth_actions`, and `auth_readiness`.
+- **`priority`**: higher is preferred; ties go to the most free slots
+  (convention: 100 normal, 110–130 preferred, 50–90 fallback).
 
 ---
 
-## 7. Settings-First Activation Model
+## 5. Settings-First Activation
 
-### 7.1 Principle
+### 5.1 Outcomes
 
-The Settings page should make first-party Claude and Codex providers easy to configure:
-
-- Claude Code / Anthropic
-- Codex CLI / OpenAI
-
-These providers should be visible even before credentials exist. They should not be launchable until credentials are verified.
-
-The expected user experience is:
-
-| User action in Settings | Result |
+| Event | Result |
 | --- | --- |
-| Fresh install / no credentials | Claude and Codex OAuth provider cards are visible, disabled, and marked setup required. |
-| User completes OAuth | Profile becomes connected and enabled by default. |
-| User adds a valid API key | Profile becomes connected and enabled by default. |
-| User manually disables a connected profile | Profile stays disabled until the user explicitly enables it again. |
-| OAuth or API-key validation fails | Profile stays disabled with a clear readiness error. |
-| Workspace policy blocks the provider | Profile may be connected, but launch remains blocked by policy. |
+| Fresh install | Claude and Codex OAuth cards visible, disabled, setup required |
+| OAuth completes or a valid API key is added | Connected and enabled |
+| User disables a connected profile | Stays disabled until the user enables it |
+| Validation fails | Disabled with a readiness error |
+| Policy blocks the provider | May be connected; launch stays blocked |
 
-### 7.2 First-party seeded profiles
+### 5.2 Seeded profiles
 
-MoonMind seeds disabled OAuth Provider Profiles for first-party Claude and Codex. These OAuth profiles are Settings affordances, not launch targets until OAuth setup succeeds.
+`claude_anthropic_oauth` and `codex_openai_oauth` are always seeded as disabled
+setup affordances (`credential_source: none`, `disabled_reason:
+missing_credentials`, no secrets or volume, `command_behavior.auth_actions`
+listing setup actions). When `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set at
+startup, `claude_anthropic_api` or `codex_openai_api` is also seeded, connected
+and enabled. Custom profiles are created disabled unless the request is part of
+a verified setup flow.
 
-Always-seeded OAuth profiles:
+### 5.3 User-initiated activation vs passive validation
 
-| Profile ID | Runtime | Provider | Initial state |
+**Connect OAuth**, **Reconnect OAuth**, **Add API key**, and a successful
+**Rotate API key** are setup actions. On success MoonMind sets `auth_state:
+connected`, `disabled_reason: null`, `enabled: true`, and records
+`first_authenticated_at` (if unset), `last_validated_at`, and `last_auth_method`.
+Enabling is correct because the user is configuring the provider to use it; such
+an action may also clear `user_disabled`.
+
+Passive validation — background checks, migrations, repair jobs, readiness
+refreshes, health probes, manager sync — may update `auth_state`, timestamps,
+and diagnostics but never re-enables a `user_disabled` profile.
+
+### 5.4 Disable, disconnect, failure, and policy states
+
+| Situation | `enabled` | `disabled_reason` | `auth_state` |
 | --- | --- | --- | --- |
-| `claude_anthropic_oauth` | `claude_code` | `anthropic` | disabled, setup required |
-| `codex_openai_oauth` | `codex_cli` | `openai` | disabled, setup required |
+| Manual disable | false | `user_disabled` | `connected` |
+| Disconnect (clears volume binding, and `secret_refs` when removal is requested) | false | `disconnected` | `disconnected` |
+| Validation failure | false | `auth_invalid` | `validation_failed` |
+| Policy block | false, or true with `launch_ready` false | `policy_disabled`, or null | unchanged |
 
-When `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is configured at startup, MoonMind also seeds a corresponding API-key profile and enables it by default:
+The second policy form is preferable for temporary policy because it keeps user
+intent separate from enforcement.
 
-| Profile ID | Runtime | Provider | Initial state |
-| --- | --- | --- | --- |
-| `claude_anthropic_api` | `claude_code` | `anthropic` | enabled, connected |
-| `codex_openai_api` | `codex_cli` | `openai` | enabled, connected |
+### 5.5 API enforcement
 
-An OAuth setup profile should look like:
-
-```yaml
-profile_id: claude_anthropic_oauth
-runtime_id: claude_code
-provider_id: anthropic
-provider_label: Anthropic
-
-credential_source: none
-runtime_materialization_mode: api_key_env
-
-enabled: false
-is_default: false
-auth_state: oauth_pending
-disabled_reason: missing_credentials
-tags: ["oauth", "first-party"]
-priority: 100
-
-secret_refs: {}
-volume_ref: null
-volume_mount_path: null
-
-command_behavior:
-  supported_auth_methods: ["oauth_volume", "secret_ref"]
-  auth_actions:
-    - connect_oauth
-    - use_api_key
-  auth_status_label: "Not connected"
-  auth_readiness:
-    connected: false
-    launch_ready: false
-```
-
-A separate provider-offerings catalog may replace setup stubs later, but the launch semantics must remain the same: no successful credential setup means no launchable profile.
-
-### 7.3 User-initiated activation
-
-A user-initiated Settings activation is any of:
-
-- **Connect OAuth**
-- **Reconnect OAuth**
-- **Add API key**
-- **Rotate API key** where the new key validates successfully
-
-When one of these succeeds, MoonMind should enable the profile by default:
-
-```yaml
-auth_state: connected
-disabled_reason: null
-enabled: true
-first_authenticated_at: <preserve existing value or set now>
-last_validated_at: <now>
-last_auth_method: oauth_volume | secret_ref
-```
-
-This is intentionally different from passive validation. The user is actively configuring the provider so that it can be used.
-
-### 7.4 Passive validation and user-disabled guard
-
-Passive validation includes:
-
-- background credential checks
-- migrations
-- admin repair jobs
-- readiness refreshes
-- provider health probes
-
-Passive validation may update `auth_state`, `last_validated_at`, and diagnostics, but it must not silently re-enable a profile with:
-
-```yaml
-disabled_reason: user_disabled
-```
-
-Only an explicit user/admin enable action or a direct setup action in Settings may clear `user_disabled`.
-
-### 7.5 Manual disable and disconnect
-
-Manual disable:
-
-```yaml
-enabled: false
-disabled_reason: user_disabled
-auth_state: connected
-```
-
-Disconnect OAuth or remove credentials:
-
-```yaml
-enabled: false
-disabled_reason: disconnected
-auth_state: disconnected
-volume_ref: null      # for OAuth-backed profiles
-volume_mount_path: null
-secret_refs: {}       # for API-key-backed profiles, if credential removal is requested
-```
-
-Validation failure:
-
-```yaml
-enabled: false
-disabled_reason: auth_invalid
-auth_state: validation_failed
-```
-
-Policy block:
-
-```yaml
-enabled: false
-disabled_reason: policy_disabled
-```
-
-or, if product needs to preserve the user’s enabled preference while showing a launch block:
-
-```yaml
-enabled: true
-disabled_reason: null
-# computed launch_ready remains false because policy blocks launch
-```
-
-The second pattern is preferable when the policy may be temporary, because it keeps user intent separate from policy enforcement.
-
-### 7.6 Settings UI states
-
-Before setup:
-
-```text
-Claude Code
-Status: Not connected
-Enabled: Off / unavailable until connected
-Actions: Connect OAuth · Add API key
-```
-
-After successful OAuth:
-
-```text
-Claude Code
-Status: OAuth connected
-Enabled: On
-Actions: Disable · Reconnect OAuth · Add API key
-```
-
-After successful API key:
-
-```text
-Claude Code
-Status: API key connected
-Enabled: On
-Actions: Disable · Rotate key · Switch to OAuth
-```
-
-When manually disabled:
-
-```text
-Claude Code
-Status: Connected, disabled by user
-Enabled: Off
-Actions: Enable · Reconnect OAuth · Rotate key
-```
-
-When policy-blocked:
-
-```text
-Claude Code
-Status: Connected, blocked by workspace policy
-Enabled: On or policy-locked Off, depending on policy model
-Actions: View policy · Contact admin
-```
-
-### 7.7 API behavior
-
-Provider profile create/update endpoints must not trust client-provided `enabled=true` for first-party setup stubs unless credentials are verified.
-
-Recommended behavior:
-
-```python
-def may_enable_profile(profile, *, action, readiness, policy) -> bool:
-    if policy.blocks_launch(profile):
-        return False
-    if action in {"connect_oauth", "reconnect_oauth", "use_api_key", "rotate_api_key"}:
-        return readiness.credentials_verified
-    if profile.disabled_reason == "user_disabled":
-        return False
-    return readiness.launch_ready
-```
-
-Patch requests that set `enabled=true` should fail with a validation error when readiness blockers remain:
-
-```text
-Provider profile cannot be enabled until OAuth or API-key credentials are verified.
-```
+Endpoints do not trust client-supplied `enabled=true`. A setup action enables
+only when credentials are verified; otherwise `user_disabled` stays disabled and
+an enable requires `launch_ready`. A patch enabling a profile with readiness
+blockers fails with "Provider profile cannot be enabled until OAuth or API-key
+credentials are verified."
 
 ---
 
-## 8. OAuth-Backed Provider Profiles
+## 6. OAuth-Backed Profiles
 
-### 8.1 OAuth-backed profiles are profile rows, not terminal-session rows
+The profile stores the durable result of an OAuth login: `oauth_volume` /
+`oauth_home`, `volume_ref`, `volume_mount_path`, `account_label`, and activation
+state. PTY identifiers, WebSocket URLs, session ids, browser status, and OAuth
+tokens belong to the OAuth session subsystem or the provider's files in the
+volume, never the row.
 
-For OAuth-backed runtimes, the browser-interactive authentication flow is owned by [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md). The Provider Profile stores the resulting durable launch target.
-
-The Provider Profile may contain:
-
-- `credential_source = oauth_volume`
-- `runtime_materialization_mode = oauth_home`
-- `volume_ref`
-- `volume_mount_path`
-- `account_label`
-- `auth_state = connected`
-- `enabled = true`
-- concurrency/cooldown policy
-- routing metadata
-
-The Provider Profile must **not** contain:
-
-- PTY bridge identifiers
-- WebSocket URLs
-- terminal session ids
-- browser session status
-- OAuth access tokens
-- refresh tokens
-
-Those belong to the OAuth session subsystem or to provider-owned credential storage in the mounted auth volume.
-
-### 8.2 OAuth registration flow
-
-At a high level, an OAuth-backed profile is created or updated through the following flow:
-
-1. The dashboard starts an OAuth session from Settings.
-2. MoonMind creates a short-lived auth container and mounts the target auth volume.
-3. The dashboard attaches through the MoonMind PTY/WebSocket bridge, where required.
-4. The runtime CLI drives the interactive login flow.
-5. MoonMind verifies that valid credential state now exists in the mounted auth volume.
-6. MoonMind creates or updates the Provider Profile.
-7. MoonMind marks the profile connected and enabled by default.
-8. MoonMind tears down the auth container and terminal session.
-
-The resulting Provider Profile is transport-neutral and reusable long after the browser terminal session has ended.
-
-### 8.3 OAuth success behavior
-
-After successful OAuth verification:
-
-```python
-profile.credential_source = ProviderCredentialSource.OAUTH_VOLUME
-profile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
-profile.volume_ref = session.volume_ref
-profile.volume_mount_path = session.volume_mount_path
-profile.auth_state = "connected"
-profile.disabled_reason = None
-profile.first_authenticated_at = profile.first_authenticated_at or now
-profile.last_validated_at = now
-profile.last_auth_method = "oauth_volume"
-profile.enabled = True
-```
-
-This auto-enable behavior is correct because OAuth finalization is a direct user-initiated setup action.
-
-### 8.4 OAuth failure behavior
-
-After failed OAuth verification:
-
-```python
-profile.auth_state = "validation_failed"
-profile.disabled_reason = "auth_invalid"
-profile.enabled = False
-```
-
-The profile should remain visible in Settings with diagnostics and a retry action.
-
-### 8.5 OAuth disconnect behavior
-
-When a user disconnects OAuth:
-
-```python
-profile.auth_state = "disconnected"
-profile.disabled_reason = "disconnected"
-profile.enabled = False
-profile.volume_ref = None
-profile.volume_mount_path = None
-```
-
-If the profile also has a separate API-key credential, product may offer “switch to API key” rather than fully disconnecting all credential methods.
+Flow: Settings starts an OAuth session; MoonMind creates a short-lived auth
+container with the target volume; the dashboard attaches through the PTY bridge
+where required; the CLI drives login; MoonMind verifies credential state in the
+volume, creates or updates the profile with the 5.3 activation state, and tears
+down the container and session. A failed verification sets the validation-failure
+state. Disconnect clears the volume binding; when an API-key credential also
+exists, Settings may offer switching to it.
 
 ---
 
-## 9. API-Key-Backed Provider Profiles
+## 7. API-Key-Backed Profiles
 
-### 9.1 API-key setup flow
+### 7.1 Setup flow
 
-API keys should be added through Settings or a dedicated provider profile credentials endpoint. The raw key must never be stored directly in the Provider Profile row.
+Keys enter through `POST /provider-profiles/{profile_id}/credentials/api-key`
+(`api_key`, optional `account_label`, `make_default`, `enable_after_validation`).
+The server checks `provider_profiles.write`, validates the key with the
+provider, stores it in the Secrets System, writes only a `SecretRef`, populates
+`env_template`, `clear_env_keys`, and command behavior, applies the 5.3
+activation state, and returns readiness, never the key. The candidate key is
+never persisted in payloads, rows, diagnostics, audit rows, or artifacts.
 
-Recommended endpoint shape:
+First-party mappings: `claude_code + anthropic` sets `ANTHROPIC_API_KEY` from
+role `anthropic_api_key` and clears `ANTHROPIC_AUTH_TOKEN` and
+`ANTHROPIC_BASE_URL`; `codex_cli + openai` sets `OPENAI_API_KEY` from
+`openai_api_key` and clears `MINIMAX_API_KEY`.
 
-```http
-POST /provider-profiles/{profile_id}/credentials/api-key
-```
+### 7.2 Credential-maintenance lease failures
 
-Request:
+Enrollment first acquires an exclusive maintenance lease (9.4). Failing to
+acquire it happens before validation: RPC failures and timeouts return HTTP 503
+`provider_credential_manager_unavailable`, credentials and readiness are
+unchanged, and the key is not called invalid. Because Temporal may have accepted
+the request before the result was lost, the 503 echoes `retry_idempotency_key`
+(the `operation_id` the lease owner was derived from: `Idempotency-Key`, else
+`X-Request-ID`, else generated). Retrying with it reattaches to the same owner
+instead of orphaning a competing one.
 
-```json
-{
-  "api_key": "raw key supplied by user",
-  "account_label": "optional label",
-  "make_default": false,
-  "enable_after_validation": true
-}
-```
+The post-acquisition host drain is bounded at 120 seconds; a drain that never
+answers is cancelled and returns the same 503 with `refusal:
+credential_host_drain_timeout`. Rotation stays atomic.
 
-Server behavior:
-
-1. Check `provider_profiles.write` permission.
-2. Validate the API key using provider-specific validation.
-3. Store the key in the Secrets System.
-4. Write only a `SecretRef` into the Provider Profile.
-5. Populate `env_template`, `clear_env_keys`, and any runtime-specific command behavior.
-6. Mark the profile connected.
-7. Enable the profile by default because this is a direct user-initiated setup action.
-8. Return readiness metadata, never the raw key.
-
-### 9.2 API-key success behavior
-
-After successful API-key validation:
-
-```python
-profile.credential_source = ProviderCredentialSource.SECRET_REF
-profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
-profile.secret_refs[role] = secret_ref
-profile.auth_state = "connected"
-profile.disabled_reason = None
-profile.first_authenticated_at = profile.first_authenticated_at or now
-profile.last_validated_at = now
-profile.last_auth_method = "secret_ref"
-profile.enabled = True
-```
-
-### 9.3 API-key failure behavior
-
-After failed API-key validation:
-
-```python
-profile.auth_state = "validation_failed"
-profile.disabled_reason = "auth_invalid"
-profile.enabled = False
-```
-
-The raw candidate key must not be persisted in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.
-
-Failure to acquire the credential-maintenance lease is an infrastructure failure,
-before key validation. Temporal RPC failures and acquisition timeouts return HTTP
-503 with `provider_credential_manager_unavailable` and a safe retry diagnostic
-for Settings. Existing credentials, generation, and profile readiness remain
-unchanged; the failure does not classify the submitted key as invalid.
-
-The acquisition outcome is ambiguous: Temporal may have accepted
-`AcquireCredentialMaintenanceLease` before the result was lost, so the
-deterministic owner derived from the request identity may hold a waiter or
-lease. The 503 therefore echoes `retry_idempotency_key` — the exact
-`operation_id` the owner was derived from (`Idempotency-Key`, else
-`X-Request-ID`, else a generated value). A retry must reuse it as
-`Idempotency-Key` so it reattaches to the same owner (`already_held`) instead
-of orphaning a competing owner behind the original. The key carries no
-credential material. The Settings OpenCode drawer stores it from the 503 and
-resends it on the next submit for that profile.
-
-The profile host drain after acquisition is bounded (120s) by one monotonic
-deadline covering connection, workflow start, and the janitor result
-together. A janitor drain that never answers is cancelled best-effort
-before returning the same 503 shape with
-`refusal: credential_host_drain_timeout` and the same stable
-`retry_idempotency_key`; rotation stays atomic, so saved credentials are
-unchanged and the retry reattaches to the same owner instead of colliding
-with the still-running workflow ID.
-
-While the drawer shows "validating token", it polls
-`GET /provider-profiles/{profile_id}/credential-maintenance-status?idempotency_key=<key>`
-for the caller's queue position. The response projects only counts and the
-caller's own 1-based `waiter_position` (`exclusive_maintenance_waiters`,
-`waiter_position`, `lease_held`, `execution_lease_count`); other waiters'
-identities are never exposed, and manager unavailability degrades to
-`known: false` instead of failing the poll. The drawer always sends a
-client-generated `Idempotency-Key` on the first submit so the poll key and
-the lease owner agree; the enrollment POST itself times out client-side after
-10 minutes with a retryable failure that keeps the same key. Aborting the
-request (Cancel validation) or hitting the client timeout only stops the
-browser from waiting: the server may still commit the credential, so the
-drawer reports the outcome as uncertain and the retry reuses the same key
-to reattach to the same operation rather than starting a conflicting one.
-The API waits for its fenced validation-lease release when a background
-revalidation task is cancelled during shutdown. Validation grants record their
-purpose-specific maximum lifetime so a missing release reaches cleanup at the
-validation bound rather than the longer execution bound. Expiry still requests
-verified cleanup; it does not free a credential slot on its own.
-
-### 9.4 Recommended first-party API-key mappings
-
-```yaml
-claude_code + anthropic:
-  secret_role: anthropic_api_key
-  env_template:
-    ANTHROPIC_API_KEY:
-      from_secret_ref: anthropic_api_key
-  clear_env_keys:
-    - ANTHROPIC_AUTH_TOKEN
-    - ANTHROPIC_BASE_URL
-
-codex_cli + openai:
-  secret_role: openai_api_key
-  env_template:
-    OPENAI_API_KEY:
-      from_secret_ref: openai_api_key
-  clear_env_keys:
-    - MINIMAX_API_KEY
-```
-
-Runtime-specific strategies may adjust these defaults when a CLI requires a different key name, config file, or home directory behavior.
+While validating, the Settings drawer polls
+`GET /provider-profiles/{profile_id}/credential-maintenance-status?idempotency_key=<key>`,
+which exposes only counts and the caller's own `waiter_position`, and reports
+`known: false` when the manager is unavailable. The drawer always sends a
+client-generated `Idempotency-Key`. Cancelling or the 10-minute client timeout
+only stops waiting; the server may still commit, so the outcome is shown as
+uncertain and the retry reuses the key.
 
 ---
 
-## 10. Request and Selection Model
+## 8. Request and Selection
 
-### 10.1 Why runtime-only selection is no longer enough
+### 8.1 Unified selection
 
-A request that says only:
+[Harness, Provider Profile, and Backend Selection](../UI/HarnessProfileBackendSelection.md)
+owns the vocabulary. A profile may pin an `execution_configuration` (immutable
+id, version, digest). Submissions supply the profile id; admission resolves
+compatible execution behavior and records an immutable snapshot that
+continuations reuse. Selection does not change when model discovery expires or
+a host image changes; credentials, trust, compatibility, and actual-host model
+verification remain launch gates.
 
-```json
-{ "agent_id": "claude_code" }
-```
+An omitted Backend resolves to the deployment default, normally Omnigent. A
+profile without a compatible configuration reports the gap rather than falling
+back to a direct launcher; an alternative Backend is an explicit, disclosed
+Advanced choice. A new unconfigured draft may use an authorized default or sole
+compatible profile. After a Harness change the profile is kept only if
+compatible; MoonMind never substitutes another account. Disabled and
+disconnected profiles remain visible with a setup action.
 
-is ambiguous once multiple providers exist for `claude_code`.
+### 8.2 Request contract and resolution order
 
-MoonMind must not route a generic Claude request to MiniMax, Z.AI, or Anthropic arbitrarily just because one profile currently has an open slot.
-
-Selection must become provider-aware and readiness-aware.
-
-### 10.2 Request Contract
+A request naming only `agent_id` is ambiguous once several providers exist, and
+MoonMind does not route to whichever provider has a free slot.
 
 ```yaml
 AgentExecutionRequest:
   agent_id: str
   execution_profile_ref: str | null
-  profile_selector:
-    provider_id: str | null
-    tags_any: [str]
-    tags_all: [str]
-    runtime_materialization_mode: str | null
+  profile_selector: {provider_id, tags_any, tags_all, runtime_materialization_mode}
 ```
 
-### 10.3 Resolution Order
+1. `execution_profile_ref` resolves exactly that profile; busy or cooling
+   profiles wait rather than permitting another account.
+2. Otherwise resolution stays in the authorized Harness scope (`runtime_id ==
+   agent_id`, or the Omnigent configuration's compatibility projection).
+3. Filter by provider and tags; exclude disabled, not-ready, cooling, and full
+   profiles.
+4. Pick the highest priority, then most free slots.
 
-Provider Profile resolution must follow this order:
+Priority ordering applies only inside an operator-authorized pool; no
+constraint does not mean "any launch-ready provider." Missing authority reports
+the affected action instead of falling back across provider, account, or
+Backend.
 
-1. If `execution_profile_ref` is present, resolve that exact profile. An unavailable slot or cooldown waits through existing capacity handling; it does not permit another account or provider.
-2. Otherwise, resolve only within the authorized selector's Harness scope (`runtime_id == agent_id` for direct requests, or the selected Omnigent configuration's compatibility projection).
-3. If `profile_selector.provider_id` is present, filter by provider.
-4. Apply tag filters.
-5. Exclude disabled profiles.
-6. Exclude profiles that are not launch ready.
-7. Exclude profiles currently in cooldown.
-8. Exclude profiles with no available slots.
-9. Select the highest-priority compatible profile.
-10. Break ties using the profile with the most free slots.
+### 8.3 Omnigent compatibility
 
-The priority and free-slot ordering applies only within an explicitly authorized
-selector pool. Ordinary authoring resolves its Provider Profile through the shared
-selection boundary before this capacity handoff. Selection never rewrites an
-authored account, Harness, Backend, or credential route.
+Omnigent is a facade, not a profile owner, so selection never matches
+`runtime_id == omnigent`. Traditional execution profiles filter by the target's
+`providerRuntime` and provider requirements. A generic (v2) Agent Profile
+accepts a profile only when the materializer for its `(runtime_id,
+provider_id)` pair is accepted by the selected harness under every allowed
+launch policy; the readiness projection's `compatibleProviderProfiles` uses the
+same check, so the API cannot accept a pair the UI calls incompatible.
 
-### 10.4 Default Provider Profile and authorized selectors
+### 8.4 Harness-owned selection scope
 
-A new unconfigured authoring draft may use its authorized default or sole
-compatible Provider Profile. A submitted explicit or preserved profile remains
-that identity even when capacity is busy, advisory discovery fails, or setup
-is unavailable. Missing or revoked authority reports the affected action; it
-never triggers a cross-provider, account, or Backend fallback.
+A profile is never multi-runtime because it owns runtime-specific
+materialization, command behavior, tiers, capacity, and default selection. One
+provider used by two runtimes is two profiles, which may share a managed secret.
+Execution and authoring surfaces offer no **All harnesses** option, scope
+results server-side with `GET /api/v1/provider-profiles?runtime_id=<harness>`
+plus the Backend projection, key caches by the selected identity so stale
+placeholder data is never submittable, and show a named setup state when a
+Harness has no eligible profile.
 
-Lower-level selector requests may use provider/tag constraints and deterministic
-priority ordering only within the pool the operator authorized. Absence of both
-an exact profile and a provider constraint does not itself authorize routing to
-every launch-ready provider. Disabled setup stubs never become launch defaults.
-The selected identity and authored/defaulted provenance are recorded through the
-existing admission owner before acquisition.
+### 8.5 Server-side correctness boundary
 
-### 10.5 Harness-owned selection scope
+Every authoring and submission path rejects `selected_profile.runtime_id !=
+effective_runtime_id` with `409 provider_profile_runtime_mismatch`, naming both
+sides. The rule lives once in `api_service/services/provider_profile_runtime.py`.
+A blank `runtime_id` is rejected (it would be launchable everywhere), and a
+payload whose runtime fields disagree is validated against every runtime it
+names, using the worker's precedence (`workflow.runtime.mode` first).
 
-> Provider Profiles are Harness-owned connection and launch contracts. Ordinary
-> authoring displays and accepts profiles compatible with the selected Harness
-> and Backend through the shared selection owners. Settings may expose an
-> explicit **All harnesses** configuration view. Existing `runtime_id` query
-> parameters and persisted identifiers retain their meanings.
-
-`runtime_id` is required and stable because the profile owns runtime-specific
-behavior: provider and credential selection, credential materialization,
-environment and file shaping, command behavior, model and effort tiers,
-concurrency and cooldown policy, and default-profile selection for that runtime.
-
-A Provider Profile is therefore never a multi-runtime object. The same upstream
-provider or managed secret is represented by one runtime-specific profile per
-runtime, and those profiles may reference the same managed secret:
-
-```text
-codex_minimax_team
-  runtime_id: codex_cli
-  provider_id: minimax
-  secret_ref: db://MINIMAX_API_KEY
-
-claude_minimax_team
-  runtime_id: claude_code
-  provider_id: minimax
-  secret_ref: db://MINIMAX_API_KEY
-```
-
-#### Execution and workflow-authoring surfaces
-
-For a direct supported Backend, profile `runtime_id` agrees with the selected
-Harness's canonical ownership ID. Omnigent additionally applies the compatibility
-projection below; neither path infers Harness compatibility from Provider alone.
-
-- Execution surfaces do not offer an **All harnesses** option.
-- Surfaces scope the result set server-side using the existing
-  `GET /api/v1/provider-profiles?runtime_id=<canonical harness ownership ID>`
-  and selected Backend compatibility projection rather than fetching every
-  profile and filtering only on the client.
-- Query cache keys include the selected identity, and previous-selection
-  placeholder data is never selectable, resolvable, or submittable during refetch.
-- A deliberately changed Harness retains a compatible selected profile;
-  otherwise the form requires a compatible Provider Profile and preserves
-  recoverable draft values. It does not select a different account to repair
-  the mismatch. Authorized default selection is limited to a new unconfigured
-  draft, as specified under Unified Provider Profile selection.
-- A Harness with no eligible profile shows a named setup/compatibility state
-  instead of hiding the control or selecting another Backend.
-
-#### Omnigent compatibility exception
-
-`omnigent` is an orchestration and execution facade, not a Provider Profile
-owner. Omnigent selection is compatibility-based against the underlying managed
-runtime and the selected execution target; it must never look for
-`runtime_id == omnigent`.
-
-- A traditional execution profile filters eligible profiles by the selected
-  target's `providerRuntime` and its declared provider requirements.
-- A generic (v2) Agent Profile uses the compatibility or readiness result that
-  declares the allowed Provider Profiles. A profile is compatible only when the
-  materializer registered for that profile's `(runtime_id, provider_id)` pair is
-  accepted by the *selected* harness under every launch policy the Agent Profile
-  allows; being globally enabled, or merely having some registered materializer,
-  is never sufficient. This is the same capability boundary the readiness
-  projection applies when it builds `compatibleProviderProfiles`, so an API
-  client cannot submit a pair the UI reports as incompatible.
-- An unavailable historical profile may still render while editing an existing
-  workflow, but requires replacement before submission.
-
-#### Server-side correctness boundary
-
-The UI filter alone is not sufficient. Every launch-authoring or submission path
-validates the relationship before persisting or launching, using canonical
-runtime IDs and never inferring compatibility from `provider_id` alone:
-
-```text
-reject when selected_profile.runtime_id != effective_runtime_id
-```
-
-Rejection returns `409 Conflict` with code `provider_profile_runtime_mismatch`,
-identifying both sides of the incompatible pair:
-
-```text
-Provider Profile 'claude_anthropic_oauth' belongs to Harness 'Claude Code' and
-cannot be used with Harness 'Codex'.
-```
-
-The rule is expressed once as a typed contract at the shared authoring
-boundary — `api_service/services/provider_profile_runtime.py` — rather than
-copied per router, so a new authoring path cannot silently omit it.
-
-Two states are ambiguous rather than exempt, and both are rejected:
-
-- A profile whose `runtime_id` is blank or whitespace-only names no owning
-  runtime. Accepting it would make it launchable under every runtime, which is
-  precisely the state this invariant exists to prevent.
-- A payload whose runtime fields disagree — for example a payload-level
-  `targetRuntime` beside a different `workflow.runtime.mode` — has no single
-  authored target. The effective runtime is resolved with the precedence the
-  worker itself applies (`workflow.runtime.mode` first), and the pair is
-  validated against *every* runtime the payload names, so a second field cannot
-  decide the launch after the boundary approved the pair for a different
-  runtime. Deferring to the Omnigent facade requires an unambiguous Omnigent
-  selection.
-
-Its primary placement is the authority handoff every launch converges on,
-`TemporalExecutionService.create_execution`. Direct execution submission (both
-the task/workflow envelope and the raw request shape), rerun, continuation,
-checkpoint branching, retired manifest ingest (rejected at that boundary since
-MoonLadderStudios/MoonMind#4192), and deployment
-operations all reach a launch through that method, so an alternate client
-cannot find a submission shape that accepts a pair the runtime-scoped selectors
-would never offer. Routers translate the typed rejection into the same 409
-payload.
-
-A recovery destination — typed recovery, failed-step recovery, and
-selected-step recovery — inherits the source execution's authored runtime and
-Provider Profile, so a pair that was persisted before this rule existed, or
-whose profile was later recreated under another runtime, is rejected at the same
-handoff. Those routes return the identical 409 contract rather than an unmapped
-server error, and the source execution is left untouched.
-
-Boundaries that durably persist a launch target *before* reaching that handoff
-enforce the same contract themselves:
-
-- A recurring schedule persists the target whose `initialParameters` a later
-  schedule action launches, so its create and update paths validate the pair
-  before the target is stored, not only when a run is started.
-Enforcement at the launch handoff matters beyond the API surface: the runtime
-node carries `profileId` into the launcher, which selects the launch strategy
-from the profile's `runtime_id`. A mismatched pair that reached launch would
-silently execute the profile's runtime instead of the selected one — a
-billing-relevant runtime substitution.
-
-For Omnigent submissions the equivalent rejection comes from the Omnigent
-selection boundary when the requested profile falls outside the selected
-execution target's compatibility set. Existing authorization, visibility,
-readiness, capacity, and secret-resolution validation continue to apply
-unchanged.
+Enforcement sits at `TemporalExecutionService.create_execution`, which
+submission, rerun, continuation, checkpoint branching, and deployment
+operations all reach; recovery destinations inherit the source's pair and get
+the same 409. Recurring schedules validate on create and update because they
+persist a target before any run. This matters because the launcher picks its
+strategy from the profile's `runtime_id`: a mismatched pair would silently run
+a different, separately billed runtime.
 
 ---
 
-## 11. Provider Profile Manager Workflow
+## 9. Provider Profile Manager
 
-### 11.1 Concept
+### 9.1 Scope
 
-MoonMind should treat Provider Profile slot assignment as a first-class orchestration concern.
+`MoonMind.ProviderProfileManager` runs as one singleton per runtime family
+(`provider-profile-manager:<runtime>`), so history growth and Continue-As-New
+are independent per runtime. It owns active leases, per-profile capacity,
+cooldowns, queued requests, and assignments, and receives only enabled,
+launch-ready profiles. Each profile has its own `max_parallel_runs` budget and
+capacity scope `provider-profile:<profile_id>` unless explicitly assigned a
+shared scope, so one full profile does not block another.
 
-The singleton workflow responsible for profile-capacity coordination is:
+Signals: `request_slot` and `release_slot` and `report_cooldown` (AgentRun →
+Manager), `sync_profiles` and `shutdown` (System → Manager), `slot_assigned`
+(Manager → AgentRun). Releases quote the lease id, purpose, and fencing
+generation.
 
-- `MoonMind.ProviderProfileManager`
+### 9.2 Waiting and cooldown
 
-### 11.2 Scope
+A run with no available profile waits durably in `awaiting_slot` or fails fast
+per request policy. A full profile is busy, not unavailable: work queues
+regardless of `rate_limit_policy`, and launch surfaces keep it selectable.
+Waiting summaries name the runtime, requested provider or profile, and whether
+the gap is capacity, cooldown, policy, or setup.
 
-Each runtime family gets one singleton manager workflow:
+Plan-bound Codex and generic-host Omnigent runs acquire capacity in the workflow
+before scheduling the execution Activity, so queue time spends neither a worker
+slot nor the execution timeout. The workflow releases the lease after the Codex
+coordinator confirms host cleanup; failed cleanup keeps capacity spent for
+verified janitor teardown.
 
-- `provider-profile-manager:claude_code`
-- `provider-profile-manager:codex_cli`
+On an attributable 429 or quota exhaustion, AgentRun reports cooldown, releases
+its slot, and re-requests with the same selector or exact profile. MoonMind
+keeps the requested model and credential and retries after cooldown with bounded
+backoff (three retries by default), then returns the structured provider failure.
+Strategies trigger this by classifying rate limits as
+`failure_class="integration_error"` with `provider_error_code="429"`.
 
-The singleton coordinates profiles; it does not impose a runtime-wide execution
-limit. Each profile has its own `max_parallel_runs` budget and defaults to the
-independent capacity scope `provider-profile:<profile_id>`. A full or cooling-down
-profile must not block a request for another profile on the same runtime. Profiles
-share an upstream budget only when explicitly assigned the same capacity scope;
-deployment host and worker capacity still bound aggregate execution.
+### 9.3 Lease modes
 
-Per-runtime singletons are preferred over one global manager because they:
+One trusted classifier (`moonmind/provider_profiles/lease_client.py`) assigns a
+mode from the declared purpose and the profile's credential contract, so no
+caller can widen its own authority.
 
-- keep workflow history growth independent per runtime,
-- allow each manager to Continue-As-New independently,
-- simplify concurrent slot assignment within a runtime family.
-
-### 11.3 Responsibilities
-
-The manager is the source of truth for:
-
-- active profile leases
-- per-profile slot capacity
-- cooldown windows
-- queued requests
-- assignment decisions
-
-### 11.4 Manager sync payload
-
-The profile manager should receive only profiles that are both enabled and launch ready.
-
-```python
-profiles_payload = [
-    profile
-    for profile in provider_profiles
-    if profile.enabled and provider_profile_launch_ready(profile)
-]
-```
-
-This prevents disabled setup stubs from becoming runnable simply because they exist in the database.
-
-### 11.5 Signals
-
-| Signal | Direction | Payload |
+| Mode | When | Effect |
 | --- | --- | --- |
-| `request_slot` | AgentRun → Manager | `{requester_workflow_id, runtime_id, priority?, requested_profile_id?, provider_id?, tags_any?, tags_all?, runtime_materialization_mode?}` |
-| `release_slot` | AgentRun → Manager | `{requester_workflow_id, profile_id, lease_id?, purpose?, fencing_generation?}` |
-| `report_cooldown` | AgentRun → Manager | `{profile_id, cooldown_seconds}` |
-| `sync_profiles` | System → Manager | `{profiles: [...]}` |
-| `slot_assigned` | Manager → AgentRun | `{profile_id}` |
-| `shutdown` | System → Manager | none |
-
-### 11.6 Waiting semantics
-
-If no compatible launch-ready profile is available, the run waits durably in `awaiting_slot` or fails fast according to the request policy.
-
-A profile whose slots are all in use is busy, not unavailable. New work for it queues in the manager whatever the profile's `rate_limit_policy` is, because that field governs provider 429 handling (§11.7), not slot capacity. Launch surfaces such as the Omnigent readiness catalog mark the profile busy and keep it selectable.
-
-New plan-bound Codex and generic-host Omnigent runs acquire Provider Profile
-capacity in the workflow before scheduling the long execution Activity. A
-queued child projects `awaiting_slot` to its parent, so the workflows list
-reflects the capacity wait. Queue time consumes neither an execution worker
-slot nor the execution timeout. Codex retains its existing OAuth host lifecycle;
-the generic host reservation applies only to the generic realizer.
-
-The execution Activity consumes the admitted lease by inspecting its recorded
-plan, request, step, and credential authority. The workflow releases that lease
-after the Codex coordinator confirms host cleanup. New Codex handoffs use a
-single Activity attempt and bounded workflow retries. A ScheduleToStart timeout
-releases a fresh admission because execution never started; a resumed admission
-retains capacity when an earlier delivery may still own a host. Failed or
-interrupted cleanup keeps capacity spent for reconciliation and verified janitor
-teardown. Temporal patch markers preserve the Activity-owned acquisition of runs
-scheduled before this change; those retained runs can still display `executing`
-while waiting internally until they finish.
-
-After a confirmed durable owner release, the manager immediately offers the
-returned capacity to queued requests. It consumes its wakeup before awaited
-loop work so signals received during persistence remain pending for the next
-pass. The separate `provider-profile-manager-durable-release-wakeup-v1` marker
-preserves the timer ordering in retained manager histories.
-Acknowledgements of an unchanged cleanup claim wait for the periodic retry;
-only new cleanup obligations or confirmed releases request another pass.
-
-The UI and parent workflow should clearly indicate:
-
-- runtime family
-- requested provider, if any
-- requested exact profile, if any
-- whether the missing condition is capacity, cooldown, policy, or provider setup
-
-Example summary:
-
-> Waiting for provider profile slot on `claude_code` (`provider=minimax`)
-
-Example setup-required summary:
-
-> Claude Code is not connected. Connect OAuth or add an API key in Settings.
-
-### 11.7 Cooldown behavior
-
-On provider 429 or equivalent quota exhaustion:
-
-1. AgentRun signals `report_cooldown(profile_id, duration)`.
-2. AgentRun releases its current slot.
-3. AgentRun re-requests a slot using the same selector or exact profile intent.
-
-If another compatible launch-ready profile exists, the run may continue on a different profile. Otherwise, it waits.
-
-Claude Code and Codex CLI rate limits must be reported against the selected provider profile whenever the failure can be attributed to that profile. The `AgentRun` should release the current slot, report cooldown, and retry through the same profile selector unless the request required an exact profile. If no compatible profile is available, the run waits in `awaiting_slot`.
-
-Temporary provider or selected-model capacity exhaustion follows the same default cooldown path as provider rate limits. MoonMind preserves the requested model and credential authority, releases the profile slot, and retries after the profile cooldown with bounded exponential backoff rather than silently selecting a different model or credential source. The default budget permits three cooldown retries; after the third retry fails, AgentRun returns the final structured provider failure with explicit exhaustion metadata instead of waiting forever.
-
-The slot-release + cooldown path is gated by provider error classification. Runtime strategies must classify provider rate-limit signals as `failure_class="integration_error"` with `provider_error_code="429"`, or an equivalent retry recommendation that asks the orchestration layer to wait for provider cooldown instead of retrying immediately.
-
-### 11.8 Lease modes, durability, and fairness
-
-Configured capacity `N` is a **shared execution ceiling**, not a statement about
-credential work. Every acquisition is classified into exactly one ledger mode by
-one trusted classifier (`moonmind/provider_profiles/lease_client.py`), derived
-from the declared purpose plus the profile's durable credential contract. A
-caller never names its own mode, so no caller can widen its own authority.
-
-| Mode | When | Ledger effect |
-| --- | --- | --- |
-| `shared_execution` | any execution purpose | consumes one of the `N` execution slots |
-| `single_flight_validation` | `credential_validation` on a profile whose `credential_source` is `none` | one holder per exact evidence identity; consumes no execution slot and imposes no capacity-one requirement |
-| `exclusive_maintenance` | every other maintenance purpose | blocks new consumers and drains existing credential consumers first |
-
-A mutable OAuth home (Codex, Claude) materializes shared credential state, so
-validation against it stays `exclusive_maintenance` and the profile stays
-capacity one. Credentialless validation is admitted beside executions only under
-its non-mutating probe contract; it still spends bounded host and provider
-resources and is accounted against the shared capacity scope.
-
-#### Incompatibility is per resource and per purpose
-
-Two different questions gate exclusive maintenance, and each is asked against
-the resource it actually describes:
-
-- **Credential material.** The drain set is the leases holding the credential
-  the maintenance operation is about to take. A profile whose credential source
-  is `none` materializes no credential, so it has nothing for credential work to
-  wait on.
-- **Upstream provider capacity.** Shared-scope fullness and cooldown gate only
-  purposes that spend the upstream resource. Credential repair, revocation, and
-  interactive OAuth login (`oauth_connect`, `oauth_reconnect`) do not, so a
-  saturated or cooling-down scope must never be what stops a broken credential
-  from being fixed or revoked, or keeps the operator from signing in. A held
-  lease for one of these purposes does not fill the scope either. Login still
-  drains the profile's credential consumers before it starts.
-
-The wait predicate is the same expression as the grant condition, evaluated
-against the profile resolved by ID on every pass. A waiter therefore cannot wake
-on a condition that can never become a grant, and a profile refresh during a
-wait cannot leave a maintainer reasoning about a replaced object.
-
-#### Pending maintenance is durable and fairly ordered
-
-Pending exclusive maintenance is a **queue of waiter records**, each carrying its
-owner, purpose, position, and the compact identity it was queued for — never a
-bare count, because a count serialized without its owners loses exactly what
-fairness depends on.
-
-- Admission stops at the head of the queue, before the drain wait, so continuous
-  execution cannot starve maintenance by replacing its consumers.
-- The queue rolls over with the manager: it is serialized into the
-  Continue-As-New payload and restored with owner and order intact, and the
-  ordering sequence resumes above every restored position.
-- Before Continue-As-New the manager sets a rollover flag and waits for its
-  accepted Updates to finish. A handler still waiting fails with
-  `ProviderProfileManagerRollover` while **keeping** its queue entry. That is the
-  explicit client reattachment protocol: `ProviderProfileLeaseClient` resubmits
-  the identical owner request against the successor run, and re-enqueueing an
-  owner that is already queued preserves its original position rather than
-  sending a request that already waited to the back of the line.
-- Every other exit — grant, shutdown, persistence failure, caller cancellation —
-  removes the queue entry, so a caller that gave up never leaves an admission
-  block behind.
-- Signals and Updates delivered with a successor's first workflow task run
-  before its `run()` restores the ledger. Lease inspection, slot requests and
-  acquisitions, maintenance acquisitions, releases, cleanup reports, waiter
-  withdrawals, and cooldown reports wait for that restore (`startup_restored`)
-  first, so a successor never reports a live lease as gone, revives a released
-  lease from its snapshot, drops a request, or grants maintenance beside a live
-  consumer.
-
-#### Grants are fenced
-
-Owner IDs are deterministic so an activity retry reuses one lease, which means
-the same owner ID is granted again after it is released. Each grant is therefore
-stamped with a monotonic **fencing generation**, returned to the caller,
-persisted on the lease row, and restored on manager restart. A release quotes the
-generation it holds; a duplicate or delayed release naming an earlier generation
-is dropped instead of freeing the replacement holder. A release that carries no
-generation is still honoured, so callers whose handles predate fenced grants keep
-working.
-
-#### The durable lease ledger owns whether a slot is spent
-
-The `provider_profile_slot_leases` row — not an in-memory reservation, a log
-line, or an Activity exception — decides whether a Provider Profile slot is
-available. `provider_profile.sync_slot_leases` is its single persistence owner
-and the only place a state transition happens.
-
-**Lease states.** `held` (the owner may consume the credential),
-`cleanup_requested` (the slot is still spent; the owner's resources are owed
-cleanup), and `released` (a tombstone: the slot is free, the row survives as
-fencing evidence until `purge_released` reaps it past the redelivery horizon).
-A state outside this set is *not* free capacity: recovery reports it as
-unreconciled evidence and refuses to admit new capacity until it is resolved.
-
-**One typed identity per row.** A grant persists the exact lease ID separately
-from the workflow, step, attempt and owner kind, plus the purpose, the
-compatibility class (the ledger mode the lease coexists under), the immutable
-plan and evidence identity, and the credential and capacity-scope generations
-it was admitted against. Recovery restores the same identity rather than
-re-deriving a narrower view of it. Columns that are null on a pre-contract row
-stay explicitly historical; they are never backfilled into current authority.
-
-**Identity is runtime-scoped.** A lease ID is unique *within* the runtime that
-issued it. Pre-contract rows backfill `lease_id` from `workflow_id`, and one
-workflow may legitimately hold a lease on two runtimes, so every transition
-resolves its row inside its own runtime. Rewriting a colliding lease ID to make
-it globally unique would break the handle its holder already quotes on release:
-that release would resolve the other runtime's row, be refused as a profile
-conflict, and leave the rewritten row permanently active.
-
-Workflow, lease, owner, step-execution and idempotency identities in the lease
-ledger are opaque text. Storage preserves the full value admitted by the
-originating contract, including composed remediation identifiers longer than
-255 characters. Persistence never truncates, hashes or renames an identity:
-in-flight grants, retries, inspection and release all quote the same value.
-Schema upgrades preserve existing rows and indexes so a retained grant can
-retry unchanged after migration. A downgrade to bounded columns must refuse
-while any retained identity exceeds that bound.
-
-Before taking Provider Profile or host capacity, new Omnigent executions validate
-the complete serialized Activity request, including its admission ticket, against
-a 64 KiB handoff budget. Oversized requests fail with an actionable error before
-acquiring a lease. The ticket preserves the full request idempotency key; other
-session identity limits still apply. Retained histories keep their recorded
-admission path through the workflow's payload-preflight patch marker.
-
-The owning workflow is an identity for a **workflow-owned** lease only, and a
-partial unique index enforces it there. One Activity-owned step legitimately
-binds several Provider Profiles from the same runtime — each lease gets its own
-owner ID, and the owning workflow is recorded on all of them purely so the
-manager can verify liveness. Recovery therefore checks lease and owner identity,
-which nothing in the schema constrains, and never treats a repeated owning
-workflow as a durable conflict.
-
-**Ordering contract.** Every grant path follows the same order:
-
-1. reserve in memory and mark the grant handoff pending;
-2. write the row (`grant`), which is grant-or-get: a retry that matches the
-   complete immutable identity *and* the acquired generations returns the
-   committed row, conflicting reuse of a live identity fails without creating
-   another unit, and a lower generation is rejected as a fencing regression;
-3. only then signal or return the grant.
-
-A reservation whose write has not resolved is never reported as `already_held`.
-A concurrent identical caller waits and joins the committed result — or observes
-the rolled-back state — instead of inheriting a pending reservation.
-
-**Ambiguous write outcomes are reconciled, not guessed at.** A database write
-can time out *after* it commits. The manager re-reads the stable lease identity
-(`describe`) and treats the grant as durable only when the row is `held` *and*
-every immutable field of the attempted grant agrees: profile, owner, owner kind,
-purpose, compatibility class, capacity scope, execution plan, evidence identity,
-and the scope, credential and fencing generations. A migrated or conflicting row
-can share the lease ID, state and generation — especially generation 1 — while
-describing authority the ledger never granted to this caller, so a partial match
-leaves capacity blocked. It never deletes a possibly live row and never issues a
-second grant on that evidence.
-
-**A reservation the ledger never accepted is retried, not announced.** The
-signal drain keeps its in-memory reservation when a grant fails, precisely so
-persistence can be retried. The next pass therefore re-drives the grant before
-it announces the slot: taking the re-signal branch — which deliberately writes
-nothing — would hand a signal-based `AgentRun` a slot with no durable row, and a
-manager restart could then grant the same capacity again.
-
-**Releases keep capacity unavailable until they resolve.** `release_one` is
-fenced and returns an explicit outcome — `released`, `already_released`,
-`stale`, `conflict` or `retryable`. Only the first two let the in-memory ledger
-free the slot. A failed Activity, a structured error, or a stale fence leaves the
-slot spent and records the owner for a bounded retry against the same lease
-identity. A logged warning never announces reuse.
-
-An owner re-admitted while its earlier release is unresolved must wait for a
-fresh fenced grant. The manager records that release obligation before awaiting
-the ledger, so neither a duplicate signal nor an acquisition can reuse the
-revoked generation. Only requests that preceded the release are withdrawn;
-later same-owner requests survive persistence and release redelivery. The
-`provider-profile-manager-owner-release-ordering-v1` marker preserves the
-previous command order for retained histories. Unresolved obligations and queued
-readmissions survive Continue-As-New through the existing snapshot. If an
-acquisition's bounded transition wait expires, the shared lease client treats
-`ProviderProfileLeaseTransitionPending` as reattachable and resubmits the same
-owner request within its three-attempt budget. Exhaustion remains an observable
-error and never grants capacity against an unresolved release.
-
-**Expiry and terminal ownership request cleanup.** Lease expiry is not evidence
-that the holder stopped: it transitions the row to `cleanup_requested` and
-leaves the slot spent, so the resource owner can reclaim what the run held
-(MoonLadderStudios/MoonMind#1089) without a second credential consumer starting
-while the first may still be running. The slot is released only when workflow
-status verification proves the owner terminal, and that release tombstones the
-row with `cleanupRequested` so the cleanup is still owed. Both paths cost one
-fenced row transition per lease.
-
-The durable owner of a cleanup request is that terminal-ownership release, and
-the wait for it is deliberately unbounded — freeing the slot earlier would
-authorize a second credential consumer. The *escalation* is bounded instead: a
-cleanup request that outlives its lease duration by
-`_LEASE_CLEANUP_ESCALATION_SECONDS` with the holder still live is published on
-`get_state` as `cleanup_unresolved` reconciliation evidence, and a holder whose
-liveness can never be verified — an Activity-owned lease with no owning workflow
-— as `cleanup_owner_unverifiable`. The slot stays spent either way, but it stops
-looking handled, so a permanently stuck capacity-one Profile is operator-visible
-rather than silent.
-
-**Bounded cost, detected disagreement.** An ordinary grant or release touches
-exactly one row, independent of how many leases the runtime holds. Recovery and
-reconciliation may read the runtime's rows once; nothing rewrites every lease on
-each mutation. The manager keeps a direct reverse index so removing a lease is
-O(1), and duplicate or contradictory identities — one lease on two profiles, one
-owner on two leases, two live rows claiming one owner — are recorded as
-reconciliation evidence on `get_state` rather than silently skipped.
-
-**The retained snapshot rewrite is fenced durably.** `action=save` still exists
-for histories recorded before the incremental contract, but it carries the
-writer's own fencing high-water mark and preserves every row fenced above it. A
-patch marker in one workflow history cannot fence a stale database writer; a
-durable generation comparison can.
-
-An Activity payload recorded *before* this contract carries no writer generation
-at all. That is a zero high-water mark, not permission to delete the runtime: a
-timed-out or retried legacy `save` that lands after a transition-contract
-manager granted rows replaces only the rows its own snapshot re-states, and
-preserves every other fenced row untouched.
-
-No path in a history recorded under the transition contract issues `save`.
-Grant, release, expiry and terminal reclamation are single-row transitions, and
-re-announcing a slot the manager already holds — the drain branch an
-`AgentRun` reaches when its slot wait times out and it re-sends `request_slot`
-— writes nothing at all, because the row committed before that lease became
-visible is already the authority.
-
-**No credential material reaches a lease row.** Caller metadata passes through a
-fixed allowlist, and the only stored evidence is a compact non-secret identity
-digest plus bounded cleanup/release reasons.
-
-#### Validation identity
-
-A `single_flight_validation` lease is granted against a **versioned evidence
-identity** covering everything the launch boundary later compares: probe contract
-version, profile, pinned image digest, credential generation, materializer ref,
-provider route, and selected model. The identity is stored on the lease contract,
-so:
-
-- exactly one committed owner may run the probe;
-- a joiner observes `already_held`, is handed the owner's generation rather than
-  a new one, and stands down without releasing the owner's lease;
-- a request that reuses an owner ID under a different identity or purpose fails
-  closed with `ProviderProfileLeaseIdentityConflict`;
-- a persistence failure rolls the grant back and raises, so a failed pending
-  grant is never mistaken for a completed probe; and
-- an abandoned probe is recovered by the validation lease's shorter maximum
-  duration rather than suppressing the identity indefinitely.
-
-Discovery freshness and launch authorization stay separate: the catalog interval
-schedules re-observation, while exact-host model verification remains a launch
-boundary. See `docs/Omnigent/OpenCodeHost.md` for the interval and the
-deployment-owned proactive refresh lead.
-
-#### In-flight managers keep the admission rules they started under
-
-`ProviderProfileManager` is long-lived, so it replays its own history on every
-worker restart and Continue-As-New. Everything on this page that changes *when a
-maintenance grant happens* is therefore gated on one workflow marker,
-`provider-profile-manager-maintenance-queue-durability-v1` — not just the durable
-queue, the fencing generations and the rollover detach, but the admission rules
-themselves:
-
-- queue-head serialization, so a manager that granted two concurrent maintainers
-  keeps granting them;
-- the narrowed drain set that exempts a credentialless profile, so a pre-marker
-  manager still drains every lease;
-- the per-purpose scope exemption, so a pre-marker manager still gates credential
-  repair and revocation on shared-scope availability (the later OAuth login
-  exemption has its own marker,
-  `provider-profile-manager-oauth-login-scope-exempt-v1`, read once per manager
-  run, so a manager started before it keeps gating login on the scope until
-  its next Continue-As-New);
-- withdrawing a pending request when its owner releases.
-
-The durable lease transition contract above has its own workflow marker,
-`provider-profile-manager-lease-transition-contract-v1`. A history recorded
-before it keeps its exact recorded commands: the pre-contract release order, the
-runtime-wide snapshot rewrite on expiry and reclamation, and recovery that does
-not fail closed on unreconciled state. New executions record the marker and use
-the per-lease transitions, the pending-grant handoff, the ambiguous-outcome
-reconciliation and the fail-closed recovery described above.
-
-A rollover under this marker carries the obligations attached to the lease
-snapshot as well as the snapshot itself: unresolved releases, requested
-cleanups, and reservations whose grant never committed. A continued run
-deliberately does not reload the durable ledger, so an obligation left only in
-memory would disappear at the history rollover — the successor would advertise
-an `already_held` lease whose row is already released, strand capacity behind a
-release nobody retries, or announce a reservation the ledger never accepted. A
-pre-contract rollover payload is unchanged.
-
-The #1089 redrive (re-driving outstanding cleanup obligations and completing
-direct cleanup obligations, #4330) has its own workflow marker,
-`provider-profile-manager-lease-cleanup-redrive-v1`. A history recorded before
-it keeps its exact recorded commands: only request-cleanup + retry-unresolved
-per loop, without the redrive activities. New executions record the marker and
-use all four steps. Histories recorded with the four steps but without the
-marker (post-#4330, pre-marker) are ambiguous with the older generation and
-require operational recovery; they cannot be distinguished by markers alone.
-
-Before routing an ambiguous cohort to the patched worker, detect it: an open
-`provider-profile-manager:<runtime>` history that already contains
-`request_cleanup` activities beyond the first request per obligation (the
-redrive re-issue) but records no `provider-profile-manager-lease-cleanup-
-redrive-v1` marker must not be replayed on the patched worker — replay would
-skip the recorded redrive commands and wedge the singleton manager with
-Activity-vs-Timer nondeterminism
-(`test_unmarked_cleanup_redrive_history_is_refused_and_recovered`).
-
-The marker cannot be taught to separate this cohort after the fact. It is read
-once at startup, before any redrive command exists in the history to read, so
-a third generation is indistinguishable from the first by markers alone. That
-is a property of the mechanism, not a missing marker, and adding another
-marker reproduces it one generation later. When the cohort can be identified
-ahead of a release, keep the #4330 worker until the manager's state-preserving
-Continue-As-New handoff (the rollover payload carries requested cleanups with
-their original reasons and delivery attempts) and route the new run to the
-patched worker before it starts. When it cannot — the usual case, since the
-wedge is discovered by the first blocked caller — §11.9 replaces the run
-automatically from the durable ledger.
-
-The post-marker redrive path itself is pinned by production replay with an
-outstanding obligation
-(`test_lease_cleanup_redrive_replays_with_outstanding_obligation`).
-
-Orphaned validation cleanup has a separate marker,
-`provider-profile-manager-orphaned-validation-cleanup-v1`. The redrive marker
-predates this additional verification and release sequence and cannot authorize
-it during replay. Histories without the new marker retain their recorded order
-through the tombstone-purge marker, lease verification, and timer; normal
-Continue-As-New carries their obligations into a run that uses the new cleanup
-path. The retained OpenCode history and a fresh cleanup-to-maintenance-Update
-journey both have replay coverage. This repair lets the affected pre-cleanup
-history replay without terminating or resetting its manager.
-
-Histories recorded between #4431 and this marker (unguarded orphan cleanup
-with an eligible validation claim) already contain unmarked
-`verify_lease_holders` and possibly `release_verified` commands. They are
-ambiguous with the pre-cleanup generation by markers alone and must not replay
-on the patched worker: the worker would skip the recorded orphan commands and
-wedge the singleton with Activity-vs-Timer nondeterminism (review #4434,
-comment 4052362810). Detect the cohort before routing: an open
-`provider-profile-manager:<runtime>` history that contains
-`verify_lease_holders` for a validation probe owner or a `sync_slot_leases`
-`release_verified` command but records no
-`provider-profile-manager-orphaned-validation-cleanup-v1` marker takes the
-same controlled cutover as the ambiguous redrive cohort above — keep the
-pre-marker worker until the state-preserving Continue-As-New handoff, then
-route the new run to the patched worker before it starts, or let the
-automatic replacement in 11.9 rebuild the run from the durable ledger.
-`test_unguarded_validation_cleanup_history_needs_migration_cutover` pins both
-directions: the parent behavior replays the cohort, while the patched worker
-refuses it instead of silently skipping its recorded commands.
-
-Periodic released-lease tombstone cleanup has its own workflow marker,
-`provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
-maintenance durability predate cleanup; neither may enable the purge activity
-on replay. Histories without cleanup proceed directly to lease verification at
-that boundary. New executions record the cleanup marker and perform periodic
-cleanup, with failures contained so lease verification and admission can proceed.
-
-Deployment replaces the manager's worker directly. It does not retain a second
-worker to carry old histories, and it must not: a retained worker is another
-code version polling the same task queue, which is how
-MoonLadderStudios/MoonMind#4363 wedged this manager in the first place. The
-recorded failure was `Non-deprecated patch marker encountered for change
-provider-profile-manager-lease-tombstone-purge-v1, but there is no
-corresponding change command` -- a marker present in history that the
-*replaying* code did not emit, which happens only when the code is older than
-the history. One version at a time, moving forward only, makes that
-unreachable; the newer code replays an older history through `workflow.patched`
-exactly as Temporal intends.
-
-An earlier revision of this document required a controlled cutover for
-histories containing an unmarked `purge_released` activity, on the grounds that
-only the pre-patch generation could replay them. That shape stopped existing
-when `provider-profile-manager-lease-tombstone-purge-v1` shipped on 2026-09-05:
-these singletons Continue-As-New every two to three hours, so every live
-history has rolled over hundreds of times and carries the marker. The
-requirement outlived the hazard, and the machinery it justified was itself the
-larger risk.
-
-A grant that moved under a recorded history would emit a reservation — and, under
-DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
-history recorded a timer, failing the workflow task on non-determinism until the
-capacity ledger for that runtime is wedged. The one pre-marker behaviour that is
-*not* preserved is the busy loop this work removed: a waiter whose profile was
-empty while its scope was cooling down woke immediately and re-evaluated without
-suspending, so it recorded no commands to replay.
-
-### 11.9 Wedged-singleton recovery (#4363)
-
-`provider-profile-manager:<runtime>` is a singleton whose history outlives any
-one release, and it is the single credential-capacity ledger for its runtime.
-A release whose worker cannot replay a recorded history wedges it in a
-`WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` loop: the run stays
-`RUNNING`, its history stops advancing, `get_state` fails with
-`Unable to query workflow due to Workflow Task in failed state`, and Temporal
-answers every Update with `FAILED_PRECONDITION`. Execution admission, OAuth
-connect, credential validation and API-key enrollment all fail for that
-runtime until the run is replaced. Replay compatibility across an evolving
-6,000-line workflow cannot be guaranteed by review discipline alone, so the
-wedge is treated as a recoverable fault rather than an outage.
-
-#### Automatic replacement
-
-`moonmind.provider_profiles.manager_recovery` owns the replacement and is the
-only thing that performs it. Two callers reach it, because a wedge can be
-discovered two ways:
-
-- `ProviderProfileLeaseClient` invokes it when a manager **Update** fails at
-  the RPC level — an HTTP credential submission, an admission Activity, an
-  OAuth session — then retries its own idempotent owner request against the
-  fresh run.
-- The `provider_profile.manager_state` inspection invokes it for the
-  **signal** path. Managed `AgentRun` admission sends `request_slot` as a
-  signal, and Temporal appends a signal to a still-`RUNNING` execution even
-  while every workflow task fails, so no Update RPC ever fails. A runtime
-  whose only traffic is managed AgentRuns would otherwise wait in
-  `awaiting_provider_capacity` forever.
-Replacement is deliberately narrow:
-
-- **Confirmed evidence only.** The trailing run of failed workflow tasks must
-  name a nondeterminism cause. The scan is
-  `scan_workflow_task_failure_tail` in
-  `moonmind.workflows.skills.provider_manager_liveness`.
-- **The observed run only.** Termination quotes the run ID the describe
-  returned, so a healthy replacement started by a concurrent caller between
-  the describe and the terminate is never killed.
-- **Free capacity only.** The durable `provider_profile_slot_leases` ledger —
-  read directly, never through the component being recovered — must report no
-  row for the runtime outside the `released` tombstone. `held` and
-  `cleanup_requested` rows name a consumer that may still be executing, a
-  legacy `NULL` state is read as held exactly as the `sync_slot_leases` loader
-  reads it, and a state outside the durable contract is unreconciled evidence.
-  Counting only `held` would let a legacy or unknown row read as free and be
-  destroyed by a replacement that cannot restore it.
-- **A restored successor only.** `start_workflow` merely submits the
-  replacement; its `run()` restores profiles and durable leases through
-  Activities while Temporal is already dispatching Update handlers. Recovery
-  waits for the successor's own `startup_restored` flag (exposed on
-  `get_state`) before reporting success, so no request is admitted against
-  empty in-memory state over a restored cleanup obligation.
-- **Evidence, not silence.** An unreadable ledger refuses the replacement; it
-  is not evidence of free capacity. Each refusal is returned with what was
-  observed, and the original nondeterminism message is preserved in the
-  termination reason and the warning log, so curing the symptom never erases
-  its cause.
-
-The fresh start restores held and `cleanup_requested` rows from the durable
-ledger with their recorded reasons (`fresh-start-db-lease-restore`), so the
-redrive resumes the same stable claim instead of re-requesting or freeing the
-slot (`test_a_fresh_restart_restores_cleanup_requested_obligations`). What a
-replacement does not carry over is the wedged run's in-memory queue of pending
-slot requests; those requesters keep their own durable slot request and
-re-queue through their existing 120s slot-wait timeout without operator
-action.
-
-A refused replacement surfaces as HTTP 503 with
-`code: provider_credential_manager_unavailable` and a `refusal` naming the
-condition (`held_lease_present`, `ledger_unreadable`, `no_replay_wedge`,
-`manager_not_running`, `recovery_failed`, or `manager_unreachable` when the
-manager never answered at all). The response repeats the stable
-`retry_idempotency_key` and states that saved credentials are unchanged. A
-`held_lease_present` refusal does not ask the operator to retry later: a
-wedged manager cannot process the holder's `release_slot` signal, so the row
-stays unreleased and every later attempt refuses identically. That response
-directs the operator to verify teardown and reconcile the row below.
-
-#### Operator cutover (refused replacement)
-
-Automatic replacement refuses while the ledger reports a held lease, because
-capacity may be genuinely spent by a run that is still executing. Confirm
-which it is before acting. `<runtime>` is the runtime family (for example
-`opencode`).
-
-1. Read the ledger. Any row that is not `released` blocks replacement.
-
-   ```sql
-   SELECT lease_state, count(*)
-     FROM provider_profile_slot_leases
-    WHERE runtime_id = '<runtime>'
-    GROUP BY lease_state;
-   ```
-
-   Waiting does not clear this: the holder's release travels to the same
-   wedged run, which completes no workflow task. Verify whether each
-   unreleased row's consumer is actually still running, then reconcile or
-   release the row — it is the authority, and the manager only mirrors it. A
-   `NULL` state is a pre-contract row and counts as held; a state outside the
-   contract is unreconciled and needs an operator decision before anything
-   destructive happens.
-
-2. Confirm the wedge signature on the singleton:
-
-   ```bash
-   temporal workflow describe --workflow-id provider-profile-manager:<runtime>
-   temporal workflow show --workflow-id provider-profile-manager:<runtime>
-   ```
-
-   Expect `RUNNING` with repeated
-   `WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` and no progress.
-
-3. With the ledger reconciled, retry the operation. Recovery now finds zero
-   held rows and replaces the run. The manual equivalent, if Temporal must be
-   driven directly, is a terminate plus a fresh start on the derived task
-   queue:
-
-   ```bash
-   temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
-     --reason "nondeterministic workflow-task loop (<event-id-and-cause>)"
-   TASK_QUEUE="$(python3 -c 'from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue; print(get_workflow_task_queue())')"
-   temporal workflow start --workflow-id provider-profile-manager:<runtime> \
-     --type MoonMind.ProviderProfileManager \
-     --task-queue "$TASK_QUEUE" \
-     --input '{"runtime_id":"<runtime>"}'
-   ```
-
-   Derive the task queue with `get_workflow_task_queue()` (honoring
-   `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`) instead of hard-coding
-   `mm.workflow.user.v2`; a hard-coded queue starts the replacement on an
-   unpolled queue whenever an installation overrides that setting.
-
-4. Verify: `get_state` succeeds, the fencing generation resumes at or above
-   every number the old run issued, `current_leases` matches the ledger, and
-   `temporal workflow describe` reports `total ... fails 0`.
-
-5. Do not manually re-signal waiting `AgentRun` workflows. Watch
-   `mm_state='awaiting_slot'` drain instead; the manager already holds each
-   durable request.
+| `shared_execution` | execution | consumes one of `N` slots |
+| `single_flight_validation` | `credential_validation` with `credential_source: none` | one holder per evidence identity; no execution slot |
+| `exclusive_maintenance` | other maintenance | blocks new consumers, drains credential consumers |
+
+A mutable OAuth home is shared credential state, so validating it is exclusive
+and the profile is capacity one. Exclusive maintenance drains only leases
+holding the credential it touches, and only purposes that spend upstream
+capacity wait on shared-scope fullness or cooldown; repair, revocation, and
+OAuth login do not, so a saturated scope never blocks fixing a credential or
+signing in.
+
+### 9.4 Fairness and validation identity
+
+Pending exclusive maintenance is a durable queue of owner records, not a count,
+because fairness depends on owners. Admission stops at the queue head so
+execution cannot starve maintenance. The queue survives Continue-As-New in
+order: a waiting handler fails with `ProviderProfileManagerRollover` but keeps
+its entry, and `ProviderProfileLeaseClient` resubmits to the successor at the
+same position. Handlers arriving with a successor's first task wait for
+`startup_restored` so nothing is misreported or double-granted.
+
+A validation lease is keyed by a versioned evidence identity (probe version,
+profile, image digest, credential generation, materializer, route, model). One
+owner probes; joiners see `already_held` and stand down; reusing an owner ID
+under another identity fails with `ProviderProfileLeaseIdentityConflict`; and an
+abandoned probe expires at the shorter validation bound.
+
+### 9.5 The durable lease ledger
+
+The `provider_profile_slot_leases` row decides whether a slot is spent;
+`provider_profile.sync_slot_leases` is its only writer.
+
+- **States**: `held`, `cleanup_requested` (still spent, cleanup owed), and
+  `released` (a fencing tombstone until purged). Anything else is unreconciled,
+  not free.
+- **Identity**: each row stores the lease, owner, purpose, compatibility class,
+  plan and evidence identity, and admitted generations, as opaque untruncated
+  text. Lease IDs are unique per runtime, because one workflow may hold leases
+  on two runtimes.
+- **Fencing**: owner IDs are deterministic so retries reuse a lease; each grant
+  gets a monotonic generation, and a release quoting an older one is dropped
+  rather than freeing the new holder.
+- **Grant order**: reserve, write the row (grant-or-get), then announce. An
+  ambiguous write is re-read and trusted only if every immutable field matches;
+  otherwise capacity stays blocked rather than granting twice.
+- **Releases** return `released`, `already_released`, `stale`, `conflict`, or
+  `retryable`; only the first two free the slot.
+- **Expiry** moves the row to `cleanup_requested` and keeps the slot spent until
+  the owner is verified terminal, so a second credential consumer cannot start.
+  Cleanup outliving its lease by `_LEASE_CLEANUP_ESCALATION_SECONDS` surfaces on
+  `get_state` as `cleanup_unresolved` or `cleanup_owner_unverifiable`.
+- Grants and releases touch one row, contradictory identities are recorded as
+  evidence, and rows hold no credential material.
+
+New Omnigent executions check their serialized Activity request against a 64 KiB
+budget before taking any lease.
+
+### 9.6 Replay compatibility
+
+The manager replays its history on every restart and Continue-As-New, so changes
+to grant timing are gated by Temporal patch markers
+(`provider-profile-manager-*-v1` in
+`moonmind/workflows/temporal/workflows/provider_profile_manager.py`), letting
+each history keep its recorded commands. Rollover payloads carry unresolved
+releases, requested cleanups, and uncommitted reservations, because a continued
+run does not reload the ledger.
+
+A marker is read once at startup, so a history that recorded new commands
+without their marker cannot be distinguished from an older generation, and
+another marker would only move the problem; such histories wedge and are
+handled by 9.7. Deployment replaces the manager's worker directly rather than
+keeping a second worker for old histories, because two code versions polling one
+queue is itself a way to wedge it: newer code replays older histories through
+`workflow.patched`, but not the reverse.
+
+### 9.7 Wedged-singleton recovery
+
+A worker that cannot replay a history leaves the singleton `RUNNING` in a
+`WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` loop; `get_state` and
+Updates fail, blocking admission, OAuth, validation, and enrollment for that
+runtime. Replay compatibility cannot be guaranteed by review alone, so this is
+treated as recoverable.
+
+`moonmind/provider_profiles/manager_recovery.py` alone replaces the run. The
+lease client calls it when an Update fails at the RPC level; the
+`provider_profile.manager_state` inspection calls it for signal-only traffic,
+which a wedged run still accepts. Replacement requires confirmed nondeterminism
+in the failed-task tail (`moonmind/workflows/skills/provider_manager_liveness.py`),
+terminates only the observed run ID, requires the ledger (read directly) to hold
+no rows outside `released` — a `NULL` or unknown state counts as possibly live —
+and waits for the successor's `startup_restored`. The successor restores held
+and cleanup rows; queued requesters re-queue via their 120-second slot-wait
+timeout. An unreadable ledger refuses replacement, and the original error is
+kept in the termination reason and logs.
+
+A refusal returns HTTP 503 `provider_credential_manager_unavailable` with a
+`refusal` (`held_lease_present`, `ledger_unreadable`, `no_replay_wedge`,
+`manager_not_running`, `recovery_failed`, `manager_unreachable`), the
+`retry_idempotency_key`, and a note that credentials are unchanged.
+`held_lease_present` cannot clear by waiting, since the wedged run cannot process
+the release. The operator then:
+
+1. Reads the ledger (`SELECT lease_state, count(*) FROM
+   provider_profile_slot_leases WHERE runtime_id = '<runtime>' GROUP BY
+   lease_state`), verifies whether each unreleased row's consumer still runs,
+   and reconciles or releases it.
+2. Confirms the wedge with `temporal workflow describe` on
+   `provider-profile-manager:<runtime>`.
+3. Retries the operation. To drive Temporal directly, terminate the run with the
+   cause in the reason and start `MoonMind.ProviderProfileManager` with
+   `{"runtime_id":"<runtime>"}` on the queue from
+   `moonmind.workflows.temporal.activity_catalog.get_workflow_task_queue()`,
+   which honours `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`.
+4. Verifies `get_state`, that fencing resumes at or above the old numbers, and
+   that `current_leases` matches the ledger. Waiting AgentRuns need no re-signal.
+
+Deployment updates do not wait for manager liveness, since that would block the
+repair exactly when the manager is broken. See
+[Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
 
 ---
 
-## 12. Runtime Materialization Pipeline
+## 10. Runtime Materialization
 
-The launcher must build the final runtime environment in a predictable, layered way.
+The launcher layers the environment: base environment and runtime defaults;
+load the profile and re-check readiness; resolve model/effort through the
+canonical resolver; blank `clear_env_keys`; resolve `secret_refs` into ephemeral
+values; materialize `file_templates`; apply `env_template` and
+`home_path_overrides`; apply strategy shaping; build the command and launch.
+Templates render resolved values, never refilling nulls from scalar defaults.
+Materialization layers onto the base rather than replacing it, which would drop
+`PATH`, `HOME`, and process context.
 
-### 12.1 Required order
-
-1. Start from a sane base environment.
-2. Apply runtime-global defaults.
-3. Load the selected Provider Profile and its canonical tier policy.
-4. Re-check launch readiness and resolve model/effort through the existing canonical resolver.
-5. Remove or blank `clear_env_keys`.
-6. Resolve `secret_refs` into ephemeral launch-only values where needed.
-7. Materialize `file_templates`.
-8. Apply `env_template`.
-9. Apply `home_path_overrides`.
-10. Apply runtime strategy shaping.
-11. Build command.
-12. Launch subprocess.
-
-When file or environment templates need model/effort policy, render the canonical resolved attempt values. Do not refill explicit Custom nulls or null tier fields from removed scalar defaults. Existing compatible runtime defaults remain owned by runtime configuration.
-
-### 12.2 Critical rule: layer, do not replace
-
-Provider Profile materialization must **layer onto** a base environment.
-
-It must **not** replace the subprocess environment wholesale with only the profile’s env template.
-
-Otherwise, essential variables such as `PATH`, `HOME`, and runtime process context may be lost.
-
-### 12.3 Runtime strategy integration
-
-Provider Profiles do not eliminate runtime strategies. Instead:
-
-- Provider Profiles define the data needed to prepare environment variables and files.
-- Runtime strategies interpret `command_behavior`, canonical resolved model/effort, and runtime-specific launch rules. They do not independently read or reconstruct scalar profile defaults.
-
-Examples:
-
-- Claude strategy may suppress `--model` when model env variables are already present.
-- Codex strategy may select a generated named profile from config.
-- A proxy-first runtime strategy may shape provider URLs toward MoonMind-owned proxy endpoints instead of direct upstream credentials.
+Runtime strategies interpret `command_behavior` and the resolved model: Claude
+may suppress `--model` when model variables are set, Codex may select a
+generated named config profile, and a proxy-first strategy may point provider
+URLs at MoonMind proxy endpoints.
 
 ---
 
-## 13. Persistence Model
+## 11. Security Properties
 
-### 13.1 Table
-
-The provider-aware registry uses `managed_agent_provider_profiles`. This target schema includes tier-only model policy; it does not assert that scalar-default removal is already implemented (§5.5).
-
-```sql
-CREATE TABLE managed_agent_provider_profiles (
-    profile_id                        TEXT PRIMARY KEY,
-    runtime_id                        TEXT NOT NULL,
-    provider_id                       TEXT NOT NULL,
-    provider_label                    TEXT,
-
-    credential_source                 TEXT NOT NULL,   -- oauth_volume | secret_ref | none
-    runtime_materialization_mode      TEXT NOT NULL,   -- oauth_home | api_key_env | env_bundle | config_bundle | composite
-
-    account_label                     TEXT,
-    enabled                           BOOLEAN NOT NULL DEFAULT FALSE,
-    is_default                        BOOLEAN NOT NULL DEFAULT FALSE,
-    default_selected_by_operator      BOOLEAN NOT NULL DEFAULT FALSE,
-    tags                              JSONB NOT NULL DEFAULT '[]'::jsonb,
-    priority                          INTEGER NOT NULL DEFAULT 100,
-
-    auth_state                        TEXT NOT NULL DEFAULT 'not_configured',
-    disabled_reason                   TEXT,
-    first_authenticated_at            TIMESTAMPTZ,
-    last_validated_at                 TIMESTAMPTZ,
-    last_auth_method                  TEXT,
-
-    model_tiers                       JSONB NOT NULL,
-    default_model_tier                INTEGER NOT NULL DEFAULT 1,
-    model_overrides                   JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-    volume_ref                        TEXT,
-    volume_mount_path                 TEXT,
-    secret_refs                       JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-    clear_env_keys                    JSONB NOT NULL DEFAULT '[]'::jsonb,
-    env_template                      JSONB NOT NULL DEFAULT '{}'::jsonb,
-    file_templates                    JSONB NOT NULL DEFAULT '[]'::jsonb,
-    home_path_overrides               JSONB NOT NULL DEFAULT '{}'::jsonb,
-    command_behavior                  JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-    max_parallel_runs                 INTEGER NOT NULL DEFAULT 1,
-    cooldown_after_429_seconds        INTEGER NOT NULL DEFAULT 300,
-    rate_limit_policy                 TEXT NOT NULL DEFAULT 'backoff',
-    max_lease_duration_seconds        INTEGER NOT NULL DEFAULT 7200,
-
-    owner_user_id                     UUID NULL,
-    created_at                        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at                        TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    CONSTRAINT ck_provider_profiles_auth_state CHECK (
-        auth_state IN (
-            'not_configured',
-            'oauth_pending',
-            'api_key_pending',
-            'connected',
-            'validation_failed',
-            'disconnected'
-        )
-    ),
-    CONSTRAINT ck_provider_profiles_disabled_reason CHECK (
-        disabled_reason IS NULL OR disabled_reason IN (
-            'missing_credentials',
-            'auth_invalid',
-            'user_disabled',
-            'policy_disabled',
-            'disconnected'
-        )
-    )
-);
-
-CREATE INDEX ix_provider_profiles_runtime
-    ON managed_agent_provider_profiles(runtime_id);
-
-CREATE INDEX ix_provider_profiles_runtime_provider
-    ON managed_agent_provider_profiles(runtime_id, provider_id);
-
-CREATE INDEX ix_provider_profiles_enabled
-    ON managed_agent_provider_profiles(enabled);
-
-CREATE INDEX ix_provider_profiles_auth_state
-    ON managed_agent_provider_profiles(auth_state);
-```
-
-### 13.2 Persistence rules
-
-Secrets are never stored directly in:
-
-- `secret_refs`
-- `env_template`
-- `file_templates`
-- `command_behavior`
-
-Any sensitive value must be represented indirectly by a `SecretRef` or by an OAuth volume reference.
-
-### 13.3 Default values
-
-New unconfigured first-party setup stubs should default to:
-
-```yaml
-enabled: false
-auth_state: oauth_pending
-disabled_reason: missing_credentials
-credential_source: none
-```
-
-New custom profiles should also be created disabled unless the create request is part of a verified setup flow. This makes the non-launchable state the default across all provider profile creation paths.
+- Workflow payloads carry only `profile_id` and selectors, never keys, tokens,
+  or secret-bearing config.
+- Profile rows hold `SecretRef`s, templates, volume references, and redacted
+  readiness metadata, never secret values.
+- `SecretRef`s are resolved only at controlled execution boundaries, for the
+  minimum time needed.
+- Logs, artifacts, metadata, diagnostics, and audit rows redact secret-like
+  strings, resolved environment values, credential-bearing config, and terminal
+  output that may contain OAuth codes; generated config with secrets is not a
+  durable artifact.
+- OAuth volumes are dedicated, and one runtime does not read another's
+  credential state unless that sharing is explicitly designed.
+- Competing variables are cleared to prevent provider fallback.
+- Proxy-first execution is preferred where MoonMind owns the outbound path.
+- Only successful user-initiated setup auto-enables a profile.
 
 ---
 
-## 14. Security Requirements
-
-This section states Provider-Profile-specific security rules. Secret encryption, backend behavior, and audit semantics are owned by [SecretsSystem.md](./SecretsSystem.md).
-
-### 14.1 No raw secrets in workflow payloads
-
-Workflows must reference only:
-
-- `profile_id`
-- optional provider or tag selectors
-
-They must never carry:
-
-- API keys
-- refresh tokens
-- OAuth access tokens
-- config blobs containing raw secrets
-
-### 14.2 No raw secrets in profile rows
-
-Provider Profiles may store:
-
-- `SecretRef` values
-- file templates
-- environment templates
-- OAuth volume references
-- redacted provider readiness metadata
-
-They must not store raw secret values.
-
-### 14.3 Launch-only secret resolution
-
-`SecretRef` values are resolved only at controlled execution boundaries and only for the minimum duration needed to launch or proxy the runtime correctly.
-
-### 14.4 Redaction and artifact hygiene
-
-Logs, artifacts, run metadata, diagnostics, and audit rows must redact:
-
-- secret-like strings
-- resolved environment values
-- generated config files containing provider credentials
-- terminal output that may contain OAuth codes or credential paths
-
-Generated config files that contain secrets are sensitive runtime files, not durable artifacts by default.
-
-### 14.5 Volume isolation
-
-OAuth volumes remain dedicated named volumes with controlled ownership and permissions.
-
-One runtime should not read another runtime’s credential state unless that sharing is explicitly designed and documented.
-
-### 14.6 Clear competing variables
-
-Before launch, conflicting variables must be cleared to avoid accidental provider fallback.
-
-Examples:
-
-- Anthropic OAuth profile clears competing Anthropic API-key env vars where needed.
-- MiniMax Claude profile clears `ANTHROPIC_API_KEY`.
-- Codex MiniMax profile clears `OPENAI_API_KEY`.
-
-### 14.7 Proxy-first preference
-
-When MoonMind owns the outbound provider call path, proxy-first execution is preferred.
-
-Provider Profiles may still describe escape-hatch materialization for third-party runtimes that genuinely require direct credentials, but the system should prefer proxy-first designs whenever the runtime allows it.
-
-### 14.8 No accidental auto-enable
-
-A profile may be auto-enabled only after successful user-initiated credential setup.
-
-These events may auto-enable:
-
-- OAuth finalize from Settings
-- API-key add from Settings
-- API-key rotation from Settings, after successful validation
-
-These events must not auto-enable a user-disabled profile:
-
-- background validation
-- migration
-- readiness diagnostics
-- provider health checks
-- manager sync
-
----
-
-## 15. Examples
-
-> [!NOTE]
-> The `SecretRef` objects below are illustrative. The exact serialized shape is owned by [SecretsSystem.md](./SecretsSystem.md).
-
-### 15.1 Claude Code + Anthropic OAuth setup profile
-
-```yaml
-profile_id: claude_anthropic_oauth
-runtime_id: claude_code
-provider_id: anthropic
-provider_label: "Anthropic"
-
-credential_source: none
-runtime_materialization_mode: api_key_env
-
-account_label: null
-enabled: false
-is_default: false
-auth_state: oauth_pending
-disabled_reason: missing_credentials
-tags: ["oauth", "first-party"]
-priority: 100
-
-secret_refs: {}
-volume_ref: null
-volume_mount_path: null
-
-clear_env_keys:
-  - ANTHROPIC_API_KEY
-  - ANTHROPIC_AUTH_TOKEN
-  - ANTHROPIC_BASE_URL
-
-env_template: {}
-file_templates: []
-home_path_overrides: {}
-
-command_behavior:
-  supported_auth_methods: ["oauth_volume"]
-  auth_actions: ["connect_oauth"]
-  auth_status_label: "Not connected"
-  auth_readiness:
-    connected: false
-    launch_ready: false
-```
-
-### 15.2 Claude Code + Anthropic OAuth after setup
-
-This profile is created or updated by the OAuth session workflow after terminal-based login verification succeeds.
-
-```yaml
-profile_id: claude_anthropic_oauth
-runtime_id: claude_code
-provider_id: anthropic
-provider_label: "Anthropic"
-
-credential_source: oauth_volume
-runtime_materialization_mode: oauth_home
-
-account_label: "nsticco@gmail.com"
-enabled: true
-is_default: true
-auth_state: connected
-disabled_reason: null
-last_auth_method: oauth_volume
-tags: ["default", "oauth", "first-party"]
-priority: 100
-
-volume_ref: claude_auth_vol_nsticco
-volume_mount_path: /home/app/.claude
-secret_refs: {}
-
-clear_env_keys:
-  - ANTHROPIC_API_KEY
-  - ANTHROPIC_AUTH_TOKEN
-
-env_template: {}
-file_templates: []
-home_path_overrides:
-  CLAUDE_HOME: /home/app/.claude
-
-command_behavior:
-  auth_status_label: "Claude OAuth ready"
-  auth_readiness:
-    connected: true
-    launch_ready: true
-```
-
-### 15.3 Claude Code + Anthropic API key after setup
-
-```yaml
-profile_id: claude_anthropic_api
-runtime_id: claude_code
-provider_id: anthropic
-provider_label: "Anthropic"
-
-credential_source: secret_ref
-runtime_materialization_mode: api_key_env
-
-account_label: "team-default"
-enabled: true
-is_default: true
-auth_state: connected
-disabled_reason: null
-last_auth_method: secret_ref
-tags: ["default", "api-key", "first-party"]
-priority: 100
-
-secret_refs:
-  anthropic_api_key:
-    secret_id: sec_anthropic_team_default
-    backend_type: db_encrypted
-
-clear_env_keys:
-  - ANTHROPIC_AUTH_TOKEN
-  - ANTHROPIC_BASE_URL
-
-env_template:
-  ANTHROPIC_API_KEY:
-    from_secret_ref: anthropic_api_key
-
-file_templates: []
-home_path_overrides: {}
-
-command_behavior:
-  auth_status_label: "Anthropic API key ready"
-  auth_readiness:
-    connected: true
-    launch_ready: true
-```
-
-### 15.4 Codex CLI + OpenAI OAuth after setup
-
-```yaml
-profile_id: codex_openai_oauth
-runtime_id: codex_cli
-provider_id: openai
-provider_label: "OpenAI"
-
-credential_source: oauth_volume
-runtime_materialization_mode: oauth_home
-
-account_label: "team-oauth"
-enabled: true
-is_default: true
-auth_state: connected
-disabled_reason: null
-last_auth_method: oauth_volume
-tags: ["default", "oauth", "first-party"]
-priority: 100
-
-volume_ref: codex_auth_vol_team
-volume_mount_path: /home/app/.codex
-secret_refs: {}
-
-clear_env_keys:
-  - OPENAI_API_KEY
-  - MINIMAX_API_KEY
-
-env_template: {}
-file_templates: []
-home_path_overrides:
-  CODEX_HOME: /home/app/.codex
-
-command_behavior:
-  auth_status_label: "Codex OAuth ready"
-  auth_readiness:
-    connected: true
-    launch_ready: true
-```
-
-### 15.5 Codex CLI + OpenAI API key after setup
-
-```yaml
-profile_id: codex_openai_api
-runtime_id: codex_cli
-provider_id: openai
-provider_label: "OpenAI"
-
-credential_source: secret_ref
-runtime_materialization_mode: api_key_env
-
-account_label: "team-default"
-enabled: true
-is_default: true
-auth_state: connected
-disabled_reason: null
-last_auth_method: secret_ref
-tags: ["default", "api-key", "first-party"]
-priority: 100
-
-secret_refs:
-  openai_api_key:
-    secret_id: sec_openai_team_default
-    backend_type: db_encrypted
-
-clear_env_keys:
-  - OPENAI_BASE_URL
-  - OPENAI_ORG_ID
-  - OPENAI_PROJECT
-  - MINIMAX_API_KEY
-
-env_template:
-  OPENAI_API_KEY:
-    from_secret_ref: openai_api_key
-file_templates: []
-home_path_overrides: {}
-
-command_behavior:
-  auth_status_label: "OpenAI API key ready"
-  auth_readiness:
-    connected: true
-    launch_ready: true
-```
-
-### 15.6 Claude Code + MiniMax
-
-MiniMax exposes Anthropic-compatible configuration for Claude Code through environment variables. This is a provider-specific `env_bundle`, not merely “generic API key mode.”
-
-```yaml
-profile_id: claude_minimax_m27
-runtime_id: claude_code
-provider_id: minimax
-provider_label: "MiniMax"
-
-credential_source: secret_ref
-runtime_materialization_mode: env_bundle
-
-account_label: "MiniMax M2.7"
-enabled: true
-auth_state: connected
-disabled_reason: null
-tags: ["minimax", "m27"]
-priority: 120
-
-model_tiers:
-  - label: MiniMax default
-    model: "MiniMax-M2.7"
-    effort: null
-default_model_tier: 1
-model_overrides:
-  small_fast: "MiniMax-M2.7"
-  sonnet_equivalent: "MiniMax-M2.7"
-  opus_equivalent: "MiniMax-M2.7"
-  haiku_equivalent: "MiniMax-M2.7"
-
-max_parallel_runs: 4
-cooldown_after_429_seconds: 600
-rate_limit_policy: backoff
-max_lease_duration_seconds: 7200
-
-secret_refs:
-  provider_api_key:
-    secret_id: sec_minimax_m27
-    backend_type: db_encrypted
-
-clear_env_keys:
-  - ANTHROPIC_API_KEY
-
-env_template:
-  ANTHROPIC_BASE_URL: "https://api.minimax.io/anthropic"
-  ANTHROPIC_AUTH_TOKEN:
-    from_secret_ref: provider_api_key
-  API_TIMEOUT_MS: "3000000"
-  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
-  ANTHROPIC_MODEL: "{{resolved_model}}"
-  ANTHROPIC_SMALL_FAST_MODEL: "MiniMax-M2.7"
-  ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2.7"
-  ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2.7"
-  ANTHROPIC_DEFAULT_HAIKU_MODEL: "MiniMax-M2.7"
-
-file_templates: []
-home_path_overrides: {}
-
-command_behavior:
-  suppress_cli_model_flag_when_env_model_present: true
-```
-
-### 15.7 Codex CLI + MiniMax
-
-Codex CLI uses a provider config entry plus a profile entry, backed by an environment variable containing the provider key. This is a `composite` profile.
+## 12. Example: Codex CLI + MiniMax
+
+A `composite` profile combines a provider config entry and named profile with an
+environment variable holding the key. A Claude Code + MiniMax profile instead
+uses an `env_bundle` that sets `ANTHROPIC_BASE_URL` to MiniMax's
+Anthropic-compatible endpoint, `ANTHROPIC_AUTH_TOKEN` from the secret, the model
+variables, and `suppress_cli_model_flag_when_env_model_present`.
 
 ```yaml
 profile_id: codex_minimax_m27
 runtime_id: codex_cli
 provider_id: minimax
-provider_label: "MiniMax"
-
 credential_source: secret_ref
 runtime_materialization_mode: composite
-
-account_label: "MiniMax M2.7"
 enabled: true
 auth_state: connected
-disabled_reason: null
-tags: ["minimax", "m27"]
 priority: 120
-
 model_tiers:
-  - label: MiniMax default
-    model: "codex-MiniMax-M2.7"
-    effort: null
+  - { label: MiniMax default, model: "codex-MiniMax-M2.7", effort: null }
 default_model_tier: 1
-model_overrides:
-  codex_profile_name: "m27"
-
 max_parallel_runs: 4
 cooldown_after_429_seconds: 600
-rate_limit_policy: backoff
-max_lease_duration_seconds: 7200
-
 secret_refs:
-  provider_api_key:
-    secret_id: sec_minimax_m27
-    backend_type: db_encrypted
-
-clear_env_keys:
-  - OPENAI_API_KEY
-
+  provider_api_key: { secret_id: sec_minimax_m27, backend_type: db_encrypted }
+clear_env_keys: [OPENAI_API_KEY]
 env_template:
-  MINIMAX_API_KEY:
-    from_secret_ref: provider_api_key
-
+  MINIMAX_API_KEY: { from_secret_ref: provider_api_key }
 file_templates:
   - path: "~/.codex/config.toml"
     format: toml
@@ -2523,163 +625,12 @@ file_templates:
     content_template:
       model_providers:
         minimax:
-          name: "MiniMax Chat Completions API"
           base_url: "https://api.minimax.io/v1"
           env_key: "MINIMAX_API_KEY"
           wire_api: "chat"
           requires_openai_auth: false
-          request_max_retries: 4
-          stream_max_retries: 10
-          stream_idle_timeout_ms: 300000
       profiles:
-        m27:
-          model: "{{resolved_model}}"
-          model_provider: "minimax"
-
-home_path_overrides: {}
-
+        m27: { model: "{{resolved_model}}", model_provider: "minimax" }
 command_behavior:
   default_codex_profile_name: "m27"
 ```
-
----
-
-## 16. Migration Plan
-
-1. Add activation columns:
-   - `auth_state`
-   - `disabled_reason`
-   - `first_authenticated_at`
-   - `last_validated_at`
-   - `last_auth_method`
-
-2. Change model/API defaults:
-   - `enabled` defaults to `false` for new profiles unless creation occurs inside a verified setup flow.
-   - first-party setup stubs default to `auth_state=not_configured` and `disabled_reason=missing_credentials`.
-
-3. Seed or backfill first-party profiles for:
-   - `claude_anthropic_oauth`
-   - `codex_openai_oauth`
-   - `claude_anthropic_api` when `ANTHROPIC_API_KEY` is configured
-   - `codex_openai_api` when `OPENAI_API_KEY` is configured
-
-4. Backfill existing launch-ready OAuth profiles:
-   - `auth_state=connected`
-   - `last_auth_method=oauth_volume`
-   - `enabled=true` if they are currently enabled and not policy-blocked
-
-5. Backfill existing launch-ready SecretRef profiles:
-   - `auth_state=connected`
-   - `last_auth_method=secret_ref`
-   - `enabled=true` if they are currently enabled and not policy-blocked
-
-6. Disable profiles with missing credentials:
-   - `enabled=false`
-   - `auth_state=not_configured` or `validation_failed`
-   - `disabled_reason=missing_credentials` or `auth_invalid`
-
-7. Preserve explicit user/admin disables:
-   - `enabled=false`
-   - `disabled_reason=user_disabled`
-
-8. Update default normalization:
-   - choose only launch-ready profiles
-   - clear default when no launch-ready profile exists
-
-9. Update ProviderProfileManager sync:
-   - sync only enabled and launch-ready profiles
-
-10. Update Settings UI:
-    - show first-party setup cards
-    - expose Connect OAuth and Add API key actions
-    - auto-enable after successful user-initiated setup
-
-11. Complete tier-only persistence under §5.5 and the owning tier designs:
-    - convert only pre-tier rows, preserving existing authored policy,
-    - remove `default_model`/`default_effort` from schema, profile API, and all readers/writers,
-    - update seeds, materialization, and runtime strategies to use canonical policy/resolution,
-    - preserve historical resolved values and active work rather than retaining a second default mirror.
-
----
-
-## 17. Acceptance Tests
-
-The implementation should include tests for the following behavior:
-
-```text
-New Claude/Codex provider setup stubs are disabled by default.
-ProviderProfileCreate does not default first-party managed providers to enabled.
-PATCH enabled=true fails when OAuth/API-key readiness is missing.
-Settings Connect OAuth finalizes only after volume verification succeeds.
-Successful OAuth setup sets auth_state=connected and enabled=true.
-Successful API-key setup stores a SecretRef and sets enabled=true.
-Failed OAuth setup leaves the profile disabled with validation diagnostics.
-Failed API-key setup does not persist the raw key and leaves the profile disabled.
-Manual user disable is not overwritten by background validation.
-Direct user-initiated reconnect or add-key may clear user_disabled and enable the profile.
-ProviderProfileManager sync excludes disabled and not-ready profiles.
-Default provider selection does not choose disabled setup stubs.
-workflow.default_provider_profile_ref rejects disabled or not-ready profiles.
-Settings provider cards show setup actions for Claude and Codex.
-```
-
----
-
-## 18. Terminology
-
-The older **Auth Profile** terminology is deprecated in favor of **Provider Profile**.
-
-Expected names across docs and code:
-
-- `ManagedAgentAuthProfile` → `ManagedAgentProviderProfile`
-- `MoonMind.AuthProfileManager` → `MoonMind.ProviderProfileManager`
-- `managed_agent_auth_profiles` → `managed_agent_provider_profiles`
-
-The new terminology is required because the object now represents more than authentication alone.
-
----
-
-## 19. Summary
-
-Provider Profiles replace the narrower Auth Profile concept with a provider-aware execution contract.
-
-A Provider Profile answers all of the following for a managed runtime launch:
-
-- which runtime is being launched,
-- which upstream provider it should talk to,
-- which default model intent applies,
-- where credentials come from,
-- how provider-specific configuration is materialized,
-- which concurrency and cooldown policy applies,
-- how compatible profiles are selected when no exact profile is specified,
-- whether Settings has activated the profile for launch.
-
-This model is required for MoonMind to correctly support modern runtime/provider combinations such as:
-
-- Claude Code with Anthropic OAuth
-- Claude Code with Anthropic API key
-- Claude Code with MiniMax
-- Claude Code with Z.AI
-- Codex CLI with OpenAI
-- Codex CLI with MiniMax
-
-The Settings activation rule is intentionally simple:
-
-> First-party OAuth provider profiles are visible but not launchable until OAuth setup. API-key profiles are seeded and enabled when their configured environment secret exists. Successful user-initiated setup enables the profile by default. Manual disables and policy blocks are respected.
-
-The result is a system that is explicit, secure by default, easy to configure, and aligned with how real managed runtimes work in practice.
-
-Most importantly, it cleanly fits alongside the newer MoonMind architecture:
-
-- [SecretsSystem.md](./SecretsSystem.md) owns secret references, storage, and resolution
-- [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) owns interactive OAuth session transport
-- `ProviderProfiles.md` owns the durable runtime/provider launch contract and Settings activation semantics
-
-A wedged manager no longer gates a deployment update. The release path used to
-refuse promotion until every manager singleton answered `get_state`, which made
-the deployment unfixable exactly when it was broken: the repair could not
-become current because the fault the repair addresses blocked it. Updates
-recreate the installed fleet in place and do not consult manager liveness; the
-automatic replacement above owns this fault, on the credential and admission
-paths where it actually shows up. See
-[Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).

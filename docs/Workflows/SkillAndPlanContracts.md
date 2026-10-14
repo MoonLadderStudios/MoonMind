@@ -4,7 +4,7 @@
 **Updated:** 2026-10-07
 **Authority:** Executable tool and plan semantics under [AGENTS.md](../../AGENTS.md). Instruction Skills remain owned by the [Skill System](../Steps/SkillSystem.md).
 
-Implementation gaps belong in existing issues, not a second checklist or registry in this document. The [previous full specification](https://github.com/MoonLadderStudios/MoonMind/blob/50262ac4d68f71ce5b73f83a37e2755dfd31ff5b/docs/Workflows/SkillAndPlanContracts.md) remains available for historical examples. Retained payloads keep their original meaning.
+Retained payloads keep their original meaning.
 
 ## 1) Document boundary and Purpose
 
@@ -229,7 +229,7 @@ Preserve the selected definition snapshot and original serialized intent where t
 
 ### Q2) Do we allow conditional edges in v1?
 
-No new conditional semantics are introduced here. Keep the existing dependency behavior. A future actual requirement belongs in a deliberately scoped change, not speculative reserved fields or a new branching framework built to complete #973.
+No new conditional semantics are introduced here. Keep the existing dependency behavior. A future actual requirement belongs in a deliberately scoped change, not speculative reserved fields or a new branching framework.
 
 ### Q3) How much validation happens in workflow code vs in an Activity?
 
@@ -241,9 +241,9 @@ Reuse the existing dispatcher and curated bindings. The registry declares the ro
 
 ## 13) Deliverables (this doc’s outputs)
 
-The deliverable is a consistent contract used by existing code, not a second collection of schemas, catalogs, or mandatory status reports. #973 covers the missing real tool-plan handoff, #1088 progress, #2615 optional workspace admission, and #1090 publication. Their implementation evidence stays with the existing issues and tests.
+The deliverable is a consistent contract used by existing code, not a second collection of schemas, catalogs, or mandatory status reports.
 
-Optional configuration comparison and quality/risk assessment under #2215 and #983 reuse ordinary admitted runs, artifact readers, and reports. They do not create an experiment platform, authorize new inference from a read request, or become default gates on deterministic tools. A model's advisory assessment cannot replace required tests, security enforcement, or explicit approval.
+Optional configuration comparison and quality/risk assessment reuse ordinary admitted runs, artifact readers, and reports. They do not create an experiment platform, authorize new inference from a read request, or become default gates on deterministic tools. A model's advisory assessment cannot replace required tests, security enforcement, or explicit approval.
 
 ## 14) Engineering backlog
 

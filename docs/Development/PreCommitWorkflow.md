@@ -122,7 +122,7 @@ pre-commit install
 
 ### Step Execution Conformance Evidence
 
-For every remaining MM-822+ Step Execution PR, preserve the Step Execution conformance gate before claiming merge readiness. The PR checklist must say either:
+For a PR that changes Step Execution behavior, preserve the Step Execution conformance gate before claiming merge readiness. The PR checklist must say either:
 
 - The conformance suite was run in CI or through a representative authorized runner, with the tested revision and run or command evidence:
 
