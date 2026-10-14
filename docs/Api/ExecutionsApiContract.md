@@ -1,75 +1,56 @@
 # Executions API Contract
 
-**Document Class:** Canonical declarative  
-**Viewpoint:** Module Contract Specification  
-**Project:** MoonMind  
-**Status:** Draft  
 **Owner:** MoonMind Platform  
-**Updated:** 2026-09-06  
 **Audience:** backend, dashboard, integrations  
-**Authority:** Execution lifecycle HTTP operations, request admission, response projections, ownership, fan-out, and update/reconstruction semantics. Workflow Publishing owns publication intent and the repository-provider contract owns publication evidence.  
-**Owning Surface:** /api/executions and its Temporal execution service boundary  
-**Related Docs:** [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Settings System](../Security/SettingsSystem.md), [Workflow Architecture](../Workflows/WorkflowArchitecture.md), [Lore VCS Integration Design](../Workflows/LoreVcsIntegrationDesign.md); additional owners are listed in section 3.  
-**Related Implementation:** `moonmind/workflows/executions/execution_contract.py`, `TemporalExecutionService`, and the existing execution API router.
+**Covers:** Execution lifecycle HTTP operations, request admission, response projections, ownership, fan-out, and update/reconstruction semantics. Workflow Publishing owns publication intent and the repository-provider contract owns publication evidence.  
+**Owning surface:** `/api/executions` and its Temporal execution service boundary  
+**Implementation:** `api_service/api/routers/executions.py` (router), `moonmind/schemas/temporal_models.py` (request/response models such as `CreateExecutionRequest`, `UpdateExecutionRequest`, `ExecutionModel`, `ExecutionListResponse`), `moonmind/workflows/executions/execution_contract.py` (admission compiler), and `moonmind/workflows/temporal/service.py` (`TemporalExecutionService`).  
+**Related:** [Workflow Publishing](../Workflows/WorkflowPublishing.md), [Settings System](../Security/SettingsSystem.md), [Workflow Architecture](../Workflows/WorkflowArchitecture.md), [Lore VCS Integration Design](../Workflows/LoreVcsIntegrationDesign.md); more in section 3.
 
-Implementation sequencing, rollout status, and backlog notes live in issues or `docs/tmp/`, not as the primary story of this contract. The single-context/publication rules below are long-term target semantics, not evidence that current API/worker deployments already accept the new authoring values.
+The single-context authoring and publication rules in sections 9.3, 9.4, 12, and 16 describe the intended authoring contract. Not every part of it is accepted by current API and worker deployments; `execution_contract.py` is the authority for what the compiler accepts today.
 
 ## 1. Purpose
 
-This document defines the direct Temporal-backed execution lifecycle API under `/api/executions`: HTTP operations, request/response shapes, ownership, and lifecycle semantics. It remains an adapter-first contract, usable alongside workflow-console product routes without requiring a queue-centric model or a separate publishing service.
+This document describes the direct Temporal-backed execution lifecycle API under `/api/executions`: operations, request and response shapes at summary level, ownership, lifecycle semantics, and errors. Field-level definitions live in the schema module listed above. The API is adapter-first: it works alongside workflow-console product routes without a queue-centric model or a separate publishing service.
 
-[Workflow Publishing](../Workflows/WorkflowPublishing.md) owns publication intent and compiled effects. [Input Schema Guidance](../Steps/InputSchemaGuidance.md) owns context bindings. This API enforces those contracts independently of the UI or caller.
+[Workflow Publishing](../Workflows/WorkflowPublishing.md) owns publication intent and compiled effects, and [Input Schema Guidance](../Steps/InputSchemaGuidance.md) owns context bindings. This API enforces those contracts regardless of which UI or caller submits work.
 
 ## 2. Scope
 
-In scope are authenticated lifecycle operations, create/describe/list/update/signal/cancel, identifiers, filters/pagination/counts, and the narrow execution-scoped fan-out boundary. Artifact upload/download and direct Temporal server APIs have their own contracts. Worker-internal helpers are not public authoring APIs.
+In scope: authenticated create/describe/list/update/signal/cancel, identifiers, filters, pagination and counts, and the execution-scoped fan-out boundary. Artifact upload/download and direct Temporal server APIs have their own contracts, and worker-internal helpers are not public authoring APIs.
 
-`workflowId` is the canonical durable handle. Product UI routes may coexist with this surface. Remediation uses normal `POST /api/executions` with canonical `task.remediation`, not a privileged one-click submission path.
+`workflowId` is the durable handle. Remediation uses ordinary `POST /api/executions` with canonical `task.remediation`, not a privileged one-click path. Related remediation routes:
 
-`GET /api/executions/{workflowId}/remediations?direction=inbound|outbound` returns bidirectional lineage and bounded canonical remediation projections, including authored intent, selected evidence, context availability, approvals/locks/operator controls, action results, verification, lifecycle artifacts, and Checkpoint Branch state.
+- `GET /api/executions/{workflowId}/remediations?direction=inbound|outbound` returns bidirectional lineage and bounded remediation projections (authored intent, selected evidence, context availability, approvals, locks, operator controls, action results, verification, lifecycle artifacts, and Checkpoint Branch state).
+- `POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` accepts an authenticated `decision` and optional `comment`. Takeover, pause, resume, and cancel remain normal workflow controls. Create admission independently validates target/run visibility, selected Step Executions, checkpoints, Agent Runs, profile and configuration snapshots, action and launch policy, and repository/branch/publication intent.
 
-`POST /api/executions/{remediationWorkflowId}/remediation/approvals/{requestId}` accepts authenticated `decision` and optional rationale `comment`. Takeover/pause/resume/cancel remain normal workflow controls. Create admission independently validates exact target/run visibility, selected Step Executions/checkpoints/Agent Runs, profile/configuration snapshots, action/launch policy, and repository/branch/publication intent.
-
-The current `TemporalExecutionService`/`TemporalExecutionRecord` projection is an implementation owner, not a permanent public storage abstraction. Public semantics survive a change to Visibility-backed or mixed reads.
+`TemporalExecutionService` and its `TemporalExecutionRecord` projection implement the API, but they are not a public storage abstraction; public semantics would hold over Visibility-backed or mixed reads.
 
 ## 3. Related docs
 
-- `docs/Temporal/TemporalArchitecture.md`
-- `docs/Temporal/TemporalPlatformFoundation.md`
-- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/Temporal/SourceOfTruthAndProjectionModel.md`
-- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
-- `docs/Temporal/StepLedgerAndProgressModel.md`
-- `docs/Temporal/WorkflowExecutionProductModel.md`
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/UI/WorkflowConsoleArchitecture.md`
-- `docs/UI/DashboardDesignSystem.md`
-- `docs/UI/CreatePage.md`
-- `docs/Workflows/WorkflowPublishing.md`
-- `docs/Workflows/WorkflowPresetsSystem.md`
-- `docs/Workflows/WorkflowEditingSystem.md`
-- `docs/RepositoryAccessAndWorkspaceDesign.md`
-- `docs/Security/SettingsSystem.md`
-- `docs/Steps/SkillGithubPrResolver.md`
-- `docs/Workflows/CheckpointBranchSystem.md`
+- `docs/Temporal/TemporalArchitecture.md`, `TemporalPlatformFoundation.md`, `WorkflowTypeCatalogAndLifecycle.md`, `SourceOfTruthAndProjectionModel.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `StepLedgerAndProgressModel.md`, `WorkflowExecutionProductModel.md`
+- `docs/Temporal/WorkflowArtifactSystemDesign.md`, `VisibilityAndUiQueryModel.md`
+- `docs/UI/WorkflowConsoleArchitecture.md`, `DashboardDesignSystem.md`, `CreatePage.md`
+- `docs/Workflows/WorkflowPublishing.md`, `WorkflowPresetsSystem.md`, `WorkflowEditingSystem.md`, `CheckpointBranchSystem.md`
+- `docs/RepositoryAccessAndWorkspaceDesign.md`, `docs/Security/SettingsSystem.md`, `docs/Steps/SkillGithubPrResolver.md`
 
-## 4. Vocabulary and Identifiers
+## 4. Vocabulary and identifiers
 
-An execution is Temporal-managed MoonMind work. A workflow type is its root category, such as `MoonMind.UserWorkflow`. A run is one Temporal run instance under a durable workflow identity. Task is reserved for Temporal internals, qualified external systems, and explicitly supported task-shaped transport envelopes, not a new product entity.
+An execution is Temporal-managed MoonMind work. A workflow type is its root category, such as `MoonMind.UserWorkflow`. A run is one Temporal run instance under a durable workflow identity. "Task" refers only to Temporal internals, qualified external systems, and the supported task-shaped transport envelope, not a product entity.
 
 | Identifier | Role |
 | --- | --- |
-| `workflowId` | Primary durable execution handle and path key |
-| `runId` | Exact run instance; changes across supported rerun/Continue-As-New |
-| `namespace` | Temporal namespace, returned for detail/debugging |
-| `taskId` | Compatibility product identifier where exposed; equals `workflowId` for Temporal work |
+| `workflowId` | Durable execution handle and path key |
+| `runId` | Exact run instance; changes across rerun and Continue-As-New |
+| `namespace` | Temporal namespace, returned for detail and debugging |
+| `taskId` | Compatibility identifier where exposed; equals `workflowId` |
 
-Clients must not treat `runId` as the durable workflow identity or ignore it when checking exact-attempt evidence. Publication-scope lineage includes the applicable run/admission identity, so a later run with the same workflowId cannot silently retarget earlier children.
+`runId` is not the durable identity, but it matters for exact-attempt evidence. Publication-scope lineage includes the run/admission identity so a later run under the same `workflowId` cannot silently retarget earlier children.
 
-## 5. API Surface
+## 5. API surface
 
-All request/response bodies are JSON with camelCase external fields.
+Bodies are JSON with camelCase fields.
 
 | Method | Path | Purpose | Success |
 | --- | --- | --- | --- |
@@ -77,65 +58,43 @@ All request/response bodies are JSON with camelCase external fields.
 | GET | `/api/executions` | List visible executions | 200 |
 | GET | `/api/executions/{workflowId}` | Describe | 200 |
 | GET | `/api/executions/{workflowId}/steps` | Current/latest step ledger | 200 |
-| POST | `/api/executions/{workflowId}/update` | Validated update/rerun request | 200 |
+| POST | `/api/executions/{workflowId}/update` | Validated update or rerun request | 200 |
 | POST | `/api/executions/{workflowId}/signal` | Asynchronous signal | 202 |
-| POST | `/api/executions/{workflowId}/cancel` | Cancel/terminate | 202 |
+| POST | `/api/executions/{workflowId}/cancel` | Cancel or terminate | 202 |
 | POST | `/api/executions/{workflowId}/checkpoint-branches/{branchId}/verification` | Admit a runtime-published objective-verifier report for the exact branch head | 200 |
 
-Checkpoint verification accepts only `verifierArtifactRef`, an existing immutable
-artifact reference. The authenticated branch owner validates producer, source
-run, completed turn, Step Execution, exact head, and verdict before recording the
-receipt and continuing pending remediation verification. Rejected evidence
-returns 409 (`checkpoint_verification_rejected`); invalid request fields return
-422. [Checkpoint Branch System §8.5](../Workflows/CheckpointBranchSystem.md#85-launch-branch-turn)
-owns the full report admission contract.
+Checkpoint verification accepts only `verifierArtifactRef`, an existing immutable artifact reference. The branch owner validates producer, source run, completed turn, Step Execution, exact head, and verdict before recording the receipt and continuing pending remediation verification. Rejected evidence returns 409 `checkpoint_verification_rejected`; invalid fields return 422. [Checkpoint Branch System §8.5](../Workflows/CheckpointBranchSystem.md#85-launch-branch-turn) covers report admission.
 
-## 6. Authentication and Authorization
+## 6. Authentication and authorization
 
-All operations require an authenticated user except the exact create/describe operations authorized by section 6.5. Ownership is derived from authentication, never a caller-set create field.
+All operations require an authenticated user except the create/describe operations allowed by section 6.1. Ownership comes from authentication, never from a caller-set create field.
 
-Single-user operation (#4351) is instance-visible: the admitted operator lists, describes, and controls every execution without a human-owner lookup. Owner filters (`ownerType`/`ownerId`) pass through as provenance selectors, never 403 gates; direct describe/update/signal/cancel for a nonexistent workflow returns 404 without disclosing another execution. New executions default to the instance (`SYSTEM`) owner while retained human-owner values persist as non-authoritative provenance.
+MoonMind is single-user, so executions are instance resources: the admitted operator lists, describes, and controls every execution without a human-owner lookup. Owner filters (`ownerType`/`ownerId`) act as provenance selectors, not 403 gates. Describe, update, signal, or cancel for a nonexistent workflow returns 404 without disclosing another execution. New executions default to the instance (`SYSTEM`) owner, and retained human-owner values persist as non-authoritative provenance. Approval, state, source, and policy validation stay at their owning boundaries, and raw secret access and agent policy permissions are not broadened. See [Single-User Application Design](../SingleUserApplicationDesign.md).
 
-A schema, required-capability token, selected preset, copied parent ID, or publication mode is not an authorization grant. Repository credentials, allowed operations, runtime/model authority, artifacts, and tracker effects are independently validated through their existing owners.
+A schema, capability token, selected preset, copied parent ID, or publication mode is not an authorization grant. Repository credentials, allowed operations, runtime and model authority, artifacts, and tracker effects are validated by their own owners.
 
-### 6.4 Single-user operation (#4351)
+### 6.1 Workflow-scoped execution fan-out
 
-Executions are instance resources: the admitted operator lists, describes,
-and controls every execution without a human-owner lookup. Owner filters
-(`ownerType`/`ownerId`) pass through as provenance selectors, never 403
-gates; new executions default to the instance (`SYSTEM`) owner while
-retained human-owner values persist as non-authoritative provenance.
-Approval, state, source, and policy validation stay at their owning
-boundaries; raw secret access and agent policy permissions are not
-broadened. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+An admitted runtime with the normalized `execution.fanout` requirement may receive a short-lived bearer and `X-MoonMind-Execution-Fanout: v1`. It is not a user session, worker token, container token, or general API credential.
 
-### 6.5 Workflow-scoped Execution Fan-out
+The capability is bound to the parent execution and run, agent run, optional step, runtime session, source kind, and expiry. The server resolves the parent's authoritative owner and permits only:
 
-An admitted runtime with the normalized `execution.fanout` requirement may receive a short-lived bearer and `X-MoonMind-Execution-Fanout: v1`. This is not a user session, worker token, container token, or general API credential.
-
-The capability is bound to the parent execution/run, agent run, optional step, runtime session/id, source kind, and expiry. The server resolves the parent's authoritative owner and permits only:
-
-- One task/workflow child per `POST /api/executions`, with `runtimeInheritance="caller"` and stable `idempotencyKey`.
+- one task/workflow child per `POST /api/executions`, with `runtimeInheritance="caller"` and a stable `idempotencyKey`;
 - `GET /api/executions/{workflowId}` for an admitted child of that parent with the same owner.
 
-Schedules, ungoverned direct-create payloads, arbitrary source overrides, unrelated reads, and all other operations are denied. Unauthorized child describe returns 404. Runtime adapters mint/materialize this bearer only after trusted capability provenance and policy checks.
+Schedules, ungoverned direct-create payloads, arbitrary source overrides, unrelated reads, and all other operations are denied, and an unauthorized child describe returns 404. Runtime adapters mint the bearer only after trusted capability provenance and policy checks.
 
-Publication and repository inheritance are enforced by the server, not an optional helper flag. The server retrieves the parent's frozen authored/resolved scope intent and validates the submitted target against its admitted child contract. A coordinator's local compiled `none` is never the inherited policy. A client cannot omit an inheritance field, forge a new root, select `auto`, or submit an independent publish override to broaden the scope.
+The server, not a helper flag, enforces publication and repository inheritance. It retrieves the parent's frozen authored and resolved scope intent and validates the submitted target against the admitted child contract. A coordinator's local compiled `none` is never the inherited policy, and a client cannot omit an inheritance field, forge a new root, select `auto`, or submit an independent publish override to broaden scope.
 
-A target-derived PR head under the same authorized repository is permitted only through the declared resolver target derivation. It is not an arbitrary source override. Non-default implementation bases must survive discovery unchanged. Genuinely distinct repository roles require an explicitly supported mapping and independent target admission.
+A PR head derived from the target under the same authorized repository is permitted only through the declared resolver target derivation, not as an arbitrary source override. Non-default implementation bases survive discovery unchanged, and distinct repository roles need an explicitly supported mapping and independent target admission.
 
-Static child-policy/handoff incompatibility is checked before parent effects when known. Dynamically discovered children are revalidated before acceptance. A rejected later child does not undo earlier accepted children; responses and artifacts preserve exact partial results.
+Static child-policy and handoff incompatibility is checked before parent effects when known, and dynamically discovered children are revalidated before acceptance. A rejected later child does not undo earlier accepted children; responses and artifacts preserve exact partial results.
 
-## 7. Workflow Catalog and Lifecycle
+## 7. Workflow catalog and lifecycle
 
-Supported root workflow types are `MoonMind.UserWorkflow` and `MoonMind.MergeAutomation` until explicitly extended.
+Supported root workflow types are `MoonMind.UserWorkflow` and `MoonMind.MergeAutomation`. `MoonMind.ManifestIngest` is not in the advertised catalog: new launches are rejected with an actionable error, and existing rows remain readable as history.
 
-> **Retirement note (MoonLadderStudios/MoonMind#4192):** the native
-> `MoonMind.ManifestIngest` product is retired. It is absent from the live
-> advertised catalog: new launches are rejected actionably. Old-release rows
-> stay readable as replay/drain evidence; they are not supported for new work.
-
-Domain states include `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `finalizing`, `no_commit`, `completed`, `failed`, and `canceled`.
+Domain states are `scheduled`, `initializing`, `waiting_on_dependencies`, `planning`, `awaiting_slot`, `executing`, `awaiting_external`, `finalizing`, `no_commit`, `completed`, `failed`, and `canceled`.
 
 | Close status | `temporalStatus` |
 | --- | --- |
@@ -144,273 +103,162 @@ Domain states include `scheduled`, `initializing`, `waiting_on_dependencies`, `p
 | canceled | canceled |
 | failed, terminated, timed_out | failed |
 
-Continue-As-New is a real Temporal close concept; clients use the documented run-history surface rather than assuming a separate `temporalStatus` enumeration value.
+Continue-As-New is a Temporal close concept; clients use the run-history surface rather than expecting a separate `temporalStatus` value.
 
-Publication policy, actual publication outcome, and lifecycle state are different. A coordinator can be completed after its enqueue objective while its children remain active. A saved result can exist after failed compute or publication. No API projection may equate those states.
+Publication policy, actual publication outcome, and lifecycle state are distinct. A coordinator can complete after enqueueing while its children are still active, and a saved result can exist after failed compute or publication, so no projection equates them.
 
-## 8. Shared Response Model
+## 8. Shared response model
 
 ### 8.1 ExecutionModel
 
-Create, describe, signal, and cancel return this materialized shape. List returns the bounded `ExecutionListItemModel`, without detail-only memo, parameters, or summaries.
+Create, describe, signal, and cancel return `ExecutionModel`. List returns the bounded `ExecutionListItemModel` without detail-only memo, parameters, or summaries. Core fields are identity (`namespace`, `workflowId`, `runId`, `workflowType`), lifecycle (`state`, `temporalStatus`, `closeStatus`), `objectiveOutcome` (also on list rows), optional `agentRunId` and bounded `progress`, `searchAttributes`, `memo`, `artifactRefs`, and timestamps (`startedAt`, `queuedAt`, `updatedAt`, `closedAt`).
 
-| Field | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| namespace | string | yes | Temporal namespace |
-| workflowId | string | yes | Durable identity |
-| runId | string | yes | Current run identity |
-| workflowType | string | yes | Root workflow type |
-| state | string | yes | Domain lifecycle state |
-| temporalStatus | running/completed/failed/canceled | yes | Simplified Temporal status |
-| closeStatus | string/null | no | Terminal close disposition |
-| objectiveOutcome | bounded string/null | no | Existing objective outcome from memo, separately from execution lifecycle; also included in list rows |
-| agentRunId | string/null | no | Top-level observability binding when applicable |
-| progress | object/null | no | Bounded current-run progress |
-| searchAttributes | object | yes | Indexed safe metadata |
-| memo | object | yes | Small display metadata |
-| artifactRefs | string array | yes | Linked artifact references |
-| startedAt | datetime | yes | Initial start |
-| queuedAt | datetime/null | no | Stable queued ordering fallback |
-| updatedAt | datetime | yes | Meaningful progress/lifecycle update |
-| closedAt | datetime/null | no | Terminal time |
+`objectiveOutcome` is read from memo and reported separately from lifecycle. Its values are `active`, `succeeded`, `failed`, `cancelled`, `idle`, and `verification_blocked`; missing, unknown, or malformed values project as null without changing memo or lifecycle. A completed execution with an idle objective displays as neutral **Idle** with its explanation, because finishing a scan with nothing to do does not mean an issue was implemented. Completed executions whose objective failed, was verification-blocked, or was cancelled display **Failed**, **Verification blocked**, or **Cancelled**, while lifecycle and filter values stay unchanged. `no_commit` is successful work that needed no commit, not capacity unavailability or an empty scan.
 
-`objectiveOutcome` accepts the existing values `active`, `succeeded`, `failed`, `cancelled`, `idle`, and `verification_blocked`. Missing, unknown, or malformed memo values project as null without changing the retained memo or lifecycle fields. A completed execution with an idle objective is displayed as neutral **Idle**, with its explanation retained; it does not establish that issue implementation succeeded. Completed closures with failed, verification-blocked, or cancelled objectives display **Failed**, **Verification blocked**, or **Cancelled** respectively. These presentation labels preserve the execution lifecycle and filter values. A valid `no_commit` lifecycle still represents successful work that needed no repository commit, rather than capacity unavailability or a no-target scan.
+Success metrics follow the same distinction. A completed idle execution has `runMetrics.success = null` and `successRateSample = { "success": 0, "sampleSize": 0 }`, so it is excluded from success rates. Failed or canceled states and failed, verification-blocked, or cancelled objectives count as unsuccessful even when Temporal closed cleanly (one sample, zero successes). Active executions have a zero-size sample, and `no_commit` counts as successful, including older records whose memo still says active. `/metrics` keeps exact lifecycle counts and completion rate, and its separate `objectiveMetrics` sample excludes idle scans from the objective success denominator.
 
-For a completed idle execution, `runMetrics.success` is null and `successRateSample` is `{ "success": 0, "sampleSize": 0 }`, excluding it from success-rate samples. Exact failed/canceled states and explicit failed, verification-blocked, or cancelled objectives remain unsuccessful even when Temporal closed cleanly; an eligible terminal sample records zero successes and a sample size of one. Active executions keep a zero-size sample. A valid `no_commit` outcome remains successful, including historical records whose memo still says active. `/metrics` retains its exact execution lifecycle counts and execution completion rate; its separate bounded `objectiveMetrics` sample describes objective outcomes and excludes idle scans from the objective success denominator.
-
-The optional `recommendedNextAction` uses available outcome evidence and lifecycle state. A completed run without an inline finish summary recommends reviewing its completed summary; active runs retain monitoring guidance. Publication-specific recommendations take precedence when their outcome evidence is available.
+The optional `recommendedNextAction` uses outcome evidence and lifecycle: a completed run without an inline finish summary suggests reviewing its summary, active runs get monitoring guidance, and publication-specific recommendations take precedence when their evidence is available.
 
 ### 8.2 ExecutionProgress
 
-Progress remains bounded and is not a substitute for `/steps`.
+Progress is bounded and does not replace `/steps`. Required counts are `total`, `pending`, `executing`, `completed`, and `failed`; optional counts include `ready`, `awaitingExternal`, `reviewing`, `skipped`, and `canceled`, plus `currentStepTitle` and `updatedAt`. A missing optional counter does not mean zero.
 
-Required counts are `total`, `pending`, `executing`, `completed`, and `failed`. Optional counts include `ready`, `awaitingExternal`, `reviewing`, `skipped`, and `canceled`. `currentStepTitle` and `updatedAt` provide current safe context. Missing optional counters do not imply an exact zero unless the contract says so.
+### 8.3 Search attributes and memo
 
-### 8.3 Search Attributes and Memo
+Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`; optional ones include `mm_repo`, `mm_integration`, `mm_target_runtime`, `mm_target_skill`, and `mm_provider_profile`.
 
-Baseline attributes are `mm_owner_type`, `mm_owner_id`, `mm_state`, `mm_updated_at`, and `mm_entry`. Optional bounded metadata includes `mm_repo`, `mm_integration`, `mm_target_runtime`, `mm_target_skill`, and `mm_provider_profile`.
+`mm_provider_profile` and the memo `providerProfile` entries record the Provider Profile at admission and are updated when a launch resolves a pending selection ([Workflows List §7.2](../UI/WorkflowsListPage.md#72-how-the-projection-is-recorded)). The memo keeps every distinct recorded association for facet discovery; facet continuation keeps overflow values before advancing the workflow page and deduplicates IDs across pages, and truncated memo coverage stays marked truncated. List rows expose a bounded `providerProfile` summary (`selectionState`, up to eight `{id, label, harness}` entries, `profileCount`) that never carries credentials, OAuth paths, provider payloads, or host/container handles.
 
-`mm_provider_profile` (Text) and the memo `providerProfile` identity entries are the recorded Provider Profile projection written at admission and updated when a launch resolves a pending selection ([Workflows List §7.3](../UI/WorkflowsListPage.md#73-recorded-provider-profile-projection)). The memo retains every distinct recorded association for facet discovery; facet continuation retains overflow values before advancing the workflow page and deduplicates stable IDs across workflow pages. Older truncated memo coverage stays explicitly truncated through all continuation pages. List rows expose the bounded `providerProfile` summary (`selectionState`, up to eight `{id, label, harness}` entries, `profileCount`); it never carries credentials, OAuth paths, raw provider payloads, or host/container handles.
+`providerProfileIdIn` and `providerProfileIdNotIn` are repeated exact-ID parameters whose decoded characters (commas, quotes) are literal. The CSV parameters `providerProfileIn` and `providerProfileNotIn` keep their meaning for shared URLs and saved views and are unioned with the exact-ID sets. Conflicting intersections are rejected; distinct included and excluded IDs may coexist.
 
-`providerProfileIdIn` and `providerProfileIdNotIn` are repeated exact-ID query parameters; decoded commas, quotes, and other ID characters are literal. The legacy `providerProfileIn` and `providerProfileNotIn` CSV parameters retain their existing shared-URL/saved-view meaning and union with the corresponding exact-ID sets. Conflicting intersections are rejected, while distinct included and excluded IDs may coexist. New controls use the exact-ID parameters.
+Runtime and Skill facets are authoritative only after the namespace registers their `KeywordList` types; before that, dependent queries degrade rather than sending invalid Visibility queries. Unknown values are omitted rather than shown blank, and these fields are filters, not sortable strings.
 
-Runtime/Skill facets are authoritative only after the namespace registers their `KeywordList` types. Before registration, dependent queries degrade without sending invalid Visibility queries. Unknown values are omitted rather than blank. These fields are filters, not sortable scalar strings.
-
-Memo carries title/summary and optional safe input/manifest refs. Clients tolerate additional documented-safe keys. Projection-authored state is not a second source of truth for publication or terminal evidence.
+Memo carries title, summary, and optional safe input/manifest refs; clients tolerate additional documented-safe keys. Projection state is not a second source of truth for publication or terminal evidence.
 
 ### 8.4 ExecutionListResponse
 
-The response includes `items`, optional `nextPageToken`, optional `count`, required `countMode = exact | estimated_or_unknown`, and required `degradedCount`.
+The response has `items`, optional `nextPageToken`, optional `count`, `countMode` (`exact | estimated_or_unknown`), and `degradedCount`. An exact count requires a successful bounded count query in addition to the page read. If counting fails, the page is preserved with `count = null`, `countMode = estimated_or_unknown`, and `degradedCount = true`, and clients do not present an exact total from that.
 
-An exact count requires a successful bounded count query as well as the page read. Count failure preserves the page and returns `count = null`, `countMode = estimated_or_unknown`, and `degradedCount = true`. Clients do not present an exact total/page count from degraded evidence.
+### 8.5 Authored context and publication projection
 
-### 8.5 Authored Context and Publication Projection
+Detail and reconstruction surfaces expose enough safe input and plan evidence to distinguish the authored repository/branch context, the authored publication selection (Auto as `default`), the resolved scope behavior and its provenance, the execution's compiled mode, owner, and target, and the actual enqueue, save, publication, and merge results.
 
-Detail/reconstruction surfaces expose enough safe input and plan evidence to distinguish:
+This uses existing input artifacts, plan, result objects, and the bounded detail projection rather than a mutable publication record, and derived mode is not written back into authored input. For example, a PR batch's coordinator may compile to `none` while its authored policy remains PR or Auto. The projection gives Create and Details a safe effective explanation but no second editable policy. Clients cannot infer descendant prohibition from a local None, child completion from enqueue success, or merge authority from a label, and missing evidence is reported as unavailable rather than reconstructed from current catalog defaults.
 
-- the single authored source/repository and branch context;
-- the authored publication selection, including Auto as `default`;
-- the resolved scope behavior and definition/derivation provenance;
-- the particular execution's compiled mode/owner/target;
-- actual enqueue, save, publication, and merge results.
+Managed and agent-owned publication results come from accepted `moonmind.publish.repository.v1` artifacts under the repository-provider contract. The API preserves their attempt/target ownership and safe references rather than defining another evidence schema. Older payload shapes are decoded only for recorded histories, and a provider projection still pending mapping stays `awaiting_external` rather than reporting PR success.
 
-Use the existing input artifacts, plan, result objects, and bounded detail projection rather than a new mutable publication record. Derived mode is not written back into authored input. In particular, a PR batch's coordinator may have compiled `none` while its authored policy remains PR or Auto.
+## 9. Create execution
 
-The projection supplies a safe effective explanation for Create/Details. It does not expose another editable policy. Clients cannot infer descendant prohibition from local None, child completion from enqueue success, or merge authority from a label. Missing evidence is reported as unavailable, not reconstructed from current catalog defaults.
+### 9.1 Request
 
-New managed and agent-owned publication results are derived from accepted `moonmind.publish.repository.v1` artifacts under the providing repository contract. The API preserves their exact attempt/target ownership and safe references, not a second acceptedRepositoryEvidence or Auto-specific schema. Legacy payloads are decoded only for recorded histories. A provider projection pending mapping remains awaiting_external rather than false PR success.
+`POST /api/executions` takes `workflowType` (required; `MoonMind.UserWorkflow` or `MoonMind.MergeAutomation`), optional `title`, `inputArtifactRef`, `planArtifactRef`, `failurePolicy` (`fail_fast | continue_and_report | best_effort`), small JSON `initialParameters`, and `idempotencyKey`. `manifestArtifactRef` is accepted for parsing older payloads but ignored for new launches, and ManifestIngest payloads are rejected. Task-shaped envelopes (section 16) go through the same admission compiler.
 
-## 9. Create Execution
-
-### 9.1 Endpoint and Direct Request
-
-`POST /api/executions`
-
-| Field | Type | Required | Notes |
-| --- | --- | --- | --- |
-| workflowType | supported root type | yes | UserWorkflow or MergeAutomation (`MoonMind.ManifestIngest` retired by #4192 and rejected) |
-| title | string/null | no | Display title |
-| inputArtifactRef | string/null | no | Input reference |
-| planArtifactRef | string/null | no | Plan reference |
-| manifestArtifactRef | string/null | no | Historical-only: ignored for new launches; old ManifestIngest payloads parse but are rejected with the retirement error |
-| failurePolicy | fail_fast/continue_and_report/best_effort/null | no | Initial failure policy |
-| initialParameters | object | no | Small JSON authored parameters |
-| idempotencyKey | string/null | no | Deduplication key |
-
-Task-shaped envelopes are covered in section 16 and use the same admission compiler.
-
-A direct UserWorkflow request cannot select Omnigent. It returns 422 `omnigent_product_boundary_required` when any canonical runtime field (`targetRuntime`, `task.targetRuntime`, or a `runtime.mode` block) names Omnigent, or when it names no runtime while the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling. `moonmind workflow run` submits that envelope, carrying `--param key=value` extras in `task.inputs`. A task-shaped request whose `idempotencyKey` already names an admitted execution returns that execution before any preset, Provider Profile, or runtime-default resolution, so an uncertain submission can be reconciled even after that catalog state changes.
+A direct UserWorkflow request cannot select Omnigent: it returns 422 `omnigent_product_boundary_required` when `targetRuntime`, `task.targetRuntime`, or a `runtime.mode` block names Omnigent, or when no runtime is named and the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling; `moonmind workflow run` submits that envelope with `--param key=value` extras in `task.inputs`. A task-shaped request whose `idempotencyKey` already names an admitted execution returns that execution before any preset, Provider Profile, or runtime-default resolution, so an uncertain submission can be reconciled even after catalog state changes.
 
 ### 9.2 Validation
 
-A UserWorkflow has at least one valid planning source before persistence/start: nonempty instructions, selected Skill, input artifact, or plan artifact. Parameters are small and JSON-serializable. Artifact refs are references, not embedded blobs.
+A UserWorkflow needs at least one planning source before it starts: nonempty instructions, a selected Skill, an input artifact, or a plan artifact. Parameters are small and JSON-serializable, and artifact refs are references, not embedded blobs. Every public form, including caller-supplied plan artifacts and execution-shaped input, goes through shared validation; a client-supplied compiled mode, bound input, parent lineage, or accepted-evidence object does not bypass compilation.
 
-All public forms, including caller-supplied plan artifacts and execution-shaped input, pass shared validation. A client-provided compiled mode, bound input, parent lineage, or accepted-evidence object does not bypass context/policy compilation.
+### 9.3 Single authored context and publishing
 
-### 9.3 Single Authored Context and Publishing
+The authored repository/source target is selected once through the canonical repository contract, rather than through competing workflow, preset-input, Skill-input, `startingBranch`, and `targetBranch` values. Role-specific source, target, and destination distinctions are explicit.
 
-The ordinary authored repository/source target is selected once through the canonical repository contract. There are no simultaneous workflow, preset-input, Skill-input, `startingBranch`, and `targetBranch` authorities. Role-specific source/target/destination distinctions must be explicit and supported.
-
-In direct requests the authored selection is under `initialParameters.task.publish.mode`; in a task-shaped transport it is under `payload.task.publish.mode`. Both normalize to the same authored snapshot. New authoring values are:
+The authored selection is `initialParameters.task.publish.mode` in direct requests and `payload.task.publish.mode` in task-shaped requests; both normalize to the same snapshot. Authored values are:
 
 ```text
 default | none | branch | pr | pr_with_merge_automation
 ```
 
-Omission and `default` are equivalent user-facing Auto. Compiled execution `publishMode` remains `none | branch | pr | auto`. The compiler resolves `default` and the compound PR-and-merge selection before workers or helpers execute. Literal historical `auto` retains its Skill-owned meaning only for already-recorded input/history decoding, never the meaning of generic default. Fresh PR Resolver authoring uses default/omission with its explicit PR locator, as shown in the [resolver integration contract](../Steps/SkillGithubPrResolver.md#91-new-authored-userworkflow-request); a caller cannot select a legacy decoder to bypass new validation.
+Omission and `default` both mean Auto. Compiled execution `publishMode` is `none | branch | pr | auto`, and the compiler resolves `default` and the compound PR-and-merge selection before workers or helpers run. A recorded literal `auto` keeps its Skill-owned meaning when decoding history and is never the generic default. PR Resolver authoring uses default/omission with an explicit PR locator, as in the [resolver integration contract](../Steps/SkillGithubPrResolver.md#91-new-authored-userworkflow-request), and a caller cannot pick an older decoder to bypass validation.
 
-The removed workspace setting `workflow.default_publish_mode` and its environment aliases are not fallback sources here. [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns the one precedence rule, and [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) defines audited preservation/review of configured historical intent. New omitted and explicit-default requests use the same composition rule, including through schedules and helper submissions.
+The workspace setting `workflow.default_publish_mode` and its environment aliases are not part of this precedence rule. [Workflow Publishing](../Workflows/WorkflowPublishing.md) owns the single precedence rule, and [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting) covers how configured historical intent is preserved or reviewed. Omitted and explicit-default requests compose the same way, including through schedules and helpers.
 
-Context bindings are resolved before required-field validation and preset expansion. Bound fields are execution projections, not authored duplicates. Conflicting or redundant caller-owned copies in the new contract are rejected with an actionable path; a supported legacy decoder may collapse proven equivalent historical values when reconstructing recorded input.
+Context bindings are resolved before required-field validation and preset expansion. Bound fields are execution projections, not authored duplicates; conflicting or redundant caller copies are rejected with an actionable path, while historical decoding may collapse proven-equivalent recorded values.
 
-The compiler pins selected definitions, context/target identity, authored intent, resolved default behavior, child requirements, and effect owners in existing snapshot/plan evidence. It validates known composition conflicts before parent launch or tracker mutation. Unknown future targets are validated at the declared child boundary.
+The compiler pins selected definitions, context and target identity, authored intent, resolved default behavior, child requirements, and effect owners in the existing snapshot and plan evidence, and checks known composition conflicts before parent launch or tracker mutation. Unknown future targets are validated at the declared child boundary. The task-input snapshot also preserves the workspace authority compiled from the selected Agent Profile; native review admission compares the full compiled graph, including that workspace, with the frozen input bytes, so an altered workspace or artifact digest is rejected before launch. Preserving the value grants no extra authority.
 
-The original task-input snapshot also preserves the workspace authority compiled
-from the selected Agent Profile. Native review admission compares the complete
-compiled graph, including that workspace, with the frozen input bytes. An
-altered workspace or artifact digest remains a pre-launch rejection; preserving
-the compiled value does not grant additional repository or execution authority.
-
-Explicit None is never promoted. An incompatible publishing Skill, parallel shared-branch batch without a qualified serial handoff, or missing required predecessor-code transfer produces a pre-effect error. A read-only step or non-publishing coordinator does not erase the scope's PR intent.
-
-The following are semantic examples, not promises that current deployed schemas already accept target-state authoring:
-
-```json
-{"task": {"publish": {"mode": "default"}}}
-```
-
-```json
-{"task": {"publish": {"mode": "pr_with_merge_automation"}}}
-```
-
-An admitted implementation batch can retain the second authored selection while its coordinator compiles to None and its children compile to PR plus merge automation. The child automation may invoke a Skill-owned Auto resolver as an implementation of that same intent.
+Explicit None is never promoted. An incompatible publishing Skill, a parallel shared-branch batch without a qualified serial handoff, or a missing predecessor-code transfer fails before effects. A read-only step or non-publishing coordinator does not erase the scope's PR intent. For example, a batch authored with `{"task": {"publish": {"mode": "pr_with_merge_automation"}}}` keeps that selection while its coordinator compiles to None and its children compile to PR plus merge automation, which may in turn invoke a Skill-owned Auto resolver.
 
 ### 9.4 Idempotency
 
-Create deduplication is scoped to owner, workflow type, and idempotency key. A repeated equivalent logical request returns the existing execution without creating another.
+Create deduplication is scoped to owner, workflow type, and idempotency key, and a repeated equivalent request returns the existing execution. Under the single-context contract, reuse also checks admitted context, target, publication policy, and definition evidence: a conflicting request under the same key cannot mutate the existing execution or be reported as accepted, and returns a bounded conflict with the existing reference where visible.
 
-For the new authoring/fan-out contract, reuse also verifies admitted context, target, publication policy, and definition evidence. A conflicting request under the same key cannot mutate the existing execution or report it as accepted under the new intent. It returns a bounded conflict with the existing authorized reference where visible. This is a coordinated contract change, not a claim that historical keys already have full request-digest validation.
+Dependabot's cross-run repository/PR/head identity is preserved, so a policy edit does not create a competing resolver for the same head or retarget an old one. Helpers report the existing child's actual disposition and use explicit execution controls for an authorized replacement.
 
-Dependabot's cross-run repository/PR/head identity is preserved. A policy edit does not silently create a competing resolver for the same head or retarget an old one. Helpers report the existing child's actual disposition and use explicit execution controls for an authorized replacement.
+### 9.5 Create result
 
-### 9.5 Create Result
+Creation allocates workflow and run identity, starts in `initializing` unless the lifecycle calls for a schedule gate first, materializes safe metadata, and returns `ExecutionModel` with 201. Acceptance is not objective success.
 
-Successful creation allocates workflow/run identity, starts `initializing` unless the admitted lifecycle calls for a preceding schedule gate, and materializes safe metadata. The response is an `ExecutionModel` with status 201. Persistence/enqueue acceptance is not objective success.
-
-Title resolution is deterministic. A meaningful caller title wins. Otherwise combine the selected capability/preset label with up to two structured targets such as an issue, PR, branch, or failing check. Bookkeeping step IDs are not targets. A label without a target remains a fallback. Titles are bounded to 150 characters.
-
-Creation also freezes the generated base label and records the shared title-transition state in memo: `titleBase`, `titleProvenance` (`user_explicit` or `generated`), and the monotonic `titleRevision` ordering guard, alongside the existing `titleSource`/`titleConfidence` projection. Preset runtime resolvers that select their target after creation (such as `github-issue-search-and-implement` via its pinned `titleEnrichment` opt-in) enrich the display title to `<base>: #<number>` through the same workflow-owned transition, without touching workflow/run identity, plan, branches, checkpoints, artifacts, commits, or publication behavior.
+Title resolution is deterministic: a meaningful caller title wins; otherwise the selected capability or preset label is combined with up to two structured targets such as an issue, PR, branch, or failing check (bookkeeping step IDs are not targets). Titles are bounded to 150 characters. Creation records the generated base and title-transition state in memo (`titleBase`, `titleProvenance` of `user_explicit` or `generated`, the monotonic `titleRevision`, and `titleSource`/`titleConfidence`). Preset resolvers that select their target after creation (such as `github-issue-search-and-implement` via its `titleEnrichment` opt-in) enrich the title to `<base>: #<number>` through the same workflow-owned transition, without touching identity, plan, branches, checkpoints, artifacts, commits, or publication.
 
 ### 9.6 Errors
 
-Domain create validation uses 422 `invalid_execution_request`, with field-addressable details for context/policy conflicts. Malformed bodies may use framework validation errors. Authentication uses the auth layer's 401/403 behavior. A conflicting idempotent intent is a distinct conflict, not a successful create. Error semantics and generated clients must be updated together when the new authoring boundary is enabled.
+Create validation uses 422 `invalid_execution_request` with field-addressable details for context and policy conflicts; malformed bodies may produce framework validation errors, and authentication uses the auth layer's 401/403. A conflicting idempotent intent is a distinct conflict, not a successful create.
 
-## 10. List Executions
+## 10. List executions
 
-`GET /api/executions` supports workflow type/state, authorized owner type/ID, entry, repository, integration, registered runtime/Skill facets, page size, and opaque page token.
+`GET /api/executions` filters by `workflowType`, `state`, `ownerType`, `ownerId`, `entry`, `repo`, `integration`, registered runtime facets (`targetRuntime`/`targetRuntimeIn`, never a Provider Profile alias), Provider Profile ID/state membership (`providerProfileIdIn`, `providerProfileIdNotIn`, `providerProfileIn`, `providerProfileNotIn`, `providerProfileStateIn`, `providerProfileStateNotIn`, `providerProfileBlank`; see [Workflows List §12.1](../UI/WorkflowsListPage.md#121-filter-encoding)), and `targetSkillIn`. Filters apply before count and pagination. `pageSize` defaults to 50 (range 1–200), and `nextPageToken` is opaque.
 
-| Parameter | Default/constraint |
-| --- | --- |
-| workflowType, state, ownerType, ownerId, entry, repo, integration | Optional filters |
-| targetRuntime / targetRuntimeIn | Legacy registered canonical runtime facet; never a Provider Profile alias |
-| providerProfileIdIn / providerProfileIdNotIn / providerProfileIn / providerProfileNotIn / providerProfileStateIn / providerProfileStateNotIn / providerProfileBlank | Recorded Provider Profile ID/state membership ([Workflows List §12.1](../UI/WorkflowsListPage.md#121-canonical-filter-encoding)); applied before count and pagination |
-| targetSkillIn | Registered primary Skill facet |
-| pageSize | Default 50; range 1–200 |
-| nextPageToken | Opaque continuation token |
+Runtime and Skill attributes use membership queries over their registered one-item `KeywordList` values. Default ordering is `updatedAt` descending by one-minute bucket, then queued order descending within a bucket, then `workflowId` descending, so small refresh differences do not reorder stable queued rows. A null next token means no more pages; offsets are not public cursor semantics. Count confidence follows section 8.4.
 
-Non-admin scope is always the authenticated owner. Runtime/Skill attributes use membership queries over their registered one-item `KeywordList` values. Default ordering is meaningful `updatedAt` descending by one-minute stability bucket, then queued order descending within a bucket, then workflowId descending. Small refresh differences do not reorder otherwise stable queued rows.
+Success is 200 with `ExecutionListResponse`. Unauthorized owner scope is 403 `execution_forbidden`, and invalid tokens are 422 `invalid_pagination_token` (some route wrappers also report filter errors with that code). Clients do not treat errors as empty results.
 
-A null next token means no further pages. Offset-based implementation details are not public cursor semantics. Count confidence follows section 8.4.
+## 11. Describe execution and steps
 
-Success is 200 with `ExecutionListResponse`. Unauthorized owner scope is 403 `execution_forbidden`. Invalid tokens use 422 `invalid_pagination_token`; older route wrappers may also report some filter errors through that code. Clients do not treat such errors as empty results.
+`GET /api/executions/{workflowId}` returns 200 `ExecutionModel` or 404 `execution_not_found` for absent or invisible work. Reconstruction uses the exact input and plan refs and the authored-versus-derived distinction in section 8.5, not mutable defaults.
 
-## 11. Describe Execution and Steps
+`GET /api/executions/{workflowId}/steps` returns the current run's bounded step ledger so clients need not parse logs. The response carries `workflowId`, `runId`, `runScope`, and `steps`. Each row has identity and structure (`logicalStepId`, order, title, tool, `dependsOn`), status (`status`, `waitingReason`, `attentionRequired`, `attempt`, timestamps), a `timing` object, `summary`, `checks`, `lastError`, `refs` (child workflow/run, `agentRunId`), and `artifacts` (output summary and primary, runtime stdout/stderr/merged logs/diagnostics, provider snapshot). See the `StepLedger*` models in `moonmind/schemas/temporal_models.py`.
 
-`GET /api/executions/{workflowId}` returns 200 `ExecutionModel` or 404 `execution_not_found` for absent/invisible work. Reconstruction uses the exact input/plan refs and section 8.5's authored-versus-derived distinction, not mutable defaults.
+`logicalStepId` is stable within its plan, and attempts are scoped to workflowId, runId, and logicalStepId. A step `agentRunId` can coexist with a top-level observability binding. Timing is logical step timing, not runner workload duration (do not infer it from `workload.durationSeconds`). Its `precision` is `exact`, `live` (elapsed as of `serverNow`), `fallback` (displayable but not exact terminal evidence), or `unavailable`. Preserved rows set `preserved: true` and show original timing rather than new work.
 
-### 11.5 Step Ledger
+`GET /api/executions/{workflowId}/steps/{logicalStepId}/step-executions` returns the same timing object per attempt, from which UI totals can be derived, with the same ownership-preserving 404 behavior. Derived per-step publication disposition is not a step-level authoring override, and accepted publication or Skill evidence is read only from its authoritative producer.
 
-`GET /api/executions/{workflowId}/steps` returns the latest/current run's bounded ledger without forcing clients to parse logs. The response identifies `workflowId`, `runId`, `runScope`, and `steps`.
+## 12. Update execution
 
-Each row includes:
+`POST /api/executions/{workflowId}/update` takes `updateName` (`UpdateInputs` by default, `SetTitle`, or `RequestRerun`), candidate `inputArtifactRef`/`planArtifactRef`, a small `parametersPatch`, `title` (required for SetTitle), and an `idempotencyKey`.
 
-- logicalStepId, order, title, tool, dependsOn;
-- status, waitingReason, attentionRequired, attempt, startedAt, updatedAt;
-- timing.startedAt, endedAt, durationMs, elapsedMs, serverNow, precision, preserved;
-- summary, checks, lastError;
-- refs.childWorkflowId, childRunId, agentRunId;
-- artifacts.outputSummary, outputPrimary, runtimeStdout, runtimeStderr, runtimeMergedLogs, runtimeDiagnostics, providerSnapshot.
+**UpdateInputs** replaces or adds refs and patches admitted parameters; no-op updates can succeed. Executing or awaiting-external work may take supported changes at the next safe point, while major changes may need a newly admitted run.
 
-`logicalStepId` is stable within its plan. Attempts are scoped to workflowId/runId/logicalStepId. Checks contain structured verdict/retry evidence. A step agentRunId can coexist with a top-level observability binding.
+**SetTitle** changes display metadata immediately without changing execution authority. It runs through the shared workflow-owned title transition on both the service record and the `MoonMind.UserWorkflow` update of the same name (an object payload carrying `title`; the `update_title` method name forwards to it). Titles use the shared display-safe policy, and empty or unsafe text is rejected with `invalid_update_request`. Renaming to the same text still marks the title explicit. The record updates memo `title`, `titleBase`, `titleProvenance`, `titleRevision`, and `titleSource` and recomputes `mm_title` search tokens so state, memo, search, and UI agree. Genuine no-ops succeed without touching the record or bumping the revision.
 
-Timing is logical step timing, not runner workload duration. Precision is `exact`, `live`, `fallback`, or `unavailable`. Live elapsed time is as of serverNow; fallback is displayable but not exact terminal evidence. Preserved rows set preserved true and display original timing rather than newly executed work. Do not infer this from `workload.durationSeconds`.
+**RequestRerun** requests a clean re-execution under the [run-history/rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). A supported active workflow may Continue-As-New, keeping `workflowId` with a new `runId`. For a terminal source (including one that closes before Temporal receives the update), the service creates a fresh execution with a new `workflowId` and `runId` through normal admission, records the source in `rerunSource`, and leaves the source closed; closed Temporal runs never process an ordinary rerun update. An exact rerun preserves the source's immutable inputs, Skill snapshot, and execution choices subject to current validation. An admitted Omnigent execution plan cannot be edited here; replacement inputs need a new execution, and the update returns 409 `omnigent_execution_plan_replacement_required`. Unsupported controls or invalid admission return an explicit non-accepted result or validation error rather than fabricating a destination or falling back to a queue.
 
-`GET /api/executions/{workflowId}/steps/{logicalStepId}/step-executions` returns the same timing object per attempt; UI totals can derive from those attempt-local values. Absent/invisible step-route targets use the same ownership-preserving 404 behavior.
+### 12.1 Response and idempotency
 
-Derived per-step publication disposition does not create a step-authoring override. Accepted publication or Skill evidence is consumed only from its authoritative producer, not untrusted raw metadata keys.
+The response includes `accepted`, `applied` (`immediate | next_safe_point | continue_as_new`), a message, and the materialized `execution`; accepted reruns report `continueAsNewCause = manual_rerun`. A terminal fresh rerun also returns `applied = continue_as_new`, which does not prove that Temporal performed Continue-As-New or kept the `workflowId`, so clients follow the returned `execution.workflowId`, `execution.runId`, and `execution.redirectPath`. A 200 alone does not mean accepted. Update idempotency keeps only the most recent key and response; it is not a historical deduplication ledger.
 
-## 12. Update Execution
+Ordinary updates to terminal executions return 200 with `accepted: false`, `applied: immediate`, and an explanation; terminal RequestRerun is the fresh-start exception. Missing or invisible targets return 404, and invalid or unsupported updates return 422 `invalid_update_request` or framework errors.
 
-`POST /api/executions/{workflowId}/update` accepts:
+### 12.2 Context and policy immutability
 
-| Field | Meaning |
-| --- | --- |
-| updateName | UpdateInputs, SetTitle, or RequestRerun; default UpdateInputs |
-| inputArtifactRef / planArtifactRef | Candidate replacement refs |
-| parametersPatch | Small structured patch |
-| title | Required for SetTitle |
-| idempotencyKey | Update reconciliation key |
+The single authored context and publication rules apply to UpdateInputs and RequestRerun. A patch cannot change compiled mode, overwrite bound inputs, revive a preset override, or change a child's policy through the parent. An admitted scope's effect authority is fixed for its active work and accepted children: edits before admission can recompile the draft, but changes after target, candidate, or child admission go through a new admission, rerun, or continuation with lineage. Reruns reconstruct authored intent and its original default-resolution evidence, revalidate changed definitions and defaults visibly, and never turn an old None-to-Auto normalization or mixed per-step policy into a new authority grant. Historical artifacts and prior child results stay unchanged.
 
-UpdateInputs replaces/adds refs and patches admitted parameters. No-op updates can succeed. Executing/awaiting-external work may accept supported changes for the next safe point; major changes may require a newly admitted run through the lifecycle owner. SetTitle changes display metadata immediately and does not change execution authority.
+## 13. Signal execution
 
-SetTitle (`title` required) runs through the one shared workflow-owned title transition on both the service record and the production `MoonMind.UserWorkflow` update of the same name (object payload carrying `title`; the legacy `update_title` method name remains as a compatibility alias forwarding to it). Manual titles are validated and normalized with the shared display-safe policy (empty/whitespace-only or unsafe text is rejected with `invalid_update_request`); the same-text rename still flips provenance to explicit. The canonical record updates memo `title`/`titleBase`/`titleProvenance`/`titleRevision`/`titleSource` and recomputes the `mm_title` search tokens so state, memo, search, and UI stay consistent across refreshes. Genuine no-ops succeed without touching the record, bumping the revision, or emitting repeated metadata changes.
-
-RequestRerun requests a clean re-execution under the [run-history/rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). A supported active workflow may Continue-As-New, retaining workflowId and allocating a new runId. For a terminal source, the service creates a fresh execution with a new workflowId and runId through normal admission, records the source workflow/run in `rerunSource`, and leaves the source closed. The same fresh-start path handles a source that closes before Temporal receives the update. Closed Temporal runs never process an ordinary rerun update.
-
-An exact rerun preserves the source's immutable inputs, Skill snapshot, and execution choices subject to current validation. Replacement refs or parameters are accepted only by a lifecycle path that supports the edited intent. An admitted Omnigent execution plan cannot be edited through this update: replacement inputs require a new execution through normal admission, and the update returns 409 `omnigent_execution_plan_replacement_required`. Unsupported active controls or invalid admission return an explicit non-accepted result or validation error; they do not fabricate a destination or use a queue fallback.
-
-### Response and Idempotency
-
-The response includes required `accepted`, `applied = immediate | next_safe_point | continue_as_new`, a human-readable message, and the materialized `execution`. Accepted reruns report `continueAsNewCause = manual_rerun`. The existing wire value `applied = continue_as_new` is also returned for a terminal fresh rerun; it does not prove that Temporal performed Continue-As-New or that workflowId was retained. Clients follow the returned `execution.workflowId`, `execution.runId`, and `execution.redirectPath` instead of continuing to poll the closed source. A 200 response alone does not mean accepted. Older update idempotency retains only the most recent key/response and is not an arbitrary historical deduplication ledger.
-
-Ordinary updates to terminal executions return 200 with accepted false, applied immediate, and an explanation. Terminal RequestRerun is the explicit fresh-start exception above. Missing/invisible targets use 404; invalid or unsupported updates use 422 `invalid_update_request` or framework errors, with the immutable-plan conflict using the 409 code above.
-
-### Context and Policy Immutability
-
-The single authored context/publication rules apply equally to UpdateInputs and RequestRerun. A patch cannot directly change compiled mode, overwrite bound inputs, revive a preset override, or change a child's policy through the parent's projection.
-
-An admitted scope's effect authority is immutable for its active work and already accepted children. An authoring edit before admission can recompile the draft. A change after target/candidate/child admission requires the supported new-admission/rerun/continuation path with lineage, not an in-place broadening at a nominal safe point. Display-title changes and other non-authority updates retain their normal behavior.
-
-Reruns reconstruct authored intent and its original default-resolution evidence. Changed definitions/defaults are visible and revalidated. Old None-to-Auto normalization or mixed per-step policies cannot silently become a new authority grant. Historical artifacts and prior child results remain unchanged.
-
-## 13. Signal Execution
-
-`POST /api/executions/{workflowId}/signal` accepts required signalName, optional payload defaulting to an empty object, and optional payloadArtifactRef.
+`POST /api/executions/{workflowId}/signal` takes `signalName`, an optional `payload` (default `{}`), and an optional `payloadArtifactRef`.
 
 | Signal | Required payload | Behavior |
 | --- | --- | --- |
-| ExternalEvent | source, event_type | Record the event/ref; clear only the relevant external wait when not paused. |
-| Approve | approval_type | Apply the approval under the owning gate; normal lifecycle resumes only when its requirements are satisfied. |
-| Pause | Signal-specific payload | Set paused overlay and waiting metadata while preserving the underlying state. |
-| Resume | Signal-specific payload | Clear the pause overlay and return to the underlying scheduled/dependency/slot/active gate. |
+| ExternalEvent | `source`, `event_type` | Records the event; clears only the relevant external wait when not paused. |
+| Approve | `approval_type` | Applies the approval under the owning gate; the lifecycle resumes only when its requirements are met. |
+| Pause | signal-specific | Sets a paused overlay and waiting metadata while keeping the underlying state. |
+| Resume | signal-specific | Clears the pause overlay and returns to the underlying gate. |
 
-Remediation approval uses its durable pending approval record and authenticated endpoint described in section 2. Expired, terminal, self-approved, or reviewer-ineligible decisions fail with bounded validation errors.
+Remediation approval uses its durable pending approval record and the endpoint in section 2; expired, terminal, self-approved, or ineligible decisions fail with bounded validation errors. Success is 202 with the execution. Signals to terminal executions and invalid signal/payload combinations are rejected, normally 409 `signal_rejected`, and absent targets return 404. A signal or approval cannot replace authored publication intent, broaden repository authority, or authorize duplicate effects.
 
-Success is 202 with the materialized execution. Terminal signals and invalid signal/payload combinations are rejected, normally 409 `signal_rejected`; absent/invisible targets use 404. A signal or approval cannot replace the authored publication intent, broaden repository authority, or authorize duplicate effects.
+## 14. Cancel execution
 
-## 14. Cancel Execution
+`POST /api/executions/{workflowId}/cancel` takes an optional `reason` and `graceful` (default true).
 
-`POST /api/executions/{workflowId}/cancel` accepts an optional body with reason and graceful defaulting true.
+Graceful cancellation durably requests Temporal cancellation. Until Temporal confirms it, the response keeps the live state and pause/wait metadata, records the request in the intervention audit, and reports cancellation as requested. Only confirmed cancellation records `canceled`, clears pause/wait metadata, and allows terminal dependency fan-out, including when a first-attempt workflow task is queued on a worker version with no pollers. A terminal record is unchanged by graceful cancellation.
 
-Graceful cancellation durably requests Temporal cancellation. Until Temporal confirms the execution is canceled, the response preserves its live state and pause/wait metadata, records the request in the intervention audit, and reports cancellation as requested. Only confirmed cancellation records canceled/closeStatus canceled, clears pause/wait metadata, and permits terminal dependency fan-out. This applies even when a first-attempt workflow task is queued on a worker version with no pollers. An already terminal local record is unchanged by graceful cancellation.
+Force cancel (`graceful: false`) stays available through `actions.canForceCancel` even for a terminal or orphaned record, and always targets the recorded Temporal run, independent of workers and containers. Termination records `failed` with close status `terminated` and a `forced_termination:` summary. If Temporal reports NOT_FOUND, a run-scoped describe separates an already closed run (result preserved) from an absent execution, which is recorded canceled with an orphan-repair summary and unconfirmed runtime cleanup. Transient, permission, and timeout failures never count as absence; they leave the record unchanged and return a retryable 503. Force-cancel RPCs have a ten-second budget, and ownership checks apply to orphaned records. Success is 202; invisible targets return 404.
 
-Force cancel (`graceful: false`) remains available through `actions.canForceCancel` even when the local record is terminal or its projection is orphaned. It always targets the recorded Temporal run, independently of workflow workers and execution containers. Successful termination records failed/closeStatus terminated and a `forced_termination:` summary. If Temporal reports NOT_FOUND, a run-scoped describe distinguishes an already closed run from an absent execution. An existing terminal result is preserved; an absent nonterminal execution is recorded canceled with an explicit orphan-repair summary and unconfirmed runtime cleanup. Transient failures, permission failures, and timeouts never count as evidence of absence and leave the record unchanged with a retryable 503. Force-cancel RPCs have a bounded ten-second budget. Ownership checks apply to orphaned records as well. Success is 202 with the execution; invisible targets use 404.
+Accepted cancellation does not prove runtime teardown or rollback of remote effects. Verified pushes, PRs, merges, and accepted children remain evidence, and preservation and credential release follow their lifecycle owners.
 
-Cancellation acceptance is not proof of physical runtime teardown or remote-effect rollback. Independently verified pushes, PRs, merges, or accepted children remain evidence. Preservation and credential release follow their existing lifecycle owners. Policy inheritance does not imply new recursive cancellation semantics.
+## 15. Error model
 
-## 15. Error Model
-
-Structured domain errors use:
+Structured domain errors look like:
 
 ```json
 {
@@ -421,49 +269,38 @@ Structured domain errors use:
 }
 ```
 
-Input/policy errors additionally identify the actionable authored field and affected consumer when available. A missing bound repository points to the workflow source, not an invisible Skill input.
+Input and policy errors also identify the authored field and affected consumer when available; for example, a missing bound repository points to the workflow source rather than a hidden Skill input.
 
-Existing domain codes include execution_not_found/404, execution_forbidden/403, invalid_execution_request/422, invalid_update_request/422, invalid_pagination_token/422, and signal_rejected/409. The coordinated single-context boundary also distinguishes conflicting idempotent intent from successful reuse. Framework JSON/type/coercion errors remain possible before route logic.
+| Code | Status |
+| --- | --- |
+| `execution_not_found` | 404 |
+| `execution_forbidden` | 403 |
+| `invalid_execution_request` | 422 |
+| `invalid_update_request` | 422 |
+| `invalid_pagination_token` | 422 |
+| `signal_rejected` | 409 |
+| `omnigent_product_boundary_required` | 422 |
+| `omnigent_execution_plan_replacement_required` | 409 |
+| `checkpoint_verification_rejected` | 409 |
 
-Errors are safe and bounded. They do not contain credentials, unrestricted parent data, raw provider sessions, or private target content beyond authorized identifiers.
+A conflicting idempotent intent is distinct from successful reuse. Framework JSON, type, and coercion errors can occur before route logic. Errors are bounded and do not contain credentials, unrestricted parent data, raw provider sessions, or private target content beyond authorized identifiers.
 
-## 16. Task-shaped and Historical Payloads
+## 16. Task-shaped and historical payloads
 
-The task-shaped transport may map to Temporal work, but it is not an alternate policy compiler. WorkflowId remains canonical; compatibility taskId equals workflowId. Supported `task.tool`/`step.tool` selectors and older Skill aliases use the established selector normalization, with `type: skill` where required by that transport.
+The task-shaped transport maps to Temporal work but is not a separate policy compiler. `workflowId` is canonical and the compatibility `taskId` equals it. Supported `task.tool`/`step.tool` selectors and older Skill aliases use the established selector normalization, with `type: skill` where that transport requires it.
 
-New authoring has one repository/source target, one applicable branch, and one publication selection. It cannot use old Skill args, preset `publish_mode`, `startingBranch`, `targetBranch`, or a worker-facing mode to create another authority. Checkpoint operations and resolver inputs follow the same restriction, not independent legacy fallback chains.
+New authoring has one repository/source target, one applicable branch, and one publication selection; old Skill args, preset `publish_mode`, `startingBranch`, `targetBranch`, or a worker-facing mode cannot add another authority. Checkpoint operations and resolver inputs follow the same rule.
 
-Historical decoding is versioned and evidence-preserving. Old literal Auto stays Skill-owned; old None-to-Auto coercion is confined to recorded old execution semantics. A coordinator's old local None and explicit child PR policy reconstruct as one PR intent only when provenance proves that meaning. Conflicts and unknown origins require review, not inference. Recorded effective workspace-fallback values follow the Settings retirement contract rather than consulting current configuration.
+Historical decoding is versioned and preserves evidence. A recorded literal Auto stays Skill-owned, and old None-to-Auto coercion applies only to recorded old executions. A coordinator's old local None and an explicit child PR policy reconstruct as one PR intent only when provenance proves that meaning; conflicts and unknown origins need review rather than inference. Recorded workspace-fallback values follow the Settings contract rather than current configuration.
 
-Replay and supported resets retain original bytes/digests and workflow command semantics. New drafts and schedule occurrences cross current admission. Mixed API/worker versions cannot receive a new authoring value they would reinterpret or default. The rollout boundary rejects incompatible consumers before launch without rewriting historical hashes. Fresh callers and outputs cannot opt into a historical decoder by supplying an old label or schemaVersion.
+Replay and supported resets keep original bytes, digests, and workflow command semantics, while new drafts and schedule occurrences go through current admission. Consumers that would reinterpret or default a new authoring value are rejected before launch without rewriting historical hashes, and fresh callers cannot opt into a historical decoder by supplying an old label or `schemaVersion`.
 
-## 17. Implementation Boundary Notes
+## 17. Implementation notes
 
-The current projection row can materialize identifiers, lifecycle state, attributes/memo, artifact refs, pending updates, counters, and timestamps. Those implementation details do not replace Temporal history or authoritative artifacts.
+The projection row materializes identifiers, lifecycle state, attributes and memo, artifact refs, pending updates, counters, and timestamps, but it does not replace Temporal history or authoritative artifacts. List implementations preserve successful pages when count enrichment fails, and pagination or filter error naming never justifies silently reporting empty work.
 
-Supported active Continue-As-New retains workflowId with a new runId. Terminal or explicit fresh reruns create a new linked workflowId/runId and preserve the source result; clients follow the returned destination as specified in section 12. Projection/Visibility-backed list implementations preserve successful pages when bounded count enrichment fails. Current pagination/filter error naming is not a reason to change input authority or silently report empty work.
+Supported root types, update and signal names, error semantics, ordering and count confidence, identity rules, and authored-versus-compiled mode semantics are part of the contract; changes to them are classified as additive, behavioral with stable shape, or breaking.
 
-The new authoring/compiler rules require coordinated schemas, generated clients, preset/helper consumers, retired workspace-default readers, unified publication writers/validators, and compatible workers. This documentation-only specification does not implement or qualify that cutover.
+## 18. Summary
 
-## 18. Change Rules and Conformance
-
-Changes identify whether they are additive, behavioral with stable shape, or breaking and coordinated. Supported root types, update/signal names, error semantics, ordering/count confidence, identity rules, and authored-versus-compiled mode semantics are contract changes.
-
-Conformance exercises actual API/compiler/preset/fan-out boundaries for:
-
-- equivalent direct/task-shaped/UI/MCP authoring;
-- omission versus explicit default and the distinct compiled Auto protocol;
-- retired workspace/default/environment settings cannot change new resolution, while configured historical intent is preserved or reviewed;
-- one context binding with required-input validation and conflicting-copy rejection;
-- non-publishing coordinators with inherited PR/Auto children through nesting;
-- explicit None, existing-PR target derivation, non-default bases, branch collision prevention, and required code handoffs;
-- partial fan-out, lost acknowledgement, equivalent retry, and policy-conflicting idempotency reuse;
-- immutable admitted intent across update, schedule, rerun, recovery, and mixed-version history decoding;
-- truthful authored/local/child/result projections using the one new-write publication evidence schema, without treating enqueue or process exit as proof;
-- ownership, bearer scope, stale parent/run identity, and attempts to bypass inheritance or invoke historical decoding through raw new payloads.
-
-Use existing selected suites and release qualification. A documentation edit or isolated schema test is not a passed deployment journey.
-
-## 19. Summary
-
-The API is execution-oriented, authenticated, ownership-scoped, and grounded in workflowId. It preserves explicit lifecycle controls while compiling one authored repository/branch/publication intent for every supported producer. Steps and children receive derived contracts and independently verified outcomes, not competing user-authored settings.
+The API is execution-oriented, authenticated, ownership-scoped, and grounded in `workflowId`. It keeps explicit lifecycle controls while compiling one authored repository, branch, and publication intent for every supported producer. Steps and children receive derived contracts and independently verified outcomes, not competing user-authored settings.

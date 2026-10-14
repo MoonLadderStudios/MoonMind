@@ -14,7 +14,7 @@
 
 Omnigent is the destination for one agent-backend lifecycle behind Codex, Claude Code, OpenCode, and other approved harnesses. MoonMind keeps durable orchestration and its security, workspace, credential, result, and publication responsibilities. Reliability comes from fewer competing owners, useful defaults, bounded recovery, and preserved work, not a larger rollout or compatibility system.
 
-This strategy revises the earlier exact-combination promotion and staged-retirement requirements. The staged-retirement machinery (removal stages, retirement criteria, drain census, and removal plans) has been removed (#3932); retirement is now class-based new-admission control with owner-specific removal checks, described in `OmnigentModuleArchitecture.md` §5. This strategy does not claim that the exact-combination promotion code has been removed. The [earlier strategy](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/PrimaryRuntimeProviderStrategy.md) remains available for concrete historical interpretation. Old machinery is not a permanent requirement merely because it exists. Until the owning migrations land, `README.md` exact-qualification rules, `ContractOwnership.md` per-combination assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
+Retirement is class-based new-admission control with owner-specific removal checks, described in `OmnigentModuleArchitecture.md` §5; there are no staged-retirement removal stages, retirement criteria, drain census, or removal plans. The exact-combination promotion code still exists. Old machinery is not a permanent requirement merely because it exists. `README.md` exact-qualification rules, `ContractOwnership.md` per-combination assignments, and `SharedHostImage.md` §§5–6 remain the authoritative implemented contract for current behavior; this document states the desired target and must not be read as having already removed those controls.
 
 ## 1. Decision
 
@@ -58,7 +58,7 @@ At the September 21 review baseline `6fdaab848e8f9fd9c5279ea36186482cab05733d`, 
 
 The desired steady state does not preserve the old Codex phase machine, per-combination canaries, six rollback switches, nine ordered removal stages, or a permanent inventory of deleted components. Simplify them through their existing consumers. Do not just set every gate true, install another policy facade, or strip an active resource owner without a safe transition.
 
-The existing shared selection boundary remains the integration point. Actual implementation and migration work is tracked by #3931, #3932, #3935, and #3835. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) distinguishes the target from currently readable legacy fields and controls.
+The existing shared selection boundary remains the integration point. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) distinguishes the target from currently readable legacy fields and controls.
 
 ## 5. Governing principles
 

@@ -676,7 +676,7 @@ Rules:
 
 ## 18.2 Dedicated `/report` endpoint (Deferred)
 
-A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The MM-496 decision was that the bounded `reportProjection` on execution detail is sufficient for current dashboard needs and that a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs. The execution-artifacts API treats `link_type` as an exact match, so clients that want the canonical report artifacts query per-link-type (for example `GET /artifacts?link_type=report.primary&latest_only=true` and `GET /artifacts?link_type=report.summary&latest_only=true`) or fall back to an unfiltered list plus client-side selection.
+A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The bounded `reportProjection` on execution detail is sufficient for current dashboard needs, and a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs. The execution-artifacts API treats `link_type` as an exact match, so clients that want the canonical report artifacts query per-link-type (for example `GET /artifacts?link_type=report.primary&latest_only=true` and `GET /artifacts?link_type=report.summary&latest_only=true`) or fall back to an unfiltered list plus client-side selection.
 
 If a dedicated endpoint is later added, it should:
 
@@ -784,23 +784,3 @@ The contract in this document is implemented and verified through the following 
 | Compact bundle/projection helper invariants | `tests/unit/workflows/temporal/test_report_workflow_rollout.py` |
 | Execution-detail `reportProjection` serialization, omission, and bounded metadata | `tests/unit/api/routers/test_executions.py`, `tests/contract/test_temporal_execution_api.py` |
 | Dashboard report-first rendering | `frontend/src/entrypoints/workflow-detail.test.tsx` |
-
-### 22.3 Specs
-
-| Spec | Scope |
-| --- | --- |
-| `specs/227-report-bundle-workflow-publishing` | Activity-level bundle publication contract (MM-461) |
-| `specs/230-dashboard-report-presentation` | Dashboard report-first UI surface |
-| `specs/245-publish-report-bundles` | Workflow-level fallback / publication coverage (MM-493) |
-| `specs/248-report-aware-execution-projections` | Execution-detail `reportProjection` (MM-496); the dedicated `/report` endpoint is explicitly deferred here |
-
-### 22.4 Hermetic integration verification
-
-The MM-461 spec listed `./tools/test_integration.sh` as a follow-up step. That step is **reclassified as not required for this design slice**.
-
-Rationale:
-
-- The report bundle contract is a pure workflow-result/validation contract layered on the existing artifact service. The slice did not change artifact persistence semantics, the storage backend, or any cross-service compose-backed seam covered by `integration_ci`.
-- The contract is fully covered by activity-boundary unit tests (`tests/unit/workflows/temporal/test_artifacts_activities.py`), router/contract tests against the FastAPI execution detail surface (`tests/contract/test_temporal_execution_api.py`), and dashboard component tests (`frontend/src/entrypoints/workflow-detail.test.tsx`).
-- This matches the escalation policy used by spec 245 (`T020 was intentionally skipped as not required because MM-493 did not cross the hermetic integration boundary`) and spec 248 (`T021 Escalate to ./tools/test_integration.sh only if MM-496 implementation crosses the hermetic integration boundary`).
-- If a future change to the report path touches artifact persistence, the artifact-link query surface, or compose-backed service topology, the hermetic integration suite should be re-run at that time.

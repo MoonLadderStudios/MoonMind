@@ -108,7 +108,7 @@ from moonmind.workflows.temporal.workflow_registry import (
 # retired. Manifest-only update names below are rejected actionably in
 # send_update; the new release never registers or launches ManifestIngest
 # workflows. Old-release replay/drain evidence may retain the historical
-# strings (see docs/tmp/QdrantCutoverRunbook-4115.md).
+# strings.
 RETIRED_MANIFEST_UPDATE_NAMES: frozenset[str] = frozenset(
     {"UpdateManifest", "SetConcurrency", "CancelNodes", "RetryNodes"}
 )

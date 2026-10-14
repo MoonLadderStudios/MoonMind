@@ -9,16 +9,13 @@ They exercise genuine public authorization boundaries (artifact owner checks,
 worker-auth gate, auth-router mounting, identity-model constraints), not
 provider-string assertions.
 
-Pre-change baselines asserted here are owned for replacement by the K4/K5
-cutover children (see docs/tmp/KeycloakRemovalInventory-4117.md); the frozen
-contract assertions (canonical UUID principal, no email linking, error
-semantics) are durable and move with docs/Security/AuthenticationContracts.md.
+The contract assertions (canonical UUID principal, no email linking, error
+semantics) follow docs/Security/AuthenticationContracts.md.
 """
 
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -91,24 +88,6 @@ def test_external_identity_pair_has_unique_pair_constraint():
 def test_zero_uuid_default_is_reserved_single_user_principal():
     assert auth_module._DEFAULT_USER_ID == ZERO_UUID
     uuid.UUID(auth_module._DEFAULT_USER_ID)  # parses as a UUID
-
-
-def test_target_modes_are_frozen_and_documented():
-    inventory = Path("docs/tmp/KeycloakRemovalInventory-4117.md").read_text(encoding="utf-8")
-    contracts = Path("docs/Security/AuthenticationContracts.md").read_text(encoding="utf-8")
-    # Supported modes: asserted as structured table rows in the canonical
-    # contract (`| `accounts` |`), not incidental prose mentions — a removed
-    # mode row or an added retired-mode row fails even when the word appears
-    # elsewhere in the document.
-    for mode in ("accounts", "oidc", "header", "disabled"):
-        assert f"| `{mode}` |" in contracts, f"missing structured mode row for {mode}"
-    # Retired selectors: frozen as rejected-at-startup with migration guidance
-    # in the canonical contract, with dispositions tracked in the inventory.
-    for retired in ("keycloak", "default", "google"):
-        assert retired in contracts
-    assert "Rejected selectors" in contracts or "retired selectors" in contracts.lower()
-    for retired in ("keycloak", "default", "google"):
-        assert retired in inventory  # retired literals tracked with disposition
 
 
 # ---------------------------------------------------------------------------

@@ -306,7 +306,7 @@ authoritative.
 The seeded `defaultModel`/`defaultEffort` is a configured identity, not
 eligibility evidence. It distinguishes the configured seed from the observed
 exact-host catalog, the qualified runtime, the eligible pricing/privacy state,
-and temporary availability (MoonLadderStudios/MoonMind#4021):
+and temporary availability:
 
 - configured seed: the persisted `opencode-zen-free` profile and its default
   model/effort selection;
@@ -429,7 +429,7 @@ behavior as production:
 
 MoonMind does not substitute a configured model when the provider catalog is empty. It does not silently select another model when the prior default disappears.
 
-### Credentialless free-route admission (MoonLadderStudios/MoonMind#4021)
+### Credentialless free-route admission
 
 The `opencode-zen-free`/`none@1` route is admitted through one first-result
 path that reuses the existing owners; no new free-model profile family, no
@@ -689,7 +689,7 @@ including the API and worker consumers of those refs.
 
 ## 15. Qualification and support
 
-Ordinary execution is certificate-independent (MoonLadderStudios/MoonMind#4560): a compatible, authorized workflow must not become unrunnable merely because a historical qualification certificate is missing, stale, or names another policy revision. Certification below is a separate truthful observation, or an additional requirement when the operator deliberately selects strict certification (`protected` or `deployment`). Bootstrap qualification reporting is best-effort for ordinary readiness and never a synchronous launch prerequisite.
+Ordinary execution is certificate-independent: a compatible, authorized workflow must not become unrunnable merely because a historical qualification certificate is missing, stale, or names another policy revision. Certification below is a separate truthful observation, or an additional requirement when the operator deliberately selects strict certification (`protected` or `deployment`). Bootstrap qualification reporting is best-effort for ordinary readiness and never a synchronous launch prerequisite.
 
 Certified support remains combination-specific. Qualification binds at least:
 

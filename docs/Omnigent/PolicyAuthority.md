@@ -1,7 +1,6 @@
 # Omnigent Policy Authority
 
 **Status:** Canonical desired state
-**Issue:** MoonLadderStudios/MoonMind#3515
 
 MoonMind owns Omnigent policy authority. A stable identity has immutable,
 normalized, digest-addressed versions. Runs bind the exact identity, version,
@@ -14,8 +13,8 @@ One version declares `endpoint`, `execution`, `host`, `resources`, `network`,
 `workspace`, `providerProfile`, `session`, `capture`, `checkpoint`,
 `remediation`, `approvals`, `retention`, and `rollout`.
 
-MoonMind no longer provides native retrieval (MoonLadderStudios/MoonMind#4103).
-A version recorded earlier may also carry a `rag` section; it stays readable
+MoonMind does not provide native retrieval.
+An older recorded version may also carry a `rag` section; it stays readable
 and executable with its recorded digest, but the policy API rejects `rag` on
 new versions. Authoring uses a separate document schema that allows only an
 absent or null `rag`; historical decoding retains the recorded section.
@@ -119,7 +118,7 @@ Related: [settings](../Security/SettingsSystem.md), [Provider Profiles](../Secur
 [checkpoints](../Workflows/CheckpointBranchSystem.md), [remediation](../Workflows/WorkflowRemediation.md),
 and [context assembly](../Rag/WorkflowRag.md).
 
-## Single-user operation (#4351)
+## Single-user operation
 
 Policies are instance resources: the admitted operator reads and manages
 every policy without a human-owner lookup. New policies carry no

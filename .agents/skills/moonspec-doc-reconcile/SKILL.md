@@ -81,7 +81,7 @@ When no discovery passes the gate, report `no_update_required` with a one-line r
 
 - Update only the sections the gated discoveries name. Make the smallest coherent edit.
 - Preserve desired-state framing: never downgrade the documented desired state to match buggy or incomplete code.
-- Never insert migration narratives, status checklists, phase plans, or implementation backlogs into canonical docs. Migration, rollout, and MoonSpec execution notes belong under `docs/tmp/` or local-only/gitignored artifact paths.
+- Never insert migration narratives, status checklists, phase plans, or implementation backlogs into canonical docs. Migration, rollout, and MoonSpec execution notes belong in PR descriptions or local-only/gitignored artifact paths.
 - Remove superseded text outright instead of layering compatibility language, in keeping with the pre-release compatibility policy.
 - Preserve the document's voice, heading structure, and terminology where they remain accurate.
 - Cite implementation evidence (file paths, tests) in the reconciliation report, not inside the canonical document.

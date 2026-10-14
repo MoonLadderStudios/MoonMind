@@ -5,10 +5,6 @@ Document Class: System / Feature Design View
 Owners: MoonMind Platform
 Last updated: 2026-09-06
 
-**Issue:** [MoonLadderStudios/MoonMind#3885](https://github.com/MoonLadderStudios/MoonMind/issues/3885)
-([Omnigent concurrency] Complete layered N-way qualification with
-production-boundary evidence and truthful readiness).
-
 ## Related docs
 
 - [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md) — the fencing guarantees the concurrent journeys exercise.

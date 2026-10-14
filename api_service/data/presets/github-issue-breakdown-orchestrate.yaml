@@ -74,7 +74,7 @@ steps:
       {{ inputs.feature_request }}
 
       Preserve story order, dependencies, source issue, source document path, sourceReference, and traceability in the breakdown output.
-      If the selected input is a readable repo path under docs/ (except docs/tmp/) or AGENTS.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
+      If the selected input is a readable repo path under docs/ or AGENTS.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
       If the selected input is a non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
       If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).

@@ -30,7 +30,7 @@ for the authoritative mode, identity, session, and error contracts.
 
 | Caller | Credential at the MCP boundary | Scope |
 | --- | --- | --- |
-| Browser / API user (`accounts`, `oidc`, `header`) | Bearer credential validated by `get_current_user()` on every protected route today; the MoonMind session cookie for the resolved `User.id` UUID is target behavior pending the #4124-era session contracts (no cookie issuance routes exist yet — bearer only where the route explicitly accepts it) | Only its authorized routes and resources; conflicting cookie/bearer identities are rejected (`401 auth_conflict`) |
+| Browser / API user (`accounts`, `oidc`, `header`) | Bearer credential validated by `get_current_user()` on every protected route today; the MoonMind session cookie for the resolved `User.id` UUID is not implemented (no cookie issuance routes exist — bearer only where the route explicitly accepts it) | Only its authorized routes and resources; conflicting cookie/bearer identities are rejected (`401 auth_conflict`) |
 | Local single-user (`disabled`) | Stable persisted user behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`) | Same execution-linked authorization; never an error fallback |
 | Machine (worker / container-job) | Container-job bearer (`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN` family) or other scoped service credential on its authorized routes | Succeeds only on authorized routes and resources; runtime, session, and worker tokens never become unrestricted browser credentials. The removed legacy worker-token path is rejected (`410 worker_token_deprecated`). |
 
@@ -81,7 +81,7 @@ Example initialization:
 Example tool call:
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"jira.get_issue","arguments":{"issueKey":"MM-777"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"jira.get_issue","arguments":{"issueKey":"PROJ-123"}}}
 ```
 
 ## JSON helper endpoints
@@ -91,7 +91,7 @@ Example tool call:
 `POST /mcp/tools/call` accepts a tool name and arguments:
 
 ```json
-{"tool":"jira.get_issue","arguments":{"issueKey":"MM-777"}}
+{"tool":"jira.get_issue","arguments":{"issueKey":"PROJ-123"}}
 ```
 
 The `result` shape is tool-specific. Errors use HTTP status codes with a structured `detail` containing codes such as `tool_not_found`, `invalid_tool_arguments`, or provider-specific failures.
