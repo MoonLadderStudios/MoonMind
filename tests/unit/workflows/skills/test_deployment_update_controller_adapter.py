@@ -178,39 +178,70 @@ def _refresh_receipt(refreshed: bool) -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize("controller_changed", [True, False])
+@pytest.mark.parametrize(
+    "outcome",
+    ["refreshed", "refreshed-retry-unreachable", "current", "bootstrap-failed"],
+)
 def test_tool_retries_with_the_requested_release_controller_after_installed_one_fails(
-    controller_factory, monkeypatch, controller_changed
+    controller_factory, monkeypatch, outcome
 ):
     """A capable installed controller can still carry the bug its release fixes."""
     refreshed = False
     controller = controller_factory(failing_until(lambda: refreshed))
     ensures = []
+    retry_posts = []
+    request = controller_client._controller_request
 
     def bootstrap(command, **kwargs):
         nonlocal refreshed
         assert command[2] == "ensure" and "--prefer-requested" in command
         assert command[command.index("--image") + 1] == IMAGE
         ensures.append(command)
-        refreshed = controller_changed
-        return _refresh_receipt(controller_changed)
+        if outcome == "bootstrap-failed":
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="Controller image pull failed (exit 1)."
+            )
+        refreshed = outcome != "current"
+        return _refresh_receipt(refreshed)
+
+    def recreated_controller(endpoint, **kwargs):
+        if kwargs["path"].endswith("/retry"):
+            retry_posts.append(kwargs["path"])
+            if outcome == "refreshed-retry-unreachable" and len(retry_posts) == 1:
+                # The just-recreated controller refused the connection.
+                raise controller_client.ControllerTransportError("connection refused")
+        return request(endpoint, **kwargs)
 
     monkeypatch.setattr(controller_client, "subprocess", SimpleNamespace(run=bootstrap))
+    monkeypatch.setattr(controller_client, "_controller_request", recreated_controller)
+    monkeypatch.setattr(controller_client, "CONTROLLER_RETRY_PAUSE_SECONDS", 0)
 
     result = asyncio.run(_handler()(dict(INPUTS), dict(CONTEXT)))
 
     assert len(ensures) == 1
     operation = controller.store.load(result.outputs["operationId"])
-    if controller_changed:
+    if refreshed:
         assert result.status == "COMPLETED", result
         assert (operation["status"], operation["attemptGroup"]) == ("succeeded", 2)
         assert "Expecting value" in operation["attempts"][0]["error"]
-    else:
-        assert result.status == "FAILED"
-        assert operation["attemptGroup"] == 1
-        assert result.outputs["failure"]["reason"].startswith(
-            "attempt 1: apply failed: journal-prepare failed"
-        )
+        assert result.outputs["controllerRefresh"] == {"refreshed": True, "detail": ""}
+        assert len(retry_posts) == (2 if outcome.endswith("unreachable") else 1)
+        return
+    assert result.status == "FAILED"
+    assert retry_posts == []
+    assert operation["attemptGroup"] == 1
+    # The original error stays the failure; the recovery diagnostic sits beside it.
+    assert result.outputs["failure"]["reason"].startswith(
+        "attempt 1: apply failed: journal-prepare failed"
+    )
+    recovery = result.outputs["controllerRefresh"]
+    assert recovery["refreshed"] is False
+    expected = (
+        "Controller image pull failed"
+        if outcome == "bootstrap-failed"
+        else "already runs the requested release"
+    )
+    assert expected in recovery["detail"]
 
 
 def test_tool_reports_a_failed_controller_operation_with_its_original_error(
