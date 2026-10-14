@@ -1124,14 +1124,20 @@ RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
 # ceiling the interrupted attempts left, and an exhausted ceiling stops instead
 # of starting another attempt. Older histories keep a fresh budget per attempt.
 RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
-# GitHub and Jira Orchestrate run the same remediation loop, then reconcile docs
-# and hand off the PR in further fresh Omnigent sandboxes. Restore the verified
-# candidate into doc reconciliation, then publish that reconciled archive (or
-# the verified candidate when reconciliation left none). Older histories retain
-# their recorded clean-checkout commands.
+# GitHub and Jira Orchestrate run the same remediation loop, then hand off the
+# PR in a further fresh Omnigent sandbox that restores the verified candidate.
+# A history that launched a doc-reconciliation Step before MoonMind#4808
+# restored the candidate into it and publishes that Step's completed archive.
+# Older histories retain their recorded clean-checkout commands.
 RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-orchestrate-publication-checkpoint-restore-v1"
 )
+# MoonMind#4808 removed the moonspec-doc-reconcile pass. A plan compiled before
+# that removal skips its doc-reconciliation Step instead of resolving the
+# removed Skill; histories that already launched the Step keep it. Remove with
+# the doc-reconciliation restore handling once no running or retained history
+# contains a doc-reconciliation Step.
+RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH = "run-retired-doc-reconciliation-skip-v1"
 # An issue-implementation PR handoff may restore a candidate that was already
 # pushed by the implementation stage. ``no_commits`` at that later sandbox is
 # not authority to skip the PR: it only says the restored head needs no second
@@ -1653,8 +1659,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # attempts inherit it so ``auto`` loop tools never reach adapter routing.
         self._remediation_loop_runtime: dict[str, Any] | None = None
         self._remediation_loop_continuation: dict[str, Any] | None = None
-        # Orchestrate doc-reconciliation Step launched from the verified
-        # candidate archive; only its archive may replace that candidate at PR.
+        # Doc-reconciliation Step launched before MoonMind#4808 from the
+        # verified candidate; only its archive may replace it at PR.
         self._omnigent_reconciled_candidate_step_id: str | None = None
         # Controller-attested canonical turn lineage per logical step (#3707).
         # Compact and deterministic: the workflow is the only authority that can
@@ -7966,9 +7972,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> str | None:
         """Return the verified candidate archive consumed by a PR handoff.
 
-        Orchestrate presets reconcile docs after verification; that Step
-        continues from the same candidate, and its archive is what the PR
-        handoff publishes.
+        A doc-reconciliation Step launched before MoonMind#4808 continues from
+        the same candidate, and its completed archive is what the PR handoff
+        publishes.
         """
 
         annotations = self._node_annotations_mapping(node)
@@ -8805,6 +8811,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 },
                 sort_keys=True,
             ),
+        )
+
+    def _is_retired_doc_reconciliation_step(
+        self,
+        node: Mapping[str, Any],
+        *,
+        node_inputs: Mapping[str, Any],
+    ) -> bool:
+        """Return whether a plan compiled before MoonMind#4808 runs the removed pass."""
+
+        annotations = self._node_annotations_mapping(node)
+        role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        if role == "doc-reconciliation":
+            return True
+        skill = node.get("skill")
+        candidates = [node_inputs.get("selectedSkill")]
+        if isinstance(skill, Mapping):
+            candidates.append(skill.get("id"))
+        return any(
+            isinstance(value, str) and value.strip().lower() == "moonspec-doc-reconcile"
+            for value in candidates
         )
 
     def _moonspec_remediation_loop_skip_reason(
@@ -13017,6 +13044,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 isinstance(current_step_row, Mapping)
                 and current_step_row.get("status") == "pending"
             ):
+                continue
+            if self._is_retired_doc_reconciliation_step(
+                node, node_inputs=original_node_inputs
+            ) and workflow.patched(RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH):
+                skip_reason = (
+                    "Skipped doc reconciliation step; the moonspec-doc-reconcile "
+                    "pass was removed."
+                )
+                self._mark_step_terminal(
+                    node_id,
+                    status="skipped",
+                    updated_at=workflow.now(),
+                    summary=skip_reason,
+                    last_error=None,
+                )
+                self._summary = skip_reason
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
                 continue
             if workflow.patched(RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH):
                 skip_reason = self._moonspec_remediation_loop_skip_reason(

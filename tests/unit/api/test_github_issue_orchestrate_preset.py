@@ -160,7 +160,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             )
 
     steps = expanded["steps"]
-    assert len(steps) == 16
+    assert len(steps) == 15
     assert [step["title"] for step in steps[:4]] == [
         "Load GitHub issue brief",
         "Assess existing implementation state",
@@ -228,24 +228,15 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "selectedSkill"
     ] == "moonspec-implement"
 
-    assert steps[13]["title"] == "Reconcile declarative docs"
-    assert steps[13]["annotations"] == {"jiraOrchestrateRole": "doc-reconciliation"}
-    assert steps[13]["skill"]["id"] == "moonspec-doc-reconcile"
-    assert "FULLY_IMPLEMENTED" in steps[13]["instructions"]
-    assert "skip doc reconciliation" in steps[13]["instructions"]
-    assert "artifacts/github-issue-orchestrate-doc-reconcile.json" in steps[13][
-        "instructions"
-    ]
+    assert steps[13]["title"] == "Create pull request"
+    assert steps[13]["annotations"] == {"jiraOrchestrateRole": "pull-request-handoff"}
+    assert "controlling moonspec-verify" in steps[13]["instructions"]
+    assert "ADDITIONAL_WORK_NEEDED" in steps[13]["instructions"]
+    assert "artifacts/github-issue-orchestrate-pr.json" in steps[13]["instructions"]
 
-    assert steps[14]["title"] == "Create pull request"
-    assert steps[14]["annotations"] == {"jiraOrchestrateRole": "pull-request-handoff"}
-    assert "controlling moonspec-verify" in steps[14]["instructions"]
-    assert "ADDITIONAL_WORK_NEEDED" in steps[14]["instructions"]
-    assert "artifacts/github-issue-orchestrate-pr.json" in steps[14]["instructions"]
-
-    assert steps[15]["title"] == "Finalize GitHub issue status"
-    assert steps[15]["annotations"] == {"jiraOrchestrateRole": "code-review-handoff"}
-    assert steps[15]["tool"] == {
+    assert steps[14]["title"] == "Finalize GitHub issue status"
+    assert steps[14]["annotations"] == {"jiraOrchestrateRole": "code-review-handoff"}
+    assert steps[14]["tool"] == {
         "id": "github.update_issue_status",
         "requiredCapabilities": ["gh"],
         "inputs": {
@@ -258,4 +249,4 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "requireVerification": True,
         },
     }
-    assert steps[15]["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"
+    assert steps[14]["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"

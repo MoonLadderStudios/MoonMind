@@ -48,6 +48,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH,
     RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH,
+    RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH,
     RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH,
     RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
     RUN_STEP_RETRY_OVERRIDES_PATCH,
@@ -641,6 +642,102 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
     )
 
     assert integration_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retirement_patch_enabled",
+    [True, False],
+    ids=["new-history", "legacy-replay"],
+)
+async def test_run_execution_stage_skips_retired_doc_reconciliation_step(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    retirement_patch_enabled: bool,
+) -> None:
+    """MoonMind#4808: plans compiled before the pass was removed still drain."""
+
+    mock_run_workflow._integration = None
+    launched: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "reconcile-docs",
+                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "inputs": {
+                        "title": "Reconcile declarative docs",
+                        "instructions": "Run moonspec-doc-reconcile.",
+                        "annotations": {"jiraOrchestrateRole": "doc-reconciliation"},
+                    },
+                },
+                {
+                    "id": "final-status",
+                    "tool": {"type": "agent_runtime", "name": "jules"},
+                    "inputs": {"instructions": "Finalize status."},
+                },
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _request: Any,
+        **kwargs: Any,
+    ) -> Any:
+        launched.append(str(kwargs.get("id") or ""))
+        return {
+            "summary": "Step completed.",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    async def noop_step_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            retirement_patch_enabled
+            and patch_id == RUN_RETIRED_DOC_RECONCILIATION_SKIP_PATCH
+        ),
+    )
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_record_step_execution_manifest",
+        noop_step_manifest,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    reconcile_row = mock_run_workflow._step_ledger_row_for("reconcile-docs")
+    final_row = mock_run_workflow._step_ledger_row_for("final-status")
+    assert final_row["status"] == "completed"
+    if retirement_patch_enabled:
+        assert len(launched) == 1
+        assert reconcile_row["status"] == "skipped"
+    else:
+        assert len(launched) == 2
+        assert reconcile_row["status"] == "completed"
 
 
 @pytest.mark.asyncio

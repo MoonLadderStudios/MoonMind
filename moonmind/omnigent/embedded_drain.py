@@ -2,14 +2,14 @@
 
 Source issue: MoonLadderStudios/MoonMind#3955 (plan steps 2 and 6).
 
-Stage 1 disabled new admission through the experimental embedded host/runner
-transport while in-flight sessions drain through their recorded mode/endpoint
+New admission through the experimental embedded host/runner transport is
+disabled while in-flight sessions drain through their recorded mode/endpoint
 and cleanup owner. This module is the bounded, side-effect-free half of the
 remaining verifier work:
 
 * read-only decoding of retained rows (recorded mode, lifecycle state,
   launch-record and cleanup-authority presence) without importing the
-  launch modules that a later removal stage will delete — historical data
+  launch modules that are deleted once the drain completes — historical data
   does not need a live transport;
 * a bounded drain summary over durable counts (active embedded sessions,
   active embedded host leases) that names blockers instead of inferring
@@ -48,7 +48,7 @@ EMBEDDED_DRAIN_CONTRACT_VERSION = "moonmind.omnigent-embedded-drain/v1"
 # ``EMBEDDED_LIFECYCLE_KEY``) and ``moonmind.omnigent.control_plane.identities``
 # (``EGRESS_CLEANUP_AUTHORITY_KEY``). Repeated here as literals so this
 # read-only decoder never imports the store, channel, launch, or DB modules
-# that a later removal stage will delete; a unit test pins them equal to the
+# that are deleted once the drain completes; a unit test pins them equal to the
 # canonical constants.
 _RETAINED_MODE_KEY = "hostProtocolMode"
 _RETAINED_LAUNCH_KEY = "embedded_runner_launch"
@@ -56,7 +56,8 @@ _RETAINED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 _RETAINED_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
 
 # Launch modules that must stay importable until the drain disposition below
-# reports drained and the retirement row advances past new-admission-disabled.
+# reports drained; they are then deleted together with the embedded transport
+# retirement row.
 # Proxy-only callers must not require them (see
 # ``api_service.api.routers.omnigent_bridge_composition``).
 EMBEDDED_LAUNCH_MODULES: tuple[str, ...] = (
