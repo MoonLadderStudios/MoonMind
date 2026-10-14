@@ -280,7 +280,6 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
     for copied_path in (
         "COPY api_service /app/api_service/",
         "COPY config /app/config/",
-        "COPY docs/ReleaseNotes /app/docs/ReleaseNotes/",
         "COPY .agents /app/.agents/",
     ):
         assert project_install_index < dockerfile.index(copied_path)

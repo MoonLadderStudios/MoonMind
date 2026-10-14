@@ -3083,7 +3083,6 @@ async def test_seed_catalog_includes_document_author_preset(tmp_path):
             assert "docs/Workflows/" in step["instructions"]
             assert "MM-931 from MM-927" in step["instructions"]
             assert "Do not create spec.md" in step["instructions"]
-            assert "docs/tmp/" in step["instructions"]
 
 async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,

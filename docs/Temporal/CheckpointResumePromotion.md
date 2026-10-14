@@ -1,6 +1,6 @@
 # Checkpoint Resume Promotion
 
-MoonLadderStudios/MoonMind#3278 defines checkpoint-backed Resume as a promoted
+Checkpoint-backed Resume is a promoted
 `codex_cli` capability, distinct from same-session continuation and full retry.
 The immutable runtime descriptor states what deployed code can do. A separate
 environment policy and readiness snapshot states whether a new recovery may be

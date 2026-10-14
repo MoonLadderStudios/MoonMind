@@ -7,8 +7,6 @@
 **Authority:** Reconciliation index that pins one internally consistent normal
 Codex-through-Omnigent product path across its canonical owners. It does not
 redefine any owned contract; each stage names the document that owns it.
-**Traceability:** MoonLadderStudios/MoonMind#3565 (Omnigent Milestone 1, item 1.0
-declarative reconciliation)
 
 This document is the single normative anchor for the ordinary **Codex via
 Omnigent** journey from browser authoring through protected support evidence and
@@ -243,7 +241,7 @@ repeating these exact words, and no weaker state is written as a stronger one:
 - **retired** — removed after history, rollback, and release gates pass.
 
 Milestone 1 completion may mark **supported** only the normal product-path rows
-proved by the protected browser-to-host matrix (#3564/#3508).
+proved by the protected browser-to-host matrix.
 It must not imply completion of checkpoint resume/branching, operator
 remediation, RAG, persistent policy/profile product journeys, restricted egress
 without live proof, embedded compatibility, Claude parity, broad **default**
@@ -268,10 +266,8 @@ row is promoted to **supported** on the strength of code presence or hermetic
 tests alone, and promotion to **supported** and to any later **default** phase is
 gated on the protected browser-to-host matrix. The deployed phase advances
 independently through `MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE` and is reported by
-the `/api/omnigent/codex-catalog-readiness` projection and the support matrix; the
-point-in-time deployment status and the open milestone-evidence items are tracked
-in the roadmap and `docs/tmp/`, not here, so this canonical anchor stays
-declarative. This document is the declarative reconciliation for roadmap item
+the `/api/omnigent/codex-catalog-readiness` projection and the support matrix.
+This document is the declarative reconciliation for roadmap item
 **1.0**; the live-evidence items remain gated until their independently resolvable
 protected artifacts are linked.
 

@@ -6,12 +6,6 @@
 **Last updated:** 2026-10-14
 **Authority:** Maps every `docs/Omnigent/` path and known duplicated section to
 its one surviving owner. Owners hold the contract; all other docs point.
-**Issue:** [MoonLadderStudios/MoonMind#3962](https://github.com/MoonLadderStudios/MoonMind/issues/3962).
-
-Parent: #3929. Coordinates with #3928 (integration boundaries) and
-#3832–#3835 (qualification, default promotion, Compose consolidation,
-retirement). Completed scaffolding is disposed under #3963; current rollout
-work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 
 ## Unique contracts and surviving owners
 
@@ -59,7 +53,7 @@ instead of carrying a second description:
 | `OpenCodeHost.md` §3 Host Class mapping | `SharedHostImage.md` §3 |
 | `OpenCodeHost.md` §6 shared-image credential isolation | `SharedHostImage.md` §4 |
 
-Deliberately *not* merged (distinct responsibilities, per #3962):
+Deliberately *not* merged (distinct responsibilities):
 
 - Omnigent vs ManagedAgents execution: provider-native session semantics stay
   in `docs/ManagedAgents/`; only the shared container-job/MCP contract is
@@ -75,39 +69,33 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 
 ## Per-file disposition
 
-| File | Disposition | Design status / outstanding refs |
+| File | Disposition | Design status |
 | --- | --- | --- |
-| `README.md` | Module entrypoint (new, #3962) | Current |
-| `ContractOwnership.md` | Ownership map (new, #3962) | Current |
-| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion evidence-gated (#3832–#3834). Per-combination assignments below remain authoritative for current behavior until the owning migrations land; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target. Retirement (#3835, #3932) is class-based new-admission control only: removing a retained path deletes its code and row while the surviving owner's replay, historical-read, cleanup, and credential checks keep passing (`OmnigentModuleArchitecture.md` §5.2) |
+| `README.md` | Module entrypoint | Current |
+| `ContractOwnership.md` | Ownership map | Current |
+| `SharedHostImage.md` | Owner: image, packs, Host Classes, credential ownership | Implemented; qualification/promotion evidence-gated. Per-combination assignments below remain authoritative for current behavior; `PrimaryRuntimeProviderStrategy.md` states the desired simplification target. Retirement is class-based new-admission control only: removing a retained path deletes its code and row while the surviving owner's replay, historical-read, cleanup, and credential checks keep passing (`OmnigentModuleArchitecture.md` §5.2) |
 | `PrimaryRuntimeProviderStrategy.md` | Owner: selection/defaults/stages/gates; §§7–8 point to `SharedHostImage.md` | Desired simplification target; does not remove the implemented per-combination controls by itself |
 | `OmnigentHostOAuth.md` | Owner: materializer mechanisms; §§10–11 point to `SharedHostImage.md` | Current desired state |
 | `OpenCodeHost.md` | Owner: OpenCode runtime contract; §§1–3, 6 point to `SharedHostImage.md` | Current |
-| `OmnigentBridge.md` | Owner: transport and native UI contract | Design with open questions (§21); #3635 |
+| `OmnigentBridge.md` | Owner: transport and native UI contract | Design with open questions (§21) |
 | `OmnigentAdapter.md` | Owner: adapter launch/lifecycle contract | Current |
-| `OmnigentModuleArchitecture.md` | Owner: packages, dependencies, retirement description | Current; #3711 (retirement execution #3712) |
+| `OmnigentModuleArchitecture.md` | Owner: packages, dependencies, retirement description | Current |
 | `OmnigentHarnessPlatformDesign.md` | Owner: target harness-platform model | Proposed (target, not shipped) |
 | `RuntimeProviderRollout.md` | Owner: rollout mechanism | Implemented mechanism; promotion per combination |
-| `CodexSupportAndCutover.md` | Owner: Codex rows, phases, remediation matrix | Exact evidence pending; #3518, #3563, #3564, #3622, #3626 |
-| `CodexCreateToHostContract.md` | Owner: create-to-host wire contract (test-pinned) | Accepted; #3449 |
-| `NormalCodexProductPathReconciliation.md` | Owner: product-path reconciliation (test-pinned) | Accepted; #3565 |
-| `AgentProfiles.md` | Owner: Profile identities | #3517 |
-| `CanonicalTurnCommandBoundary.md` | Owner: turn-command boundary | #3707 |
-| `OmnigentLifecycleReconciler.md` | Owner: transition contract | Accepted; #3702 |
-| `ControlPlaneAggregates.md` | Owner: durable aggregates | #3703 |
-| `ControlPlaneConcurrencyAndFencing.md` | Owner: fencing generations | #3704 |
-| `OmnigentSemanticTelemetryAndTimeline.md` | Owner: telemetry and timeline | #3708 |
-| `ConformanceAndLiveSmoke.md` | Owner: conformance tiers | Current; #3480, #3508, #3642, #3710 |
-| `ConcurrencyQualification.md` | Owner: concurrency qualification | #3885 |
-| `OmnigentFaultInjectionSuite.md` | Owner: fault-injection suite | #3709 |
+| `CodexSupportAndCutover.md` | Owner: Codex rows, phases, remediation matrix | Exact evidence pending |
+| `CodexCreateToHostContract.md` | Owner: create-to-host wire contract (test-pinned) | Accepted |
+| `NormalCodexProductPathReconciliation.md` | Owner: product-path reconciliation (test-pinned) | Accepted |
+| `AgentProfiles.md` | Owner: Profile identities | Desired-state design |
+| `CanonicalTurnCommandBoundary.md` | Owner: turn-command boundary | Implemented |
+| `OmnigentLifecycleReconciler.md` | Owner: transition contract | Accepted |
+| `ControlPlaneAggregates.md` | Owner: durable aggregates | Proposed design |
+| `ControlPlaneConcurrencyAndFencing.md` | Owner: fencing generations | Proposed design |
+| `OmnigentSemanticTelemetryAndTimeline.md` | Owner: telemetry and timeline | Implemented |
+| `ConformanceAndLiveSmoke.md` | Owner: conformance tiers | Current |
+| `ConcurrencyQualification.md` | Owner: concurrency qualification | Target design |
+| `OmnigentFaultInjectionSuite.md` | Owner: fault-injection suite | Desired-state design |
 | `OmnigentHostMountedTools.md` | Owner: mounted tools | Desired-state design |
-| `PolicyAuthority.md` | Owner: policy authority | Canonical desired state; #3515 |
+| `PolicyAuthority.md` | Owner: policy authority | Canonical desired state |
 | `EmbeddedHostAuthCompatibility.md` | Owner: embedded compat surface | Experimental, not default |
-| `CombinedStackValidationAndRollback.md` | Owner: validation/rollback runbook | Current; #3564 |
-| `UpstreamDuplicationAudit.md` | Owner: caller-backed upstream-duplication audit | Current; #3954 |
-
-## Reduction report
-
-Moved to `../tmp/OmnigentConsolidation3962ReductionReport.md`: that note
-records this pass's implementation history (removed duplicates, word
-counts, touched files). This map keeps only the target ownership state.
+| `CombinedStackValidationAndRollback.md` | Owner: validation/rollback runbook | Current |
+| `UpstreamDuplicationAudit.md` | Owner: caller-backed upstream-duplication audit | Current |

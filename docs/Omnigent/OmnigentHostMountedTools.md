@@ -6,7 +6,7 @@
 **Owners:** MoonMind Platform  
 **Last updated:** 2026-09-26
 
-**Implementation tracking:** rollout notes, spikes, migration checklists, and temporary handoffs belong under `docs/tmp/` or in issue/PR tracking. This document defines the durable target-state contract.
+This document defines the durable target-state contract.
 
 ## Related documents
 
@@ -48,14 +48,13 @@ The first supported example is GitHub CLI, `gh`, for GitHub-aware Skills such as
 
 This design preserves the upstream image lineage, keeps portable Skills on their ordinary CLI interfaces, and avoids per-run package installation.
 
-> Retired path (MoonLadderStudios/MoonMind#4558): a separately initialized,
-> version-named tools volume (`omnigent-tools-init`, `moonmind-omnigent-tools-*`)
-> previously delivered these executables. That lifecycle is removed from the
-> supported shared-host path because initialization and launch configuration
+> The shared-host path does not deliver these executables through a separately
+> initialized, version-named tools volume (`omnigent-tools-init`,
+> `moonmind-omnigent-tools-*`) because initialization and launch configuration
 > could disagree, re-running initialization mutated shared state in place, and
 > routine upgrades required operators to synchronize volume names, tool
-> versions, manifests, and initializer-image settings. Lingering pre-cutover
-> volumes are retired by the bounded maintenance cleanup
+> versions, manifests, and initializer-image settings. Leftover volumes of that
+> kind are removed by the bounded maintenance cleanup
 > (`tools/cleanup-legacy-omnigent-tools-volumes.sh`), never by Compose and
 > never automatically during updates.
 

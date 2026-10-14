@@ -6,9 +6,8 @@
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Account-era authentication contracts and guidance for deployments that still use them. The [single-user application model](../MoonMindArchitecture.md#single-user-application-model) and [Single-User Application Design](../SingleUserApplicationDesign.md) govern the desired application architecture.\
-**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `moonmind/security/session_authority_4121.py` + `api_service/services/session_store.py` (session/revocation/CSRF owner, #4121), `moonmind/security/account_lifecycle_4122.py` (enrollment/administration rules, #4122) + `api_service/services/account_lifecycle_store_4122.py` + `MoonmindAccountNonce` (production User-table wiring and operated runbook, #4122), `moonmind/security/oidc_advanced_4124.py` + `trusted_proxy_4124.py` + `advanced_identity_4124.py` + `api_service/services/advanced_auth_service_4124.py` + `api_service/api/routers/auth_advanced_4124.py` (advanced identity owner, #4124), `api_service/db/models.py` (`User`)  
-**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable), [KeycloakRemovalResidual-4129.md](../tmp/KeycloakRemovalResidual-4129.md) (reviewed removal manifest for #4129)
-**Related Tooling:** [`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py) (hermetic K6 preflight/rehearsal gate for #4131; never mutates a live deployment)
+**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner), `moonmind/security/session_authority_4121.py` + `api_service/services/session_store.py` (session/revocation/CSRF owner), `moonmind/security/account_lifecycle_4122.py` (enrollment/administration rules) + `api_service/services/account_lifecycle_store_4122.py` + `MoonmindAccountNonce` (production User-table wiring and operated runbook), `moonmind/security/oidc_advanced_4124.py` + `trusted_proxy_4124.py` + `advanced_identity_4124.py` + `api_service/services/advanced_auth_service_4124.py` + `api_service/api/routers/auth_advanced_4124.py` (advanced identity owner), `api_service/db/models.py` (`User`)  
+**Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md)
 
 > [!IMPORTANT]
 > The account-based application target below is superseded by the
@@ -28,8 +27,6 @@
 > credential isolation, and preservation of data and in-flight work remain
 > required. The single-user design replaces human identity requirements, not
 > these boundaries. Exact machine contracts retain their owning authority.
-> Operational cutover steps and evidence remain in issues, `docs/tmp/`, or
-> run-local artifacts.
 
 ---
 
@@ -221,7 +218,7 @@ Request surface (`api_service/api/routers/accounts_4122.py`, prefix
 `/api/v1/accounts`, only when the classified production mode is
 `accounts`): `POST /setup` (operator-held bootstrap capability),
 `POST /login` (password verify off the event loop, login resolved to
-the existing `User` UUID, session minted through the shared #4121
+the existing `User` UUID, session minted through the shared session
 authority), `POST /logout` (browser authority only — never cancels
 admitted work or machine credentials), `GET /me`,
 `POST /password/change` (bumps the durable revocation generation, caller
@@ -289,16 +286,15 @@ bearer tokens, cookies, reset links, refresh material, or raw IdP token
 responses. No authentication material belongs in Temporal payloads, workflow
 artifacts, or runtime bridge evidence.
 
-## 11. Qualified upstream boundary (K2)
+## 11. Qualified upstream boundary
 
-The reusable upstream authentication boundary qualified in
-MoonLadderStudios/MoonMind#4118 is declared in
+The reusable qualified upstream authentication boundary is declared in
 [OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md): the
 pinned upstream entrypoints MoonMind composes, the validated-identity
 hook ordering before session minting, the MoonMind session-purpose
 binding and durable revocation interface, the explicitly rejected
 optional surfaces, and configuration isolation. That contract is the
-authoritative adapter reference for K3/K4; this document remains the
+authoritative adapter reference; this document remains the
 authority for modes, identity, session, error, and background-work
 semantics.
 
@@ -307,56 +303,35 @@ semantics.
 This section records the predecessor account design's qualification limits.
 That design was **Draft**: the session, revocation, CSRF/origin, enrollment,
 OIDC/proxy, and cutover semantics in §§5–8 and §§12.4–12.5 are backed
-by hermetic implementation on this checkout (#4121 session authority,
-#4122 account lifecycle, #4124 advanced identity, #4125 API cutover —
-see the ledger), not by shipped and browser-verified product journeys.
+by hermetic implementation (session authority, account lifecycle,
+advanced identity, and API cutover), not by shipped and browser-verified product journeys.
 Do not read them as proof that the journeys in §12.1 pass. §7
 (enrollment and administration) is hermetic contract + implementation
 (`account_lifecycle_4122` unit coverage) plus production User-table wiring
 (`account_lifecycle_store_4122` with `MoonmindAccountNonce`, unit coverage
 on SQLite and integration coverage on PostgreSQL), not yet browser-verified
-operator procedure: end-to-end journeys await #4128
-product qualification. Until that product evidence lands, the end-to-end
-operator journeys remain contract text, not shipped proof.
-
-Point-in-time execution status — the landed-ticket list, pending backlog
-IDs, checkout-specific qualification results, and temporary plan lifecycle —
-lives in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)
-so this canonical section cannot go stale as issues land. This section keeps
+operator procedure. Without product qualification, the end-to-end
+operator journeys remain contract text, not shipped proof. This section keeps
 only the durable support, cutover, and compatibility contracts.
 
 ### 12.1 Supported and tested versus blocked and unqualified
 
 | Combination | Status | Evidence owner |
 | --- | --- | --- |
-| `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests plus the residual manifest §5 open gates) | #4120 tests, #4129 manifest |
-| Session authority, revocation/CSRF bounds, account lifecycle (first-owner setup, expiring one-use invites, last-admin protection, operator recovery), OIDC/proxy identity, and API user-resolution cutover (cookie/bearer precedence, conflict rejection, §8 error mapping, legacy JWT refusal) | Supported and tested hermetically (unit + Postgres integration, route enumeration); account lifecycle additionally wired to the production User table (unit on SQLite + integration on PostgreSQL) | #4121, #4122, #4124, #4125 tests |
-| `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: hermetic implementation only, pending #4128 product qualification | #4128 (product evidence) |
-| Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment-cutover issue, #4131 rehearsal gate prerequisites |
+| `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests) | Selector-owner unit tests |
+| Session authority, revocation/CSRF bounds, account lifecycle (first-owner setup, expiring one-use invites, last-admin protection, operator recovery), OIDC/proxy identity, and API user-resolution cutover (cookie/bearer precedence, conflict rejection, §8 error mapping, legacy JWT refusal) | Supported and tested hermetically (unit + Postgres integration, route enumeration); account lifecycle additionally wired to the production User table (unit on SQLite + integration on PostgreSQL) | Session-authority, account-lifecycle, advanced-identity, and API cutover tests |
+| `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: hermetic implementation only, pending product qualification | Product qualification evidence (not yet collected) |
+| Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment owner; rehearsal gate prerequisites |
 | `keycloak`, `default`, `google`, `local`, or unknown selectors; dual old/new credential issuance; whole shared PostgreSQL/Temporal restore as auth rollback; silent `disabled` fallback | Rejected, never a supported path | This contract §§2–4 plus §12.2 |
 
-#4128 consumes the documented journey: qualification runs the real
+Product qualification runs the real
 fresh-install, migrated-data, remote OIDC/proxy, and restricted-local
 paths against the coordinated implementation and records the result.
 Documentation must not invent a successful result ahead of that evidence.
 
 ### 12.2 Cutover, backup, and rollback tooling
 
-The deployment owner's actual tooling is the hermetic rehearsal gate
-[`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py)
-(#4131, plan coverage K6). It verifies preflight, rehearsal,
-rollback-check, and retirement-check fixtures from repo files only: exact
-build pins and topology, sanitized inventory survey, UUID and ownership
-retention across the real-shaped cutover sequence, failure containment at
-each step, backup-envelope restore verification, mutation freeze, drain
-that preserves admitted Temporal work, dual-issuance refusal, and textual
-retirement-plan safety. It never contacts a live IdP, mints or invalidates
-real sessions, or deletes services, volumes, roles, or databases; no new
-commands are invented here — run its `--help` for the exact invocation.
-
-Operator-gated steps stay `blocked` with the missing evidence named until
-the deployment owner supplies them. The durable rules the gate enforces
-are:
+An authentication cutover, backup, and rollback follow these rules:
 
 - Encrypted, restore-tested backups of identity, configuration, and key
   material with recorded matching code and image versions. Hermetic
@@ -380,7 +355,7 @@ are:
   authentication is never a rollback. If identity data changed after
   cutover, reconcile before restoring or repair forward.
 
-### 12.3 Upstream pin compatibility and plan lifecycle
+### 12.3 Upstream pin compatibility
 
 The reusable upstream boundary follows the pin recorded in
 [OmnigentAuthAdapterContract.md](./OmnigentAuthAdapterContract.md) §1
@@ -389,17 +364,7 @@ The reusable upstream boundary follows the pin recorded in
 before any behavior is relied upon; qualification results name the exact
 pin they ran against.
 
-[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) is a superseded
-scoped legacy retirement reference; its account-replacement execution is not
-required (see the point-in-time
-ledger in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)).
-Retain the accepted contracts in this document and
-its adapter companion, resolve backlinks, and archive or remove the
-temporary plan once its remaining backlinks and real recovery consumers have
-another home. Do not erase necessary operator upgrade guidance
-prematurely.
-
-### 12.4 Advanced-mode logout limitations and MFA qualification (#4124)
+### 12.4 Advanced-mode logout limitations and MFA qualification
 
 - OIDC logout always invalidates the local MoonMind session first, even
   when the optional IdP end-session call fails. IdP-wide (single) logout
@@ -418,7 +383,7 @@ prematurely.
   MoonMind superuser authority. Live-provider and MFA qualification is
   recorded separately from hermetic CI per §12.1.
 
-### 12.5 Advanced-mode operator configuration (#4124)
+### 12.5 Advanced-mode operator configuration
 
 Runnable Compose inputs (see `.env-template` for the full list):
 
@@ -446,7 +411,7 @@ MOONMIND_PROXY_IDENTITY_NAMESPACE="corp-sso"
 Selecting `oidc` or `header` without these inputs fails startup with an
 actionable error; omitted values never silently select a mode.
 
-## 13. Operator-admission boundary (single-user, #4347)
+## 13. Operator-admission boundary (single-user)
 
 Owner: `moonmind/security/operator_admission.py` (boundary),
 `api_service/operator_admission.py` (FastAPI adapter),
@@ -502,12 +467,10 @@ class. Intentionally public probes are narrow: `/healthz`, `/health`,
   authority). Losing browser admission never cancels already-admitted
   durable work, which continues under its own recorded intent and scoped
   machine authority.
-- Limitations: full route-by-route consumer migration off the
-  account session authority and deletion of the obsolete login modules
-  belong to the final-removal child; the predecessor account stack
-  remains mounted alongside this boundary until all consumers move.
+- Limitations: the predecessor account stack remains mounted alongside
+  this boundary while consumers still use the account session authority.
   Activating the new boundary on retained data additionally requires the
-  #4346 conversion and the coordinated release. The test-only bypass
+  single-user data conversion and a coordinated release. The test-only bypass
   topology (`docker-compose.operator-admission-test.yaml`, rendered and
   pinned by `tests/unit/security/test_operator_isolation_4347.py`) runs
   live in CI; this checkout proves the rendered isolation plus the

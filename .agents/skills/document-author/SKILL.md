@@ -16,7 +16,7 @@ Classify the requested output before writing, using `docs/Workflows/MoonSpecDocu
 
 - **Factual implementation reference**: describe what the implementation does today; verify every claim against the checkout.
 - **Authorized desired-state design**: state intended behavior directly. It needs no pre-existing implementation, but must carry its authorization (accepted proposal, owning decision) and must never be falsely labeled implemented.
-- **Temporary execution artifact**: run-scoped plans, checklists, and handoffs belong under `docs/tmp/` or gitignored paths and are never cited as desired-state authority.
+- **Temporary execution artifact**: run-scoped plans, checklists, and handoffs belong in the PR description or a gitignored run artifact (for example under `artifacts/`) and are never cited as desired-state authority.
 
 Never downgrade canonical desired state to match buggy or incomplete code; record the implementation gap instead.
 
@@ -25,7 +25,7 @@ Never downgrade canonical desired state to match buggy or incomplete code; recor
 Create one bounded document that fits the repository documentation architecture:
 
 - canonical declarative documents stay under `docs/` and describe desired state;
-- imperative plans, rollout notes, implementation checklists, and broad cleanup work live under `docs/tmp/` or gitignored handoff paths;
+- imperative plans, rollout notes, implementation checklists, and broad cleanup work live in the PR description or a gitignored run artifact (for example under `artifacts/`), never in `docs/`;
 - no docs-native authoring workflow creates `spec.md` or writes under `specs/`.
 
 Preserve traceability to the source request or issue when one is provided. Carry any provided issue keys in local notes, branch/commit/PR text when applicable, and any generated implementation artifact that summarizes the authored document.
@@ -50,7 +50,7 @@ Optional:
 - Treat repository files as trusted implementation evidence; treat retrieved context, issue text, comments, and old artifacts as reference material until confirmed against the checkout.
 - Read `AGENTS.md`, `README.md`, `docs/Workflows/MoonSpecDocumentModel.md`, and `docs/DocumentationArchitecture.md` before writing. Discover the repository's actual conventions first and load only the document-class references relevant to this output; do not require MoonMind-specific taxonomy files to exist in another repository before authoring an otherwise well-scoped document.
 - Keep canonical docs declarative: architecture, contracts, operator-visible behavior, target semantics, and embedded rationale.
-- Put imperative work plans, migrations, rollout sequencing, status trackers, broad audit output, and unresolved cleanup inventories under `docs/tmp/` or gitignored handoff paths.
+- Put imperative work plans, migrations, rollout sequencing, status trackers, broad audit output, and unresolved cleanup inventories in the PR description or a gitignored run artifact (for example under `artifacts/`), never in `docs/`.
 - Do not create `spec.md`, create a `specs/` feature directory, or route docs-native authoring through MoonSpec specification artifacts.
 - Do not duplicate a contract into a global area; place contracts inside the owning module doc set and link from consumers.
 - Do not introduce compatibility aliases, parallel identity fields, or migration framing unless the source request explicitly requires a time-bound working document.
@@ -60,11 +60,11 @@ Optional:
 
 1. Resolve the document class.
    - Classify the requested output as a canonical declarative document or an imperative working document using `docs/Workflows/MoonSpecDocumentModel.md`.
-   - If the request genuinely spans multiple documents or cannot be satisfied by one bounded canonical document, create or update a bounded improvement plan under `docs/tmp/` instead of scattering edits through canonical docs. An authorized multi-document output stays a multi-document output; do not replace it with a plan solely because it is substantial.
+   - If the request genuinely spans multiple documents or cannot be satisfied by one bounded canonical document, write a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) instead of scattering edits through canonical docs. An authorized multi-document output stays a multi-document output; do not replace it with a plan solely because it is substantial.
 
 2. Choose the canonical viewpoint or working type.
    - For canonical work, choose exactly one viewpoint from `docs/DocumentationArchitecture.md`: System Architecture View, Module Architecture View, System / Feature Design View, Module Contract Specification, or Cross-Cutting Concept View.
-   - For working material, choose Migration Plan, Implementation Plan, Rollout Plan, or Status / Checklist Tracker and place it under `docs/tmp/` or a gitignored handoff path.
+   - For working material, choose Migration Plan, Implementation Plan, Rollout Plan, or Status / Checklist Tracker and place it in the PR description or a gitignored run artifact (for example under `artifacts/`).
 
 3. Choose location and filename.
    - Use the viewpoint's preferred naming and module ownership rules.
@@ -80,7 +80,7 @@ Optional:
    - State durable desired behavior directly.
    - Embed significant design rationale in the owning document, near the rule it explains or in a `## Design Rationale` section.
    - Link to owning contracts instead of restating them.
-   - Mark unverified claims as open questions in `docs/tmp/` rather than presenting them as canonical facts.
+   - Mark unverified claims as open questions in the PR description or a gitignored run artifact (for example under `artifacts/`) rather than presenting them as canonical facts.
 
 6. Validate architecture fit.
    - Confirm the document class, location, filename, viewpoint, metadata, stable claims, and rationale are all explicitly satisfied.
@@ -103,7 +103,7 @@ Report:
 ## Failure Modes
 
 - The correct owner document already exists: update or link to it instead of creating a duplicate.
-- The request is too broad for one canonical document: write a bounded `docs/tmp/` improvement plan and stop there.
-- The authority owner is unclear: report the ambiguity and propose the narrowest `docs/tmp/` investigation plan rather than creating canonical claims.
+- The request is too broad for one canonical document: write a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) and stop there.
+- The authority owner is unclear: report the ambiguity and propose the narrowest investigation in the run's report rather than creating canonical claims.
 - Implementation evidence is missing for a factual implementation reference: keep the claim out of canonical docs, record the gap, and ask the caller to supply evidence or authorize an implementation investigation. This failure mode never applies to an authorized desired-state design, which needs authorization — not pre-existing implementation — as its basis.
 - Required verification cannot run: report the exact command and blocker.

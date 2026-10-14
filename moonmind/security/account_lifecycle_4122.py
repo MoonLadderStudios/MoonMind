@@ -1,8 +1,7 @@
 """Account lifecycle and operator recovery (MoonLadderStudios/MoonMind#4122).
 
 Parent: #4116. Depends on #4118/#4119/#4120/#4121, composes #4124 identity
-primitives. Plan coverage: enrollment and administration, K3/K4 in
-``docs/tmp/KeycloakRemovalPlan.md``; declarative target in
+primitives. Covers enrollment and administration; declarative target in
 ``docs/Security/AuthenticationContracts.md`` §7.
 
 This module is the single hermetic owner for the ``accounts``-mode

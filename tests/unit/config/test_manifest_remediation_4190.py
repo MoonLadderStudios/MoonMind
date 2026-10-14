@@ -363,7 +363,6 @@ def test_retained_manifest_strings_are_guards_history_or_excluded() -> None:
         "api_service/services/recurring_workflows_service.py",
         "api_service/db/models.py",
         "api_service/migrations/versions/",
-        "docs/tmp/QdrantCutoverRunbook-4115.md",
     )
     # Explicitly excluded manifests and ordinary step-execution manifests are
     # not native Manifest product surfaces.

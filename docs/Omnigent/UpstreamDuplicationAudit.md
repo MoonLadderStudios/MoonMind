@@ -7,10 +7,6 @@
 **Authority:** Caller-backed ownership audit of suspected MoonMind/Omnigent
 duplication: which side owns each mutation or decision, and what must be
 proven before anything is removed.
-**Issue:** [MoonLadderStudios/MoonMind#3954](https://github.com/MoonLadderStudios/MoonMind/issues/3954).
-
-Parent: #3928. Coordinates with #3925 (runtime convergence), #3935 (session
-ownership), #3946 (projection writes), and #3956 (native UI).
 
 ## Related documents
 
@@ -74,8 +70,5 @@ blocked until its persisted-consumer and removal-criteria blockers clear,
 and each row names its own removal criteria rather than deferring to a
 generic compatibility framework. Reduction is measured after preserving
 behavior via the code-owned `audit_reduction_summary()`, which derives its
-counts from row dispositions. The point-in-time outcome of this audit pass
-(examined/preserved/removed counts and residual dependencies at the review
-baseline) lives in
-[`../tmp/OmnigentUpstreamDuplication3954ReductionReport.md`](../tmp/OmnigentUpstreamDuplication3954ReductionReport.md),
-not here, so this document cannot go stale when the pin or consumers change.
+counts from row dispositions. Point-in-time audit outcomes are not recorded
+here, so this document cannot go stale when the pin or consumers change.

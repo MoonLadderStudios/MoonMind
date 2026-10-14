@@ -1,146 +1,79 @@
 # Artifact Presentation Contract
 
-Status: Desired state
 Owners: MoonMind Platform + UI
-Last updated: 2026-05-06
 
 ## 1. Purpose
 
-This document defines the API and UI consumption contract for displaying and interacting with artifact-backed outputs in MoonMind across execution, workflow, session, report, and observability surfaces.
+This document describes how API and UI clients display and interact with artifact-backed outputs across execution, workflow, session, report, and observability surfaces: how metadata maps to the UI, the conventions for `link_type`, default reads, downloads, previews, and rendering hints, and how presentation works for runtime results, reports, and **workflow-scoped session containers**.
 
-It focuses on:
-
-- how UI clients present artifacts in execution, workflow detail, report, and observability flows
-- how API clients interpret artifact metadata fields
-- stable conventions for `link_type`, default reads, downloads, previews, and rendering hints
-- how artifact presentation connects to canonical runtime result and report bundle contracts
-- how artifact presentation works for **workflow-scoped session containers** and managed-runtime continuity
-
-This document is intentionally downstream of the artifact storage, execution identity, managed-runtime, report, and observability contracts. It does not redefine storage internals, artifact lifecycle implementation, managed-runtime supervision internals, report bundle semantics, or execution query semantics.
+It sits downstream of the artifact storage, execution identity, managed-runtime, report, and observability designs and does not redefine them.
 
 ### 1.1 Related docs and ownership boundaries
 
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
-  - Owns storage backend, artifact identity, lifecycle, linkage, authorization, and activity-boundary design.
-- `docs/Temporal/VisibilityAndUiQueryModel.md`
-  - Owns execution identity, list/detail query semantics, and workflow-surface mapping rules.
-- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-  - Owns canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`) and execution-model boundaries.
-- `docs/ManagedAgents/CodexCliManagedSessions.md`
-  - Owns the desired-state contract for Codex workflow-scoped session identity, control actions, and clear/reset semantics.
-- `docs/Observability/LiveLogs.md`
-  - Owns live-log and observability APIs, artifact-backed tails, live streaming, and diagnostics presentation for managed runs.
-- `docs/Artifacts/ReportArtifacts.md`
-  - Owns report-specific artifact classes, report bundle conventions, report metadata, evidence separation, and report-first UI behavior.
-- `docs/UI/WorkflowConsoleArchitecture.md`
-  - Owns dashboard route wiring, source resolution, and mixed-source UI integration.
+- `docs/Temporal/WorkflowArtifactSystemDesign.md` — storage backend, artifact identity, lifecycle, linkage, authorization, and activity-boundary design.
+- `docs/Temporal/VisibilityAndUiQueryModel.md` — execution identity, list/detail query semantics, and workflow-surface mapping.
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` — canonical runtime contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`).
+- `docs/ManagedAgents/CodexCliManagedSessions.md` — Codex workflow-scoped session identity, control actions, and clear/reset semantics.
+- `docs/Observability/LiveLogs.md` — live-log and observability APIs, artifact-backed tails, and diagnostics presentation for managed runs.
+- `docs/Artifacts/ReportArtifacts.md` — report artifact classes, report bundles, report metadata, evidence separation, and report-first UI.
+- `docs/UI/WorkflowConsoleArchitecture.md` — dashboard route wiring, source resolution, and mixed-source UI integration.
 
-This document owns the **generic consumer-facing artifact presentation contract** layered on top of those decisions.
+This document covers the **generic consumer-facing presentation layer** on top of those designs.
 
 ---
 
-## 2. Scope / Non-goals
+## 2. Scope
 
-### 2.1 In scope
+In scope: listing artifacts for one execution, metadata and its UI mapping, preview vs raw download, viewer selection, error codes, runtime result integration, and presentation of provider snapshots, diagnostics, reports, and session continuity artifacts.
 
-- artifact listing for one execution: `namespace`, `workflow_id`, `run_id`
-- artifact metadata and its UI mapping
-- preview vs raw download behavior
-- standard viewer rules by `content_type` and metadata hints
-- stable error codes and client behavior for common failure states
-- runtime result integration and artifact-backed large outputs
-- presentation rules for provider snapshots, managed-runtime diagnostics, reports, and workflow-scoped session continuity artifacts
-- session-aware aggregation views for workflow-scoped session containers
-- generic presentation rules that report-specific artifact contracts build on
-
-### 2.2 Out of scope
-
-- artifact storage backend internals
-- full authorization model design
-- artifact lifecycle cleanup workflows
-- report-specific bundle assembly, report content schemas, or evidence taxonomy
-- Temporal Web UI integration
-- execution list/query/count semantics
-- container-launching details, Docker orchestration internals, or managed-runtime PID/container reconciliation
-- browser-native terminal embedding for managed-run logs
-- persistence of full runtime home directories or auth volumes as user-facing artifacts
+Out of scope: storage internals, the full authorization model, lifecycle cleanup, report bundle assembly and schemas, execution query semantics, container orchestration, terminal embedding for logs, and exposing runtime home directories or auth volumes as artifacts.
 
 ---
 
 ## 3. Consumer invariants
 
-1. **Artifacts remain execution-centric.**
-   - Artifacts attach durably to a Temporal execution identified by `(namespace, workflow_id, run_id)`.
-   - Workflow-oriented, session-oriented, and report-oriented views are projections over execution-linked artifacts; they do not create a second durable artifact identity.
+1. **Artifacts are execution-centric.** Artifacts attach durably to a Temporal execution identified by `(namespace, workflow_id, run_id)`. Workflow-, session-, and report-oriented views are projections over execution-linked artifacts, not a second durable identity.
 
-2. **Workflow-scoped session containers are continuity caches, not durable truth.**
-   - A persistent managed-runtime container may survive across multiple plan steps within one workflow execution.
-   - Any state needed for recovery, audit, presentation, or rerun must be materialized as artifacts or bounded workflow metadata.
-   - Clients must never assume that container memory, container-local session databases, or runtime home directories are the canonical source of truth.
+2. **Workflow-scoped session containers are continuity caches, not durable truth.** A managed-runtime container may survive across several plan steps, but anything needed for recovery, audit, presentation, or rerun is materialized as artifacts or bounded workflow metadata. Container memory, container-local session databases, and runtime home directories are not a canonical source because they do not survive the container.
 
-3. **Step boundaries remain first-class even when one session spans many steps.**
-   - Session reuse must not collapse multiple plan steps into one undifferentiated artifact blob.
-   - Each step must still produce step-scoped input/output/diagnostic evidence linked to the producing execution.
+3. **Step boundaries stay first-class when one session spans many steps.** Session reuse does not collapse multiple plan steps into one artifact blob; each step still produces step-scoped input, output, and diagnostic evidence linked to the producing execution.
 
-4. **Session resets create explicit epoch boundaries.**
-   - `/clear`, hard reset, recovery rebuild, or equivalent intervention must create a new logical `session_epoch`.
-   - UI clients must present epoch boundaries explicitly and must not imply one uninterrupted conversation across resets.
+4. **Session resets create explicit epoch boundaries.** `/clear`, hard reset, recovery rebuild, or an equivalent intervention starts a new logical `session_epoch`, and the UI shows that boundary rather than implying one uninterrupted conversation.
 
-5. **`default_read_ref` is authoritative for the default read target.**
-   - Clients must not override the server's choice based only on `redaction_level`.
-   - `ArtifactRef` is an identifier, not an access grant or URL.
+5. **`default_read_ref` is authoritative for the default read target.** Clients do not override the server's choice based on `redaction_level`. An `ArtifactRef` is an identifier, not an access grant or URL.
 
-6. **Clients must not derive “latest” semantics locally.**
-   - Use the server's query parameters and response shape.
-   - Do not sort by `created_at` in the browser and call that canonical “latest output.”
-   - “Latest output” for runtime, provider, session, and report artifacts must be server-driven, not client-grouped.
+6. **"Latest" is server-defined.** Clients use the server's query parameters and response shape instead of sorting by `created_at` in the browser, so that "latest output" for runtime, provider, session, and report artifacts means the same thing everywhere.
 
-7. **Artifact metadata must be safe for control-plane display.**
-   - `metadata` and any session-specific or report-specific fields are for bounded, display-safe hints and domain semantics.
-   - They must not contain secrets, auth headers, cookies, session tokens, presigned URLs, private keys, or absolute local filesystem paths.
+7. **Metadata is display-safe.** `metadata` and session- or report-specific fields carry bounded hints and domain semantics only; they do not contain secrets, auth headers, cookies, session tokens, presigned URLs, private keys, or absolute local filesystem paths.
 
-8. **Clients must degrade gracefully.**
-   - Unknown `link_type`, `artifact_type`, `render_hint`, `content_type`, `checkpoint_kind`, `report_type`, or group keys must fall back to generic artifact presentation, not a hard failure.
+8. **Clients degrade gracefully.** Unknown `link_type`, `artifact_type`, `render_hint`, `content_type`, `checkpoint_kind`, `report_type`, or group keys fall back to generic presentation rather than failing.
 
-9. **Detail pages must use the latest execution identity before listing artifacts.**
-   - The `run_id` used for artifact listing must come from execution detail, not from stale cached state.
-   - Reruns or Continue-As-New change the `run_id`, so artifact listing must refresh accordingly.
+9. **Detail pages use the latest execution identity.** The `run_id` used for artifact listing comes from execution detail, not cached state, because reruns and Continue-As-New change it.
 
-10. **Observability remains artifact-first even when live streaming exists.**
-    - Live streaming is optional and secondary.
-    - Artifact-backed stdout/stderr/diagnostics, event journals, and checkpoint artifacts remain authoritative for what happened.
+10. **Observability is artifact-first.** Live streaming is optional and secondary; artifact-backed stdout/stderr/diagnostics, event journals, and checkpoints are the record of what happened.
 
-11. **Reports are artifact families, not a separate storage system.**
-    - Report artifacts use the same metadata, preview, raw-download, retention, and renderer rules as other artifacts.
-    - Report-specific projections and report-first UI surfaces are convenience views over ordinary linked artifacts.
+11. **Reports are artifact families, not a separate storage system.** Report artifacts follow the same metadata, preview, raw-download, retention, and renderer rules as other artifacts; report-first surfaces are convenience views.
 
 ---
 
 ## 4. Glossary
 
-- **Artifact**: Immutable blob stored outside Temporal history, plus metadata and linkage.
-- **ArtifactRef**: Small pointer that workflows/activities can pass around safely.
-- **ExecutionRef**: `(namespace, workflow_id, run_id)` identifying one Temporal execution.
-- **Link**: Join row connecting an artifact to an execution with semantic `link_type`.
-- **Preview artifact**: Redacted or reduced representation generated for more secure presentation.
-- **Raw artifact**: The original bytes, which may be restricted.
+- **Preview artifact / raw artifact**: A redacted or reduced representation generated for safer presentation, and the original (possibly restricted) bytes.
 - **Workflow-scoped session container**: A managed-runtime container or long-lived process reused across multiple steps within one workflow.
-- **Session ID**: Durable MoonMind identifier for one workflow-scoped runtime session.
-- **Session epoch**: One logical continuity interval within a session. A reset or `/clear` starts a new epoch.
-- **Step checkpoint artifact**: Compact MoonMind-owned artifact written at a step boundary so the workflow execution can be recovered or reviewed without depending on in-container state.
-- **Session summary artifact**: Latest durable summary of the active session state used for presentation, handoff, and recovery.
-- **Session control artifact**: Artifact describing an explicit session control action such as `/clear`, approve/reject, operator message, pause, resume, or cancel.
-- **Session projection**: A server-produced read model that groups execution-linked artifacts by `session_id` and optional `session_epoch` for UI consumption.
-- **Report artifact**: An artifact whose primary purpose is to communicate the outcome of a workflow, step, evaluation, or investigation.
-- **Report bundle**: A compact result shape that references the human-facing report, summary, structured data, and supporting evidence artifacts.
+- **Session ID / session epoch**: Durable identifier for one workflow-scoped session, and one continuity interval within it. A reset or `/clear` starts a new epoch.
+- **Step checkpoint / session summary / session control artifact**: A compact step-boundary record for recovery and review, the latest durable session summary, and a record of an explicit control action (`/clear`, approve/reject, operator message, pause, resume, cancel).
+- **Session projection**: Server-produced read model grouping execution-linked artifacts by `session_id` and optional `session_epoch`.
+- **Report bundle**: Compact result shape referencing the report, summary, structured data, and evidence artifacts.
 
 ---
 
-## 5. Canonical data models: consumer-facing
+## 5. Consumer-facing data models
+
+Pydantic models live in `moonmind/schemas/temporal_artifact_models.py`; the router is `api_service/api/routers/temporal_artifacts.py`.
 
 ### 5.1 ArtifactRef v1
 
-Used in workflow/activity IO and returned by API.
+Used in workflow/activity IO and returned by the API.
 
 ```json
 {
@@ -153,63 +86,27 @@ Used in workflow/activity IO and returned by API.
 }
 ```
 
-Rules:
-
-- `artifact_ref_v` is the version marker for the ref shape.
-- `artifact_id` is the durable handle.
-- `ArtifactRef` does not include a URL and must not be treated as a permanent download token.
-- Compact projections may use a reduced ref shape with only `artifact_ref_v` and `artifact_id` when size and security matter more than inline metadata.
+`artifact_id` is the durable handle. The ref carries no URL and is not a download token. Compact projections may use a reduced ref with only `artifact_ref_v` and `artifact_id` when size and security matter more than inline metadata.
 
 ### 5.2 ArtifactMetadata
 
-Returned by metadata and list endpoints.
+Returned by metadata and list endpoints. Presentation-relevant fields:
 
-Core presentation fields:
-
-- `artifact_id`
-- `created_at`
-- `created_by_principal`
-- `content_type`
-- `size_bytes`
-- `sha256`
-- `status`: `pending_upload | complete | failed | deleted`
-- `retention_class`: `ephemeral | standard | long | pinned`
-- `expires_at`
-- `redaction_level`: `none | preview_only | restricted`
+- identity and content: `artifact_id`, `created_at`, `created_by_principal`, `content_type`, `size_bytes`, `sha256`
+- lifecycle: `status` (`pending_upload | complete | failed | deleted`), `retention_class` (`ephemeral | standard | long | pinned`), `expires_at`, `pinned`
+- access: `redaction_level` (`none | preview_only | restricted`), `raw_access_allowed`, `artifact_ref`, `preview_artifact_ref`, `default_read_ref`, and optional `download_url`/`download_expires_at` when explicitly requested and allowed
 - `metadata`: bounded JSON for UI hints and domain semantics
-- `links[]`: execution links, each with `namespace`, `workflow_id`, `run_id`, `link_type`, and optional `label`
-- `pinned`
-- `artifact_ref`: ref for the raw artifact
-- `preview_artifact_ref`: ref for the preview artifact, if available
-- `raw_access_allowed`: whether the caller may access raw bytes
-- `default_read_ref`: the artifact ref to use for default rendering when renderable
-- `download_url` / `download_expires_at`: optional presigned raw download fields when explicitly requested and allowed
+- `links[]`: execution links with `namespace`, `workflow_id`, `run_id`, `link_type`, and optional `label`
+- debug-oriented: `storage_backend`, `storage_key`, `encryption`
 
-Optional session-continuity fields:
+Optional `session_context` carries `session_id`, `session_epoch`, `step_id`, `step_index`, `turn_index`, `checkpoint_kind` (`step_checkpoint | session_summary | recovery_bundle | reset_boundary | none`), `control_event_kind` (`operator_message | clear | approve | reject | pause | resume | cancel | none`), and `source_execution_ref`.
 
-- `session_context`: nullable object with:
-  - `session_id`
-  - `session_epoch`
-  - `step_id`
-  - `step_index`
-  - `turn_index`
-  - `checkpoint_kind`: `step_checkpoint | session_summary | recovery_bundle | reset_boundary | none`
-  - `control_event_kind`: `operator_message | clear | approve | reject | pause | resume | cancel | none`
-  - `source_execution_ref`: `{ namespace, workflow_id, run_id }`
+Client behavior:
 
-Returned but debug-oriented fields:
-
-- `storage_backend`
-- `storage_key`
-- `encryption`
-
-Client rules:
-
-- Treat `default_read_ref` as the default display target when a display target is available.
-- If `raw_access_allowed=false` and `preview_artifact_ref=null`, clients must show a pending or unavailable preview state rather than assume the raw artifact is readable.
-- If `default_read_ref.artifact_id != artifact_id`, the client should resolve that referenced artifact through the normal artifact metadata/download flow.
-- If `session_context` is present, the client may use it for grouping and badges, but must still treat `links[]` as the durable source execution evidence.
-- If report metadata is present, the client may display it, but generic artifact clients must not depend on report-specific fields to render a safe fallback.
+- `default_read_ref` is the default display target. When it names a different artifact than `artifact_id`, the client resolves it through the normal metadata/download flow.
+- When `raw_access_allowed=false` and `preview_artifact_ref=null`, the client shows a pending or unavailable preview state rather than assuming raw bytes are readable.
+- `session_context` is used for grouping and badges; `links[]` remains the durable source-execution evidence.
+- Report metadata may be displayed when present, but generic clients render a safe fallback without it.
 
 ### 5.3 SessionProjection
 
@@ -221,21 +118,9 @@ Returned by session-aware list endpoints.
   "session_id": "sess_...",
   "session_epoch": 3,
   "grouped_artifacts": [
-    {
-      "group_key": "runtime",
-      "title": "Runtime",
-      "artifacts": ["ArtifactMetadata", "..."]
-    },
-    {
-      "group_key": "continuity",
-      "title": "Continuity",
-      "artifacts": ["ArtifactMetadata", "..."]
-    },
-    {
-      "group_key": "control",
-      "title": "Control",
-      "artifacts": ["ArtifactMetadata", "..."]
-    }
+    { "group_key": "runtime", "title": "Runtime", "artifacts": ["ArtifactMetadata", "..."] },
+    { "group_key": "continuity", "title": "Continuity", "artifacts": ["ArtifactMetadata", "..."] },
+    { "group_key": "control", "title": "Control", "artifacts": ["ArtifactMetadata", "..."] }
   ],
   "latest_summary_ref": { "artifact_ref_v": 1, "artifact_id": "art_..." },
   "latest_checkpoint_ref": { "artifact_ref_v": 1, "artifact_id": "art_..." },
@@ -244,20 +129,11 @@ Returned by session-aware list endpoints.
 }
 ```
 
-Rules:
-
-- `SessionProjection` is a read convenience, not a second artifact identity model.
-- Every artifact returned in a session projection must still include normal execution `links[]`.
-- The session projection may span multiple executions within the same workflow execution when a session container is reused across steps.
-- `grouped_artifacts` is server-defined. Clients may render known groups such as `runtime`, `continuity`, and `control`, but must tolerate unknown group keys.
-- Missing refs may be omitted from both latest-ref fields and grouped-artifact lists.
-- The projection must not require a live session container, live session-controller query, or container-local history.
+The projection is a read convenience, not a second identity model: every artifact in it still carries normal execution `links[]`, and it may span multiple executions when a session container is reused across steps. Groups are server-defined; clients render known groups (`runtime`, `continuity`, `control`) and tolerate unknown keys. Missing refs are omitted. The projection does not require a live session container, a live session-controller query, or container-local history, so it remains readable after the session ends.
 
 ### 5.4 ReportProjection
 
-Report-specific projection shapes are owned by `docs/Artifacts/ReportArtifacts.md`.
-
-Generic clients should understand only the following baseline:
+Report projection shapes are owned by `docs/Artifacts/ReportArtifacts.md`. Generic clients understand only this baseline:
 
 ```json
 {
@@ -266,1189 +142,291 @@ Generic clients should understand only the following baseline:
   "latest_report_summary_ref": { "artifact_ref_v": 1, "artifact_id": "art_..." },
   "report_type": "security_pentest_report",
   "report_status": "final",
-  "finding_counts": {
-    "total": 8
-  },
-  "severity_counts": {
-    "critical": 1,
-    "high": 2
-  }
+  "finding_counts": { "total": 8 },
+  "severity_counts": { "critical": 1, "high": 2 }
 }
 ```
 
-Rules:
-
-- Report projections are convenience read models over ordinary artifacts.
-- Underlying report artifacts remain individually addressable through the standard artifact APIs.
-- Generic artifact UI should still work if a report projection is absent.
+Report projections are convenience read models; the underlying artifacts remain individually addressable, and generic artifact UI works without a report projection.
 
 ---
 
 ## 6. Runtime result integration
 
-### 6.1 Canonical runtime result discipline
+### 6.1 Compact runtime results
 
-True agent-runtime activities return compact canonical contracts. Large outputs stay in artifacts.
+Agent-runtime activities return compact canonical contracts (`AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`). `AgentRunResult` carries artifact refs for large outputs: `output_refs[]` for primary outputs and `diagnostics_ref` for operational diagnostics. Provider payload dumps, managed-runtime logs, large summaries and diffs, session summaries and checkpoints, and report bodies and evidence all live in artifacts; workflow history sees only small summaries, refs, and bounded metadata, which keeps history small and replay-safe.
 
-The canonical contracts are:
+### 6.2 Workflow-scoped session containers
 
-- `AgentRunHandle`
-- `AgentRunStatus`
-- `AgentRunResult`
+A session container may persist across plan steps and keep native runtime state for efficiency. MoonMind still materializes step inputs, outputs, logs, diagnostics, summaries, and checkpoints as artifacts, and detail UIs prefer that evidence over in-container state. For each managed step that uses such a container, the durable surface includes:
 
-`AgentRunResult` normally carries artifact refs for large outputs:
+- step-scoped inputs (instructions, plan fragments, skill snapshots, operator feedback)
+- step-scoped outputs (primary output, patch, summary, agent result)
+- runtime stdout, stderr, merged logs, event journals, and diagnostics
+- at least one continuity artifact (step checkpoint and/or session summary)
+- explicit control or reset artifacts when the operator intervenes or the epoch changes
 
-- `output_refs[]` — primary output artifacts
-- `diagnostics_ref` — operational diagnostics artifact
+No user-important state exists only inside the container, because the container is not guaranteed to survive.
 
-This means:
+### 6.3 Workflow and detail UIs
 
-- provider raw payload dumps belong in artifacts, not workflow history
-- managed runtime logs belong in artifacts
-- large summaries or diffs belong in artifacts
-- session summaries and step checkpoints belong in artifacts
-- report bodies, report evidence, and structured findings belong in artifacts
-- workflow history should only see small summaries, refs, and bounded metadata
-
-### 6.2 Workflow-scoped session container rule
-
-For workflow-scoped session containers, the artifact contract must behave as follows:
-
-- the container may persist across multiple plan steps
-- the container may keep native runtime state for efficiency and continuity
-- MoonMind must still materialize step inputs, step outputs, logs, diagnostics, summaries, and checkpoints as artifacts
-- workflow and detail UIs must prefer artifact evidence over in-container session assumptions
-- the existence of one long-lived session must not remove the requirement for per-step artifact evidence
-
-### 6.3 Step and session durability rule
-
-For each managed step that uses a workflow-scoped session container, the durable presentation surface should include:
-
-- step-scoped input artifacts such as instructions, plan fragments, skill snapshots, and operator feedback
-- step-scoped output artifacts such as primary output, patch, summary, and agent result
-- runtime stdout, stderr, merged logs, event journals, and diagnostics artifacts for the producing execution
-- at least one session continuity artifact: a step checkpoint, session summary, or both
-- explicit control or reset artifacts when the operator intervenes or the session epoch changes
-
-A workflow-scoped session container may be reused, but no user-important state should exist only inside that container.
-
-### 6.4 Rule for workflow/detail UIs
-
-Workflow and detail UIs should prefer execution-linked artifact evidence over provider-native inline payloads and over ephemeral container state.
-
-When an `AgentRunResult` references artifacts, the UI should:
-
-1. list artifacts by execution using the standard list endpoint
-2. render each artifact using the standard presentation rules
-3. use session projections only as a grouping and continuity aid
-4. not attempt to reconstruct or parse raw provider payloads inline
-5. not treat container-local session memory as canonical history
+When an `AgentRunResult` references artifacts, the UI lists artifacts by execution through the standard list endpoint, renders each with the standard presentation rules, and uses session projections only as a grouping and continuity aid. It does not parse raw provider payloads inline or treat container-local session memory as history.
 
 ---
 
-## 7. Endpoint contract summary
-
-All endpoints below are server-relative. Authentication behavior is controlled by the app auth mode.
-
-### 7.1 Create an artifact
-
-`POST /api/artifacts`
-
-Request: `CreateArtifactRequest`
-
-- `content_type` optional
-- `size_bytes` optional, recommended
-- `sha256` optional, recommended
-- `retention_class` optional
-- `link` optional initial execution link
-- `metadata` optional JSON
-- `redaction_level` optional, default `none`
-- `encryption` optional, default `none`
-
-Response:
-
-- `artifact_ref`
-- `upload`: mode plus URL or upload ID, expiry, max size, and required headers
-
-### 7.2 Upload bytes
-
-`PUT /api/artifacts/{artifact_id}/content`
-
-Rules:
-
-- Sends the raw request body as artifact bytes.
-- If a `Content-Type` header is present, it becomes the artifact `content_type`.
-- Clients should not assume the artifact is readable until metadata reports `status=complete`.
-
-### 7.3 Multipart part presign
-
-`POST /api/artifacts/{artifact_id}/presign-upload-part`
-
-Request:
-
-- `part_number`
-
-Response:
-
-- `part_number`
-- `url`
-- `expires_at`
-- `required_headers`
-
-### 7.4 Complete multipart upload
-
-`POST /api/artifacts/{artifact_id}/complete`
-
-Request:
-
-- `parts[]`: `part_number`, `etag`
-
-Response:
-
-- `ArtifactRef`
-
-### 7.5 Get metadata
-
-`GET /api/artifacts/{artifact_id}`
-
-Query:
-
-- `include_download` boolean, default `false`
-
-Response:
-
-- `ArtifactMetadata`
-
-Notes:
-
-- If `include_download=true` and raw access is allowed, the response includes `download_url` and `download_expires_at`.
-- Clients should not assume `download_url` is present unless they explicitly requested it.
-
-### 7.6 Presign download
-
-`POST /api/artifacts/{artifact_id}/presign-download`
-
-Response:
-
-- `url`
-- `expires_at`
-
-Use this for raw-download affordances when `raw_access_allowed=true`.
-
-### 7.7 Download via API proxy
-
-`GET /api/artifacts/{artifact_id}/download`
-
-Returns:
-
-- `Content-Type: artifact.content_type || application/octet-stream`
-- `Content-Disposition: attachment; filename="{artifact_id}"`
-
-Notes:
-
-- The proxy filename is transport-oriented and uses `artifact_id` unless a sanitized product-level override is later added.
-- Clients should prefer `metadata.name` or other UI labels for display text instead of deriving user-facing names from the download filename.
-
-### 7.8 Link artifact to an execution
-
-`POST /api/artifacts/{artifact_id}/links`
-
-Request:
-
-- `namespace`
-- `workflow_id`
-- `run_id`
-- `link_type`
-- optional `label`
-- optional provenance:
-  - `created_by_activity_type`
-  - `created_by_worker`
-
-Response:
-
-- updated `ArtifactMetadata`
-
-### 7.9 List artifacts for an execution
-
-`GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts`
-
-Query:
-
-- `link_type` optional
-- `latest_only` boolean, default `false`
-
-Response:
-
-```json
-{
-  "artifacts": ["ArtifactMetadata", "..."]
-}
-```
-
-Rules:
-
-- `latest_only=true` is guaranteed only when paired with `link_type`; in that case the response contains at most one artifact, the latest for that execution/link pair.
-- Without `link_type`, clients must not assume the server collapses results to one artifact per `link_type`.
-
-### 7.10 Get artifact projection for a workflow-scoped session
-
-`GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
-
-Response:
-
-- `SessionProjection`
-
-Current rules:
-
-- This endpoint is a server-side read model over persisted artifacts and the durable managed-session record.
-- It must not require a live session container, live session-controller query, or container-local history.
-- It must return only artifacts that still carry ordinary execution `links[]`.
-- Missing artifact refs may be omitted from both latest-ref fields and grouped-artifact lists.
-- The server defines grouping and latest-ref semantics for the session projection.
-
-Future extension rule:
-
-- If query filters such as `session_epoch`, `link_type`, or `latest_only` are added later, the server must define their scope. Clients must not re-derive canonical “latest” locally.
-
-### 7.11 List session resource aliases
-
-- `GET /api/sessions/{session_id}/resources`
-- `GET /api/sessions/{session_id}/resources/files`
-
-Response:
-
-- `SessionResourceList`
-
-Rules:
-
-- Session resources are read-only projections over authorized artifact refs from the durable managed-session projection.
-- The aliases must not create blob storage, upload flows, or a second file/resource browser source of truth.
-- The server must enforce the same artifact authorization boundary for listing, content, and download paths.
-- Secret-like metadata keys must be dropped from resource summaries before they are returned to clients.
-- Ended, degraded, or otherwise non-live sessions may still return resource references from durable artifact state.
-
-Initial content aliases:
-
-- `GET /api/sessions/{session_id}/resources/{artifact_id}/content`
-- `GET /api/sessions/{session_id}/resources/{artifact_id}/download`
-
-These aliases may only serve artifacts that belong to the requested session projection. A request for another artifact id must fail with `session_resource_not_found` even when the artifact exists elsewhere.
-
-### 7.12 Pin / unpin
-
-- `POST /api/artifacts/{artifact_id}/pin`
-- `DELETE /api/artifacts/{artifact_id}/pin`
-
-Pin request includes optional `reason`.
-
-### 7.13 Delete
-
-`DELETE /api/artifacts/{artifact_id}`
-
-Response:
-
-- updated `ArtifactMetadata`, typically `status=deleted`
+## 7. Endpoint summary
+
+All endpoints are server-relative; authentication follows the app auth mode. Request and response models are in `moonmind/schemas/temporal_artifact_models.py`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/artifacts` | Create an artifact (optional `content_type`, `size_bytes`, `sha256`, `retention_class`, initial `link`, `metadata`, `redaction_level`, `encryption`). Returns `artifact_ref` plus an `upload` descriptor (mode, URL or upload ID, expiry, max size, required headers). |
+| `PUT /api/artifacts/{artifact_id}/content` | Upload the raw request body; a `Content-Type` header becomes the artifact `content_type`. |
+| `POST /api/artifacts/{artifact_id}/presign-upload-part` | Presign one multipart part (`part_number` → `url`, `expires_at`, `required_headers`). |
+| `POST /api/artifacts/{artifact_id}/complete` | Complete a multipart upload from `parts[]` (`part_number`, `etag`); returns `ArtifactRef`. |
+| `GET /api/artifacts/{artifact_id}` | Metadata. `include_download=true` adds `download_url`/`download_expires_at` when raw access is allowed; otherwise those fields are absent. |
+| `POST /api/artifacts/{artifact_id}/presign-download` | Presigned raw download (`url`, `expires_at`) for raw-download affordances when `raw_access_allowed=true`. |
+| `GET /api/artifacts/{artifact_id}/download` | API-proxied download with `Content-Type` from the artifact (or `application/octet-stream`) and `Content-Disposition: attachment; filename="{artifact_id}"`. |
+| `POST /api/artifacts/{artifact_id}/links` | Link to an execution (`namespace`, `workflow_id`, `run_id`, `link_type`, optional `label`, optional provenance `created_by_activity_type`/`created_by_worker`); returns updated metadata. |
+| `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts` | List artifacts for one execution, optionally filtered by `link_type`, with `latest_only`. Returns `{ "artifacts": [...] }`. |
+| `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}` | `SessionProjection` for a workflow-scoped session. |
+| `GET /api/sessions/{session_id}/resources` (and `/resources/files`) | Read-only `SessionResourceList` for a session. |
+| `GET /api/sessions/{session_id}/resources/{artifact_id}/content` and `/download` | Content and download for an artifact in that session. |
+| `POST` / `DELETE /api/artifacts/{artifact_id}/pin` | Pin (optional `reason`) or unpin. |
+| `DELETE /api/artifacts/{artifact_id}` | Delete; returns metadata, typically `status=deleted`. |
+
+Behavior worth knowing:
+
+- An uploaded artifact is not readable until metadata reports `status=complete`.
+- The proxy download filename is transport-oriented (the `artifact_id`), so display labels come from `metadata.name` or other UI labels.
+- `latest_only=true` returns at most one artifact only when paired with `link_type`; without `link_type`, the server does not collapse results per link type.
+- The session projection endpoint reads persisted artifacts and the durable managed-session record, returns only artifacts that still carry execution `links[]`, and defines grouping and latest-ref semantics itself.
+- Session resources are read-only projections over authorized artifact refs from the durable managed-session projection. They do not create blob storage, upload flows, or a second resource browser, and the same artifact authorization boundary applies to listing, content, and download. Secret-like metadata keys are dropped from resource summaries. Ended or degraded sessions still return resources from durable artifact state. The content and download aliases serve only artifacts in that session's projection; any other artifact id returns `session_resource_not_found`, even if the artifact exists elsewhere, so the alias cannot be used to reach unrelated artifacts.
 
 ---
 
 ## 8. Error contract
 
-Errors are returned as `HTTPException.detail` objects with:
+Errors are `HTTPException.detail` objects with a stable `code` and a human-readable `message`.
 
-- `code`: stable machine code
-- `message`: human-readable string
-
-Common codes:
-
-- `authentication_required` 401
-- `artifact_not_found` 404
-- `artifact_forbidden` 403
-- `artifact_state_error` 409
-- `invalid_artifact_payload` 422
-- `artifact_too_large` 413
-- `session_projection_not_found` 404
-- `session_projection_unavailable` 409
-- `session_resource_not_found` 404
-
-Client rules:
-
-- Treat `authentication_required` as an auth/session problem, not a retry loop.
-- Treat `artifact_state_error` as recoverable. Refresh UI and show uploading/processing state.
-- Treat `artifact_forbidden` as “do not retry raw access.” Hide or disable raw-download affordances.
-- Treat `session_projection_not_found` as “session projection unavailable for this workflow run,” not as proof that the workflow execution has no artifacts.
-- Treat `session_projection_unavailable` as a projection/read-model issue. Fall back to execution-scoped artifact listing instead of leaving the UI blank.
+| Code | Status | Client behavior |
+| --- | --- | --- |
+| `authentication_required` | 401 | Auth/session problem; do not retry in a loop. |
+| `artifact_not_found` | 404 | Show unavailable. |
+| `artifact_forbidden` | 403 | Do not retry raw access; hide or disable raw-download affordances. |
+| `artifact_state_error` | 409 | Recoverable; refresh and show uploading/processing state. |
+| `invalid_artifact_payload` | 422 | Request problem. |
+| `artifact_too_large` | 413 | Request exceeds size limits. |
+| `session_projection_not_found` | 404 | No session projection for this run; this is not proof that the execution has no artifacts, so fall back to execution-scoped listing. |
+| `session_resource_not_found` | 404 | Artifact is not part of the requested session. |
 
 ---
 
-## 9. Presentation rules: UI contract
+## 9. UI presentation
 
-### 9.1 Primary UI surfaces
+### 9.1 Primary surfaces
 
-Execution detail or workflow detail should expose:
+Execution or workflow detail exposes:
 
-- an **Execution Artifacts** panel for the current execution
-- a **Session Continuity** panel when the workflow used a workflow-scoped session container
-- a **Report** panel or report card when the execution or workflow has a canonical report artifact
-- observability/log panels that can read live streams or artifact-backed histories
+- an **Execution Artifacts** panel for the current execution (all artifacts, filtered by `link_type`, or the latest for one execution/link pair), listed with `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts` using the latest `temporalRunId` from execution detail
+- a **Session Continuity** panel when the workflow used a workflow-scoped session container, backed by `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
+- a **Report** panel or card when a canonical report artifact exists
+- observability/log panels that read live streams or artifact-backed histories
 
-Common execution-artifact modes:
+`GET /api/sessions/{session_id}/resources` may back compact evidence cards or links, but it does not replace artifact detail, execution artifacts, diagnostics, or log surfaces.
 
-- all artifacts for the execution
-- filtered artifacts by `link_type`
-- latest artifact for one known execution/link pair
+The artifact detail drawer/page fetches `GET /api/artifacts/{artifact_id}`, renders metadata plus the default content target, offers raw download only when `raw_access_allowed=true`, shows session and report badges when that metadata is present, and shows the source execution for session- or report-projected artifacts.
 
-Default execution list call:
+### 9.2 Default read, download, and redaction
 
-- `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts`
+Default rendering resolves `default_read_ref.artifact_id`, fetches its metadata if needed, and renders it with the renderer-selection rules in section 10. Raw download calls `presign-download` and navigates to the URL only when `raw_access_allowed=true`; otherwise the UI shows a restricted message. `presign-download` is not used for inline preview by default, because that would bypass the preview/redaction choice.
 
-The `run_id` must be the latest `temporalRunId` from the execution detail response.
+- `raw_access_allowed=false`: no raw download. With a `preview_artifact_ref`, `default_read_ref` is the preview target; without one, the UI shows "Preview not yet available" with refresh.
+- `redaction_level=restricted` with raw access allowed: the UI may de-emphasize raw download or note the restriction, and still uses `default_read_ref` for display.
+- `redaction_level=preview_only`: preview is the intended steady-state surface, not an error.
 
-Common session-continuity modes:
+These rules apply equally to every artifact class.
 
-- server-defined grouped artifacts for the active session
-- runtime group for stdout, stderr, diagnostics, and merged-log artifacts
-- continuity group for latest summary and step checkpoint artifacts
-- control group for latest control-event and reset-boundary artifacts
-- explicit epoch boundaries when `session_epoch` changes
+### 9.3 Metadata visibility
 
-Default session view call:
+Shown to most users: created time, size, content type, checksum when useful, `link_type` and `label`, retention and expiry, pinned and redaction status, session badges from `session_context`, and safe report badges (type, scope, title, producer, bounded counts).
 
-- `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
+Debug-only: storage backend and key, `created_by_principal`, `encryption`, provenance fields, recovery internals that expose local layout or secret-bearing paths, raw provider payload details, and sensitive report evidence internals.
 
-Default session resource call:
+### 9.4 "Latest output"
 
-- `GET /api/sessions/{session_id}/resources`
+"Latest" is server-defined scope plus `link_type`, not a client grouping heuristic. Within one execution the UI specifies `link_type`; within a workflow-scoped session it uses the session endpoint; for the latest report it uses the report projection or `link_type=report.primary`. Cross-link aggregation would be a new explicit server mode rather than client-side collapsing. This applies to every link type.
 
-The session resource response may be used to render compact evidence cards or links, but it must not replace the existing artifact detail, execution artifacts, diagnostics, or log surfaces.
+### 9.5 Session continuity
 
-Artifact detail drawer/page should:
+The Session Continuity panel is artifact-backed. It shows explicit epoch boundaries when `session_epoch` changes; `/clear`, hard reset, and recovery rebuild appear as control or reset artifacts rather than invisible gaps. It shows the latest summary, checkpoint, control event, and reset boundary when available, renders server-defined groups without hiding unknown ones, and links each artifact back to its source execution. Sharing a `session_id` does not imply all artifacts came from one execution. When the projection is unavailable, the UI falls back to execution-scoped artifacts plus workflow step context.
 
-- fetch `GET /api/artifacts/{artifact_id}`
-- render metadata plus the default content target
-- expose raw download only when `raw_access_allowed=true`
-- show session badges when `session_context` is present
-- show report badges when report metadata is present
-- show the source execution reference for session-projected or report-projected artifacts
+### 9.6 Logs and observability
 
-### 9.2 Default read and download behavior
+Managed-run log viewing uses the observability APIs for live tails and artifact-backed retrieval. Artifact panels may still show `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics`, and event-journal artifacts, but do not simulate a terminal. Ended runs stay viewable from artifacts without a live connection, and live streams and artifact-backed logs converge on the same durable evidence where possible.
 
-Default rendering:
+### 9.7 Reports
 
-- resolve `default_read_ref.artifact_id`
-- fetch metadata for that artifact if needed
-- render it using the renderer-selection rules below
-
-Raw download:
-
-- if `raw_access_allowed=true`, call `POST /api/artifacts/{artifact_id}/presign-download` and navigate to that URL
-- otherwise show a restricted message and do not attempt raw download
-
-Clients must not use `presign-download` for inline preview rendering by default unless the product intentionally wants browser-native rendering of the raw asset.
-
-### 9.3 Redaction / preview behavior
-
-Use these fields as follows:
-
-- If `raw_access_allowed=false`:
-  - UI must not attempt raw download.
-  - If `preview_artifact_ref` is present, use `default_read_ref` for the default preview target.
-  - If `preview_artifact_ref` is absent, show “Preview not yet available” and offer refresh.
-- If `redaction_level=restricted` and `raw_access_allowed=true`:
-  - UI may visually de-emphasize raw download or call out that the artifact is restricted.
-  - UI must still treat `default_read_ref` as authoritative for the default display target.
-- If `redaction_level=preview_only`:
-  - treat preview presentation as an intended steady-state consumer surface, not as an error condition.
-
-Preview/raw-access behavior applies equally to:
-
-- provider snapshots
-- managed-runtime diagnostics
-- session summaries
-- session checkpoints
-- session control artifacts
-- report artifacts
-- evidence artifacts
-
-### 9.4 What to show/hide from metadata
-
-Show to most users:
-
-- created time
-- size
-- content type
-- checksum when useful
-- `link_type` plus `label`
-- retention plus `expires_at`
-- pinned status
-- redaction status
-- session badge information from `session_context` when present:
-  - `session_id`
-  - `session_epoch`
-  - `step_id` / `step_index`
-  - `checkpoint_kind`
-  - `control_event_kind`
-- report badge information when present and safe:
-  - `report_type`
-  - `report_scope`
-  - `title`
-  - `producer`
-  - bounded counts such as `finding_counts` or `severity_counts`
-
-Hide by default or keep debug-only:
-
-- `storage_backend`
-- `storage_key`
-- `created_by_principal` unless ownership/debug context requires it
-- `encryption` unless needed for compliance/operator UI
-- provenance fields such as `created_by_activity_type` and `created_by_worker`
-- raw recovery internals that expose local runtime layout or secret-bearing paths
-- raw provider payload details unless intentionally opened
-- report evidence internals that may contain sensitive target, exploit, PII, or credential data
-
-### 9.5 “Latest output” semantics
-
-The canonical latest-output contract is server-defined scope plus `link_type`, not a client-derived grouping heuristic.
-
-Rules:
-
-- if the UI wants “latest output” for a known artifact kind within one execution, it should specify `link_type`
-- if the UI wants “latest output” within one workflow-scoped session, it should use the session endpoint
-- if the UI wants “latest report” within one execution or workflow, it should use report-specific server projection or `link_type=report.primary`
-- if the UI wants cross-link aggregation later, add an explicit server mode instead of collapsing client-side
-- this applies equally to `output.primary`, `output.provider_snapshot`, `runtime.diagnostics`, `session.summary`, `session.step_checkpoint`, `report.primary`, `report.summary`, and all other link types
-
-### 9.6 Session continuity presentation
-
-When workflow-scoped session containers are in use, the UI must present continuity without making the container itself the source of truth.
-
-Rules:
-
-- the Session Continuity panel must be artifact-backed
-- the panel must show explicit epoch boundaries when `session_epoch` changes
-- `/clear`, hard reset, or recovery rebuild must appear as an explicit control or reset artifact, not as an invisible gap
-- the panel must show the latest session summary, latest checkpoint, latest control event, and latest reset boundary when available
-- the panel should render server-defined groups such as `runtime`, `continuity`, and `control` without hiding unknown future groups
-- the panel must preserve links back to the source execution that produced each artifact
-- the panel must not imply that all artifacts came from one execution simply because they share one `session_id`
-- if the session projection is unavailable, the UI should fall back to execution-scoped artifacts plus standard workflow step context
-
-### 9.7 Logs and observability
-
-Managed-run log viewing remains governed by the observability APIs.
-
-Rules:
-
-- workflow detail log panels should use the observability APIs for live tails and artifact-backed log retrieval
-- artifact panels may still show `runtime.stdout`, `runtime.stderr`, `runtime.merged_logs`, `runtime.diagnostics`, and event-journal artifacts when those artifacts exist
-- the artifact panel must not attempt to simulate a terminal session
-- ended runs should always remain viewable from artifacts even if no live connection exists
-- live streams and artifact-backed logs should converge on the same durable evidence model where possible
-
-### 9.8 Report presentation
-
-Report-first presentation is owned by `docs/Artifacts/ReportArtifacts.md`, but generic artifact UI must still handle report artifacts.
-
-Rules:
-
-- if an execution has `report.primary`, the dashboard may show a report-first card or panel
-- report artifacts must still appear in generic artifact lists unless intentionally filtered
-- report evidence should remain separately addressable
-- generic rendering must use the same `default_read_ref`, redaction, raw-download, and renderer-selection rules as any other artifact
-- report projections must not hide the underlying artifact identity or execution linkage
+Report-first presentation is owned by `docs/Artifacts/ReportArtifacts.md`. When an execution has `report.primary`, the dashboard may show a report-first card. Report artifacts still appear in generic lists unless intentionally filtered, evidence stays separately addressable, generic rendering uses the same default-read, redaction, raw-download, and renderer rules, and report projections do not hide artifact identity or execution linkage.
 
 ---
 
-## 10. Rendering rules by `content_type` and hints
+## 10. Rendering by `content_type` and hints
 
-### 10.1 Renderer selection priority
+### 10.1 Renderer selection
 
-1. `metadata.render_hint`
-2. `content_type`
-3. filename-like hint in `metadata.name`
-4. fallback: binary / download-only
+Priority: `metadata.render_hint`, then `content_type`, then a filename-like hint in `metadata.name`, then binary/download-only. Unknown `render_hint` values are ignored.
 
-Unknown `render_hint` values must be ignored, not treated as fatal.
+### 10.2 Baseline renderers
 
-### 10.2 Supported renderers: recommended baseline
-
-#### Text viewer
-
-Content types:
-
-- `text/plain`
-- `text/markdown`
-- `text/x-diff`
-- `application/x-ndjson`
-
-UI behavior:
-
-- inline preview up to `MAX_INLINE_BYTES`, for example 256 KB
-- if larger, show an explicit open/download action rather than eagerly loading the full body
-- show diff formatting when `content_type` or `render_hint` indicates patch/diff content
-- when rendering `application/x-ndjson`, preserve line boundaries and avoid silently coalescing records
-
-#### JSON viewer
-
-Content types:
-
-- `application/json`
-
-UI behavior:
-
-- pretty-print JSON for preview
-- if parsing fails, fall back to text viewer
-- for very large JSON, show a bounded preview plus open/download action
-
-#### Image viewer
-
-Content types:
-
-- `image/png`
-- `image/jpeg`
-- `image/webp`
-- `image/gif`
-
-UI behavior:
-
-- inline preview, subject to redaction/default-read rules
-- show dimensions when available
-- do not inline images when access is restricted and no preview is available
-
-#### PDF and document exports
-
-Content types:
-
-- `application/pdf`
-- `text/html`
-- other document/export formats
-
-UI behavior:
-
-- default to metadata + download/open action unless a deliberate viewer is implemented
-- do not embed untrusted HTML inline without sanitization
-- use `default_read_ref` if a safe preview exists
-
-#### Binary / unknown
-
-Everything else:
-
-- show metadata, size, and download action if allowed
-- no inline rendering by default
+| Renderer | Content types | Behavior |
+| --- | --- | --- |
+| Text | `text/plain`, `text/markdown`, `text/x-diff`, `application/x-ndjson` | Inline preview up to `MAX_INLINE_BYTES` (for example 256 KB), then an explicit open/download action instead of eager loading. Diff formatting when content type or hint indicates a patch. NDJSON keeps line boundaries. |
+| JSON | `application/json` | Pretty-printed; falls back to text if parsing fails; very large JSON gets a bounded preview plus open/download. |
+| Image | `image/png`, `image/jpeg`, `image/webp`, `image/gif` | Inline, subject to redaction/default-read rules; dimensions when available; not inlined when restricted with no preview. |
+| PDF / document export | `application/pdf`, `text/html`, other exports | Metadata plus download/open unless a deliberate viewer exists; untrusted HTML is never embedded without sanitization; uses `default_read_ref` if a safe preview exists. |
+| Binary / unknown | everything else | Metadata, size, and download if allowed; no inline rendering. |
 
 ### 10.3 Standard metadata hints
 
-These reserved keys live under `ArtifactMetadata.metadata`:
+Reserved keys under `ArtifactMetadata.metadata`:
 
-- `name`: display filename, basename only
-- `title`: display title
-- `description`: short UI description
-- `source`: bounded origin string such as `worker:codex`, `worker:runner`, `ui:upload`
+- `name`: display filename, basename only, with no path separators so it does not leak workspace layout
+- `title`, `description`: display title and short description
+- `source`: bounded origin such as `worker:codex`, `worker:runner`, `ui:upload`
 - `artifact_type`: stable domain classifier
 - `render_hint`: `text | json | diff | image | binary`
 - `preview_of`: source artifact ID for preview artifacts
 - `policy`: preview/redaction policy name
 
-Reserved nested session keys under `metadata.session` are allowed for producer-specific elaboration, but they must not duplicate or conflict with `session_context`.
+Producer-specific keys live under a producer-owned nested object to avoid collisions; `metadata.session` may elaborate on session details but does not duplicate or conflict with `session_context`. Without these hints the UI still works from `content_type`, `links`, and `session_context`.
 
-Rules:
-
-- standardized keys above are reserved for cross-client interpretation
-- additional producer-specific keys should live under a producer-owned nested object to avoid future key collisions
-- `name` must not include path separators or leak local workspace layout
-- if these keys are absent, UI should still function using `content_type`, `links`, and `session_context`
-
-Report-specific metadata keys such as `report_type`, `report_scope`, `sensitivity`, `producer`, `subject`, `finding_counts`, `severity_counts`, and `is_final_report` are defined by `docs/Artifacts/ReportArtifacts.md`. Generic clients may display them when present, but this document does not own their schema.
+Report metadata keys (`report_type`, `report_scope`, `sensitivity`, `producer`, `subject`, `finding_counts`, `severity_counts`, `is_final_report`) are defined in `docs/Artifacts/ReportArtifacts.md`.
 
 ---
 
-## 11. Presentation guidance for artifact classes
+## 11. Artifact classes
 
-### 11.1 Standard artifact classes
+`link_type` values are lowercase, dot-delimited, and stable. Use `link_type` for machine meaning and the optional `label` (for example `Plan v2`, `Epoch 3 reset`, `Executive summary`) for human nuance. Clients display unknown link types generically. Report link types are ordinary link types, not a separate storage namespace.
 
-These artifact classes have well-defined presentation behavior:
+### 11.1 Inputs and outputs
 
-| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| `link_type` | Typical `content_type` | Renderer | Notes |
 | --- | --- | --- | --- |
-| `input.instructions` | `text/plain`, `text/markdown` | Text viewer | User-provided or system-provided instructions for one step |
-| `input.manifest` | `application/json` | JSON viewer | Manifest definition |
-| `input.plan` | `application/json` | JSON viewer | Pre-computed plan |
-| `input.skill_snapshot` | `application/json` | JSON viewer | Resolved skill set |
-| `input.prompt_index` | `application/json` | JSON viewer | Prompt index for runtime |
+| `input.instructions` | `text/plain`, `text/markdown` | Text | Instructions for one step |
+| `input.manifest` | `application/json` | JSON | Manifest definition |
+| `input.plan` | `application/json` | JSON | Pre-computed plan |
+| `input.skill_snapshot` | `application/json` | JSON | Resolved skill set |
+| `input.prompt_index` | `application/json` | JSON | Prompt index for runtime |
 | `output.primary` | varies | Auto-detect | Primary execution output |
-| `output.patch` | `text/x-diff` | Diff viewer | Code patch |
-| `output.logs` | `text/plain` | Text viewer | Execution logs outside managed-run observability surfaces |
-| `output.summary` | `text/plain`, `text/markdown` | Text viewer | Human-readable summary |
-| `output.agent_result` | `application/json` | JSON viewer | Canonical agent result |
+| `output.patch` | `text/x-diff` | Diff | Code patch |
+| `output.logs` | `text/plain` | Text | Logs outside managed-run observability |
+| `output.summary` | `text/plain`, `text/markdown` | Text | Human-readable summary |
+| `output.agent_result` | `application/json` | JSON | Canonical agent result |
 
-### 11.2 Provider and runtime artifact classes
+### 11.2 Provider and runtime
 
-These artifact classes represent large operational outputs from agent execution:
-
-| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| `link_type` | Typical `content_type` | Renderer | Notes |
 | --- | --- | --- | --- |
-| `output.provider_snapshot` | `application/json` | JSON viewer | Raw provider result snapshot; may be restricted |
-| `runtime.stdout` | `text/plain` | Text viewer | Managed runtime stdout |
-| `runtime.stderr` | `text/plain` | Text viewer | Managed runtime stderr |
-| `runtime.merged_logs` | `text/plain` | Text viewer | Combined stdout/stderr when persisted as an artifact |
+| `output.provider_snapshot` | `application/json` | JSON | Raw provider result; may be restricted |
+| `runtime.stdout` / `runtime.stderr` | `text/plain` | Text | Managed runtime streams |
+| `runtime.merged_logs` | `text/plain` | Text | Combined stdout/stderr |
 | `runtime.diagnostics` | `application/json`, `text/plain` | Auto-detect | Operational diagnostics; may be restricted |
-| `runtime.skill_materialization` | `application/json` | JSON viewer | Runtime delivery bundle |
+| `runtime.skill_materialization` | `application/json` | JSON | Runtime delivery bundle |
 
-Rules:
+Provider snapshots and diagnostics may hold sensitive operational detail, so they are not assumed safe for unrestricted inline display. A live log panel does not make durable runtime artifacts redundant.
 
-- provider snapshots and managed-runtime diagnostics may contain sensitive operational detail
-- preview/raw-access behavior applies equally to these classes
-- UI should not assume these artifacts are safe for unrestricted inline display
-- large runtime logs should use the standard size-threshold behavior: inline preview up to `MAX_INLINE_BYTES`, then explicit open/download
-- the presence of a live log panel does not remove the value of durable runtime artifacts
+### 11.3 Session continuity
 
-### 11.3 Session continuity artifact classes
-
-These artifact classes exist specifically to keep workflow-scoped session containers artifact-first:
-
-| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| `link_type` | Typical `content_type` | Renderer | Notes |
 | --- | --- | --- | --- |
-| `session.summary` | `application/json`, `text/markdown` | Auto-detect | Latest durable summary of session state; may be updated each step |
-| `session.step_checkpoint` | `application/json` | JSON viewer | Step-boundary checkpoint used for recovery and review |
-| `session.control_event` | `application/json` | JSON viewer | `/clear`, operator message, approval, rejection, pause, resume, cancel |
-| `session.transcript` | `application/x-ndjson`, `text/plain` | Text viewer | Optional ordered session event stream |
-| `session.recovery_bundle` | `application/json` | JSON viewer | Sanitized recovery bundle; operator/debug-oriented |
-| `session.reset_boundary` | `application/json`, `text/plain` | Auto-detect | Explicit epoch boundary after reset or rebuild |
+| `session.summary` | `application/json`, `text/markdown` | Auto-detect | Latest durable session summary |
+| `session.step_checkpoint` | `application/json` | JSON | Step-boundary checkpoint for recovery and review |
+| `session.control_event` | `application/json` | JSON | `/clear`, operator message, approval, rejection, pause, resume, cancel |
+| `session.transcript` | `application/x-ndjson`, `text/plain` | Text | Optional ordered session event stream |
+| `session.recovery_bundle` | `application/json` | JSON | Sanitized recovery bundle; operator/debug-oriented, may be restricted |
+| `session.reset_boundary` | `application/json`, `text/plain` | Auto-detect | Epoch boundary after `/clear`, reset, or rebuild |
 
-Rules:
+Summaries and step checkpoints are the primary continuity artifacts for normal users. Control events are visible enough that resets and interventions are not hidden. Continuity works without `session.transcript`, which may not exist.
 
-- `session.summary` and `session.step_checkpoint` are the preferred continuity artifacts for normal users
-- `session.control_event` must be visible enough that resets and operator interventions are not invisible
-- `session.reset_boundary` should appear whenever a session epoch boundary changes because of `/clear`, hard reset, or recovery rebuild
-- `session.recovery_bundle` is usually debug/operator oriented and may be restricted
-- clients must not assume that `session.transcript` exists; session continuity must still work from summary/checkpoint/control/reset artifacts
-- session artifacts should carry `session_context` so the UI can group them by session and epoch without hiding the source execution
+Session artifacts carry `session_context` so the UI can group by session and epoch without hiding the source execution. `session_id` is stable for the session's lifetime; `session_epoch` increases on clear, reset, or rebuild; `step_id`/`step_index` identify the producing or consuming step; `turn_index` may identify a turn; and `source_execution_ref` preserves the producing execution. Session metadata does not include container paths, auth volume paths, cookies, tokens, or provider credentials.
 
-### 11.4 Report artifact classes
+### 11.4 Reports
 
-Report-specific semantics are owned by `docs/Artifacts/ReportArtifacts.md`, but generic artifact clients should recognize these classes enough to render them consistently.
-
-| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| `link_type` | Typical `content_type` | Renderer | Notes |
 | --- | --- | --- | --- |
-| `report.primary` | `text/markdown`, `text/plain`, `application/pdf`, `text/html` | Auto-detect | Canonical human-facing report for the current scope |
-| `report.summary` | `text/markdown`, `text/plain`, `application/json` | Auto-detect | Short executive summary or abstract |
-| `report.structured` | `application/json` | JSON viewer | Machine-readable findings or results |
-| `report.evidence` | varies | Auto-detect | Supporting evidence such as screenshots, excerpts, command results, or captures |
-| `report.appendix` | varies | Auto-detect | Extended detail intentionally separate from the main report |
-| `report.findings_index` | `application/json` | JSON viewer | Structured findings index optimized for grouping/filtering |
-| `report.export` | `application/pdf`, `text/html`, varies | Binary/download or auto-detect | Alternative rendered export such as PDF or HTML |
+| `report.primary` | `text/markdown`, `text/plain`, `application/pdf`, `text/html` | Auto-detect | Canonical human-facing report |
+| `report.summary` | `text/markdown`, `text/plain`, `application/json` | Auto-detect | Executive summary |
+| `report.structured` | `application/json` | JSON | Machine-readable findings |
+| `report.evidence` | varies | Auto-detect | Screenshots, excerpts, command results, captures |
+| `report.appendix` | varies | Auto-detect | Extended detail |
+| `report.findings_index` | `application/json` | JSON | Findings index for grouping/filtering |
+| `report.export` | `application/pdf`, `text/html`, varies | Download or auto-detect | Rendered export |
 
-Rules:
+`report.*` marks intentional report deliverables, `output.*` generic outputs, and `runtime.*`/`debug.*` operational evidence. Report metadata stays bounded; report bodies, findings, screenshots, and evidence blobs are not stored inline in metadata. Evidence stays separately addressable when that improves auditability or reuse. PDFs stay download-only unless a viewer is added, and untrusted HTML exports are not injected into the dashboard unsanitized. The UI does not assume every `output.primary` is a report, and report-first surfaces fall back to generic lists when no report exists.
 
-- generic artifact clients should use the same preview, default-read, raw-download, and renderer-selection rules for report artifacts as for other artifacts
-- if a report-specific projection exists, the dashboard may show report artifacts in a report-first surface while keeping them accessible through generic artifact views
-- report evidence remains separately addressable and must not be hidden inside one opaque report blob when separate access improves auditability
-- `application/pdf` should remain metadata + download-only unless a PDF viewer is intentionally added
-- untrusted `text/html` report exports must not be injected into the dashboard without sanitization
+### 11.5 Debug
 
-### 11.5 Debug artifact classes
-
-| `link_type` | Typical `content_type` | Recommended renderer | Notes |
+| `link_type` | Typical `content_type` | Renderer | Notes |
 | --- | --- | --- | --- |
 | `debug.trace` | `application/json`, `text/plain` | Auto-detect | Execution trace |
-| `debug.skill_resolution_trace` | `application/json` | JSON viewer | Skill resolution debug info |
+| `debug.skill_resolution_trace` | `application/json` | JSON | Skill resolution debug info |
 
-Debug artifacts should be hidden by default in normal user views and shown in operator/debug panels.
+Debug artifacts are hidden in normal views and shown in operator/debug panels.
 
-### 11.6 Saved-result presentation (Workflow Detail, #4020)
+### 11.6 Saved-result presentation in Workflow Detail
 
-Workflow Detail shows one compact Saved Results section on the Artifacts tab,
-bound to the server's actual selected run/result and its committed artifact
-references from the existing run artifact listing. Report-only and non-Git
-output remain useful. The section reuses the existing result/artifact
-projection, the single continuation owner, and the existing publication-only
-publisher path. It introduces no second result store and no recovery wizard.
+Workflow Detail shows one compact Saved Results section on the Artifacts tab, bound to the server's selected run/result and its committed artifact references from the run artifact listing. It reuses the existing result/artifact projection, the single continuation owner, and the publication-only publisher path rather than adding a second result store or recovery wizard. The frontend lives in `frontend/src/entrypoints/saved-results.ts` and `saved-results-section.tsx`.
 
-Rules:
+- **What counts as saved.** Result-linked artifacts only: `output.*` except `output.logs`, `report.*`, repository/patch/checkpoint links, or `result`. Report-only and non-Git output are useful results.
+- **Saved-work manifests.** A committed manifest (`application/vnd.moonmind.saved-work-manifest+json`) is one saved unit whose named parts (snapshot archive, delta, history, file manifest, index patch) each show their own completeness and download. Format claims, exclusions, and limitations come from the server-projected `saved_work_summary` listing metadata; the browser does not parse manifest bytes, and a manifest without a summary shows "format details unavailable".
+- **Completeness.** Only a server `COMPLETE` status bound to digest plus size counts as complete; exit codes, local paths, or permissive defaults do not. A required format without a `self_contained`/`requires_dependencies` claim, or with a missing, incomplete, or expired part, makes the unit incomplete, and summary metadata never upgrades it.
+- **Distinct outcomes.** Compute, saving, requested publication, and cleanup are reported separately, so a failed run can still show committed saved work and a failed publication can still show a successful save. Publication status comes from `auxiliaryOutcomes.gitPublication`; cleanup reports the recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired` outcome, or unknown. Missing projection data shows a pending/unavailable state; the UI never restarts compute or invents a status.
+- **Preview and download.** Previews use the safe-preview path and do not authorize raw restore or publication. Download appears only when `raw_access_allowed === true`. Expired entries (`expires_at` passed or `DELETED`) show no Preview/Download, and hostile generated content never triggers credentialed fetches or workflow controls.
+- **Continue working.** Sends operator-authored instructions through `continueInNewWorkflow` (`POST /executions/{workflow_id}/continue`), the same owner as the terminal Chat actions. It creates a fresh admitted execution rather than reviving a session or lease, is available in every terminal state including `no_commit`, and carries only complete saved outputs the captured evidence authorizes.
+- **Publish Saved Work.** Offered for a complete, unexpired saved unit with raw access to its manifest and required snapshot/delta closure, when the action projection reports `canPublishSavedWork`. When that capability is off, `disabledReasons.canPublishSavedWork` carries the route's admission reason (for example `publication_recovery_disabled`, `publication_mode_not_allowed`, `publication_recovery_not_in_canary`, or `temporal_submit_disabled`), which the section shows once while keeping Preview, Download, and Continue available; an unreported capability counts as unavailable. `actionEvidence.publishSavedWork` limits the form to its `allowedModes` and any `canaryRepositories`. The form posts `savedWorkRef`, `sourceRunId`, destination repository, objective, branches, strategy, and optional PR title to `POST /executions/{workflow_id}/retry-publication` (see [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work)), so no model reruns. It is the only saved-work publication form and is independent of `canRetryPublication`, which gates only body-less recovery of a failed requested publication from the action menu. The server decides admission, and refusals such as `publication_retry_not_admitted` are shown as returned. An accepted publication is followed through `GET /executions/{workflow_id}` until it closes; following never starts, retries, or cancels work.
+- **Request binding.** Requests and state are bound to the selected `(workflow_id, run_id)` and the latest request per action, so late responses cannot retarget a historical selection. A double click dispatches once; transport failures and timeouts after submission are reported as possibly accepted. The same continuation intent maps to the same idempotency key and the same publication request to the same server operation, including after reload, and leaving a form is not cancellation.
+- **Access.** Cache keys follow the single-user model with no human-user partitions. A `401`/`403` refreshes the protected listing so raw-access affordances follow current authorization.
 
-- Saved outputs are only artifacts linked as results (`output.*` other
-  than `output.logs`, `report.*`, repository/patch/checkpoint links, or
-  `result`); inputs, runtime logs, and debug evidence are not saved work.
-- A committed saved-work manifest (content type
-  `application/vnd.moonmind.saved-work-manifest+json`) is one saved unit.
-  The snapshot archive, delta, history, file manifest, and index patch it
-  names are listed as its parts, each with its own completeness and raw
-  download, not as separate saved results. Its format claims, exclusion
-  counts by reason, and limitations come from the `saved_work_summary`
-  listing metadata the capture path projects from the committed manifest;
-  its displayed retention is the listing's retention class and expiry. The
-  browser never parses raw manifest bytes. A
-  manifest listed without that summary is shown with its own status and
-  identity and "format details unavailable".
-- Completeness never comes from a provider exit code, a local directory
-  path, an absent digest, or a permissive generic metadata default. Only
-  a server `COMPLETE` status bound to real content identity (digest plus
-  size) counts as a complete save. For a saved unit, a required format whose
-  claim is not `self_contained`/`requires_dependencies`, or whose listed part
-  is missing, incomplete, or expired, downgrades it to incomplete; summary
-  metadata can never upgrade an incomplete manifest. Available downloads,
-  completeness/exclusions, and retention are shown without requiring every
-  format.
-- Compute, saving, requested publication, and cleanup outcomes stay
-  distinct. A failed/canceled run may still show committed saved work; a
-  failed requested publication may still show a successful save; pending
-  cleanup never erases either. Missing or stale projection data shows an
-  unavailable/pending state with the existing refresh behavior. The UI
-  never restarts compute or invents a frontend-only status to repair
-  presentation. Publication reads the control-stop
-  `auxiliaryOutcomes.gitPublication` status first; cleanup reports the
-  recorded `hostCleanup`/`providerProfileRelease`/`janitorRequired`
-  outcome, or unknown when no evidence exists.
-- Previews reuse the existing safe-preview path: metadata-first,
-  `default_read_ref`-honoring, bounded inert renderers with redaction.
-  Preview access never authorizes raw restore/publication; an ArtifactRef
-  is an identifier, not a URL or credential. Raw download affordances
-  appear only when `raw_access_allowed === true`. Expiry comes from the
-  artifact's `expires_at` (or a `DELETED` status), and expired entries show
-  no Preview/Download affordance. Expired links and hostile generated
-  content never trigger credentialed fetches or workflow controls.
-- **Download** uses the authorized artifact download endpoint.
-- **Continue working** submits operator-authored instructions (and an
-  optional title) through `continueInNewWorkflow`, the same owner the
-  terminal Chat actions use: `POST /executions/{workflow_id}/continue`
-  creates a fresh admitted execution and never revives a session or lease.
-  It is available for every terminal state, including `no_commit`, and
-  carries only complete saved outputs the source's captured evidence
-  authorizes.
-- **Publish Saved Work** is offered for a complete, unexpired saved unit
-  whose manifest and required snapshot/delta closure have raw access, when
-  the execution's action projection reports `canPublishSavedWork`. That capability applies the same
-  submission gate and publication-recovery rollout admission as the
-  publication route; when it is off, `disabledReasons.canPublishSavedWork`
-  carries the route's reason (`publication_recovery_disabled` when the
-  operator turns the default-on rollout gate off,
-  `publication_recovery_shadow_only`,
-  `publication_mode_not_allowed`, `publication_recovery_not_in_canary` when
-  a canary admits no repository for the operator,
-  `publication_recovery_policy_invalid` when the rollout setting cannot be
-  read, or `temporal_submit_disabled`); a malformed rollout setting never
-  breaks the execution read. The section then explains the reason once,
-  separately from the save's completeness and the compute outcome, and
-  keeps Preview, Download, and Continue available. An unreported
-  capability is unavailable, never assumed. When available,
-  `actionEvidence.publishSavedWork` lists the `allowedModes` and, under a
-  repository canary, the `canaryRepositories`; the form offers only those
-  modes and names those repositories. The UI never changes the rollout
-  setting, and the server remains the final authority: a
-  `publication_retry_not_admitted` refusal is shown as returned and
-  refreshes the projection.
-- Publishing posts the saved-work body (`savedWorkRef` and the selected
-  `sourceRunId`, plus the destination repository, objective, base/head
-  branch, application strategy, and optional PR title) to the publication-only
-  `POST /executions/{workflow_id}/retry-publication` path described in
-  [Publish Saved Work](../Workflows/WorkflowPublishing.md#publish-saved-work),
-  so no model is rerun. The destination form is prefilled from the
-  execution's repository, starting branch, and publish mode. Repository,
-  publish mode, head branch, and PR title come first; the base branch and
-  application strategy appear when requested, when an existing destination
-  still needs a base, or when a non-default strategy is chosen. Initializing
-  an empty destination selects branch-only publication and sends no base;
-  it is offered only when branch publication is admitted. This is the
-  single saved-work publication form; Workflow Create/edit (#2619) does not add another. It
-  does not depend on `canRetryPublication`: that capability gates only the
-  body-less recovery of a failed requested publication, which stays in the
-  workflow action menu. The server's ownership, destination, Lore, and
-  rollout checks decide admission, and their rejection is shown as
-  returned. The returned publication workflow and
-  `publicationIdempotencyKey` are displayed with the destination they were
-  admitted for. Changing the destination makes the next submission a new
-  decision; the earlier operation stays visible, and no second approval
-  system is added.
-- An accepted publication is followed through the existing execution
-  detail read of the returned workflow (`GET /executions/{workflow_id}`)
-  until it closes, and its terminal status is shown: completed means the
-  saved work was published or the destination already had it, and failed
-  or canceled means the run's persisted saved-work publication result
-  records the reason and any confirmed change. Following never starts,
-  retries, or cancels work, and closing the form does not stop it.
-- Requests and displayed state are bound to the exact selected
-  `(workflow_id, run_id)` result and to the latest request for each action.
-  Late responses never retarget a historical selection or overwrite a newer
-  operation; a selection change discards unfinished local state without
-  cancelling accepted remote work. A double click dispatches once. A
-  transport failure after submission is reported as possibly accepted,
-  and publication timeout/server-error responses carry the same uncertainty.
-  Resubmitting the same continuation intent maps to the same idempotency key (derived from the source run and the authored intent and
-  refs), and resubmitting the same publication request maps to the same
-  server operation, including after a reload. Leaving a form is not
-  cancellation.
-- Instance/resource cache keys stay under the single-user model: no
-  human-user partitions. A `401`/`403` from a saved-result action refreshes
-  the protected listing so raw-access affordances follow current
-  authorization. A continuation denial also refetches captured evidence
-  before retrying with current refs. Machine/resource access restrictions
-  remain effective.
+### 11.7 Remediation evidence
+
+`remediation.context`, approval request/decision, action request/result, verification, audit, target annotation, decision log, and lifecycle summary artifacts keep durable links and remain the deep evidence. Workflow Detail projects only bounded, redacted JSON and metadata: artifact class, status, freshness/expiry, boundedness, and safe lifecycle fields. Per-class availability and degradation come from the canonical context artifact.
+
+Action delivery, repair verification, and prevention verification are reported separately and are not reconstructed from rendered logs, chat text, or assistant prose, because those are not authoritative. When a compact projection is unavailable, the durable artifact link stays visible and the UI reports degradation instead of inventing state.
 
 ---
 
-## 12. Upload UX contract
+## 12. Uploads
 
-### 12.1 Simple upload
+Simple upload: `POST /api/artifacts`; upload bytes to `upload.upload_url` with the required headers when `upload.mode=single_put` (or `PUT /api/artifacts/{artifact_id}/content` in local-dev mode); then refresh metadata until `status=complete`. Multipart upload: `POST /api/artifacts` returns `upload.mode=multipart` and `upload.upload_id`; presign and upload each part; call `complete` with the parts list; refresh until complete.
 
-1. `POST /api/artifacts`
-2. If `upload.mode=single_put` and `upload.upload_url` is present:
-   - upload bytes to that URL with required headers
-3. If local-dev mode returns a direct API path:
-   - `PUT /api/artifacts/{artifact_id}/content`
-4. Refresh metadata until `status=complete`
-
-### 12.2 Multipart upload
-
-1. `POST /api/artifacts`
-2. Expect `upload.mode=multipart` and `upload.upload_id`
-3. For each part:
-   - `POST /api/artifacts/{artifact_id}/presign-upload-part`
-   - upload the part to the returned URL
-4. `POST /api/artifacts/{artifact_id}/complete` with the completed parts list
-5. Refresh metadata until `status=complete`
-
-### 12.3 Managed runtime artifact discipline
-
-The upload UX rules also apply to workflow-scoped session container outputs.
-
-Rules:
-
-- step inputs may be artifact-created before the container receives them
-- live runtime output may be spooled and later persisted, but the final presentation contract remains artifact-first
-- session summaries, checkpoints, control artifacts, and reset-boundary artifacts may be worker-created rather than browser-uploaded, but they must still obey the same metadata and linkage rules
-- report artifacts may be workflow-created, worker-created, or assembled from runtime evidence, but their final presentation still uses the ordinary artifact contract
+Worker- and workflow-created artifacts (session continuity, control, and report artifacts) follow the same metadata and linkage rules. Live output may be spooled and persisted later, but the final presentation is artifact-first.
 
 ---
 
-## 13. Execution linkage conventions
+## 13. Producers
 
-### 13.1 Required link fields
+**Workflows** pass only `ArtifactRef`s, compact summaries, bounded metadata, server-defined selectors, canonical runtime results, and compact report bundle refs. Large bodies, provider payloads, long logs, binary evidence, presigned URLs, secrets, and container-local state stay out because workflow history is size-limited and durable.
 
-- `namespace`
-- `workflow_id`
-- `run_id`
-- `link_type`
+**Activities and workers** perform the side effects: writing bytes, finalizing uploads, generating previews, linking artifacts, publishing runtime logs, diagnostics, session continuity artifacts, and report artifacts, and returning compact refs to workflow code. Managed runtime producers sanitize metadata and logs before exposing them and do not rely on container-local state. Report producers follow `docs/Artifacts/ReportArtifacts.md` and keep curated report content separate from raw logs.
 
-### 13.2 `link_type` naming
-
-Use lowercase, dot-delimited, stable machine meaning.
-
-Complete `link_type` registry:
-
-- `input.instructions`
-- `input.manifest`
-- `input.plan`
-- `input.skill_snapshot`
-- `input.prompt_index`
-- `output.primary`
-- `output.patch`
-- `output.logs`
-- `output.summary`
-- `output.provider_snapshot`
-- `output.agent_result`
-- `runtime.skill_materialization`
-- `runtime.stdout`
-- `runtime.stderr`
-- `runtime.merged_logs`
-- `runtime.diagnostics`
-- `session.summary`
-- `session.step_checkpoint`
-- `session.control_event`
-- `session.transcript`
-- `session.recovery_bundle`
-- `session.reset_boundary`
-- `report.primary`
-- `report.summary`
-- `report.structured`
-- `report.evidence`
-- `report.appendix`
-- `report.findings_index`
-- `report.export`
-- `debug.skill_resolution_trace`
-- `debug.trace`
-
-Rules:
-
-- `link_type` should stay small, bounded, and stable
-- use `link_type` for machine meaning and `label` for human-facing nuance
-- clients must tolerate unknown `link_type` values and display them generically
-- report-specific link types are valid ordinary artifact link types, not a separate report-storage namespace
-
-### 13.3 `label` usage
-
-- optional, human-friendly
-- can carry versioning or presentation nuance, for example `Plan v2`, `Final output`, `Epoch 3 reset`, or `Executive summary`
-- must not replace `link_type` as the machine key
-
-### 13.4 Session context rules
-
-When artifacts participate in a workflow-scoped session view:
-
-- `session_context.session_id` should be stable for the lifetime of the workflow-scoped session
-- `session_context.session_epoch` must increase when the session is cleared, reset, or rebuilt
-- `session_context.step_id` and `session_context.step_index` should identify the step that produced or consumed the artifact when applicable
-- `session_context.turn_index` may identify an interaction turn inside the session
-- `session_context.source_execution_ref` must preserve the execution that produced the artifact
-- session projection grouping must not erase execution linkage
-- session-specific metadata must not include container paths, auth volume paths, cookies, tokens, or provider credentials
-
-### 13.5 Report linkage rules
-
-When artifacts participate in a report view:
-
-- use `report.*` link types for artifacts that are intentionally part of a report deliverable
-- use `output.*` link types for generic outputs that are not report deliverables
-- use `runtime.*` and `debug.*` link types for operational evidence, not curated report content
-- use bounded report metadata only for presentation and filtering
-- do not store report bodies, finding details, screenshots, or evidence blobs inline in metadata
-- keep report evidence separately addressable when separate evidence improves auditability or reuse
+Older producers may lack `session_context`, report metadata, previews, report link types, or session projections. Clients still render those artifacts generically from `artifact_id`, `content_type`, `size_bytes`, `links[]`, `metadata`, `raw_access_allowed`, and `default_read_ref`.
 
 ---
 
-## 14. Producer rules
+## 14. Security and access
 
-### 14.1 Workflows
+Access is governed by the artifact system and execution authorization. Clients request metadata before raw access, honor `raw_access_allowed`, use `default_read_ref` for default rendering, avoid retry loops on forbidden access, and keep artifact IDs, labels, and metadata out of unrelated surfaces.
 
-Workflows should pass only:
+Potentially sensitive classes include `output.provider_snapshot`, `runtime.diagnostics`, `runtime.merged_logs`, `session.recovery_bundle`, `report.structured`, `report.evidence`, `report.export`, `debug.trace`, and `debug.skill_resolution_trace`. The list is not exhaustive; clients follow metadata and access-policy fields rather than assuming any class is safe.
 
-- `ArtifactRef`
-- compact summaries
-- bounded metadata
-- server-defined selectors
-- canonical runtime result contracts
-- compact report bundle refs when applicable
+Presigned URLs are access grants, not identity. They are not stored in workflow history, metadata, or durable report bodies, are requested only when the user intentionally opens or downloads raw content, and are not copied into logs or diagnostics.
 
-Workflows must not pass:
-
-- large artifact bodies
-- provider-native raw payloads
-- long logs
-- screenshots or binary evidence
-- presigned URLs
-- secrets or credentials
-- full container-local state
-
-### 14.2 Activities and workers
-
-Activities and workers are responsible for side effects such as:
-
-- writing artifact bytes
-- finalizing uploads
-- generating previews
-- linking artifacts to executions
-- writing runtime logs and diagnostics
-- publishing session summaries and checkpoints
-- publishing report artifacts and report evidence
-- returning compact refs and bounded metadata to workflow code
-
-### 14.3 Managed runtime producers
-
-Managed runtime producers should:
-
-- write stdout/stderr/diagnostics as runtime artifacts
-- write final user-facing output as `output.primary` or report artifacts as appropriate
-- write session continuity evidence when a workflow-scoped session is used
-- avoid relying on container-local state for recovery or presentation
-- sanitize metadata and logs before exposing them in the control plane
-
-### 14.4 Report producers
-
-Report producers should:
-
-- publish `report.primary` when a report is the canonical deliverable
-- publish `report.summary`, `report.structured`, and `report.evidence` when useful
-- keep curated report content separate from raw logs and diagnostics
-- use report bundle refs rather than large report payloads in workflow history
-- follow `docs/Artifacts/ReportArtifacts.md` for report-specific metadata and bundle semantics
+Metadata stays bounded and display-safe (see invariant 7): beyond credentials and URLs, it also excludes raw payload or report bodies, container auth volume paths, and large nested structures.
 
 ---
 
-## 15. Security and access behavior
+## 15. Retention and pinning
 
-### 15.1 Default access posture
-
-Artifact access is governed by the artifact system and execution authorization rules.
-
-Clients must:
-
-- request metadata before raw access
-- honor `raw_access_allowed`
-- use `default_read_ref` for safe preview/default rendering
-- avoid retry loops when access is forbidden
-- avoid leaking artifact IDs, labels, or metadata into unrelated user surfaces
-
-### 15.2 Sensitive artifacts
-
-These artifact classes should be treated as potentially sensitive:
-
-- `output.provider_snapshot`
-- `runtime.diagnostics`
-- `runtime.merged_logs`
-- `session.recovery_bundle`
-- `report.structured`
-- `report.evidence`
-- `report.export`
-- `debug.trace`
-- `debug.skill_resolution_trace`
-
-This list is not exhaustive. Clients must follow metadata and access-policy fields rather than assuming a class is safe.
-
-### 15.3 Presigned URLs
-
-Rules:
-
-- presigned URLs are access grants, not artifact identity
-- presigned URLs must not be stored in workflow history, metadata, or durable report bodies
-- clients should request presigns only when the user intentionally opens or downloads raw content
-- clients should not copy presigned URLs into logs or diagnostics
-
-### 15.4 Metadata security
-
-Artifact metadata must remain bounded and display-safe.
-
-Metadata must not include:
-
-- secrets
-- API keys
-- OAuth tokens
-- provider auth material
-- cookies
-- presigned URLs
-- private keys
-- raw payload bodies
-- raw report bodies
-- absolute local filesystem paths
-- container-local auth volume paths
-- large nested data structures
-
----
-
-## 16. Retention and pinning presentation
-
-Retention semantics are owned by the artifact system, but UI clients should present retention clearly.
-
-Rules:
-
-- show retention class and expiry where useful
-- show pinned state prominently on important outputs and reports
-- do not imply that an artifact is permanent unless it is pinned or governed by a long-retention policy
-- expose pin/unpin affordances where authorization allows
-- when a report is the primary deliverable, the dashboard may make pinning especially visible
-- deleted artifacts should render as unavailable/tombstoned rather than silently disappearing from historical context when the API returns tombstones
-
----
-
-## 17. Compatibility and migration guidance
-
-### 17.1 Move from Temporal folder to Artifacts folder
-
-The canonical path for this document is:
-
-- `docs/Artifacts/ArtifactPresentationContract.md`
-
-The old path:
-
-- `docs/Temporal/ArtifactPresentationContract.md`
-
-should be treated as stale after the move.
-
-References should be updated across docs, specs, and code comments.
-
-### 17.2 Compatibility with older artifact producers
-
-Older producers may lack:
-
-- `session_context`
-- report-specific metadata
-- preview artifacts
-- explicit report link types
-- server-side session projections
-
-Clients must still render artifacts generically using:
-
-- `artifact_id`
-- `content_type`
-- `size_bytes`
-- `links[]`
-- `metadata`
-- `raw_access_allowed`
-- `default_read_ref`
-
-### 17.3 Report rollout compatibility
-
-During report rollout:
-
-- generic outputs may still use `output.primary`
-- report-producing workflows should prefer `report.primary`
-- UI should not guess that every `output.primary` artifact is a report
-- report-first surfaces should fall back to generic artifact lists when no report projection or `report.primary` artifact exists
-
-### 17.4 Session projection compatibility
-
-During managed-session rollout:
-
-- session projections may initially include only latest refs and grouped artifacts from the durable managed-session record
-- older workflow runs may not have a session projection
-- clients should fall back to execution-scoped artifacts and observability views
-- unknown future group keys should be rendered as generic groups, not hidden
-
----
-
-## 18. Testing expectations
-
-Consumer-facing artifact changes should include tests that cover:
-
-- default rendering uses `default_read_ref`
-- raw download is hidden or disabled when `raw_access_allowed=false`
-- unknown `link_type` falls back to generic rendering
-- unknown `render_hint` falls back to content-type-based rendering
-- large text artifacts do not eagerly load beyond the configured inline preview threshold
-- session projections render grouped artifacts and latest refs
-- missing session projection falls back to execution artifacts
-- report artifacts render through generic artifact rules
-- `report.primary` can be surfaced without hiding generic artifact access
-- sensitive report and runtime artifacts preserve preview/raw-access behavior
-- stale `docs/Temporal/ArtifactPresentationContract.md` references are removed after the move
-
----
-
-## 19. Open questions
-
-1. Should `ArtifactMetadata` grow a first-class `session_context` column-backed field, or should session presentation remain metadata/projection-driven for now?
-2. Should report-aware execution projections live under execution endpoints, workflow endpoints, or both?
-3. Should `application/pdf` get a first-party viewer, or should PDFs remain download/open-only for security and simplicity?
-4. Should latest-artifact queries support a generic multi-link server aggregation mode, or should each projection define its own latest refs?
-5. Should `report.evidence` receive additional grouping metadata such as `finding_id`, `section_id`, or `evidence_kind` in the report-specific contract?
-6. Should session projections eventually support historical epoch browsing through query filters, or should they remain latest-session surfaces with links back to execution-scoped artifacts?
-7. How much debug-only metadata should the dashboard expose to local single-user installs by default?
-
----
-
-## 20. Bottom line
-
-MoonMind should keep artifact presentation as a generic, artifact-first contract under `docs/Artifacts`.
-
-The artifact system is still execution-linked and Temporal-compatible, but the presentation contract now spans more than Temporal:
-
-- runtime outputs
-- managed-session continuity
-- observability logs and diagnostics
-- report deliverables
-- report evidence
-- workflow detail projections
-- future UI convenience surfaces
-
-This document should therefore move to `docs/Artifacts/ArtifactPresentationContract.md` and remain the generic presentation layer that more specific documents, especially `docs/Artifacts/ReportArtifacts.md`, build on.
-
-## 21. Remediation evidence presentation
-
-`remediation.context`, approval request/decision, action request/result,
-verification, audit, target annotation, decision log, and lifecycle summary
-artifacts retain durable links and remain the deep evidence authority. Workflow
-Detail may project only bounded, redacted JSON and metadata: artifact class,
-status, freshness/expiry, boundedness, and safe lifecycle fields. Per-class
-availability and degradation come from the canonical context artifact.
-
-Action delivery, repair verification, and prevention verification remain
-separate. The UI must never reconstruct them from rendered logs, chat text, or
-assistant prose. When a compact projection is unavailable, the durable artifact
-link remains visible and the UI reports degradation rather than inventing state.
+Retention semantics are owned by the artifact system. The UI shows retention class and expiry where useful, shows pinned state prominently on important outputs and reports, does not imply permanence unless an artifact is pinned or under long retention, and offers pin/unpin where authorized. When the API returns tombstones, deleted artifacts render as unavailable rather than silently disappearing from historical context.

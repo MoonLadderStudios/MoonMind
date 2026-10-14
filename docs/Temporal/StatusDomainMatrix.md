@@ -3,11 +3,8 @@
 Status: Normative
 Owners: MoonMind Platform
 Last updated: 2026-09-08
-Source issue: MM-1080; preserves MM-1073 traceability; Jules consolidation MoonLadderStudios/MoonMind#3952
 
 This document is the canonical cross-domain matrix for MoonMind status tokens. It names the owner, value set, storage/API surface, and conversion boundary for each status domain so downstream cleanup can make domain-specific changes without treating similarly named tokens as interchangeable.
-
-The former workflow status model remains only an archival pointer. Do not use archived status notes as the source for new status decisions.
 
 ## Domain Matrix
 
