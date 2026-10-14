@@ -264,7 +264,7 @@ Issue Implement, GitHub Issue Orchestrate, and Jira Orchestrate declare one work
 
 Loop tools are authored as `auto`, a planning-time sentinel meaning "inherit the run's runtime selection": each attempt names the run's resolved runtime, model, effort, and provider profile, so attempts route like the run's authored steps. A loop with no resolved controller runtime fails at admission rather than routing to a substitute.
 
-On Omnigent, where each Step Execution starts in a fresh sandbox, post-loop steps restore the verified candidate (the loop head, or the latest implementation archive when no attempt ran). Issue Implement's pull-request handoff restores it directly; the Orchestrate presets run doc reconciliation from it and publish the reconciliation archive, or the candidate when reconciliation left none.
+On Omnigent, where each Step Execution starts in a fresh sandbox, post-loop steps restore the verified candidate (the loop head, or the latest implementation archive when no attempt ran). Issue Implement and Orchestrate pull-request handoffs restore and publish that candidate directly.
 
 `ADDITIONAL_WORK_NEEDED` is retryable only while a later remediation step remains. Otherwise, in `pr` publish mode, the workflow publishes a draft pull request with `attention_required: true`, completes, and skips downstream promotion such as moving Jira. The same draft handoff applies to environment-class `BLOCKED` and malformed `NO_DETERMINATION`; verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` stop before publication. The draft is a recoverability handoff carrying the latest report, remaining work, and recommended next action — not success evidence.
 
