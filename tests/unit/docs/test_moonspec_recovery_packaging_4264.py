@@ -58,7 +58,7 @@ BUNDLE_TEXT_EXTENSIONS = {".md", ".yaml", ".yml", ".py", ".sh", ".json"}
 
 def _catalog_files() -> list[Path]:
     files = sorted(SKILLS_ROOT.glob("*/SKILL.md"))
-    assert len(files) == 35, f"expected 35 skill entrypoints, found {len(files)}"
+    assert len(files) == 34, f"expected 34 skill entrypoints, found {len(files)}"
     presets = sorted(PRESETS_ROOT.glob("*.yaml"))
     assert len(presets) == 19, f"expected 19 preset definitions, found {len(presets)}"
     files.extend(presets)

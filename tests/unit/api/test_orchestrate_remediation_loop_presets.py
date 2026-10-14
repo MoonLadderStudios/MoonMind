@@ -9,6 +9,7 @@ the MoonSpec bundle and a pin bump, not a local edit.
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -131,7 +132,6 @@ async def test_orchestrate_run_verify_omitted_matches_true_and_false_drops_stage
     for title in (
         "Verify completion",
         "Remediation loop controller",
-        "Reconcile declarative docs",
     ):
         assert title in [step["title"] for step in enabled]
         assert title not in disabled_titles
@@ -407,8 +407,23 @@ def _enable_publication_restore(
     )
 
 
+def _with_legacy_doc_reconciliation(
+    nodes: list[dict[str, Any]], publish: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Insert the doc-reconciliation Step a pre-#4808 plan carried before PR."""
+
+    docs = copy.deepcopy(publish)
+    docs["id"] = f"{publish['id']}-legacy-doc-reconciliation"
+    docs["inputs"]["title"] = "Reconcile declarative docs"
+    for holder in (docs, docs["inputs"]):
+        if isinstance(holder.get("annotations"), dict):
+            holder["annotations"] = {"jiraOrchestrateRole": "doc-reconciliation"}
+    index = nodes.index(publish)
+    return [*nodes[:index], docs, *nodes[index:]], docs
+
+
 @pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
-async def test_expanded_orchestrate_pr_publishes_reconciled_verified_head(
+async def test_expanded_orchestrate_pr_publishes_verified_head(
     tmp_path,
     slug: str,
     run_workflow: run_module.MoonMindRunWorkflow,
@@ -420,7 +435,30 @@ async def test_expanded_orchestrate_pr_publishes_reconciled_verified_head(
         _head("C2", 3)
     )
     _enable_publication_restore(monkeypatch)
-    docs = _node_with_title(nodes, "Reconcile declarative docs")
+    publish = _node_with_title(nodes, "Create pull request")
+    run_workflow._step_ledger_rows = _ledger(
+        nodes, completed_through=publish["id"], current=publish["id"]
+    )
+
+    assert _restore_ref(run_workflow, publish) == "artifact://workspace/C2"
+
+
+@pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
+async def test_legacy_doc_reconciliation_archive_replaces_verified_head(
+    tmp_path,
+    slug: str,
+    run_workflow: run_module.MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nodes = await _omnigent_plan_nodes(tmp_path, slug)
+    nodes, docs = _with_legacy_doc_reconciliation(
+        nodes, _node_with_title(nodes, "Create pull request")
+    )
+    run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
+    run_workflow._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
+        _head("C2", 3)
+    )
+    _enable_publication_restore(monkeypatch)
     publish = _node_with_title(nodes, "Create pull request")
 
     run_workflow._step_ledger_rows = _ledger(
@@ -440,6 +478,12 @@ async def test_expanded_orchestrate_pr_publishes_reconciled_verified_head(
     }
     assert _restore_ref(run_workflow, publish) == "artifact://art_reconciled_archive"
 
+    # An incomplete reconciliation cannot replace the verified candidate.
+    rows = _ledger(nodes, completed_through=docs["id"], current=publish["id"])
+    next(row for row in rows if row["logicalStepId"] == docs["id"])["status"] = "failed"
+    run_workflow._step_ledger_rows = rows
+    assert _restore_ref(run_workflow, publish) == "artifact://workspace/C2"
+
 
 @pytest.mark.parametrize("slug", _PUBLICATION_PRESETS)
 async def test_expanded_orchestrate_pr_publishes_implementation_without_remediation(
@@ -452,29 +496,14 @@ async def test_expanded_orchestrate_pr_publishes_implementation_without_remediat
     run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
     _enable_publication_restore(monkeypatch)
     implement = _node_with_title(nodes, "Implement the task breakdown")
-    docs = _node_with_title(nodes, "Reconcile declarative docs")
     publish = _node_with_title(nodes, "Create pull request")
     run_workflow._step_checkpoint_workspace_evidence_by_boundary = {
         implement["id"]: _archive_evidence("implementation")
     }
-
     run_workflow._step_ledger_rows = _ledger(
-        nodes, completed_through=docs["id"], current=docs["id"]
-    )
-    assert _restore_ref(run_workflow, docs) == (
-        "artifact://art_implementation_archive"
+        nodes, completed_through=publish["id"], current=publish["id"]
     )
 
-    # Reconciliation did not complete, so its archive cannot replace the
-    # verified implementation candidate.
-    run_workflow._step_checkpoint_workspace_evidence_by_boundary[docs["id"]] = (
-        _archive_evidence("partial-docs")
-    )
-    rows = _ledger(nodes, completed_through=docs["id"], current=publish["id"])
-    next(row for row in rows if row["logicalStepId"] == docs["id"])["status"] = (
-        "failed"
-    )
-    run_workflow._step_ledger_rows = rows
     assert _restore_ref(run_workflow, publish) == (
         "artifact://art_implementation_archive"
     )
@@ -488,12 +517,14 @@ async def test_orchestrate_publication_restore_retains_unpatched_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     nodes = await _omnigent_plan_nodes(tmp_path, slug)
+    nodes, docs = _with_legacy_doc_reconciliation(
+        nodes, _node_with_title(nodes, "Create pull request")
+    )
     run_workflow._initialize_remediation_loop_controller(ordered_nodes=nodes)
     run_workflow._remediation_workspace_head = RemediationWorkspaceHead.model_validate(
         _head("C2", 3)
     )
     _enable_publication_restore(monkeypatch, orchestrate=False)
-    docs = _node_with_title(nodes, "Reconcile declarative docs")
     publish = _node_with_title(nodes, "Create pull request")
     run_workflow._step_ledger_rows = _ledger(
         nodes, completed_through=docs["id"], current=publish["id"]
