@@ -346,11 +346,24 @@ def test_partial_report_retains_only_same_candidate_verified_rows(candidate):
 
 def test_assessment_checks_can_bind_only_the_original_scope(candidate):
     _, current, _ = candidate
+    def check(requirement, filename):
+        return {
+            "id": requirement,
+            "sourceRef": current["scope"]["sourceRef"],
+            "sourceDigest": current["scope"]["sourceDigest"],
+            "sourceLocator": requirement,
+            "classification": "mandatory",
+            "requiredBehavior": "Preserve the source requirement",
+            "executableChecks": [f"python -m pytest tests/{filename}"],
+            "proofMethods": ["automated_test"],
+            "owner": "repository focused tests",
+        }
+
     assessment = {
         "scope": copy.deepcopy(current["scope"]),
         "verificationMap": [
-            {"id": "AC-1", "mandatory": True, "executableChecks": ["python -m pytest tests/test_value.py"]},
-            {"id": "AC-2", "mandatory": True, "executableChecks": ["python -m pytest tests/test_callable.py"]},
+            check("AC-1", "test_value.py"),
+            check("AC-2", "test_callable.py"),
         ],
     }
     bound = portable.bind_verification_map(current, assessment)
@@ -358,7 +371,7 @@ def test_assessment_checks_can_bind_only_the_original_scope(candidate):
 
     invented = copy.deepcopy(assessment)
     invented["verificationMap"].append(
-        {"id": "FULL-RELEASE-GPU", "mandatory": True, "executableChecks": ["render all maps"]}
+        check("FULL-RELEASE-GPU", "test_all_maps.py")
     )
     with pytest.raises(ValueError, match="original mandatory scope"):
         portable.bind_verification_map(current, invented)

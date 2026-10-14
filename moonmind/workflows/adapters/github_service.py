@@ -7,11 +7,17 @@ workflow orchestration from Jules-specific adapters (Constitution §I, §III, §
 
 from __future__ import annotations
 
+import hashlib
+import io
+import json
 import logging
 import re
+import stat
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -170,6 +176,236 @@ _CONFLICTING_MERGEABLE_VALUES = {"CONFLICTING", "DIRTY"}
 #: The admitted collaboration operation for issue labels, comments and state.
 ISSUE_OPERATIONS = ("issues",)
 
+# Provider metadata and archives are untrusted, including for private projects.
+_ACTIONS_METADATA_BYTES = 2 * 1024 * 1024
+_ACTIONS_ARCHIVE_BYTES = 32 * 1024 * 1024
+_ACTIONS_EXPANDED_BYTES = 64 * 1024 * 1024
+_ACTIONS_MEMBER_BYTES = 16 * 1024 * 1024
+_ACTIONS_MAX_FILES = 256
+_ACTIONS_MAX_RUNS = 100
+_ACTIONS_MAX_ARTIFACTS = 32
+_ACTIONS_JOB_LOG_BYTES = 4 * 1024 * 1024
+_ACTIONS_MAX_FAILED_JOBS = 32
+_ACTIONS_FAILED_CONCLUSIONS = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
+
+
+class _ActionsEvidenceGap(ValueError):
+    """Safe diagnostic code; never includes credentials or signed URLs."""
+
+
+def _actions_digest(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
+def _positive_id(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise _ActionsEvidenceGap("invalid_provider_identity")
+    return value
+
+
+def _actions_validate_input(repository: str, pr_number: int, head_sha: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(part in {".", ".."} for part in repository.split("/")):
+        raise ValueError("A repository owner/name is required")
+    _positive_id(pr_number)
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head_sha):
+        raise ValueError("An exact commit SHA is required")
+
+
+async def _actions_response_bytes(response: httpx.Response, limit: int) -> bytes:
+    length = response.headers.get("Content-Length")
+    if length and (not length.isdecimal() or int(length) > limit):
+        raise _ActionsEvidenceGap("response_size_limit")
+    chunks, size = [], 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > limit:
+            raise _ActionsEvidenceGap("response_size_limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _actions_json(client: httpx.AsyncClient, url: str, headers: dict[str, str], **kwargs: Any) -> dict[str, Any]:
+    async with client.stream("GET", url, headers=headers, follow_redirects=False, **kwargs) as response:
+        response.raise_for_status()
+        value = json.loads(await _actions_response_bytes(response, _ACTIONS_METADATA_BYTES))
+    if not isinstance(value, dict):
+        raise _ActionsEvidenceGap("malformed_provider_metadata")
+    return value
+
+
+async def _actions_download(
+    client: httpx.AsyncClient, url: str, headers: dict[str, str], *,
+    limit: int = _ACTIONS_ARCHIVE_BYTES, media_type: str = "application/zip",
+) -> bytes:
+    # Only the constructed GitHub REST endpoint is authenticated. Never use an
+    # artifact-supplied archive_download_url, and never forward its token/cookies.
+    async with client.stream("GET", url, headers=headers, follow_redirects=False) as response:
+        if response.status_code == 200:
+            return await _actions_response_bytes(response, limit)
+        if response.status_code != 302:
+            response.raise_for_status()
+            raise _ActionsEvidenceGap("unexpected_archive_response")
+        location = response.headers.get("Location", "")
+    target = urlsplit(location)
+    host = (target.hostname or "").lower()
+    if (
+        target.scheme != "https" or target.username or target.password
+        or target.port not in (None, 443) or target.fragment
+        or not (
+            host.endswith((".blob.core.windows.net", ".actions.githubusercontent.com"))
+            or host == "objects.githubusercontent.com"
+        )
+    ):
+        raise _ActionsEvidenceGap("untrusted_archive_redirect")
+    # A separate client has neither API authorization nor the API cookie jar.
+    async with (
+        httpx.AsyncClient(timeout=client.timeout, follow_redirects=False) as download,
+        download.stream("GET", location, headers={"Accept": media_type}) as response,
+    ):
+        response.raise_for_status()
+        return await _actions_response_bytes(response, limit)
+
+
+def _actions_extract(payload: bytes) -> list[dict[str, Any]]:
+    """Read safe regular members in memory, with no filesystem extraction."""
+    result: list[dict[str, Any]] = []
+    total, names = 0, set()
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        entries = archive.infolist()
+        if len(entries) > _ACTIONS_MAX_FILES:
+            raise _ActionsEvidenceGap("archive_file_count_limit")
+        for entry in entries:
+            path = entry.filename
+            parts = path.rstrip("/").split("/")
+            mode = entry.external_attr >> 16
+            if (
+                not path or len(path.encode()) > 1024 or path.startswith("/")
+                or "\\" in path or ":" in path or "\x00" in path or entry.orig_filename != path
+                or any(part in ("", ".", "..") for part in parts)
+                or path in names or entry.flag_bits & 1
+                or (stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR))
+            ):
+                raise _ActionsEvidenceGap("unsafe_archive_member")
+            names.add(path)
+            if entry.is_dir():
+                continue
+            total += entry.file_size
+            if (
+                entry.file_size > _ACTIONS_MEMBER_BYTES or total > _ACTIONS_EXPANDED_BYTES
+                or entry.file_size > max(entry.compress_size, 1) * 200
+            ):
+                raise _ActionsEvidenceGap("archive_expansion_limit")
+            with archive.open(entry) as member:
+                body = member.read(_ACTIONS_MEMBER_BYTES + 1)
+            if len(body) != entry.file_size or len(body) > _ACTIONS_MEMBER_BYTES:
+                raise _ActionsEvidenceGap("archive_member_size_mismatch")
+            result.append({"path": path, "sizeBytes": len(body),
+                           "sha256": hashlib.sha256(body).hexdigest(), "payload": body})
+    if not result:
+        raise _ActionsEvidenceGap("empty_artifact_archive")
+    return result
+
+
+async def _actions_job_diagnostics(
+    client: httpx.AsyncClient, root: str, headers: dict[str, str], *,
+    run_id: int, attempt: int, head_sha: str, started: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Collect failed-job facts and bytes, never classify their implementation cause.
+
+    Job listing is pinned to the specific run attempt. API-supplied URL fields
+    are identity checks only; every authenticated request is constructed here.
+    Optional check annotations use already admitted credentials, with no scope
+    expansion if the token lacks checks:read.
+    """
+    files, gaps = [], []
+    listing = await _actions_json(client, f"{root}/actions/runs/{run_id}/attempts/{attempt}/jobs", headers, params={"per_page": 100})
+    jobs = listing.get("jobs")
+    if not isinstance(jobs, list) or listing.get("total_count") != len(jobs) or len(jobs) > 100:
+        raise _ActionsEvidenceGap("job_inventory_incomplete")
+    seen, failed_count = set(), 0
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise _ActionsEvidenceGap("malformed_job_metadata")
+        job_id = _positive_id(job.get("id"))
+        job_started = _parse_github_timestamp(job.get("started_at"))
+        if (
+            job_id in seen or job.get("run_id") != run_id or job.get("head_sha") != head_sha
+            or (job.get("run_attempt") is not None and job.get("run_attempt") != attempt)
+            or job.get("run_url") != f"{root}/actions/runs/{run_id}"
+            or job.get("url") != f"{root}/actions/jobs/{job_id}"
+        ):
+            raise _ActionsEvidenceGap("job_run_identity_mismatch")
+        seen.add(job_id)
+        if job.get("status") != "completed" or job.get("conclusion") not in _ACTIONS_FAILED_CONCLUSIONS:
+            continue
+        if (job.get("started_at") is not None and job_started is None) or (job_started is not None and job_started < started):
+            raise _ActionsEvidenceGap("job_attempt_identity_mismatch")
+        failed_count += 1
+        if failed_count > _ACTIONS_MAX_FAILED_JOBS:
+            raise _ActionsEvidenceGap("failed_job_count_limit")
+        identity = {"runId": run_id, "runAttempt": attempt, "jobId": job_id, "headSha": head_sha}
+        # Strip cosmetic URLs before hashing. Captured execution steps, messages,
+        # annotations and log bytes are stable evidence, not aggregate acceptance.
+        details = {"job": {key: job[key] for key in (
+            "id", "run_id", "run_attempt", "head_sha", "name", "status", "conclusion",
+            "started_at", "completed_at", "steps", "labels", "runner_id", "runner_name",
+            "runner_group_id", "runner_group_name",
+        ) if key in job}, "annotations": []}
+        check_url = str(job.get("check_run_url") or "")
+        match = re.fullmatch(re.escape(root) + r"/check-runs/([1-9][0-9]*)", check_url)
+        if check_url and match is None:
+            raise _ActionsEvidenceGap("job_check_identity_mismatch")
+        if match:
+            check_id = int(match[1])
+            try:
+                check = await _actions_json(client, f"{root}/check-runs/{check_id}", headers)
+                if check.get("id") != check_id or check.get("head_sha") != head_sha:
+                    raise _ActionsEvidenceGap("job_check_identity_mismatch")
+                details["check"] = {key: check[key] for key in ("id", "head_sha", "status", "conclusion") if key in check}
+                output = check.get("output") or {}
+                if not isinstance(output, dict):
+                    raise _ActionsEvidenceGap("malformed_job_check_output")
+                details["check"]["output"] = {key: output[key] for key in ("title", "summary", "text", "annotations_count") if key in output}
+                async with client.stream("GET", f"{root}/check-runs/{check_id}/annotations", headers=headers, params={"per_page": 100}, follow_redirects=False) as response:
+                    response.raise_for_status()
+                    annotations = json.loads(await _actions_response_bytes(response, _ACTIONS_METADATA_BYTES))
+                    if not isinstance(annotations, list) or len(annotations) > 100 or any(not isinstance(row, dict) for row in annotations):
+                        raise _ActionsEvidenceGap("malformed_job_annotations")
+                    details["annotations"] = annotations
+                    if 'rel="next"' in response.headers.get("Link", ""):
+                        gaps.append({"code": "job_annotations_incomplete", **identity})
+            except httpx.HTTPStatusError as exc:
+                gaps.append({"code": f"job_annotations_http_{exc.response.status_code}", **identity})
+            except httpx.TransportError:
+                gaps.append({"code": "job_annotations_transport_unavailable", **identity})
+        # Attempt log retrieval even when optional annotations are unavailable.
+        try:
+            logs = b""
+            if job_started is not None:
+                logs = await _actions_download(client, f"{root}/actions/jobs/{job_id}/logs", headers,
+                    limit=_ACTIONS_JOB_LOG_BYTES, media_type="text/plain")
+            if logs:
+                files.append({**identity, "sourceType": "job-log", "path": f"jobs/{job_id}/logs.txt",
+                    "payload": logs, "sizeBytes": len(logs), "sha256": hashlib.sha256(logs).hexdigest()})
+            else:
+                gaps.append({"code": "job_not_started" if job_started is None else "job_logs_empty", **identity})
+        except httpx.HTTPStatusError as exc:
+            gaps.append({"code": f"job_logs_http_{exc.response.status_code}", **identity})
+        except httpx.TransportError:
+            gaps.append({"code": "job_logs_transport_unavailable", **identity})
+        body = json.dumps(details, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        if len(body) > _ACTIONS_MEMBER_BYTES:
+            raise _ActionsEvidenceGap("job_diagnostics_size_limit")
+        files.append({**identity, "sourceType": "job-diagnostics", "path": f"jobs/{job_id}/details.json",
+            "payload": body, "sizeBytes": len(body), "sha256": hashlib.sha256(body).hexdigest()})
+        if sum(item["sizeBytes"] for item in files) > _ACTIONS_EXPANDED_BYTES:
+            raise _ActionsEvidenceGap("job_diagnostics_size_limit")
+    if not files:
+        gaps.append({"code": "failed_job_diagnostics_unavailable", "runId": run_id, "runAttempt": attempt})
+    return files, gaps
+
 
 def _parse_github_timestamp(value: Any) -> datetime | None:
     candidate = str(value or "").strip()
@@ -233,6 +469,294 @@ class GitHubService:
     def __init__(self, *, timeout: float = 30.0, connection: Any | None = None) -> None:
         self._timeout = timeout
         self._connection = connection
+
+    async def read_actions_evidence(
+        self,
+        repository: str,
+        pr_number: int,
+        head_sha: str,
+        *,
+        admitted_workflow_id: str,
+        workflow_identities: Sequence[str | int] = (),
+        artifact_names: Sequence[str] = (),
+        verify_candidate_only: bool = False,
+    ) -> dict[str, Any]:
+        """Collect bounded actual evidence for one admitted PR revision.
+
+        ``ready`` describes retrieval, never acceptance. Omitted selectors discover
+        the exact-head inventory. Explicit selectors are required source-map
+        constraints. Rerun artifacts must be created within the current attempt;
+        no historic same-name archive is substituted for a missing current one.
+        REST routes follow GitHub's workflow-runs and artifacts API contracts.
+        No Actions permissions are granted or requested by this reader.
+        """
+        _actions_validate_input(repository, pr_number, head_sha)
+        if not str(admitted_workflow_id or "").strip():
+            raise ValueError("An admitted workflow is required for evidence collection")
+        if isinstance(workflow_identities, (str, bytes)) or isinstance(artifact_names, (str, bytes)):
+            raise TypeError("Evidence selectors must be lists")
+        if len(workflow_identities) > 32 or len(artifact_names) > 32:
+            raise ValueError("Evidence selector limit exceeded")
+        workflows = {str(value) for value in workflow_identities}
+        names = set(artifact_names)
+        if any(not isinstance(value, str) or not value or len(value) > 256 for value in names):
+            raise ValueError("Invalid artifact name")
+        result: dict[str, Any] = {
+            "status": "unavailable", "repository": repository, "prNumber": pr_number,
+            "headSha": head_sha, "runIds": [], "runs": [], "files": [], "gaps": [],
+            "retryable": True, "evidenceSetDigest": None, "semanticDigest": None, "excludedArtifacts": [],
+            "collectionComplete": False, "pendingRunIds": [],
+        }
+        phase = "admitted_repository_read"
+        try:
+            api_base, headers = await self._repository_reader(repository, None, admitted_workflow_id)
+            root = f"{api_base.rstrip('/')}/repos/{repository}"
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+                async def read_pr() -> dict[str, Any]:
+                    pr = await _actions_json(client, f"{root}/pulls/{pr_number}", headers)
+                    if (
+                        pr.get("number") != pr_number
+                        or str(((pr.get("base") or {}).get("repo") or {}).get("full_name", "")).lower() != repository.lower()
+                    ):
+                        raise _ActionsEvidenceGap("pull_request_identity_mismatch")
+                    result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
+                    if result["observedHeadSha"] != head_sha:
+                        result["files"] = []
+                        raise _ActionsEvidenceGap("pull_request_head_moved")
+                    result.update(pullRequestOpen=pr.get("state") == "open", draft=pr.get("draft") is True)
+                    return pr
+
+                phase = "candidate_read"
+                pr = await read_pr()
+                commit = await _actions_json(client, f"{root}/commits/{head_sha}", headers)
+                tree = ((commit.get("commit") or {}).get("tree") or {}).get("sha")
+                if commit.get("sha") != head_sha or not isinstance(tree, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", tree):
+                    raise _ActionsEvidenceGap("candidate_tree_identity_mismatch")
+                result["subject"] = {"repository": repository, "revision": head_sha, "contentDigest": f"git-tree:{tree}"}
+                if verify_candidate_only:
+                    await read_pr()
+                    result.update(status="ready", retryable=False, collectionComplete=True)
+                    return result
+                repo_id = _positive_id(((pr.get("base") or {}).get("repo") or {}).get("id"))
+                head_repo_id = _positive_id(((pr.get("head") or {}).get("repo") or {}).get("id"))
+                phase = "workflow_runs_read"
+                listing = await _actions_json(client, f"{root}/actions/runs", headers,
+                    params={"head_sha": head_sha, "per_page": _ACTIONS_MAX_RUNS})
+                runs = listing.get("workflow_runs")
+                if not isinstance(runs, list) or listing.get("total_count") != len(runs) or len(runs) > _ACTIONS_MAX_RUNS:
+                    raise _ActionsEvidenceGap("workflow_run_inventory_incomplete")
+                seen_workflows, seen_names, seen_runs = set(), set(), set()
+                archive_count, expanded_bytes, file_count = 0, 0, 0
+                pending = False
+
+                def validate_run(run: dict[str, Any], run_id: int | None = None, attempt: int | None = None) -> None:
+                    if (
+                        run.get("head_sha") != head_sha
+                        or str((run.get("repository") or {}).get("full_name", "")).lower() != repository.lower()
+                        or (run.get("repository") or {}).get("id") != repo_id
+                        or (run.get("head_repository") or {}).get("id") != head_repo_id
+                        or (run_id is not None and run.get("id") != run_id)
+                        or (attempt is not None and run.get("run_attempt") != attempt)
+                    ):
+                        raise _ActionsEvidenceGap("workflow_run_identity_mismatch")
+
+                for listed_run in runs:
+                    if not isinstance(listed_run, dict):
+                        raise _ActionsEvidenceGap("malformed_workflow_run")
+                    validate_run(listed_run)
+                    workflow_id = _positive_id(listed_run.get("workflow_id"))
+                    path = str(listed_run.get("path") or "").split("@", 1)[0]
+                    identities = {str(workflow_id), path}
+                    if workflows and not workflows.intersection(identities):
+                        continue
+                    seen_workflows.update(identities)
+                    run_id = _positive_id(listed_run.get("id"))
+                    if run_id in seen_runs:
+                        raise _ActionsEvidenceGap("duplicate_workflow_run")
+                    seen_runs.add(run_id)
+                    run = await _actions_json(client, f"{root}/actions/runs/{run_id}", headers)
+                    validate_run(run, run_id)
+                    attempt = _positive_id(run.get("run_attempt"))
+                    if run.get("workflow_id") != workflow_id:
+                        raise _ActionsEvidenceGap("workflow_identity_changed")
+                    inventory = {"runId": run_id, "runAttempt": attempt, "workflowId": workflow_id,
+                        "workflowPath": path, "status": run.get("status"), "conclusion": run.get("conclusion")}
+                    result["runs"].append(inventory)
+                    result["runIds"].append(run_id)
+                    if run.get("status") != "completed":
+                        pending = True
+                        result["pendingRunIds"].append(run_id)
+                        continue
+                    # The attempt endpoint supplies the current rerun's start time,
+                    # rather than trusting the original run's timestamp.
+                    attempt_run = await _actions_json(client, f"{root}/actions/runs/{run_id}/attempts/{attempt}", headers)
+                    validate_run(attempt_run, run_id, attempt)
+                    started = _parse_github_timestamp(attempt_run.get("run_started_at"))
+                    if started is None:
+                        raise _ActionsEvidenceGap("workflow_attempt_start_unavailable")
+                    run_files = []
+                    if run.get("conclusion") in _ACTIONS_FAILED_CONCLUSIONS:
+                        phase = "job_diagnostics_read"
+                        try:
+                            diagnostic_files, diagnostic_gaps = await _actions_job_diagnostics(
+                                client, root, headers, run_id=run_id, attempt=attempt,
+                                head_sha=head_sha, started=started,
+                            )
+                            run_files.extend({**item, "workflowId": workflow_id, "workflowPath": path} for item in diagnostic_files)
+                            result["gaps"].extend(diagnostic_gaps)
+                            expanded_bytes += sum(item["sizeBytes"] for item in diagnostic_files)
+                            file_count += len(diagnostic_files)
+                            if expanded_bytes > _ACTIONS_EXPANDED_BYTES or file_count > _ACTIONS_MAX_FILES:
+                                raise _ActionsEvidenceGap("evidence_collection_size_limit")
+                        except httpx.HTTPError as exc:
+                            code = f"job_diagnostics_http_{exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else "job_diagnostics_transport_unavailable"
+                            result["gaps"].append({"code": code, "runId": run_id, "runAttempt": attempt})
+                    phase = "artifact_inventory_read"
+                    try:
+                        artifacts = await _actions_json(client, f"{root}/actions/runs/{run_id}/artifacts", headers,
+                            params={"per_page": 100})
+                    except httpx.HTTPError as exc:
+                        code = f"artifact_inventory_http_{exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else "artifact_inventory_transport_unavailable"
+                        result["gaps"].append({"code": code, "runId": run_id, "runAttempt": attempt})
+                        artifacts = {"artifacts": [], "total_count": 0}
+                    items = artifacts.get("artifacts")
+                    if not isinstance(items, list) or artifacts.get("total_count") != len(items) or len(items) > 100:
+                        raise _ActionsEvidenceGap("artifact_inventory_incomplete")
+                    for artifact in items:
+                        if not isinstance(artifact, dict):
+                            raise _ActionsEvidenceGap("malformed_artifact_metadata")
+                        name = artifact.get("name")
+                        if names and name not in names:
+                            continue
+                        artifact_id = _positive_id(artifact.get("id"))
+                        identity = artifact.get("workflow_run") or {}
+                        created = _parse_github_timestamp(artifact.get("created_at"))
+                        if (
+                            not isinstance(name, str) or not name or len(name) > 256
+                            or identity.get("id") != run_id or identity.get("head_sha") != head_sha
+                            or identity.get("repository_id") != repo_id
+                            or identity.get("head_repository_id") != head_repo_id
+                            or (identity.get("run_attempt") is not None and identity.get("run_attempt") != attempt)
+                        ):
+                            raise _ActionsEvidenceGap("artifact_run_identity_mismatch")
+                        if created is None or created < started:
+                            result["excludedArtifacts"].append({"code": "stale_artifact_attempt", "runId": run_id, "artifactId": artifact_id})
+                            continue
+                        if artifact.get("expired") is not False:
+                            result["gaps"].append({"code": "artifact_expired", "runId": run_id, "artifactId": artifact_id})
+                            continue
+                        archive_count += 1
+                        if archive_count > _ACTIONS_MAX_ARTIFACTS:
+                            raise _ActionsEvidenceGap("artifact_count_limit")
+                        size = artifact.get("size_in_bytes")
+                        if not isinstance(size, int) or isinstance(size, bool) or size < 0 or size > _ACTIONS_ARCHIVE_BYTES:
+                            raise _ActionsEvidenceGap("archive_size_limit")
+                        phase = "artifact_bytes_read"
+                        try:
+                            body = await _actions_download(client, f"{root}/actions/artifacts/{artifact_id}/zip", headers)
+                        except httpx.HTTPStatusError as exc:
+                            result["gaps"].append({"code": f"artifact_http_{exc.response.status_code}", "runId": run_id, "artifactId": artifact_id})
+                            continue
+                        archive_digest = "sha256:" + hashlib.sha256(body).hexdigest()
+                        if artifact.get("digest") and artifact["digest"] != archive_digest:
+                            raise _ActionsEvidenceGap("artifact_digest_mismatch")
+                        extracted = _actions_extract(body)
+                        expanded_bytes += sum(item["sizeBytes"] for item in extracted)
+                        file_count += len(extracted)
+                        if expanded_bytes > _ACTIONS_EXPANDED_BYTES or file_count > _ACTIONS_MAX_FILES:
+                            raise _ActionsEvidenceGap("evidence_collection_size_limit")
+                        for item in extracted:
+                            run_files.append({**item, "runId": run_id, "runAttempt": attempt,
+                                "workflowId": workflow_id, "workflowPath": path,
+                                "artifactId": artifact_id, "artifactName": name, "archiveDigest": archive_digest})
+                        seen_names.add(name)
+                    # A concurrent rerun invalidates all files just read for that run.
+                    phase = "workflow_attempt_recheck"
+                    current = await _actions_json(client, f"{root}/actions/runs/{run_id}", headers)
+                    validate_run(current, run_id, attempt)
+                    if current.get("status") != "completed":
+                        raise _ActionsEvidenceGap("workflow_attempt_changed")
+                    result["files"].extend(run_files)
+                for missing in sorted(workflows - seen_workflows):
+                    result["gaps"].append({"code": "required_workflow_missing", "workflowIdentity": missing})
+                for missing in sorted(names - seen_names):
+                    result["gaps"].append({"code": "required_artifact_missing", "artifactName": missing})
+                phase = "candidate_recheck"
+                await read_pr()
+                if not result["files"] and not pending:
+                    result["gaps"].append({"code": "artifact_bytes_unavailable"})
+                # An unrelated pending/expired diagnostic cannot invent a new
+                # acceptance prerequisite. The source-owning verifier receives
+                # usable bytes AND precise gaps, and alone decides sufficiency.
+                result["collectionComplete"] = not pending and not result["gaps"]
+                result["status"] = "ready" if result["files"] else ("pending" if pending else "unavailable")
+                result["retryable"] = not result["collectionComplete"]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:
+            # No bytes leave this method without the final exact-head read.
+            result["files"] = []
+            code = str(exc) if isinstance(exc, _ActionsEvidenceGap) else (
+                f"github_http_{exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else f"{phase}_unavailable"
+            )
+            result["gaps"].append({"code": code})
+        if result["files"]:
+            identities = sorted(({key: value for key, value in item.items() if key != "payload"} for item in result["files"]),
+                key=lambda item: (item["runId"], item["runAttempt"], item.get("sourceType", "artifact"), item.get("artifactId", item.get("jobId", 0)), item["path"]))
+            result["semanticDigest"] = _actions_digest({"repository": repository, "headSha": head_sha, "files": identities})
+            result["evidenceSetDigest"] = result["semanticDigest"]
+        return result
+
+    async def mark_automation_draft_ready(
+        self, repository: str, pr_number: int, head_sha: str, *, admitted_workflow_id: str,
+    ) -> dict[str, Any]:
+        """Remove an automation-owned draft after the caller's acceptance guard.
+
+        The owning Activity validates the persisted gate and absence of user holds.
+        This adapter reuses admitted merge-request authority and exact PR identity.
+        GitHub has no expected-head argument for this mutation: read-back detects
+        movement and the merge owner must retain its independent exact-head guard.
+        """
+        _actions_validate_input(repository, pr_number, head_sha)
+        if not str(admitted_workflow_id or "").strip():
+            raise ValueError("An admitted workflow is required for ready-for-review")
+        result: dict[str, Any] = {"ready": False, "status": "unavailable", "headSha": head_sha, "retryable": True}
+        try:
+            api_base, headers = await self._repository_reader(repository, None, admitted_workflow_id, operation="merge_request")
+            root = api_base.rstrip("/")
+            graphql_url = root.removesuffix("/api/v3") + "/api/graphql" if root.endswith("/api/v3") else root + "/graphql"
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+                async def read() -> dict[str, Any]:
+                    pr = await _actions_json(client, f"{root}/repos/{repository}/pulls/{pr_number}", headers)
+                    result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
+                    if (pr.get("number") != pr_number
+                        or str(((pr.get("base") or {}).get("repo") or {}).get("full_name") or "").lower() != repository.lower()
+                        or result["observedHeadSha"] != head_sha or pr.get("state") != "open"):
+                        raise _ActionsEvidenceGap("pull_request_identity_or_state_changed")
+                    return pr
+
+                pr = await read()
+                if pr.get("draft") is not False:
+                    node_id = pr.get("node_id")
+                    if pr.get("draft") is not True or not isinstance(node_id, str) or not node_id:
+                        raise _ActionsEvidenceGap("pull_request_draft_identity_unavailable")
+                    mutation = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+                    try:
+                        async with client.stream("POST", graphql_url, headers=headers,
+                            json={"query": mutation, "variables": {"id": node_id}}) as response:
+                            response.raise_for_status()
+                            outcome = json.loads(await _actions_response_bytes(response, _ACTIONS_METADATA_BYTES))
+                        if outcome.get("errors"):
+                            result["reasonCode"] = "github_ready_mutation_rejected"
+                    except httpx.HTTPError:
+                        # Reconcile a lost acknowledgement before any caller retry.
+                        result["reasonCode"] = "github_ready_mutation_unconfirmed"
+                    pr = await read()
+                result["ready"] = pr.get("draft") is False
+                result["draft"] = pr.get("draft")
+                result["status"] = "ready" if result["ready"] else "unavailable"
+                result["retryable"] = not result["ready"]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            result["reasonCode"] = str(exc) if isinstance(exc, _ActionsEvidenceGap) else "github_ready_transition_unavailable"
+        return result
 
     async def read_pull_request(
         self,

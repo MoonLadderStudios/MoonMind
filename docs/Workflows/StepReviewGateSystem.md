@@ -237,6 +237,44 @@ meaning. New producer results can carry explicit recovery decisions without
 changing historical parser defaults. Changes to workflow command scheduling require
 replay coverage or the existing versioned migration mechanism.
 
+## Current source and delayed evidence ownership
+
+The portable `acceptance/v1` verification map binds each obligation to the current
+original source, declared proof method and relevant target. A source-bound report
+carries the actual byte inventory and its digest for both passing and nonpassing
+judgments. Suggestions remain advisory. The original issue brief is the source
+of authority; an initial assessment and its `BLOCKED` verdict remain history.
+When old requirement IDs were invented or superseded, source-byte selectors and
+recorded scope reconciliation preserve the explanation while replacing the old
+map. This does not authorize omitting a current mandatory source obligation.
+
+After preserving an incomplete candidate PR, `MoonMind.UserWorkflow` owns delayed
+CI evidence through its existing issue claim and remediation budgets. The
+`github_issue.collect_evidence` Activity reads exact-head Actions run/attempt
+identities and bounded artifact bytes, persists them in the existing artifact
+store, and returns references plus a semantic content identity. A different
+report URL is not progress. Aggregate green checks do not establish acceptance.
+The same configured `moonspec-verify` step receives actual artifacts and the
+original source in a read-only candidate workspace. It neither rebuilds passing
+work nor creates another PR. Malformed reports use the existing report-repair
+budget; concrete code findings use the existing same-PR remediation owner.
+
+The continuation decision is persisted before further dispatch. Pending jobs and
+unchanged missing capabilities wait without charging implementation attempts.
+The existing loop wall-clock limit remains controlling; where it is omitted,
+the post-publication observation window is one hour. Exhaustion retains the PR,
+precise missing proof, owner, counters and next action without claiming another
+continuation has been scheduled. Cancellation, explicit human decisions and
+operator pauses retain their existing meanings. Retained histories do not gain
+new commands: the owner entrypoint is guarded by
+`run-issue-evidence-continuation-v1`.
+
+Only a persisted, current, source-bound accepted result can remove an
+**automation-owned** draft state. The owner rereads the PR head around verification
+and ready-for-review publication. This does not suppress Codex review, required CI,
+branch protections, merge authority, or the existing fresh-target issue-completion
+check. Changed heads and unconfirmed effects remain blocked for reconciliation.
+
 ## Consumer adoption and validation
 
 MoonSpec assets are owned upstream. Adopt them through the existing pinned bundle
@@ -259,3 +297,25 @@ execute the actual publisher, evidence reader, and continuation owner; a helper
 unit test or descriptive policy does not prove that end-to-end behavior. Broader
 validation belongs in existing GitHub Actions lanes. No human-review checkpoint is
 added to implementation acceptance.
+
+Partial evidence delivery does not consume the terminal evidence-judgment retry.
+The publication owner records every verifier dispatch and waits for changed actual
+bytes after a provisional no-determination while collection remains incomplete.
+The existing issue claim and configured wall-clock limit (or a one-hour observation
+window) bound this waiting. Cosmetic URL or report changes cannot trigger another
+verifier. Real implementation failures enter the existing same-PR repair owner
+immediately, even when optional CI remains pending. Terminal proof judgments still
+consume the configured evidence retry; implementation and contract-repair budgets
+are unchanged. Failed jobs without uploaded artifacts provide bounded exact-attempt
+logs, step details, and annotations to the verifier, never aggregate status as proof.
+
+Strict reports larger than the child metadata limit remain complete in immutable
+artifacts. The publisher emits an `acceptance-projection/v1` descriptor only after
+full source/contract validation. It retains all requirement IDs and exact source,
+candidate, target, freshness and evidence inventory bindings. The parent rereads
+and hashes original bytes before gate interpretation; the descriptor alone is not
+acceptance. Ready and issue-completion paths repeat the owner-scoped read and
+reject unreadable or mismatched reports. A valid strict evidence-only initial
+`NO_DETERMINATION` can enter the existing automation-draft path so delayed proof
+can obtain an owner; implementation defects and explicit human stops cannot use
+that entry path.

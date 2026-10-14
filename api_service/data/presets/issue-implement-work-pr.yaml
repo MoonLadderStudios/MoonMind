@@ -79,24 +79,33 @@ steps:
   instructions: |-
     Use the carried assessmentVerdict and briefArtifactRef refs from the assess step; reread {{ inputs.assessment_artifact_path }} or {{ inputs.brief_artifact_path }} only when identity or freshness requires it (new candidate, retry, or carried ref mismatch). When {{ inputs.issue_ref }} is empty, resolve the identity from trusted previous step context or the brief artifact with provenance checks; never infer it from arbitrary prose, and reject missing identity instead of proceeding. Read {{ inputs.assessment_artifact_path }} as initial process context when the carried refs do not include the assessment's requirement rows, evidence, or bounded backlog; the compact handoff alone never substitutes for that verification map.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
-
-    If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
+    Reconcile the saved candidate, latest persisted verifier evidence, and current prerequisite readiness before choosing work. The initial assessment is immutable history; its BLOCKED verdict does not veto independent ready work or later accepted evidence. If only evidence collection remains, preserve the implementation and run only the missing proof through its existing authorized owner. Current denied authority, cancellation, and explicit holds remain stops.
 
     When the existing-PR resolution step produced an exact existing PR and validated current head, continue that same PR from its validated head: prepare the workspace from the existing head, implement only the remaining requirements, and update that PR. Preserve the resolved issue and predecessor across replay/retry. Never repeat search during recovery of an already selected issue, reset a continuation to the base branch, or create a second PR just because the preset normally produces one. Keep internal remediation within this one issue attempt.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
-
-    If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
-
-    Use the assessment requirements verification map to prepare test prerequisites
-    and reproduce the required production boundaries before editing. If historical
-    assessment rows lack executable checks, derive them from the original visible
-    issue requirements under the portable acceptance policy and persist the map in
-    subsequent evidence without overwriting the initial assessment. Preserve its
-    candidate subject, original scope, completionTarget, and prerequisite attempt
-    counts. Setup failures that can be repaired through authorized tools stay in
-    that bounded loop; only an actual missing capability or authority becomes a
+    Reconcile the assessment requirements verification map against the original
+    trusted issue source before preparing prerequisites or reproducing production
+    boundaries. Derive missing historical checks from visible source requirements
+    under the portable acceptance policy. Remove invented or inherited obligations
+    through source-cited scopeReconciliation, explaining every removed historical
+    ID while preserving every mandatory row in the current source map. Keep the
+    initial assessment unchanged. Preserve its historical candidate identity and
+    prerequisite attempt counts; capture the current candidate subject, original
+    source scope, and completionTarget for new evidence. Before expensive work, bind each mandatory
+    row to the original source locator/digest, allowed proof method and target,
+    existing executable owner, and current capability/prerequisite probe evidence.
+    Use the resolved moonspec-verify helper's admission command with --current
+    pointing to that source-bound inventory and, when available, --previous
+    pointing to the last persisted admission result. Keep its readiness result
+    with the existing verification evidence. Run independent readyRequirementIds;
+    waitingRequirementIds reuse their pending job, and blockedRequirementIds keep
+    the exact unavailable or unauthorized prerequisite and resume check. Unknown,
+    optional, or separate-release work cannot become an implementation blocker.
+    A changed report reference or elapsed cooldown is not prerequisite progress:
+    do not repeat unchanged rejected setup or reset its recorded attempt budget.
+    Explicit source-required rendered, live-provider, or target proof remains
+    mandatory when unavailable. Setup failures repairable through authorized tools
+    stay in that bounded loop; only an actual missing capability or authority becomes a
     handoff. Save completed code before retrying verification infrastructure, and
     do not redo implementation when only evidence collection remains.
 
@@ -124,6 +133,8 @@ steps:
     Run moonspec-verify against the original scope and constraints. The initial assessment is context, not objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise execute the missing checks. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and mandatory evidence gaps; optional enrichment and diagnostics are disclosed limitations.
 
     Use verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}. Read {{ inputs.brief_artifact_path }} as original scope and {{ inputs.assessment_artifact_path }} as initial process context only when identity or freshness requires it; otherwise use the carried validated refs. No MoonSpec packet is required. Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default).
+
+    Bind the current verificationMap to the exact original trusted source bytes. Preserve sourceBinding with its original brief artifactRef and an empty pointer. The full original brief bytes, including acceptance criteria and constraints, are the admitted source; do not select only its title, description, or any other field. Preserve the current sourceDigest and any scopeReconciliation from historical requirement IDs. Source-cited reconciliation does not require an extra human approval. It cannot omit a mandatory row in the current source map or substitute synthetic proof for an explicitly required live, rendered, or target check.
 
     Write the complete verifier result to {{ inputs.verify_artifact_path }}. Return bounded remainingWork and the canonical continuation decision to the existing remediation controller; do not edit code or tests in this read-only step.
   skill:
@@ -229,7 +240,7 @@ steps:
 
     Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
 
-    If the recorded verdict is BLOCKED, stop without creating a pull request and report the blocking evidence from the assessment.
+    Publication follows the latest controlling verification and current publication policy. An initial BLOCKED assessment is historical context and cannot veto fresh accepted evidence. Preserve its original record and report any current remaining mandatory proof, denied authority, or explicit hold honestly.
 
     Otherwise create a pull request for the completed work for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} {% if inputs.run_verify %}only after the latest controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if {{ inputs.remediation_max_attempts }} remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request and report the verifier evidence.{% else %}after implementation is complete and the focused tests required by the issue have passed. Verification was disabled for this workflow execution, so do not require {{ inputs.verify_artifact_path }} or a moonspec-verify verdict before creating the pull request.{% endif %}
 

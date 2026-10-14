@@ -166,7 +166,7 @@ def github_boundary(candidate, pull_request, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target_input", [None, "", "refs/heads/release"])
 @pytest.mark.parametrize(
-    "initial_verdict", ["FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED"]
+    "initial_verdict", ["FULLY_IMPLEMENTED", "PARTIALLY_IMPLEMENTED", "BLOCKED"]
 )
 async def test_expanded_preset_requires_pr_for_candidate_and_closes_verified_target(
     candidate, github_boundary, tmp_path, monkeypatch, target_input, initial_verdict
@@ -210,7 +210,7 @@ async def test_expanded_preset_requires_pr_for_candidate_and_closes_verified_tar
     parent._record_assessment_context(
         {"assessmentVerdict": initial_verdict, "assessmentArtifactRef": "initial"}
     )
-    assert parent._issue_implement_pr_required()
+    assert parent._issue_implement_pr_required() is (initial_verdict != "BLOCKED")
     initial = parent._moonspec_verify_gate_result({"verdict": "FULLY_IMPLEMENTED"})
     assert initial.verdict == "NO_DETERMINATION"
     gate = parent._moonspec_verify_gate_result(report)

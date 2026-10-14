@@ -2,17 +2,136 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
 from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_BYTES
 from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+from moonmind.workflows.skills.approval_policy import step_gate_contract_violations
 
 _VERIFY_GATE_METADATA_KEYS = (
-    "moonSpecVerify", "moonspecVerify", "moonspec_verify",
-    "verificationResult", "verification_result",
+    "moonSpecVerify",
+    "moonspecVerify",
+    "moonspec_verify",
+    "verificationResult",
+    "verification_result",
 )
+
+
+_ACCEPTANCE_PROJECTION_FIELDS = (
+    "subject",
+    "scope",
+    "completionTarget",
+    "freshness",
+    "evidenceSetDigest",
+)
+
+
+def build_acceptance_projection(
+    gate: Mapping[str, Any],
+    *,
+    report_ref: str,
+    report_digest: str,
+) -> dict[str, Any]:
+    """Project a publisher-validated strict report after its immutable write.
+
+    This descriptor deliberately is not acceptance/v1. Consumers must read the
+    complete report with the owning workflow's authority and verify its bytes
+    before interpreting its proof. Requirement IDs and bindings are never cut.
+    Source validation remains owned by the artifact publisher.
+    """
+    refs = gate.get("validatedRefs")
+    binding = refs.get("acceptance") if isinstance(refs, Mapping) else None
+    if not isinstance(binding, Mapping):
+        binding = gate
+    if (
+        not isinstance(report_ref, str)
+        or not report_ref.strip()
+        or not isinstance(report_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", report_digest) is None
+        or binding.get("schemaVersion") != "acceptance/v1"
+        or not isinstance(binding.get("verificationMap"), list)
+        or not binding["verificationMap"]
+        or any(key not in binding for key in _ACCEPTANCE_PROJECTION_FIELDS)
+        or step_gate_contract_violations(gate, require_acceptance=True)
+    ):
+        raise ValueError("Only a validated strict acceptance report can be projected")
+    return {
+        "schemaVersion": "acceptance-projection/v1",
+        "reportRef": report_ref,
+        "reportDigest": report_digest,
+        **{key: copy.deepcopy(binding[key]) for key in _ACCEPTANCE_PROJECTION_FIELDS},
+    }
+
+
+def hydrate_acceptance_projection(
+    gate: Mapping[str, Any],
+    *,
+    report_bytes: bytes,
+    report_ref: str,
+) -> dict[str, Any]:
+    """Verify a strict descriptor against bytes read under workflow authority."""
+    refs = gate.get("validatedRefs")
+    projection = refs.get("acceptanceProjection") if isinstance(refs, Mapping) else None
+    if not isinstance(projection, Mapping):
+        raise ValueError("A strict acceptance projection is required")
+    expected_ref = projection.get("reportRef")
+    if (
+        not isinstance(expected_ref, str)
+        or not isinstance(report_ref, str)
+        or expected_ref.removeprefix("artifact://")
+        != report_ref.removeprefix("artifact://")
+        or not isinstance(report_bytes, bytes)
+        or gate.get("invalid")
+        or gate.get("degraded")
+        or gate.get("contractViolations")
+        or gate.get("contract_violations")
+    ):
+        raise ValueError(
+            "Acceptance projection is invalid or references another report"
+        )
+    digest = "sha256:" + hashlib.sha256(report_bytes).hexdigest()
+    if projection.get("reportDigest") != digest:
+        raise ValueError("Acceptance report bytes do not match the published digest")
+    try:
+        report = json.loads(report_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Acceptance report bytes are not JSON") from exc
+    if not isinstance(report, Mapping):
+        raise ValueError("Acceptance report must be an object")
+    expected = build_acceptance_projection(
+        report, report_ref=expected_ref, report_digest=digest
+    )
+    if dict(projection) != expected:
+        raise ValueError(
+            "Acceptance report binding differs from its published projection"
+        )
+    for key in ("verdict", "recommendedNextAction"):
+        if gate.get(key) != report.get(key):
+            raise ValueError("Acceptance report decision differs from its projection")
+    hydrated = dict(report)
+    hydrated["validatedRefs"] = {
+        **dict(report.get("validatedRefs") or {}),
+        "acceptanceProjection": copy.deepcopy(dict(projection)),
+    }
+    hydrated["acceptanceScopeContract"] = "source-bound/v1"
+    # Durable wrapper/source references are publisher-owned and may be added
+    # after the immutable raw report was written.
+    for key in (
+        "gateResultRef",
+        "sourceMoonSpecVerifyArtifactRef",
+        "moonSpecVerifyArtifactRef",
+        "remediationVerificationRef",
+        "remainingWorkRef",
+    ):
+        if gate.get(key):
+            hydrated[key] = gate[key]
+    hydrated.setdefault("gateResultRef", expected_ref)
+    return hydrated
 
 
 def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
@@ -68,10 +187,14 @@ def _compact_workflow_text_mapping(value: Any) -> dict[str, str]:
 
 def compact_moonspec_verify_metadata(
     value: Mapping[str, Any],
+    *,
+    acceptance_projection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     compact: dict[str, Any] = {}
     scalar_keys = (
         "schemaVersion",
+        "acceptanceScopeContract",
+        "sourceMoonSpecVerifyArtifactRef",
         "verdict",
         "gateVerdict",
         "gate_verdict",
@@ -133,11 +256,28 @@ def compact_moonspec_verify_metadata(
     # projection. Nested control evidence is not a string-valued annotation.
     # Keep its exact identity/scope/freshness and reference the full published
     # report for detailed evidence; never reinterpret the Skill's verdict.
-    acceptance = acceptance_evidence(value)
-    if acceptance is not None:
+    raw_refs = value.get("validatedRefs")
+    if acceptance_projection is None and isinstance(raw_refs, Mapping):
+        existing = raw_refs.get("acceptanceProjection")
+        if isinstance(existing, Mapping):
+            acceptance_projection = existing
+    acceptance = acceptance_evidence(value) if acceptance_projection is None else None
+    if acceptance_projection is not None:
+        validated_refs["acceptanceProjection"] = copy.deepcopy(
+            dict(acceptance_projection)
+        )
+        compact["acceptanceScopeContract"] = "source-bound/v1"
+    elif (
+        acceptance is not None
+        and value.get("acceptanceScopeContract") != "source-bound/v1"
+    ):
         projected = acceptance.model_dump(mode="json", by_alias=True, exclude_none=True)
         evidence_ref = value.get("gateResultRef")
-        if isinstance(evidence_ref, str) and evidence_ref.strip():
+        if (
+            not projected.get("evidenceSetDigest")
+            and isinstance(evidence_ref, str)
+            and evidence_ref.strip()
+        ):
             for row in projected["evidence"]:
                 row["evidenceRefs"] = [evidence_ref]
         validated_refs["acceptance"] = projected
@@ -221,9 +361,7 @@ def compact_agent_run_result_payload_for_workflow_history(
     for key in _VERIFY_GATE_METADATA_KEYS:
         value = compact_metadata.get(key)
         if isinstance(value, Mapping):
-            compact_metadata[key] = compact_moonspec_verify_metadata(
-                value
-            )
+            compact_metadata[key] = compact_moonspec_verify_metadata(value)
 
     queued_children = compact_metadata.get("queuedChildren")
     if isinstance(queued_children, (list, tuple)):
@@ -232,9 +370,7 @@ def compact_agent_run_result_payload_for_workflow_history(
             if not isinstance(child, Mapping):
                 continue
             compact_child: dict[str, str] = {}
-            workflow_id = _compact_workflow_text(
-                child.get("workflowId"), max_chars=400
-            )
+            workflow_id = _compact_workflow_text(child.get("workflowId"), max_chars=400)
             execution_id = _compact_workflow_text(
                 child.get("executionId"), max_chars=400
             )
@@ -254,9 +390,7 @@ def compact_agent_run_result_payload_for_workflow_history(
     omnigent_capture = compact_metadata.get("omnigentCheckpointCapture")
     if isinstance(omnigent_capture, Mapping):
         compact_metadata["omnigentCheckpointCapture"] = (
-            _compact_omnigent_checkpoint_capture_for_workflow_history(
-                omnigent_capture
-            )
+            _compact_omnigent_checkpoint_capture_for_workflow_history(omnigent_capture)
         )
     compact_payload["metadata"] = compact_metadata
     return compact_payload
