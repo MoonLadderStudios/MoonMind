@@ -1544,6 +1544,9 @@ class OmnigentProfileBoundExecutionCoordinator:
             preflight_operation = self._host_preparation.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
+                publication_git_identity=publication_git_identity_projection(
+                    request.parameters
+                ),
                 workspace_key=(
                     f"{workflow_id}:{step_execution_id or request.idempotency_key}"
                 ),

@@ -822,6 +822,12 @@ RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
 # payload. Retained histories keep their original payload when this is absent.
 RUN_GITHUB_ACTION_PERMISSIONS_PATCH = "run-github-action-permissions-v1"
 RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH = "run-publication-git-identity-payload-v1"
+RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH = (
+    "run-publication-git-identity-continuation-v1"
+)
+RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH = (
+    "run-publication-git-identity-child-memo-v1"
+)
 # The launching controller attests the closed canonical turn source and the Step
 # Execution a remediation attempt repairs (#3707).  This adds a field to the
 # AgentRun request payload and therefore requires a replay gate: an in-flight
@@ -4335,6 +4341,32 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_remediation_loop_projection()
         self._sync_progress_snapshot(updated_at=workflow.now())
 
+    @staticmethod
+    def _publication_identity_memo() -> dict[str, object]:
+        from moonmind.omnigent.git_identity import publication_git_identity_memo
+
+        try:
+            return publication_git_identity_memo(workflow.memo() or {})
+        except Exception as exc:
+            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            return {}
+
+    def _continue_remediation_loop_as_new(
+        self, *, ordered_nodes: Sequence[Mapping[str, Any]]
+    ) -> None:
+        continuation_options = {}
+        if self._workflow_patch_enabled(
+            RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH
+        ):
+            continuation_options["memo"] = self._publication_identity_memo()
+        workflow.continue_as_new(
+            self._build_remediation_loop_continue_as_new_input(
+                ordered_nodes=ordered_nodes,
+            ),
+            **continuation_options,
+        )
+
     def _build_remediation_loop_continue_as_new_input(
         self,
         *,
@@ -5062,11 +5094,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_progress_snapshot(updated_at=workflow.now())
         if continue_after_admission:
             await workflow.wait_condition(workflow.all_handlers_finished)
-            workflow.continue_as_new(
-                self._build_remediation_loop_continue_as_new_input(
-                    ordered_nodes=ordered_nodes,
-                )
-            )
+            self._continue_remediation_loop_as_new(ordered_nodes=ordered_nodes)
+
         return admitted
 
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
@@ -21274,6 +21303,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 ),
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",
+                **(
+                    {"memo": self._publication_identity_memo()}
+                    if self._workflow_patch_enabled(
+                        RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH
+                    )
+                    else {}
+                ),
             )
 
         try:
@@ -23477,25 +23513,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             }
                         },
                     }
-            from moonmind.omnigent.git_identity import (
-                PUBLICATION_GIT_IDENTITY_MEMO_KEY,
-                admitted_publication_git_identity,
-                publication_git_identity_admission,
-            )
-
-            try:
-                admission_memo = workflow.memo() or {}
-            except Exception as exc:
-                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
-                    raise
-                admission_memo = {}
-            identity = admitted_publication_git_identity(admission_memo)
-            if identity is not None:
-                parameters[PUBLICATION_GIT_IDENTITY_MEMO_KEY] = (
-                    publication_git_identity_admission(
-                        {"name": identity[0], "email": identity[1]}
-                    )
-                )
+            parameters.update(self._publication_identity_memo())
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,

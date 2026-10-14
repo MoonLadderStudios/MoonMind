@@ -6679,9 +6679,11 @@ async def test_dynamic_loop_active_cancellation_keeps_terminal_evidence_and_pair
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publication_memo_enabled", [False, True])
 async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
+    publication_memo_enabled: bool,
 ) -> None:
     loop = {
         "kind": "remediation_loop",
@@ -6753,10 +6755,29 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
         },
     )
+    memo = {
+        "publicationGitIdentityAdmission": {
+            "schemaVersion": "v1",
+            "identity": {"name": "Admitted", "email": "admitted@example.invalid"},
+        }
+    }
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: memo)
+    old_patch = run_workflow_module.workflow.patched
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: (
+            publication_memo_enabled
+            if patch == "run-publication-git-identity-continuation-v1"
+            else old_patch(patch)
+        ),
+    )
     carried: list[dict[str, Any]] = []
+    carried_options = []
 
-    def capture_continue(payload: dict[str, Any]) -> None:
+    def capture_continue(payload: dict[str, Any], **kwargs) -> None:
         carried.append(payload)
+        carried_options.append(kwargs)
         raise RuntimeError("continued")
 
     monkeypatch.setattr(
@@ -6771,6 +6792,7 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
             remaining_work_ref="artifact://remaining/R1",
         )
 
+    assert carried_options == [{"memo": memo} if publication_memo_enabled else {}]
     continuation = carried[0]["remediation_loop_continuation"]
     assert continuation["schemaVersion"] == 1
     assert continuation["state"]["attemptOrdinal"] == 2

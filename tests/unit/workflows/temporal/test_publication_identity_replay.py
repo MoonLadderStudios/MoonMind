@@ -161,3 +161,81 @@ async def test_new_publication_identity_payload_records_patch_and_replays():
         workflows=[CurrentPublicationIdentityHandoff],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@workflow.defn(name="PublicationIdentityContinuationReplay")
+class LegacyIdentityContinuation:
+    @workflow.run
+    async def run(self, parameters: dict) -> dict:
+        if not parameters.get("continued"):
+            workflow.continue_as_new({"continued": True})
+        parent = MoonMindRunWorkflow()
+        check = parent._workflow_patch_enabled
+        parent._workflow_patch_enabled = lambda patch: (
+            False if patch == _PATCH else check(patch)
+        )
+        return {
+            "parameters": await _handoff(_request(parent, {}).parameters),
+            "runId": workflow.info().run_id,
+        }
+
+
+@workflow.defn(name="PublicationIdentityContinuationReplay")
+class CurrentIdentityContinuation:
+    @workflow.run
+    async def run(self, parameters: dict) -> dict:
+        parent = MoonMindRunWorkflow()
+        if not parameters.get("continued"):
+            # The compact remediation input already has separate budget/authority
+            # coverage. Exercise its actual SDK continuation boundary here.
+            parent._build_remediation_loop_continue_as_new_input = lambda **_: {
+                "continued": True
+            }
+            parent._continue_remediation_loop_as_new(ordered_nodes=[])
+        return {
+            "parameters": await _handoff(_request(parent, {}).parameters),
+            "runId": workflow.info().run_id,
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_publication_identity_continue_as_new_and_legacy_history_replay(legacy):
+    producer = LegacyIdentityContinuation if legacy else CurrentIdentityContinuation
+    admission = {
+        "publicationGitIdentityAdmission": {
+            "schemaVersion": "v1",
+            "identity": _IDENTITY,
+        }
+    }
+    identity = f"publication-identity-continuation-{legacy}"
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as env,
+        Worker(
+            env.client,
+            task_queue=identity,
+            workflows=[producer],
+            activities=[capture_publication_parameters],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            producer.run, {}, id=identity, task_queue=identity, memo=admission
+        )
+        result = await handle.result()
+        first = await handle.fetch_history()
+        successor = await env.client.get_workflow_handle(
+            identity, run_id=result["runId"]
+        ).fetch_history()
+    if legacy:
+        assert "publicationGitIdentityAdmission" not in result["parameters"]
+    else:
+        assert (
+            result["parameters"]["publicationGitIdentityAdmission"]
+            == admission["publicationGitIdentityAdmission"]
+        )
+    for history in (first, successor):
+        await Replayer(
+            workflows=[CurrentIdentityContinuation],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
