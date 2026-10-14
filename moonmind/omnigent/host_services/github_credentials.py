@@ -662,7 +662,16 @@ class OmnigentGithubCredentialService:
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         projection_reservation: dict[str, Any] | None = None,
         projection_verifier: Callable[[], Awaitable[None]] | None = None,
+        issuance_sink: Callable[[str | None], None] | None = None,
     ) -> dict[str, Any] | None:
+        """Publish the admitted collaboration issuance as the attempt's gh login.
+
+        A later call with a newer reservation of the same owner re-issues
+        through the same frozen binding and atomically replaces the projection
+        the running ``gh`` reads; the destination fence rejects an older one.
+        ``issuance_sink`` receives the published issuance's expiry (``None``
+        for a non-expiring PAT), which is all a refresh schedule needs.
+        """
         attachment = self.anticipated_attachment(resolved_tools, owner_ref=owner_ref)
         if attachment is None:
             return None
@@ -760,6 +769,8 @@ class OmnigentGithubCredentialService:
                     confirmed = False
                 if not confirmed:
                     raise
+            if issuance_sink is not None:
+                issuance_sink(getattr(acquired.binding, "expires_at", None))
             return attachment
         finally:
             acquired.credential.clear()

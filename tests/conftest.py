@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 # Mirror the auth module's disabled-mode default user id to avoid importing
 # api_service.auth during global pytest collection.
@@ -164,6 +165,22 @@ def authenticated_mode(monkeypatch):
 
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc", raising=False)
     yield
+
+
+@pytest_asyncio.fixture
+async def deployment_without_recorded_connections(monkeypatch, tmp_path):
+    """A deployment that records no repository connection.
+
+    Its default connection derives from the deployment's GitHub declaration,
+    read through the production connection loader. A test may still record
+    connections into the same database.
+    """
+
+    from tests.helpers.repository_connections import record_repository_connections
+
+    engine = await record_repository_connections(monkeypatch, tmp_path)
+    yield
+    await engine.dispose()
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -17,6 +17,9 @@ from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import story_output_tools as tools
 from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
+
 # Reuse the claim journey's real GitHub HTTP fixture for selection tests.
 journey = claim_journey.journey
 

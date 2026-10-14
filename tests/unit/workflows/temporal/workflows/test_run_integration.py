@@ -33,6 +33,9 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH,
     RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH,
     RUN_OMNIGENT_INITIAL_VERIFICATION_CHECKPOINT_RESTORE_PATCH,
+    RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+    RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+    RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
@@ -1722,6 +1725,392 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
         assert ("terminal", 1, "retryable") in manifests
     else:
         assert all(disposition != "retryable" for _, _, disposition in manifests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_archive", "interruptions", "prior_restore"),
+    [
+        (True, 1, False),
+        (False, 1, False),
+        (True, 1, True),
+        (True, 2, False),
+    ],
+    ids=[
+        "restores-saved-archive",
+        "restarts-from-admitted-inputs",
+        "prefers-interrupted-save-over-prior-restore",
+        "keeps-inherited-save-across-second-interruption",
+    ],
+)
+async def test_run_execution_stage_carries_interrupted_omnigent_workspace_to_successor(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_archive: bool,
+    interruptions: int,
+    prior_restore: bool,
+) -> None:
+    """A host-loss successor resumes the verified save or restarts honestly."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    start_workspaces: dict[int, dict[str, Any]] = {}
+    archive_ref = "artifact://checkpoints/interrupted-step-archive"
+    prior_restore_ref = "artifact://checkpoints/prior-verified-head"
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        attempt = workflow._step_execution_for("omnigent-turn") or 0
+        start_workspaces[attempt] = workflow._step_execution_workspace(
+            "omnigent-turn",
+            attempt=attempt,
+            source_execution_ordinal=None,
+        )
+        if len(child_requests) <= interruptions:
+            return AgentRunResult(
+                summary="Omnigent session host was replaced.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+            )
+        return AgentRunResult(summary="Completed on the successor attempt.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    def fake_publication_checkpoint_restore_ref(**_kwargs: Any) -> str | None:
+        # An earlier trusted restore (for example a remediation or publication
+        # head) that predates the interrupted attempt's own verified save.
+        return prior_restore_ref if prior_restore else None
+
+    async def fake_record_canonical_step_checkpoint(
+        logical_step_id: str,
+        *,
+        boundary: str,
+        **_kwargs: Any,
+    ) -> str | None:
+        # The predecessor's after-execution capture archives its real
+        # workspace bytes; a dead host yields no capture at all.
+        if boundary != "after_execution" or not saved_archive:
+            return None
+        if (workflow._step_execution_for(logical_step_id) or 0) != 1:
+            return None
+        checkpoint_ref = "artifact://checkpoints/interrupted-step-manifest"
+        workflow._step_checkpoint_refs[logical_step_id] = checkpoint_ref
+        workflow._step_checkpoint_workspace_evidence_by_boundary.setdefault(
+            logical_step_id, {}
+        )["after_execution"] = {
+            "checkpointRef": checkpoint_ref,
+            "workspaceKind": "worktree_archive",
+            "workspaceDigest": "sha256:" + "a" * 64,
+            "workspaceIdentityDigest": "sha256:" + "b" * 64,
+            "checkpointManifestRef": "artifact://checkpoints/manifest",
+            "workspaceArchiveRef": archive_ref,
+        }
+        return checkpoint_ref
+
+    async def fake_record_step_execution_manifest(
+        _logical_step_id: str,
+        **_kwargs: Any,
+    ) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH,
+        RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-omnigent-host-replaced",
+            "run_id": "run-omnigent-host-replaced",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_canonical_step_checkpoint",
+        fake_record_canonical_step_checkpoint,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_omnigent_publication_checkpoint_restore_ref",
+        fake_publication_checkpoint_restore_ref,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    assert len(child_requests) == interruptions + 1
+    predecessor, successor = child_requests[0], child_requests[-1]
+    assert successor.step_execution is not None
+    assert successor.step_execution.execution_ordinal == interruptions + 1
+    assert successor.step_execution.reason == "runtime_recovered"
+    expected_predecessor_ref = prior_restore_ref if prior_restore else None
+    assert (predecessor.workspace_spec or {}).get(
+        "workspaceCheckpointRestoreRef"
+    ) == expected_predecessor_ref
+    successor_workspace = start_workspaces[interruptions + 1]
+    assert successor_workspace["evidenceAccepted"] is True
+    if saved_archive:
+        assert (successor.workspace_spec or {}).get(
+            "workspaceCheckpointRestoreRef"
+        ) == archive_ref
+        assert successor_workspace["policy"] == "continue_from_previous_execution"
+        assert "restartLimitation" not in successor_workspace
+    else:
+        assert "workspaceCheckpointRestoreRef" not in (successor.workspace_spec or {})
+        assert successor_workspace["policy"] == "fresh_branch_from_source"
+        assert successor_workspace["restartLimitation"] == (
+            "no_verified_workspace_checkpoint"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interrupted_seconds", "expected_child_count"),
+    [(1800, 2), (7200, 1)],
+    ids=["successor-gets-remaining-budget", "exhausted-budget-starts-no-successor"],
+)
+async def test_run_execution_stage_preserves_step_deadline_across_interruptions(
+    monkeypatch: pytest.MonkeyPatch,
+    interrupted_seconds: int,
+    expected_child_count: int,
+) -> None:
+    """Repeated host replacement cannot reset the Step's hard ceiling."""
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._integration = None
+    child_requests: list[AgentExecutionRequest] = []
+    clock = {"now": datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)}
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "omnigent-turn",
+                    "tool": {"type": "agent_runtime", "name": "omnigent"},
+                    "inputs": {
+                        "instructions": "Implement the change.",
+                        "runtime": {"mode": "omnigent"},
+                        "timeoutPolicy": {
+                            "timeout_seconds": 3600,
+                            "max_timeout_seconds": 7200,
+                        },
+                    },
+                }
+            ]
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        if len(child_requests) == 1:
+            clock["now"] += timedelta(seconds=interrupted_seconds)
+            return AgentRunResult(
+                summary="Omnigent session host was replaced.",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                retryRecommendation="retry_step_execution",
+            )
+        return AgentRunResult(summary="Completed on the successor attempt.")
+
+    async def fake_bind_workflow_scoped_session(
+        request: AgentExecutionRequest,
+    ) -> AgentExecutionRequest:
+        return request
+
+    async def fake_record_step_execution_manifest(
+        _logical_step_id: str,
+        **_kwargs: Any,
+    ) -> None:
+        return None
+
+    enabled_patches = {
+        RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
+    }
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "task_queue": "mm.workflow.user.v2",
+            "namespace": "default",
+            "workflow_id": "wf-omnigent-deadline",
+            "run_id": "run-omnigent-deadline",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+
+    def advancing_now() -> datetime:
+        clock["now"] += timedelta(microseconds=1)
+        return clock["now"]
+
+    monkeypatch.setattr(run_workflow_module.workflow, "now", advancing_now)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module, "execute_typed_activity", fake_execute_typed_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id in enabled_patches,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "wait_condition", _immediate_wait_condition
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_record_step_execution_manifest",
+        fake_record_step_execution_manifest,
+    )
+
+    if expected_child_count == 2:
+        await workflow._run_execution_stage(
+            parameters={"publishMode": "none"},
+            plan_ref="plan-ref",
+        )
+    else:
+        with pytest.raises(ValueError, match="execution budget"):
+            await workflow._run_execution_stage(
+                parameters={"publishMode": "none"},
+                plan_ref="plan-ref",
+            )
+
+    assert len(child_requests) == expected_child_count
+    assert child_requests[0].timeout_policy == {
+        "timeout_seconds": 3600,
+        "max_timeout_seconds": 7200,
+    }
+    if expected_child_count == 2:
+        successor_policy = child_requests[1].timeout_policy
+        # Interrupted wall-clock time is consumed, never refunded.
+        assert (
+            7200 - interrupted_seconds - 1
+            <= successor_policy["max_timeout_seconds"]
+            <= 7200 - interrupted_seconds
+        )
+        assert successor_policy["timeout_seconds"] == 3600
+        assert successor_policy["progress_stall_seconds"] <= 3600
 
 
 @pytest.mark.asyncio
@@ -9875,3 +10264,112 @@ async def test_failed_finish_summary_keeps_terminal_publication_evidence(
     assert summary["publish"]["branchName"] == "mm/workflow/recovered-work"
     assert summary["publish"]["remoteVerified"] is True
     assert summary["publish"]["evidenceRef"] == "artifact://terminal-publication"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("verdict,expected", [
+    ("BLOCKED", "verification_blocked"),
+    ("NO_DETERMINATION", "verification_blocked"),
+    (None, "verification_blocked"),
+    ("INVALID", "verification_blocked"),
+    ("ADDITIONAL_WORK_NEEDED", "failed"),
+])
+def test_preserved_draft_projects_unmet_objective_without_changing_lifecycle(
+    mock_run_workflow, monkeypatch, enabled, verdict, expected
+):
+    workflow = mock_run_workflow
+    patches = {
+        RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+        "run-objective-outcome-projection-v1",
+    }
+    if enabled:
+        patches.add("run-incomplete-draft-objective-outcome-v1")
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", patches.__contains__)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": verdict, "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == (expected if enabled else "succeeded")
+    assert ("Workflow completed successfully" in message) is not enabled
+    assert workflow._pull_request_url in message
+    assert workflow._attention_required is True
+
+
+@pytest.mark.parametrize("state,expected", [("failed", "failed"), ("canceled", "cancelled")])
+def test_incomplete_draft_keeps_failed_or_canceled_terminal_objective(
+    mock_run_workflow, monkeypatch, state, expected
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = "BLOCKED"
+    workflow._activate_moonspec_draft_publication("Required verification is incomplete.")
+    workflow._state = state
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == expected
+
+
+@pytest.mark.parametrize("draft,verdict", [(False, "BLOCKED"), (True, "FULLY_IMPLEMENTED")])
+def test_draft_objective_projection_does_not_reclassify_accepted_or_unrelated_work(
+    mock_run_workflow, monkeypatch, draft, verdict
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda key: key in {
+        "run-objective-outcome-projection-v1", "run-incomplete-draft-objective-outcome-v1"
+    })
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._moonspec_gate_verdict = verdict
+    if draft:
+        workflow._activate_moonspec_draft_publication("Earlier gate was incomplete.")
+    workflow._state = "completed"
+    workflow._update_memo()
+    assert memos[-1]["objectiveOutcome"] == "succeeded"
+    assert "Workflow completed successfully" in workflow._compose_success_completion_message()
+
+
+@pytest.mark.asyncio
+async def test_preserved_draft_finalization_keeps_publication_and_blocked_objective(
+    mock_run_workflow, monkeypatch
+):
+    workflow = mock_run_workflow
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    memos = []
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", memos.append)
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-final", outputs={"verdict": "BLOCKED", "diagnostics_ref": "art_verify"}
+    )
+    workflow._activate_moonspec_draft_publication("Required GPU evidence is unavailable.")
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    workflow._publish_context["pullRequestUrl"] = workflow._pull_request_url
+    workflow._publish_context["objectiveOutcome"] = "succeeded"
+    workflow._publish_status = "published"
+    workflow._authoritative_publish_outcome_enabled = True
+    status, message, failed = workflow._determine_publish_completion(parameters={"publishMode": "pr"})
+    assert (status, failed) == ("success", False)
+    summary = await _finalize_and_capture_summary(
+        monkeypatch, workflow, parameters={"publishMode": "pr"}, status=status
+    )
+    assert summary["finishOutcome"]["code"] == "PUBLISHED_PR"
+    assert summary["publish"]["status"] == "published"
+    assert summary["publishContext"]["objectiveOutcome"] == "verification_blocked"
+    assert workflow._summary_ref == "artifact://summary"
+    workflow._set_state("completed", message)
+    assert workflow._state == "completed"
+    assert memos[-1]["objectiveOutcome"] == "verification_blocked"
+    assert "completed successfully" not in memos[-1]["summary"]
+    assert workflow._pull_request_url in memos[-1]["summary"]
+    assert workflow._attention_required is True

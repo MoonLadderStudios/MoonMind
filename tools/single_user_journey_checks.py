@@ -124,9 +124,7 @@ class Api:
         # derived from its published binding. Container-job and CI hosts
         # export an egress proxy; routing loopback journey traffic through
         # it can only fail, so this helper never honors proxy variables.
-        self._opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({})
-        )
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def request(
         self,
@@ -243,6 +241,41 @@ def wait_for_canceled(api: Api, workflow_id: str, *, timeout: float) -> dict[str
     )
 
 
+def wait_for_default_agent_profile(api: Api, *, timeout: float) -> None:
+    """Observe asynchronous bootstrap before exercising default admission.
+
+    HTTP health is available while the deployment reconciles images, policies,
+    and Agent Profiles. Observe its existing authority without creating a
+    profile or substituting a selection, then still require real admission.
+    """
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        profiles = api.json("GET", "/api/omnigent/agent-profiles")
+        if not isinstance(profiles, list):
+            raise JourneyFailure("Agent Profile inventory is not a list")
+        defaults = [p for p in profiles if p.get("defaultForRuntime") is True]
+        if len(defaults) == 1:
+            profile = defaults[0]
+            active = profile.get("activeVersion")
+            version = next(
+                (v for v in profile.get("versions", []) if v.get("version") == active),
+                None,
+            )
+            if (
+                profile.get("state") == "active"
+                and active is not None
+                and version is not None
+                and (version.get("validationResult") or {}).get("ready") is True
+            ):
+                log("deployment default Agent Profile is ready")
+                return
+        time.sleep(min(3, max(0, deadline - time.monotonic())))
+    raise JourneyFailure(
+        f"default Agent Profile did not become ready within {timeout:.0f}s"
+    )
+
+
 def journey_submission(
     *,
     title: str,
@@ -333,6 +366,8 @@ def populate(
         ).strip()
         if not repository:
             raise JourneyFailure("dashboard config exposes no default repository")
+    else:
+        wait_for_default_agent_profile(api, timeout=timeout)
 
     # One task with the dashboard's default selections and no-publication
     # intent, deferred so it stays in flight without a provider credential:
@@ -888,7 +923,9 @@ def _stack_actions(api: Api) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     stack = api.json("GET", DEPLOYMENT_STACK_PATH)
     actions = stack.get("recentActions") if isinstance(stack, dict) else None
     if not isinstance(actions, list):
-        raise JourneyFailure(f"Settings Operations stack state is not readable: {stack!r}")
+        raise JourneyFailure(
+            f"Settings Operations stack state is not readable: {stack!r}"
+        )
     return stack, [action for action in actions if isinstance(action, dict)]
 
 
@@ -996,7 +1033,9 @@ def controller_ready(api: Api, state: dict[str, Any], *, timeout: float) -> None
 
 def _require_controller_answer(name: str, answer: Any, operation_id: str) -> None:
     if not isinstance(answer, dict) or answer.get("owner") != "controller":
-        raise JourneyFailure(f"the dashboard {name} was not answered by the controller: {answer!r}")
+        raise JourneyFailure(
+            f"the dashboard {name} was not answered by the controller: {answer!r}"
+        )
     if answer.get("operationId") != operation_id:
         raise JourneyFailure(
             f"the dashboard {name} named operation {answer.get('operationId')!r}, "
@@ -1032,7 +1071,9 @@ def controller(api: Api, state: dict[str, Any]) -> None:
     stack, actions = _stack_actions(api)
     controller_state = stack.get("controller") or {}
     if not (controller_state.get("installed") and controller_state.get("reachable")):
-        raise JourneyFailure(f"the controller is no longer reachable: {controller_state!r}")
+        raise JourneyFailure(
+            f"the controller is no longer reachable: {controller_state!r}"
+        )
     owned = [action for action in actions if action.get("owner") == "controller"]
     if [action.get("operationId") for action in owned] != [operation_id]:
         raise JourneyFailure(

@@ -34,6 +34,15 @@ The selected image supplies the canonical application code, migrations, and port
 
 The controller records an immutable submission, starts one named updater with durable ownership, pulls and verifies the pinned digest, persists the desired state, recreates the installed fleet in place, verifies readiness for every affected service, and migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests. No parallel candidate or retained fleet is started, so nothing is drained afterwards and recreation has a bounded downtime window. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
 
+Before a default host submission, the entrypoint refreshes an idle controller
+through the release's existing bootstrap, including when journal support is
+already advertised. A temporary trusted image container runs that host-owned
+lifecycle with the existing controller state, socket, and private network so
+root-owned records and locks remain accessible. Compose preserves an unchanged
+controller. Active controller work retains its owner and is observed instead;
+explicit controller selections retain their release choice. A rollback target
+without the bootstrap can use the installed application's repair source.
+
 Before handing off through the transitional updater, the host verifies Docker
 access from the updater's own rendered environment and networks. If its
 configured `docker-proxy` transport is unavailable, it starts only the proxy

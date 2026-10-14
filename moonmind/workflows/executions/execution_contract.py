@@ -1084,6 +1084,39 @@ def allows_repository_publish_for_skill_context(value: object) -> bool:
     return _has_jira_orchestrate_preset_context(value)
 
 
+def skill_publish_contract(
+    skill_id: object,
+    *,
+    publish_metadata: Mapping[str, Any] | None = None,
+    side_effect_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, bool]:
+    """Project the publication constraints ``resolve_publish_mode_for_skill`` enforces.
+
+    Authoring clients read this projection instead of keeping their own Skill
+    lists: ``selfManaged`` Skills own Auto publication, and
+    ``repositoryPublishDisabled`` Skills accept only None.
+    """
+
+    normalized_skill_id = _normalize_skill_id(skill_id)
+    self_managed = _auto_publish_capability_source(
+        normalized_skill_id,
+        publish_metadata=publish_metadata,
+    ) in {"metadata", "fallback"}
+    non_repository = is_non_repository_side_effect_skill(normalized_skill_id) or (
+        side_effect_metadata is not None
+        and _is_agent_owned_side_effect_metadata(side_effect_metadata)
+    )
+    return {
+        "selfManaged": self_managed,
+        "repositoryPublishDisabled": (
+            not self_managed
+            and non_repository
+            and normalized_skill_id
+            not in _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS
+        ),
+    }
+
+
 def resolve_publish_mode_for_skill(
     skill_id: object,
     requested_mode: object,
