@@ -662,6 +662,46 @@ async def test_create_execution_initializes_lifecycle_search_attributes(
 
 
 @pytest.mark.asyncio
+async def test_input_update_preserves_admitted_publication_identity(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Publish",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        identity = dict(created.parameters["_publicationGitIdentity"])
+        await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="UpdateInputs",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            title=None,
+            parameters_patch={
+                "_publicationGitIdentity": {
+                    "name": "forged",
+                    "email": "forged@example.invalid",
+                },
+                "foo": "updated",
+            },
+            idempotency_key="identity-update",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+        assert refreshed.parameters["_publicationGitIdentity"] == identity
+        assert refreshed.parameters["foo"] == "updated"
+        dispatched = mock_client_adapter.update_workflow.await_args.args[2]
+        assert dispatched["parameters_patch"] == {"foo": "updated"}
+
+
+@pytest.mark.asyncio
 async def test_create_execution_writes_runtime_and_primary_skill_search_attributes(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

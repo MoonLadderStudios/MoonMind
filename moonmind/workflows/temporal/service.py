@@ -3117,6 +3117,15 @@ class TemporalExecutionService:
                 f"Unsupported update name: {update_name}"
             )
 
+        if parameters_patch is not None:
+            # Attribution is server-admitted intent, not an editable input.
+            # Exclude it before Temporal dispatch and canonical-record merging.
+            parameters_patch = {
+                key: value
+                for key, value in parameters_patch.items()
+                if key != "_publicationGitIdentity"
+            }
+
         record = await self._require_source_execution(workflow_id)
         if expected_run_id is not None:
             await self._session.refresh(record)
