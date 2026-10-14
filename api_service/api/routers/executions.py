@@ -8745,16 +8745,34 @@ async def _profile_route_runtime(
     user: Any,
     provider_profile: Any,
     authored_runtime: object,
+    agent_profile: object = None,
+    routes: dict[str, str] | None = None,
 ) -> str | None:
-    """Return the selected Profile's route when no runtime was authored."""
+    """Return the selected Profile's route when no runtime was authored.
 
-    if authored_runtime or provider_profile is None:
+    An explicit Agent Profile is Omnigent intent: it may name a version outside
+    the active configurations the Provider Profile's own route reads.
+    ``routes`` holds one submission's decisions, so preset expansion and
+    admission cannot reach different Backends when configurations change
+    between their reads.
+    """
+
+    if authored_runtime:
         return None
+    if agent_profile is not None:
+        return "omnigent"
+    if provider_profile is None:
+        return None
+    if routes is not None and provider_profile.profile_id in routes:
+        return routes[provider_profile.profile_id]
     from api_service.services.profile_execution_selection import (
         profile_route_runtime,
     )
 
-    return await profile_route_runtime(session, user, provider_profile)
+    route = await profile_route_runtime(session, user, provider_profile)
+    if routes is not None:
+        routes[provider_profile.profile_id] = route
+    return route
 
 
 async def _load_default_provider_profile_for_runtime(
@@ -9864,6 +9882,7 @@ async def _preset_expansion_target_runtime(
     request_payload: Mapping[str, Any],
     session: Any,
     user: Any,
+    profile_routes: dict[str, str] | None,
 ) -> str:
     """Resolve the runtime preset steps inherit, as Workflow Create will.
 
@@ -9908,6 +9927,11 @@ async def _preset_expansion_target_runtime(
             user=user,
             provider_profile=provider_profile,
             authored_runtime=authored_runtime,
+            agent_profile=(
+                request_payload.get("agentProfile")
+                or runtime_payload.get("agentProfile")
+            ),
+            routes=profile_routes,
         ),
         workflow_settings=settings.workflow,
         # The admission that follows records the selection; this is its preview.
@@ -9921,12 +9945,14 @@ async def _expand_goal_preset_for_workflow_submission(
     request_payload: Mapping[str, Any],
     session: Any,
     user: Any,
+    profile_routes: dict[str, str] | None = None,
 ) -> None:
     target_runtime = await _preset_expansion_target_runtime(
         task_payload=task_payload,
         request_payload=request_payload,
         session=session,
         user=user,
+        profile_routes=profile_routes,
     )
     if has_unexpanded_task_template({"workflow": task_payload}):
         from api_service.services.presets.catalog import (
@@ -12237,12 +12263,15 @@ async def _create_execution_from_workflow_request(
     if len(depends_on) > 10:
         raise _invalid_workflow_request(f"{field_name} can have a maximum of 10 items.")
 
+    # The Profile route preset expansion previews is the one admission uses.
+    profile_routes: dict[str, str] = {}
     if session is not None:
         await _expand_goal_preset_for_workflow_submission(
             task_payload=task_payload,
             request_payload=payload,
             session=session,
             user=user,
+            profile_routes=profile_routes,
         )
         _reject_submit_version_identity(task_payload)
 
@@ -12514,6 +12543,9 @@ async def _create_execution_from_workflow_request(
     # switches never influence this path; the bounded direct-retirement cutoff
     # and the code-owned retirement class remain the only admission authorities
     # besides the shared policy.
+    agent_profile_selection = payload.get("agentProfile")
+    if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
+        agent_profile_selection = runtime_payload.get("agentProfile")
     # Profile selection is execution authority even when the advanced runtime
     # control was untouched; it is recorded as Profile-derived, not authored.
     profile_runtime = await _profile_route_runtime(
@@ -12521,6 +12553,8 @@ async def _create_execution_from_workflow_request(
         user=user,
         provider_profile=_provider_profile,
         authored_runtime=authored_runtime,
+        agent_profile=agent_profile_selection,
+        routes=profile_routes,
     )
     try:
         new_work_selection = resolve_new_work_selection(
@@ -12761,10 +12795,7 @@ async def _create_execution_from_workflow_request(
     # Profile readiness and the immutable effective snapshot are persisted
     # under the reserved identity in the same transaction as the execution
     # record.  A failed resolution never starts Temporal work.
-    agent_profile_selection = payload.get("agentProfile")
     selected_provider_profile = None
-    if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
-        agent_profile_selection = runtime_payload.get("agentProfile")
     if (
         agent_profile_selection is not None
         and canonical_target_runtime != "omnigent"
@@ -13360,6 +13391,7 @@ async def _resolve_recurring_runtime_metadata(
         user=None,
         provider_profile=provider_profile,
         authored_runtime=authored_runtime,
+        agent_profile=request_payload.get("agentProfile"),
     )
     # MoonLadderStudios/MoonMind#3931: the recurring-schedule surface resolves
     # its unauthored default through the one shared boundary as Workflow
