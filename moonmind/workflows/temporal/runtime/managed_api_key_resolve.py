@@ -505,7 +505,8 @@ async def _admitted_repository_record(
             except Exception as exc:
                 raise RepositoryContractError(
                     "REPOSITORY_CONNECTION_UNAVAILABLE",
-                    f"admitted inputs of run {owner!r} could not be read "
+                    f"run {requested!r} has no recorded repository authority; "
+                    f"admitted inputs of root {owner!r} could not be read "
                     f"({type(exc).__name__}); no other connection is substituted",
                 ) from exc
         break
