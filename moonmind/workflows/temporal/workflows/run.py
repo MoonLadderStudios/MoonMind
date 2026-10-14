@@ -248,6 +248,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
     get_workflow_child_task_queue,
     get_activity_task_queue,
+    PUBLICATION_GIT_IDENTITY_FLEETS,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -1970,12 +1971,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 retry_policy,
                 maximum_attempts=max_attempts_override,
             )
-        try:
-            current_queue = workflow.info().task_queue
-        except Exception as exc:
-            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
-                raise
-            current_queue = ""
+        current_queue = ""
+        if route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS:
+            try:
+                current_queue = workflow.info().task_queue
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
         kwargs: dict[str, Any] = {
             "task_queue": get_activity_task_queue(route, current_queue),
             "start_to_close_timeout": timedelta(

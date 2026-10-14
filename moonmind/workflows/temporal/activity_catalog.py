@@ -43,6 +43,9 @@ DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 # not poll these queues. Retained workflows keep their original queues until
 # they finish; capable workers serve both from the existing fleets.
 PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX = ".publication-v1"
+PUBLICATION_GIT_IDENTITY_FLEETS = frozenset({
+    WORKFLOW_FLEET, AGENT_RUNTIME_FLEET, SANDBOX_FLEET,
+})
 
 
 def publication_task_queue(task_queue: str) -> str:
@@ -203,7 +206,7 @@ def get_activity_task_queue(
     route: TemporalActivityRoute, current_workflow_queue: str,
 ) -> str:
     if (
-        route.fleet in {WORKFLOW_FLEET, AGENT_RUNTIME_FLEET, SANDBOX_FLEET}
+        route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS
         and current_workflow_queue.endswith(PUBLICATION_GIT_IDENTITY_QUEUE_SUFFIX)
     ):
         return publication_task_queue(route.task_queue)

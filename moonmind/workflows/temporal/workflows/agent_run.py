@@ -103,6 +103,7 @@ with workflow.unsafe.imports_passed_through():
         build_default_activity_catalog,
         get_workflow_child_task_queue,
         get_activity_task_queue,
+        PUBLICATION_GIT_IDENTITY_FLEETS,
     )
     from moonmind.config.settings import settings
     from moonmind.schemas.agent_run_progress import (
@@ -1414,12 +1415,13 @@ class MoonMindAgentRun:
             task_queue = get_workflow_child_task_queue(
                 workflow.info().task_queue, settings.temporal
             )
-        try:
-            current_queue = workflow.info().task_queue
-        except Exception as exc:
-            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
-                raise
-            current_queue = ""
+        current_queue = ""
+        if route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS:
+            try:
+                current_queue = workflow.info().task_queue
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
         task_queue = get_activity_task_queue(
             replace(route, task_queue=task_queue), current_queue,
         )
