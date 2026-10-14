@@ -267,6 +267,7 @@ async def select_github_access_for_launch(
     connections_dir: Path | None = None,
     client_policy: Any | None = None,
     required_operations: Iterable[str] = (),
+    expected_connection_id: str | None = None,
 ) -> SelectedGitHubAccess:
     """Select a launch's Git connection and read only its credential, once.
 
@@ -274,6 +275,8 @@ async def select_github_access_for_launch(
     selected source that fails yields an unresolved credential carrying its
     correction, never another credential. Required operations are checked
     against the recorded connection and assignment before reading a secret.
+    ``expected_connection_id`` (a renewal of an earlier selection) rejects a
+    selection that now names another connection before reading its secret.
     """
 
     connection = await select_git_connection_for_launch(
@@ -282,6 +285,19 @@ async def select_github_access_for_launch(
         connections_dir=connections_dir,
         client_policy=client_policy,
     )
+    if expected_connection_id is not None and (
+        connection is None or str(connection.id) != expected_connection_id
+    ):
+        from moonmind.workflows.executions.repository_contract import (
+            REPOSITORY_CONNECTION_MISMATCH,
+            RepositoryContractError,
+        )
+
+        raise RepositoryContractError(
+            REPOSITORY_CONNECTION_MISMATCH,
+            f"GitHub connection {expected_connection_id} is no longer the "
+            "selection; MoonMind does not switch accounts mid-run",
+        )
     return await _resolve_github_access_for_connection(
         connection, repository=repository, required_operations=required_operations
     )
@@ -299,6 +315,7 @@ async def _resolve_github_access_for_connection(
         resolve_deployment_github_credential,
     )
 
+    required_operations = tuple(required_operations)
     if connection is not None:
         from moonmind.auth.github_app_wiring import github_api_base_for
         from moonmind.workflows.executions.repository_contract import (
@@ -317,7 +334,10 @@ async def _resolve_github_access_for_connection(
         credential = await resolve_deployment_github_credential(repo=repository)
     else:
         credential = await resolve_connection_github_credential(
-            connection, repo=repository
+            connection,
+            repo=repository,
+            operations=required_operations,
+            principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
         )
     return SelectedGitHubAccess(connection=connection, credential=credential)
 
@@ -581,18 +601,77 @@ async def acquire_admitted_repository_use(
     return None, None
 
 
-async def resolve_selected_github_credential_for_launch(
-    connection_ref: str,
-    *,
-    repo: str | None = None,
-    connections_dir: Path | None = None,
-) -> Any:
-    """Resolve only the credential of the Git connection a launch selected."""
+class AdmittedGitRead(NamedTuple):
+    """The clone remote, Git host and credential a recorded run admits to read.
 
-    access = await select_github_access_for_launch(
-        connection_ref, repository=repo, connections_dir=connections_dir
+    ``token`` is ``None`` for explicitly anonymous access and for the
+    unrecorded default when the deployment declares no GitHub credential.
+    """
+
+    remote: str
+    host: str
+    token: str | None
+
+
+async def resolve_admitted_git_read(
+    workflow_id: str, *, repository: str
+) -> AdmittedGitRead:
+    """Return what Git needs to read ``repository`` for a recorded run.
+
+    A frozen plan acquires through the existing Omnigent acquisition owner; a
+    historical run follows its recorded connection (PAT or App, through the
+    shared selected-connection read) or explicit anonymous intent. A selected
+    connection whose credential is unavailable raises; no other connection or
+    ambient token is substituted.
+    """
+
+    from moonmind.omnigent.host_services.github_credentials import (
+        github_host_from_endpoint,
+        normalize_github_repository_remote,
     )
-    return access.credential
+    from moonmind.workflows.executions.repository_contract import (
+        DEFAULT_GIT_CONNECTION_REF,
+        RepositoryContractError,
+    )
+
+    def admitted(endpoint: str, token: str | None) -> AdmittedGitRead:
+        remote = normalize_github_repository_remote(repository, endpoint=endpoint)
+        if remote is None:
+            raise RepositoryContractError(
+                "REPOSITORY_CONNECTION_UNAVAILABLE",
+                "admitted repository remote is unsafe",
+            )
+        return AdmittedGitRead(remote, github_host_from_endpoint(endpoint), token)
+
+    api_base, acquired = await acquire_admitted_repository_use(
+        workflow_id, repository=repository, operation="read"
+    )
+    if api_base is not None:
+        if acquired is None:
+            return admitted(api_base, None)
+        try:
+            token = acquired.credential.use_now(bytes).decode()
+        finally:
+            acquired.credential.clear()
+        return admitted(api_base, token or None)
+    connection_ref, anonymous = await load_admitted_repository_access(workflow_id)
+    if anonymous:
+        return admitted("", None)
+    access = await select_github_access_for_launch(
+        connection_ref or DEFAULT_GIT_CONNECTION_REF,
+        repository=repository,
+        required_operations=("read",),
+    )
+    if access.connection is not None and not access.credential.token:
+        raise RepositoryContractError(
+            "REPOSITORY_CONNECTION_UNAVAILABLE", access.credential.safe_summary
+        )
+    endpoint = (
+        str(getattr(access.connection, "endpoint_ref", "") or "")
+        if access.connection is not None
+        else ""
+    )
+    return admitted(endpoint, access.credential.token or None)
 
 
 async def _default_github_connection_with_operations(
@@ -678,15 +757,22 @@ async def validate_default_github_connection_operations(
 
 
 async def resolve_default_github_connection_credential(
-    *, repo: str | None = None, required_operations: tuple[str, ...] = ()
+    *,
+    repo: str | None = None,
+    required_operations: tuple[str, ...] = (),
+    expected_api_base: str | None = None,
 ) -> Any:
     """Resolve only the default credential after its assigned actions admit use.
 
     A recorded default is authoritative. Only true absence uses the deployment
     declaration; denied operations and unreadable records never read or replace
     a secret. Assignment narrowing is shared with the metadata-only preflight.
+    ``expected_api_base`` names the API the caller will send the credential
+    to; a recorded default serving another host is refused before any read.
     """
     from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
         resolve_connection_github_credential,
         resolve_deployment_github_credential,
     )
@@ -698,7 +784,35 @@ async def resolve_default_github_connection_credential(
         return error
     if connection is None:
         return await resolve_deployment_github_credential(repo=repo)
-    return await resolve_connection_github_credential(connection, repo=repo)
+    if expected_api_base is not None and _api_base_served(
+        connection
+    ) != expected_api_base.rstrip("/"):
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=str(connection.id),
+            repo=repo,
+            diagnostic=(
+                f"{connection.id} does not serve {expected_api_base}; MoonMind "
+                "does not send its credential to another host or substitute "
+                "another GitHub credential."
+            ),
+        )
+    return await resolve_connection_github_credential(
+        connection,
+        repo=repo,
+        operations=required_operations,
+        principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
+    )
+
+
+def _api_base_served(connection: Any) -> str:
+    """The trusted API base a connection serves, or ``""`` when none is."""
+    from moonmind.auth.github_app_wiring import github_api_base_for
+
+    try:
+        return github_api_base_for(connection.endpoint_ref).rstrip("/")
+    except ValueError:
+        return ""
 
 
 def _github_user_api_url() -> str:
@@ -1323,6 +1437,7 @@ async def assert_managed_secret_refs_active_for_launch(
 
 
 __all__ = [
+    "AdmittedGitRead",
     "BrokenSecretRef",
     "GHCR_REGISTRY",
     "SecretRefLaunchBlockedError",
@@ -1333,11 +1448,11 @@ __all__ = [
     "load_active_managed_github_secret_slug",
     "load_admitted_repository_access",
     "load_repository_connection_for_launch",
+    "resolve_admitted_git_read",
     "resolve_default_github_connection_credential",
     "resolve_ghcr_pull_credentials_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
-    "resolve_selected_github_credential_for_launch",
     "select_git_connection_for_launch",
     "select_github_access_for_launch",
     "validate_default_github_connection_operations",

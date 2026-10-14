@@ -60,6 +60,8 @@ _OPERATION_PERMISSIONS: dict[str, dict[str, str]] = {
     # reactions needs Issues read, without contents/branch publication access.
     "review_request": {"pull_requests": "write", "issues": "read"},
     "merge_request": {"pull_requests": "write", "contents": "write"},
+    # Issue collaboration: labels, comments, state, and the reads that fence them.
+    "issues": {"issues": "write"},
 }
 
 

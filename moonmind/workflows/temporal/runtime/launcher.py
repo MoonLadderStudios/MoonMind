@@ -72,6 +72,7 @@ from moonmind.workflows.temporal.jira_tool_hints import (
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
+    render_bash_env_script,
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
@@ -698,7 +699,10 @@ class ManagedRuntimeLauncher:
         )
 
     async def _select_request_github_access(
-        self, request: AgentExecutionRequest
+        self,
+        request: AgentExecutionRequest,
+        *,
+        expected_connection_id: str | None = None,
     ) -> SelectedGitHubAccess | None:
         """Read the request's selected Git connection and credential once.
 
@@ -734,6 +738,7 @@ class ManagedRuntimeLauncher:
             repository=repository,
             connections_dir=self._repository_connections_dir(),
             client_policy=self._repository_client_policy,
+            expected_connection_id=expected_connection_id,
         )
 
     @staticmethod
@@ -763,6 +768,35 @@ class ManagedRuntimeLauncher:
         raise RepositoryContractError(
             REPOSITORY_CREDENTIAL_UNAVAILABLE, credential.safe_summary
         )
+
+    def _github_token_renewal(
+        self, request: AgentExecutionRequest, selected: SelectedGitHubAccess | None
+    ) -> dict[str, Any]:
+        """Broker arguments renewing an expiring selected token (#4011).
+
+        A GitHub App installation token lasts about an hour, which a long run
+        can outlive. Renewal reads the request's selection again and issues through
+        the same recorded connection, restricted as at launch; a selection
+        now naming another connection fails instead of switching accounts.
+        A PAT, the deployment declaration and scratch work have no renewal.
+        """
+
+        if (
+            selected is None
+            or selected.connection is None
+            or selected.credential.expires_at is None
+        ):
+            return {}
+        connection_id = str(selected.connection.id)
+
+        async def renew() -> tuple[str, datetime | None]:
+            access = await self._select_request_github_access(
+                request, expected_connection_id=connection_id
+            )
+            token = await self._selected_github_token(request, access)
+            return str(token or ""), access.credential.expires_at if access else None
+
+        return {"expires_at": selected.credential.expires_at, "renew": renew}
 
     @staticmethod
     def _profile_declared_github_token(
@@ -1779,7 +1813,8 @@ class ManagedRuntimeLauncher:
 
         Some runtime shell-tool execution can bypass the workspace-local ``gh``
         wrapper during nested shell execution, so direct ``GITHUB_TOKEN`` env
-        remains necessary for reliable GitHub CLI auth.
+        remains necessary for reliable GitHub CLI auth. An expiring token is
+        never exported this way; see ``_persist_gh_config``'s ``BASH_ENV``.
         """
 
         return (runtime_id or "").strip() in {"claude_code", "codex_cli"}
@@ -1864,6 +1899,15 @@ class ManagedRuntimeLauncher:
                 f"{bin_dir}{os.pathsep}{existing_path}" if existing_path else str(bin_dir)
             )
             env.setdefault("GIT_TERMINAL_PROMPT", "0")
+            bash_env_path = support_dir / "bash_env.sh"
+            atomic_write_text(
+                bash_env_path,
+                render_bash_env_script(
+                    bin_dir=str(bin_dir), previous_bash_env=env.get("BASH_ENV")
+                ),
+            )
+            cleanup_paths.append(str(bash_env_path))
+            env["BASH_ENV"] = str(bash_env_path)
 
         git_config_lines = [
             "# moonmind-managed-git-config\n",
@@ -2683,10 +2727,16 @@ class ManagedRuntimeLauncher:
                     run_id=run_id,
                     support_root=str(run_root),
                 )
+                github_token_renewal = (
+                    {}
+                    if explicit_github_token
+                    else self._github_token_renewal(request, selected_github_access)
+                )
                 await self._github_auth_brokers.start(
                     run_id=run_id,
                     token=github_token,
                     socket_path=github_socket_path,
+                    **github_token_renewal,
                 )
                 if _needs_priv_drop:
                     await self._make_github_broker_accessible_to_app(
@@ -2694,7 +2744,12 @@ class ManagedRuntimeLauncher:
                     )
                 deferred_cleanup_paths.append(github_socket_path)
                 deferred_cleanup_paths.append(str(Path(github_socket_path).parent))
-                if self._runtime_requires_direct_github_env(profile.runtime_id):
+                # An expiring token would lapse in a static env value; those
+                # runs reach GitHub only through the renewing broker (#4011).
+                if (
+                    self._runtime_requires_direct_github_env(profile.runtime_id)
+                    and not github_token_renewal
+                ):
                     env_overrides["GITHUB_TOKEN"] = github_token
                     env_overrides.setdefault("GIT_TERMINAL_PROMPT", "0")
                 else:

@@ -18,6 +18,9 @@ from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 
+# GitHub operations without an explicit token use the default connection.
+pytestmark = pytest.mark.usefixtures("deployment_without_recorded_connections")
+
 
 @pytest_asyncio.fixture
 async def journey(tmp_path, monkeypatch, request):

@@ -77,15 +77,17 @@ from moonmind.workflows.executions.repository_contract import (
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     GHCR_REGISTRY,
+    SelectedGitHubAccess,
     resolve_ghcr_pull_credentials_for_launch,
     resolve_github_token_for_launch,
-    resolve_selected_github_credential_for_launch,
+    select_github_access_for_launch,
 )
 
 from .git_auth import build_github_token_git_environment
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
+    render_bash_env_script,
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
@@ -401,9 +403,11 @@ def _normalize_absolute_posix_path(value: str, *, field_name: str) -> PurePosixP
 def _is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_PATTERN.search(key))
 
-async def _session_github_token(
+async def _session_github_access(
     request: LaunchCodexManagedSessionRequest,
-) -> str:
+    *,
+    expected_connection_id: str | None = None,
+) -> tuple[str, SelectedGitHubAccess | None]:
     """Resolve the session's GitHub token from its repository selection (#4023).
 
     An explicit launch token or credential descriptor is the launch's own
@@ -413,7 +417,9 @@ async def _session_github_token(
     does. A configured source that fails stops the session with its
     correction instead of cloning without a token or as another account.
     Scratch sessions, and a deployment with no GitHub configuration at all,
-    have no token.
+    have no token. The selection read is returned with the token so an
+    expiring credential can be renewed through it (#4011);
+    ``expected_connection_id`` rejects a selection naming another connection.
     """
 
     spec = request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
@@ -430,26 +436,58 @@ async def _session_github_token(
         if raw_target is not None:
             target = compile_repository_target(raw_target)
             if target.provider != "git":
-                return ""
+                return "", None
             connection_ref, repo = target.connection_ref, target.repository.name
-        credential = await resolve_selected_github_credential_for_launch(
-            connection_ref, repo=repo
+        access = await select_github_access_for_launch(
+            connection_ref,
+            repository=repo,
+            expected_connection_id=expected_connection_id,
         )
+        credential = access.credential
         if credential.token:
-            return credential.token
+            return credential.token, access
         required = descriptor is not None and descriptor.required
         if credential.source == GitHubCredentialSource.MISSING and not required:
-            return ""
+            return "", None
         raise RepositoryContractError(
             REPOSITORY_CREDENTIAL_UNAVAILABLE, credential.safe_summary
         )
     if descriptor is None and not explicit:
-        return ""
+        return "", None
     token = await resolve_github_token_for_launch(
         request.environment,
         github_credential=descriptor,
     )
-    return str(token or "").strip()
+    return str(token or "").strip(), None
+
+
+def _session_github_token_renewal(
+    request: LaunchCodexManagedSessionRequest, selected: SelectedGitHubAccess | None
+) -> dict[str, Any]:
+    """Broker arguments renewing an expiring selected token (#4011).
+
+    A GitHub App installation token lasts about an hour, which a session can
+    outlive. Renewal reads the session's selection again and issues through
+    the same recorded connection; a selection now naming another connection
+    fails instead of switching accounts. A PAT, an explicit launch token,
+    the deployment declaration and scratch sessions have no renewal.
+    """
+
+    if (
+        selected is None
+        or selected.connection is None
+        or selected.credential.expires_at is None
+    ):
+        return {}
+    connection_id = str(selected.connection.id)
+
+    async def renew() -> tuple[str, datetime | None]:
+        token, access = await _session_github_access(
+            request, expected_connection_id=connection_id
+        )
+        return token, access.credential.expires_at if access else None
+
+    return {"expires_at": selected.credential.expires_at, "renew": renew}
 
 class DockerCodexManagedSessionController:
     """Launch and control managed runtime session containers via Docker CLI."""
@@ -1170,15 +1208,41 @@ class DockerCodexManagedSessionController:
         )
         atomic_write_text(git_config_path, "".join(git_config_lines))
 
+        path_bin_dir = bin_dir
+        if os.pathsep in str(bin_dir):
+            # Session paths carry workflow IDs (``mm:...``) and a PATH entry
+            # cannot contain ":", so the wrappers are reached through a link
+            # beside the broker socket, which is short and colon-free.
+            path_bin_dir = Path(github_socket_path).parent / "bin"
+            if path_bin_dir.is_symlink():
+                path_bin_dir.unlink()
+            path_bin_dir.symlink_to(bin_dir, target_is_directory=True)
         existing_path = str(session_environment.get("PATH") or "").strip()
         system_paths = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         session_environment["PATH"] = (
-            f"{bin_dir}{os.pathsep}{existing_path}"
+            f"{path_bin_dir}{os.pathsep}{existing_path}"
             if existing_path
-            else f"{bin_dir}{os.pathsep}{system_paths}"
+            else f"{path_bin_dir}{os.pathsep}{system_paths}"
         )
         session_environment["GIT_CONFIG_GLOBAL"] = str(git_config_path)
         session_environment.setdefault("GIT_TERMINAL_PROMPT", "0")
+        # Codex runs tools in nested ``bash -lc`` shells whose profile can
+        # reset PATH; BASH_ENV puts the brokered wrappers first again.
+        bash_env_path = support_root / "bash_env.sh"
+        touched_paths.append(bash_env_path)
+        previous_bash_env = str(session_environment.get("BASH_ENV") or "").strip()
+        atomic_write_text(
+            bash_env_path,
+            render_bash_env_script(
+                bin_dir=str(path_bin_dir),
+                previous_bash_env=(
+                    None
+                    if previous_bash_env == str(bash_env_path)
+                    else previous_bash_env
+                ),
+            ),
+        )
+        session_environment["BASH_ENV"] = str(bash_env_path)
 
         repo_git_config_path = Path(workspace_path) / ".git" / "config"
         if repo_git_config_path.exists():
@@ -1204,9 +1268,10 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
         session_environment: dict[str, str],
     ) -> dict[str, str]:
-        token = await _session_github_token(request)
+        token, selected = await _session_github_access(request)
         if not token:
             return {}
+        renewal = _session_github_token_renewal(request, selected)
 
         support_root = Path(request.session_workspace_path) / ".moonmind"
         socket_path = self._build_github_socket_path(
@@ -1219,6 +1284,7 @@ class DockerCodexManagedSessionController:
             run_id=request.session_id,
             token=token,
             socket_path=socket_path,
+            **renewal,
         )
         touched_paths = self._persist_brokered_github_config(
             session_environment,
@@ -1229,10 +1295,13 @@ class DockerCodexManagedSessionController:
         touched_paths.append(socket_dir)
         touched_paths.append(Path(socket_path))
         self._normalize_container_path_owners(touched_paths)
-        # Codex shell tools can invoke nested `bash -lc` commands that bypass
-        # the workspace-local gh wrapper. Bind the token through Docker's
-        # inherited environment (`-e GITHUB_TOKEN`) so it is not rendered into
-        # the docker command line or the launch payload.
+        if renewal:
+            # An expiring token would lapse in a static env value; the
+            # session reaches GitHub only through the renewing broker.
+            return {}
+        # Bind a non-expiring token through Docker's inherited environment
+        # (`-e GITHUB_TOKEN`) so it is not rendered into the docker command
+        # line or the launch payload.
         return {"GITHUB_TOKEN": token}
 
     @staticmethod
@@ -1565,7 +1634,11 @@ class DockerCodexManagedSessionController:
         env = dict(_GIT_COMMAND_LOCALE)
         request_env = request.environment if request is not None else {}
         try:
-            token = await _session_github_token(request) if request is not None else ""
+            token = (
+                (await _session_github_access(request))[0]
+                if request is not None
+                else ""
+            )
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
         if token:
