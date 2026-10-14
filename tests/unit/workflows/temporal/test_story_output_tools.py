@@ -188,7 +188,7 @@ class _FakeGitHubService(ClaimCommentFixture):
         # isolated between tests.
         _FAKE_ISSUE_STATE.clear()
 
-    async def resolve_github_token(self, _token=None, *, repo: str):
+    async def resolve_github_token(self, _token=None, *, repo: str, operations=()):
         self.token_requests.append(repo)
         return "ghs-test", None
 
@@ -5754,7 +5754,7 @@ async def test_default_story_fetcher_resolves_credentials_for_requested_reposito
         )
         == content
     )
-    resolve.assert_awaited_once_with(repo="owner/repo")
+    resolve.assert_awaited_once_with(repo="owner/repo", operations=("read",))
     assert client.get.await_count == 1
 
 

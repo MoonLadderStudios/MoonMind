@@ -28,7 +28,7 @@ from moonmind.integrations.jira.models import (
     TransitionIssueRequest,
 )
 from moonmind.integrations.jira.tool import JiraToolService
-from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.adapters.github_service import ISSUE_OPERATIONS, GitHubService
 from moonmind.workflows.skills.acceptance_contract import (
     acceptance_evidence,
     validate_completion_target,
@@ -573,7 +573,9 @@ async def _discover_github_document_paths(
             "repository must be a GitHub owner/repo slug or GitHub URL for remote discovery"
         )
 
-    token, _resolution_error = await GitHubService.resolve_github_token()
+    token, _resolution_error = await GitHubService.resolve_github_token(
+        repo=repo_slug, operations=("read",)
+    )
     headers = GitHubService._github_headers(token) if token else {}
     normalized_directory = directory.strip("/")
     prefix = f"{normalized_directory}/" if normalized_directory else ""
@@ -2716,7 +2718,9 @@ def _merge_fields(
     return fields
 
 async def _default_github_story_fetcher(repo: str, ref: str, path: str) -> str:
-    token, _resolution_error = await GitHubService.resolve_github_token(repo=repo)
+    token, _resolution_error = await GitHubService.resolve_github_token(
+        repo=repo, operations=("read",)
+    )
     headers = GitHubService._github_headers(token) if token else {}
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
     params = {"ref": ref} if ref else None
@@ -5071,7 +5075,9 @@ async def _fetch_github_issue(
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> tuple[dict[str, Any] | None, str | None]:
     service = github_service_factory()
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return None, resolution_error or "GitHub issue lookup is unavailable."
     headers = service._github_headers(token)
@@ -8801,7 +8807,9 @@ async def _update_github_issue_status(
         )
     target = _GITHUB_STATUS_MODE_TO_TARGET.get(mode, "to_in_progress")
     service = github_service_factory()
-    token, resolution_error = await service.resolve_github_token(repo=repository)
+    token, resolution_error = await service.resolve_github_token(
+        repo=repository, operations=ISSUE_OPERATIONS
+    )
     if not token:
         return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": resolution_error or "GitHub issue update is unavailable."})
     headers = service._github_headers(token)

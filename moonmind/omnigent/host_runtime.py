@@ -49,6 +49,8 @@ class PreparedHostInputs:
     tool_attachments: tuple[dict[str, Any], ...]
     egress_attestation: dict[str, Any]
     github_credential_attachment: dict[str, Any] | None = None
+    #: When the projected collaboration issuance expires (``None``: never).
+    github_issuance_expires_at: str | None = None
 
     @property
     def cleanup_refs(self) -> tuple[str, ...]:
@@ -195,6 +197,7 @@ class GenericOmnigentHostRuntime:
                 owner_ref=repository_owner_ref,
             )
         )
+        issued: list[str | None] = []
         github_credentials = await self._github_credentials.materialize(
             request=request,
             resolved_tools=plan.payload.resolvedTools,
@@ -207,6 +210,7 @@ class GenericOmnigentHostRuntime:
             authority_sink=authority_sink,
             projection_reservation=github_projection_reservation,
             projection_verifier=github_projection_verifier,
+            issuance_sink=issued.append,
         )
         if (github_credentials is None) != (anticipated_github is None) or (
             anticipated_github is not None
@@ -228,6 +232,7 @@ class GenericOmnigentHostRuntime:
             tool_attachments=tools,
             github_credential_attachment=github_credentials,
             egress_attestation=egress,
+            github_issuance_expires_at=issued[-1] if issued else None,
         )
 
     async def realize(
@@ -432,6 +437,46 @@ class GenericOmnigentHostRuntime:
             ),
             **attestations,
         }
+
+    async def refresh_github_projection(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        writer_image_ref: str,
+        expected_omnigent_version: str,
+        runtime_uid: int,
+        runtime_gid: int,
+        repository_owner_ref: str,
+        authority_sink: Callable[[dict[str, Any]], Awaitable[None]],
+        projection_reservation: dict[str, Any],
+        projection_verifier: Callable[[], Awaitable[None]],
+    ) -> str | None:
+        """Re-issue a live host's gh projection before its issuance lapses.
+
+        The same frozen collaboration binding is acquired again (its
+        connection, installation, repositories and operations, with live
+        revocation checks), and the shared projection writer replaces the
+        mounted ``hosts.yml`` under the newer reservation. Returns the new
+        issuance's expiry.
+        """
+
+        issued: list[str | None] = []
+        await self._github_credentials.materialize(
+            request=request,
+            resolved_tools=plan.payload.resolvedTools,
+            owner_ref=repository_owner_ref,
+            writer_image_ref=writer_image_ref,
+            runtime_uid=runtime_uid,
+            runtime_gid=runtime_gid,
+            expected_omnigent_version=expected_omnigent_version,
+            plan=plan,
+            authority_sink=authority_sink,
+            projection_reservation=projection_reservation,
+            projection_verifier=projection_verifier,
+            issuance_sink=issued.append,
+        )
+        return issued[-1] if issued else None
 
     async def renew_runtime_capabilities(
         self,

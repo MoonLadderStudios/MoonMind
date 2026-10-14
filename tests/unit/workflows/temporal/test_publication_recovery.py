@@ -498,15 +498,26 @@ def _recovery_provider(
         PullRequestReconciliation,
     )
 
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
     seen: dict = {"tokens": [], "creates": []}
 
-    async def resolve(explicit_token=None, *, repo=None):
-        assert repo == "MoonLadderStudios/MoonMind" and explicit_token is None
-        return ResolvedGitHubCredential(
-            token="destination-token",
-            source=GitHubCredentialSource.SECRET_REF_ENV,
-            sourceName="GITHUB_TOKEN_SECRET_REF",
-            repo=repo,
+    async def ambient(*_args, **_kwargs):
+        raise AssertionError("the PR effect uses the push's selected connection")
+
+    async def select(connection_ref, *, repository=None, required_operations=()):
+        # The same default-connection selection the candidate push uses.
+        assert connection_ref == "repository-connection:git-default"
+        assert repository == "MoonLadderStudios/MoonMind"
+        assert "review_request" in required_operations
+        return managed_api_key_resolve.SelectedGitHubAccess(
+            None,
+            ResolvedGitHubCredential(
+                token="destination-token",
+                source=GitHubCredentialSource.SECRET_REF_ENV,
+                sourceName="GITHUB_TOKEN_SECRET_REF",
+                repo=repository,
+            ),
         )
 
     async def reconcile(self, **kwargs):
@@ -527,7 +538,10 @@ def _recovery_provider(
             summary="created",
         )
 
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", resolve)
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", ambient)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "select_github_access_for_launch", select
+    )
     monkeypatch.setattr(GitHubService, "reconcile_pull_request", reconcile)
     monkeypatch.setattr(GitHubService, "create_pull_request", create)
     return seen
@@ -656,7 +670,6 @@ async def test_recovery_publish_retries_only_an_unreadable_authority_reference(
 ) -> None:
     from temporalio.exceptions import ApplicationError
 
-    from moonmind.auth import github_credentials
     from moonmind.auth.github_credentials import (
         GitHubCredentialSource,
         ResolvedGitHubCredential,
@@ -667,16 +680,23 @@ async def test_recovery_publish_retries_only_an_unreadable_authority_reference(
 
     seen = _recovery_provider(monkeypatch, state="absent")
 
-    async def unresolved(explicit_token=None, *, repo=None):
-        return ResolvedGitHubCredential(
-            source=GitHubCredentialSource.UNRESOLVABLE,
-            sourceName="GITHUB_TOKEN_SECRET_REF",
-            repo=repo,
-            diagnostic="GitHub credential reference could not be resolved.",
-            retryable=retryable,
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    async def unresolved(connection_ref, *, repository=None, required_operations=()):
+        return managed_api_key_resolve.SelectedGitHubAccess(
+            None,
+            ResolvedGitHubCredential(
+                source=GitHubCredentialSource.UNRESOLVABLE,
+                sourceName="GITHUB_TOKEN_SECRET_REF",
+                repo=repository,
+                diagnostic="GitHub credential reference could not be resolved.",
+                retryable=retryable,
+            ),
         )
 
-    monkeypatch.setattr(github_credentials, "resolve_github_credential", unresolved)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "select_github_access_for_launch", unresolved
+    )
 
     with pytest.raises(ApplicationError) as exc:
         await TemporalIntegrationActivities().publication_recovery_publish(
@@ -686,3 +706,166 @@ async def test_recovery_publish_retries_only_an_unreadable_authority_reference(
     assert exc.value.type == "PUBLICATION_AUTHORITY_UNAVAILABLE"
     assert exc.value.non_retryable is (not retryable)
     assert seen["tokens"] == [] and seen["creates"] == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_observe_reads_with_the_push_selection_not_ambient(
+    monkeypatch,
+) -> None:
+    """Observation uses the default-connection selection the push uses (#4003)."""
+
+    from moonmind.auth import github_credentials
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    selections = []
+
+    async def ambient(*_args, **_kwargs):
+        raise AssertionError("observation must not read an ambient credential")
+
+    async def select(connection_ref, *, repository=None, required_operations=()):
+        selections.append((connection_ref, repository, tuple(required_operations)))
+        return managed_api_key_resolve.SelectedGitHubAccess(
+            None,
+            ResolvedGitHubCredential(
+                source=GitHubCredentialSource.UNRESOLVABLE,
+                repo=repository,
+                diagnostic="selected connection credential is unavailable",
+            ),
+        )
+
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", ambient)
+    monkeypatch.setattr(GitHubService, "resolve_github_token", ambient)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "select_github_access_for_launch", select
+    )
+
+    result = await TemporalIntegrationActivities().publication_recovery_observe(
+        {"contract": _contract_payload()}
+    )
+
+    assert result == {"authoritative": True, "authorityAvailable": False}
+    assert selections == [
+        ("repository-connection:git-default", "MoonLadderStudios/MoonMind", ("read",))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recovery_verify_measures_with_the_push_selection_not_ambient(
+    monkeypatch,
+) -> None:
+    """Verification reads as the identity that pushed and opened the PR (#4003).
+
+    An App-only default connection with no ambient deployment token must
+    verify a recovery whose push and PR effects were confirmed.
+    """
+
+    import hashlib
+
+    import httpx
+
+    from moonmind.auth import github_credentials
+    from moonmind.auth.github_credentials import (
+        GitHubCredentialSource,
+        ResolvedGitHubCredential,
+    )
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+
+    head = "a" * 40
+    tree_sha = "d" * 40
+    patch = "@@ -1 +1 @@\n-old\n+new"
+    selections = []
+    authorizations = []
+
+    async def ambient(*_args, **_kwargs):
+        raise AssertionError("verification must not read an ambient credential")
+
+    async def select(connection_ref, *, repository=None, required_operations=()):
+        selections.append((connection_ref, repository, tuple(required_operations)))
+        return managed_api_key_resolve.SelectedGitHubAccess(
+            None,
+            ResolvedGitHubCredential(
+                token="selected-app-installation-token",
+                source=GitHubCredentialSource.GITHUB_APP,
+                repo=repository,
+            ),
+        )
+
+    def github(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers.get("Authorization"))
+        path = request.url.path
+        if path.endswith("/git/ref/heads/issue-3481"):
+            return httpx.Response(200, json={"object": {"sha": head}})
+        if path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "html_url": "https://github.com/MoonLadderStudios/MoonMind/pull/9",
+                        "draft": False,
+                        "head": {
+                            "ref": "issue-3481",
+                            "sha": head,
+                            "repo": {"full_name": "MoonLadderStudios/MoonMind"},
+                        },
+                        "base": {"ref": "main"},
+                    }
+                ],
+            )
+        if path.endswith(f"/git/commits/{head}"):
+            return httpx.Response(200, json={"tree": {"sha": tree_sha}})
+        if path.endswith(f"/compare/main...{head}"):
+            return httpx.Response(200, json={"files": [{"patch": patch}]})
+        return httpx.Response(404)
+
+    real_client = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(github)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    monkeypatch.setattr(github_credentials, "resolve_github_credential", ambient)
+    monkeypatch.setattr(GitHubService, "resolve_github_token", ambient)
+    monkeypatch.setattr(
+        managed_api_key_resolve, "select_github_access_for_launch", select
+    )
+
+    contract = _contract_payload()
+    contract["continuation"]["expectedTreeDigest"] = (
+        "sha256:" + hashlib.sha256(tree_sha.encode()).hexdigest()
+    )
+    contract["continuation"]["expectedDiffDigest"] = (
+        "sha256:" + hashlib.sha256(patch.encode()).hexdigest()
+    )
+
+    evidence = await TemporalIntegrationActivities().publication_recovery_verify(
+        {
+            "contract": contract,
+            "publication": {"reconciliationOutcome": "new"},
+            "reconciliation": {"outcome": "safe_to_retry"},
+            "destinationWorkflowId": "mm:recovery",
+            "idempotencyKey": contract["continuation"]["publicationIdempotencyKey"],
+        }
+    )
+
+    assert evidence["observedHeadSha"] == head
+    assert evidence["pullRequestUrl"].endswith("/pull/9")
+    assert set(selections) == {
+        ("repository-connection:git-default", "MoonLadderStudios/MoonMind", ("read",))
+    }
+    assert authorizations and all(
+        value and value.endswith("selected-app-installation-token")
+        for value in authorizations
+    )

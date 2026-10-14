@@ -568,7 +568,9 @@ async def _runtime_no_work(
         known = (compare_verdicts or {}).get(verdict_key)
         if not isinstance(known, dict):
             known = {}
-        token, _ = await service.resolve_github_token(repo=receipt.repository)
+        token, _ = await service.resolve_github_token(
+            repo=receipt.repository, operations=("read",)
+        )
         if not token:
             raise ValueError("remote_preservation_unavailable")
         headers = service._github_headers(token)

@@ -56,6 +56,120 @@ def github_pat_connection(
     )
 
 
+def github_app_connection(
+    connection_id: str, repository: str = "MoonLadderStudios/MoonMind"
+) -> RepositoryConnection:
+    """A system-scope GitHub App connection admitted for ``repository``."""
+
+    return RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": connection_id,
+            "provider": "git",
+            "displayName": connection_id,
+            "endpointRef": "https://github.com",
+            "allowedOperations": ["read", "write", "branch_write", "review_request"],
+            "clientPolicy": {
+                "pinnedVersion": "2.46.0",
+                "toolBundleRef": "repository-client:git-system",
+                "executableSha256": "sha256:git",
+            },
+            "credential": {
+                "source": "github_app",
+                "appRef": "github-app:moonmind-test",
+                "installationRef": "installation:123",
+            },
+            "ownership": {"ownerRef": "system:deployment", "scopeType": "system"},
+            "hostingService": "github",
+        }
+    ).model_copy(update={"allowed_repository_ids": (repository,)})
+
+
+def serve_repository_connections(
+    monkeypatch: pytest.MonkeyPatch, connections: Mapping[str, RepositoryConnection]
+) -> list[str]:
+    """Serve ``connections`` as the launch's recorded connections.
+
+    The mapping is read on every load, so a test can change a record
+    mid-run. Returns the references loaded, in order.
+    """
+
+    loaded: list[str] = []
+
+    async def _load(connection_ref: str, **_kwargs: Any):
+        loaded.append(connection_ref)
+        return connections.get(connection_ref)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "load_repository_connection_for_launch",
+        _load,
+    )
+    return loaded
+
+
+def github_app_provider_edge(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str | Sequence[str],
+    *,
+    repositories: Sequence[str] = ("MoonLadderStudios/MoonMind",),
+    lifetime_seconds: float = 55 * 60,
+) -> list[dict[str, Any]]:
+    """Synthetic GitHub App provider at the production acquirer seam (#4022).
+
+    A sequence issues its tokens in order, one per installation-token
+    request, each expiring ``lifetime_seconds`` after issue. Returns the
+    issuance payloads requested.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    from moonmind.auth import github_app_wiring as wiring
+
+    issued: list[dict[str, Any]] = []
+    tokens = [token] if isinstance(token, str) else list(token)
+
+    async def _post(*, jwt: str, payload: dict):
+        assert jwt == "test-app-jwt"
+        issued.append(dict(payload))
+        return {
+            "token": tokens[0] if len(tokens) == 1 else tokens.pop(0),
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=lifetime_seconds)
+            ).isoformat(),
+            "permissions": dict(payload["permissions"]),
+            "repositories": list(payload["repositories"]),
+        }
+
+    async def _get_installation(*, jwt: str):
+        assert jwt == "test-app-jwt"
+        return {
+            "app_ref": "github-app:moonmind-test",
+            "installation_ref": "installation:123",
+            "account": "MoonLadderStudios",
+            "repositories": list(repositories),
+            "suspended": False,
+        }
+
+    real_factory = wiring.build_bound_acquirer_for_connection
+
+    def _factory(connection, **kwargs):
+        edge = {
+            "resolve_secret": lambda _ref: b"fake-app-private-key",
+            "make_jwt": lambda _key: "test-app-jwt",
+            "http_post": _post,
+            "get_installation": _get_installation,
+            "app_id": "123456",
+            "installation_id": "123",
+            "expected_account": "MoonLadderStudios",
+        }
+        edge.update({k: v for k, v in kwargs.items() if v not in (None, "", (), [])})
+        return real_factory(connection, **edge)
+
+    monkeypatch.setattr(wiring, "build_bound_acquirer_for_connection", _factory)
+    return issued
+
+
 def github_repository_assignment(
     connection_id: str,
     repository: str,
