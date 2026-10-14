@@ -132,6 +132,7 @@ from moonmind.omnigent.bridge_store import (
     _chat_binding_logical_step_id,
 )
 from moonmind.omnigent.cutover import assert_runtime_new_admission
+from moonmind.omnigent.native_ui import native_ui_unavailable_reason
 from moonmind.omnigent.settings import resolved_native_ui_serving_enabled
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
@@ -18494,19 +18495,25 @@ async def resolve_workflow_chat_binding(
         ) from exc
 
     # Project native-UI serving readiness into the binding before advertising a
-    # live ``chatUrl``. When native serving is disabled the scoped UI route
-    # fails closed to a 503, so the binding must surface ``unavailable`` (and
-    # drop ``chatUrl``) instead — that is what selects the documented read-only
-    # compatibility fallback in the browser rather than an iframe pointed at the
-    # router's 503 page (MoonLadderStudios/MoonMind#3638 requirement 7,
-    # WorkflowChatPanel.md §11).
-    serving_enabled = resolved_native_ui_serving_enabled()
+    # live ``chatUrl``. When the bridge or native serving is disabled the
+    # scoped UI route fails closed, so the binding must surface ``unavailable``
+    # (and drop ``chatUrl``) instead — that is what selects the documented
+    # read-only compatibility fallback in the browser rather than an iframe
+    # pointed at the router's error page (MoonLadderStudios/MoonMind#3638
+    # requirement 7, WorkflowChatPanel.md §11). Imported here because the
+    # bridge router imports this module.
+    from api_service.api.routers.omnigent_bridge import get_bridge_config
+
+    serving_unavailable_reason = native_ui_unavailable_reason(
+        omnigent_enabled=bool(get_bridge_config().enabled),
+        serving_enabled=resolved_native_ui_serving_enabled(),
+    )
 
     chat_url = ""
     api_base = ""
     state = resolution.state
     unavailable_reason = resolution.unavailable_reason
-    if resolution.chat_binding_id and serving_enabled:
+    if resolution.chat_binding_id and serving_unavailable_reason is None:
         # Server-owned, binding-scoped navigation targets. The browser never
         # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
         chat_url = (
@@ -18518,9 +18525,9 @@ async def resolve_workflow_chat_binding(
     elif resolution.chat_binding_id:
         # A binding exists but the native UI cannot be served: mark the surface
         # unavailable so the browser shows the read-only compatibility fallback
-        # instead of an iframe pointed at the scoped route's 503 page.
+        # instead of an iframe pointed at the scoped route's error page.
         state = "unavailable"
-        unavailable_reason = "native_ui_serving_disabled"
+        unavailable_reason = serving_unavailable_reason
 
     return WorkflowChatBinding(
         chat_binding_id=resolution.chat_binding_id or "",

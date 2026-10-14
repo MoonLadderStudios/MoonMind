@@ -98,7 +98,101 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
   listeners.pagehide();
   assert.ok(observers.every((observer) => !observer.active));
 }
+// Full-page presentation has no embedding shell to receive signals, so a
+// failed or never-ready application must render its own unavailable surface.
+async function fullPageJourney({ failure = null } = {}) {
+  const timers = [];
+  const reloads = [];
+  let rendered = false;
+  const element = (tag) => ({
+    tag, textContent: '', children: [], attributes: {}, listeners: {},
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    addEventListener(name, callback) { this.listeners[name] = callback; },
+    append(...nodes) { this.children.push(...nodes); },
+  });
+  const body = { children: [], replaceChildren(...nodes) { this.children = nodes; } };
+  const root = { hasChildNodes: () => true, querySelector: () => (rendered ? {} : null) };
+  const context = {
+    URL, Request,
+    __MOONMIND_OMNIGENT_CHAT__: { chatBindingId: 'cb-1', apiBase: '/api/workflow-chat-bindings/cb-1/omnigent' },
+    location: {
+      href: 'https://moonmind.test/omnigent-ui/workflow-chat/cb-1',
+      origin: 'https://moonmind.test', protocol: 'https:', host: 'moonmind.test', search: '', hash: '',
+      reload: () => reloads.push(true),
+    },
+    history: { state: null, replaceState() {} },
+    document: { readyState: 'complete', body, getElementById: () => root, createElement: element },
+    postMessage: () => {},
+    fetch: async (url) => ({
+      ok: !(failure === '403' && new URL(url).pathname.endsWith('/items')),
+      clone: () => ({ json: async () => (new URL(url).pathname.endsWith('/items')
+        ? { data: [], has_more: false } : { id: 'cb-1' }) }),
+    }),
+    XMLHttpRequest: class { open() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); },
+    addEventListener: () => {},
+  };
+  context.window = context;
+  context.parent = context;
+  vm.runInNewContext(adapter, context);
+  const surface = () => JSON.stringify(body.children);
+  if (failure) {
+    await context.fetch('/v1/sessions/cb-1/items').catch(() => {});
+    assert.ok(surface().includes('essential_read_failed'), 'full-page failure must be visible');
+  } else {
+    assert.equal(body.children.length, 0, 'loading page is left to the native app');
+    const deadline = timers.find((timer) => timer.ms === 15000);
+    assert.ok(deadline, 'full-page startup needs a finite readiness deadline');
+    deadline.callback();
+    assert.ok(surface().includes('readiness_timeout'), 'never-ready page must become unavailable');
+  }
+  const retry = body.children[0].children.find((node) => node.tag === 'button');
+  retry.listeners.click();
+  assert.equal(reloads.length, 1, 'retry reloads the same authorized scoped surface');
+}
+
+async function fullPageReadyJourney() {
+  // A ready full-page conversation keeps rendering; its deadline is inert.
+  const timers = [];
+  let replaced = false;
+  const root = { hasChildNodes: () => true, querySelector: () => ({}) };
+  const context = {
+    URL, Request,
+    __MOONMIND_OMNIGENT_CHAT__: { chatBindingId: 'cb-1', apiBase: '/api/workflow-chat-bindings/cb-1/omnigent' },
+    location: {
+      href: 'https://moonmind.test/omnigent-ui/workflow-chat/cb-1',
+      origin: 'https://moonmind.test', protocol: 'https:', host: 'moonmind.test', search: '', hash: '',
+    },
+    history: { state: null, replaceState() {} },
+    document: {
+      readyState: 'complete', getElementById: () => root,
+      body: { replaceChildren() { replaced = true; } },
+    },
+    postMessage: () => {},
+    fetch: async (url) => ({
+      ok: true,
+      clone: () => ({ json: async () => (new URL(url).pathname.endsWith('/items')
+        ? { data: [], has_more: false } : { id: 'cb-1' }) }),
+    }),
+    XMLHttpRequest: class { open() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); },
+    addEventListener: () => {},
+  };
+  context.window = context;
+  context.parent = context;
+  vm.runInNewContext(adapter, context);
+  await context.fetch('/v1/sessions/cb-1');
+  await context.fetch('/v1/sessions/cb-1/items');
+  timers.forEach((timer) => timer.callback());
+  assert.equal(replaced, false, 'a ready full-page conversation is never replaced');
+}
+
 (async () => {
+  await fullPageJourney({ failure: '403' });
+  await fullPageJourney();
+  await fullPageReadyJourney();
   await journey({ items: [{ id: 'item-1', text: 'private transcript' }] });
   await journey({ readOnly: true, delayedRoot: true });
   for (const failure of ['403', 'metadata', 'network', 'json', 'schema']) await journey({ failure });
