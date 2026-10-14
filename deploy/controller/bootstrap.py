@@ -207,7 +207,9 @@ def cmd_ensure(args, env) -> int:
 
     Host and the already-privileged deployment-control submitter use the
     same lifecycle owner. Reuse its generated Compose file so daemon host
-    paths, networks, identity and authority never change in an app container.
+    paths, networks, identity and authority never change in an app container;
+    only the spelling of a bind source changes, for a client that resolves
+    the same host directory under its WSL drive mount.
 
     ``--prefer-requested`` runs after the installed controller failed the
     requested release. A capability cannot show that the installed code can
@@ -266,7 +268,9 @@ def cmd_ensure(args, env) -> int:
                 args.image,
             )
         )
-        lines = compose_file.read_text(encoding="utf-8").splitlines()
+        lines = _client_bind_lines(
+            compose_file.read_text(encoding="utf-8").splitlines()
+        )
         image_lines = [
             index for index, line in enumerate(lines) if line.startswith("    image:")
         ]
@@ -312,16 +316,8 @@ def cmd_ensure(args, env) -> int:
         temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.replace(temporary, compose_file)
         record_controller_image(state_dir, requested=args.image, pinned=image)
-        code = _compose(
-            state_dir,
-            identity["project"],
-            "up",
-            "-d",
-            "--pull",
-            "never",
-            "--wait",
-            CONTROLLER_SERVICE,
-        )
+        _ensure_identity_network(identity)
+        code = _compose_up(state_dir, identity["project"], "--pull", "never")
         if code:
             raise RuntimeError(
                 f"Controller prerequisite recreation failed (exit {code})."
@@ -830,11 +826,12 @@ def render_compose_file(
 ) -> Path:
     """Render the separate controller Compose project (REQ-02).
 
-    Bind sources are resolved through the daemon-visible mount adapter so
-    the Windows/WSL Docker Desktop boundary receives daemon-namespace
-    paths (``/run/desktop/mnt/host/<drive>/...``) instead of missing local
-    ``/mnt/<drive>`` mounts. A missing required host source fails fast
-    instead of becoming an auto-created empty directory. The Compose
+    Bind sources are resolved through the mount adapter: a Windows drive
+    path becomes its Desktop daemon-namespace path
+    (``/run/desktop/mnt/host/<drive>/...``) and a WSL distro's
+    ``/mnt/<drive>`` path stays the path its Docker client resolves. A
+    missing required host source fails fast instead of becoming an
+    auto-created empty directory. The Compose
     project name is this deployment's stable identity (see
     :func:`project_for_repo`), never a shared global.
     """
@@ -925,6 +922,35 @@ def _compose(state_dir: Path, project: str, *args: str) -> int:
     return subprocess.run(command, check=False).returncode
 
 
+def _compose_up(state_dir: Path, project: str, *options: str) -> int:
+    """Start the controller, replacing a container that is not running.
+
+    A stopped container keeps the network IDs it last joined, and Compose
+    restarts it rather than recreating it. Once the target stack recreates
+    the link network, that restart fails with "network ... not found".
+    ``compose rm`` removes only a container that is not running, so a live
+    controller is untouched; its state lives in the bind-mounted state dir.
+    """
+    code = _compose(state_dir, project, "rm", "--force", CONTROLLER_SERVICE)
+    if code:
+        return code
+    return _compose(
+        state_dir, project, "up", "-d", "--wait", *options, CONTROLLER_SERVICE
+    )
+
+
+def _client_bind_lines(lines: list[str]) -> list[str]:
+    """Spell Desktop daemon-namespace bind sources for this Docker client."""
+    prefix = f"      - {mounts_mod.DESKTOP_HOST_MOUNT_ROOT}/"
+    spelled = []
+    for line in lines:
+        if line.startswith(prefix):
+            source, separator, target = line[len("      - ") :].partition(":")
+            line = f"      - {mounts_mod.wsl_distro_host_path(source)}{separator}{target}"
+        spelled.append(line)
+    return spelled
+
+
 def _project_for_state(state_dir: Path, repo: Path) -> str:
     identity = load_identity(state_dir)
     if identity:
@@ -990,7 +1016,7 @@ def cmd_start(args, env) -> int:
     # The privileged container only starts from a verified digest.
     require_verified_image(state_dir, args.image)
     _ensure_identity_network(load_identity(state_dir))
-    code = _compose(state_dir, project, "up", "-d", "--wait")
+    code = _compose_up(state_dir, project)
     if code != 0:
         raise RuntimeError(f"Controller start failed (exit {code}).")
     print("Controller is running.", flush=True)
@@ -1043,9 +1069,7 @@ def cmd_update(args, env) -> int:
         code = _compose(state_dir, identity["project"], "pull", CONTROLLER_SERVICE)
         if code != 0:
             raise RuntimeError(f"Controller image pull failed (exit {code}).")
-        code = _compose(
-            state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE
-        )
+        code = _compose_up(state_dir, identity["project"])
         if code != 0:
             raise RuntimeError(f"Controller recreation failed (exit {code}).")
     print("Controller updated.", flush=True)
@@ -1077,9 +1101,7 @@ def cmd_restore(args, env) -> int:
         target_project=identity.get("targetProject"),
     )
     _ensure_identity_network(identity)
-    code = _compose(
-        state_dir, identity["project"], "up", "-d", "--wait", CONTROLLER_SERVICE
-    )
+    code = _compose_up(state_dir, identity["project"])
     if code != 0:
         raise RuntimeError(f"Controller restore failed (exit {code}).")
     print("Controller restored independently of MoonMind health.", flush=True)

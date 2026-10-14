@@ -961,7 +961,8 @@ def _ensure_controller_journal_transition(
     Default host updates refresh from the requested release even when the
     installed controller supports journals. Rollbacks can use installed
     repair code when the target predates this lifecycle. Explicit endpoints
-    keep their controller unless journal support is missing.
+    keep their controller unless journal support is missing. When one
+    source's repair fails, the next source's repair code runs.
     """
     try:
         _, health = _controller_call(
@@ -975,22 +976,35 @@ def _ensure_controller_journal_transition(
         return
     if refresh:
         _recover_controller_identity(record, repo)
+    failure = None
     for image in _controller_source_images(record, repo, refresh=refresh):
         bundle = _controller_sources(image, repo, bind_discovery=refresh)
         if not bundle:
             continue
-        with _materialized_controller(bundle) as bootstrap:
-            run(
-                _controller_bootstrap_command(
-                    bootstrap,
-                    record,
-                    repo,
-                    controller_url,
-                    source_image=image,
-                    privileged=refresh,
-                ),
-                cwd=repo,
+        try:
+            with _materialized_controller(bundle) as bootstrap:
+                run(
+                    _controller_bootstrap_command(
+                        bootstrap,
+                        record,
+                        repo,
+                        controller_url,
+                        source_image=image,
+                        privileged=refresh,
+                    ),
+                    cwd=repo,
+                )
+        except RuntimeError as exc:
+            # A later source may carry the repair this one lacks; ensure is
+            # serialized by the stack lock and never replaces a controller
+            # that owns an open operation, so the next source may retry it.
+            print(
+                f"Controller prerequisite from {image} failed; trying the "
+                f"next source.\n{exc}",
+                flush=True,
             )
+            failure = exc
+            continue
         _, health = _controller_call(
             controller_url, secret, "GET", "/v1/healthz", timeout=5
         )
@@ -999,6 +1013,8 @@ def _ensure_controller_journal_transition(
                 "Controller prerequisite did not expose journal transition support."
             )
         return
+    if failure is not None:
+        raise failure
     raise RuntimeError(
         "Neither installed source nor requested image supplies the controller prerequisite."
     )
