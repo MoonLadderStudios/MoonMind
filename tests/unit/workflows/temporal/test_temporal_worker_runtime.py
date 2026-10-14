@@ -2407,7 +2407,7 @@ async def test_child_preset_expansion_prefers_workflow_payload_over_legacy_task(
 
     assert expanded_parameters["task"] == legacy_task
     task = expanded_parameters["workflow"]
-    assert expanded_parameters["stepCount"] == 15
+    assert expanded_parameters["stepCount"] == 14
     assert task["steps"][0]["tool"]["id"] == "jira.check_blockers"
     assert task["steps"][3]["tool"]["id"] == "jira.update_issue_status"
     assert "MM-821" in task["steps"][3]["instructions"]

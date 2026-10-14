@@ -238,7 +238,7 @@ Classify gaps separately:
 - Verification gaps mean tests, command evidence, or inspection evidence are missing or insufficient.
 - Doc drift means verified behavior contradicts, supersedes, or reveals ambiguity in the canonical source document.
 
-Doc drift alone does not block `FULLY_IMPLEMENTED` when implementation behavior and required verification are correct for the agreed story scope. In that case, set the claim's drift status and also record the structured drift in Source Document Drift.
+Record source drift in the report; required in-scope documentation corrections are ordinary remaining implementation work.
 
 Use durable evidence references instead of pasting large source, code, test, artifact, or log content into the report.
 
@@ -418,8 +418,7 @@ Rules:
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
-- Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
-- Canonical claim doc drift alone follows the same rule: it is non-blocking when behavior and verification are correct, but implementation gaps and verification gaps remain blocking until resolved or explicitly out of scope.
+- When the change requires an in-scope documentation edit, a definite missing or incorrect update is ordinary remaining implementation work: record it in `remainingWork` and return `ADDITIONAL_WORK_NEEDED`. Record possible or unrelated source drift as observations. The current task and applicable AGENTS.md decide scope; this does not add a separate reconciliation stage or make reference documents override the task.
 
 ## Verdict
 
