@@ -23,7 +23,7 @@ This skill edits MoonSpec execution artifacts, not application feature code. Typ
 - files under `contracts/`
 - feature checklists when present
 
-Alignment operates only among temporary execution artifacts. It must never edit canonical `docs/` files and never aligns a canonical document toward a spec; the canonical document is the higher authority (see `docs/Workflows/MoonSpecDocumentModel.md`). Evidence that a canonical document is wrong belongs in the discovery ledger for `moonspec-doc-reconcile`, not in alignment edits.
+Alignment operates only among temporary execution artifacts. It must never edit canonical `docs/` files and never aligns a canonical document toward a spec; the canonical document is the higher authority (see `docs/Workflows/MoonSpecDocumentModel.md`). Canonical document updates belong to the implementation change, not to alignment edits.
 
 Do not ask the user for clarification. Resolve uncertainty by reading project context, making conservative decisions, documenting assumptions, and applying the least surprising artifact changes.
 

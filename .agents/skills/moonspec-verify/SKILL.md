@@ -26,7 +26,7 @@ This skill answers:
 - Do unit tests and integration tests provide credible evidence?
 - Which requirements, scenarios, source design mappings, or AGENTS.md principles remain partial, missing, conflicting, or unverified?
 - Which stable canonical source claims are covered by implementation behavior, test evidence, artifact evidence, or a clear gap reason?
-- Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift that reconciliation must handle?
+- Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift?
 
 ## Source Acceptance Matrix Verification
 
@@ -90,7 +90,7 @@ Resolve the verification baseline in this order:
 3. An explicitly provided `spec.md` or feature directory.
 4. An active feature directory discovered from repository context by running `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`.
 
-The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. Workflow-stage prose such as "run the final gate", ad hoc verifier guidance such as "focus on API tests", or other process instructions are operational guidance, not source-direct authority; do not let them outrank an explicit feature directory, `spec.md`, original request, issue brief, declarative source document, or discovered active-feature source. When a canonical declarative document and a derived artifact conflict, follow `docs/Workflows/MoonSpecDocumentModel.md`: the canonical document wins unless verified evidence requires reconciliation.
+The first usable source defines the bounded scope. Later sources are supplemental context and traceability only. Workflow-stage prose such as "run the final gate", ad hoc verifier guidance such as "focus on API tests", or other process instructions are operational guidance, not source-direct authority; do not let them outrank an explicit feature directory, `spec.md`, original request, issue brief, declarative source document, or discovered active-feature source.
 
 In source-direct verification mode:
 
@@ -200,7 +200,7 @@ In MoonSpec feature-directory mode, read when present:
 - `AGENTS.md` when present: project principles, repo constraints, `MUST` rules, and testing discipline.
 - `research.md`, `data-model.md`, `contracts/`, `quickstart.md`, and `checklists/` when present and relevant.
 - `specs/breakdown.md` when source design coverage or cross-spec dependencies matter.
-- The canonical source document named by `spec.md` `**Source Document**` when present, plus `artifacts/doc-discoveries/<feature>.json` when it exists, so source-document drift can be assessed.
+- The canonical source document named by `spec.md` `**Source Document**` when present, so source-document drift can be assessed.
 
 Do not use copied source requirement text in `spec.md` as evidence that behavior exists.
 
@@ -215,7 +215,7 @@ Do not use the issue brief, assessment, or generated handoff text as evidence th
 
 ## Canonical Claim Coverage
 
-When a canonical source document is present, report first-class Canonical Claim Coverage over stable canonical claims from that source while preserving the existing Source Document Drift section for reconciliation handoff.
+When a canonical source document is present, report first-class Canonical Claim Coverage over stable canonical claims from that source while preserving the existing Source Document Drift section.
 
 Build the claim inventory from the canonical source document's stable claim headings and durable claim anchors, such as `DOC-REQ-*`, `CONTRACT-*`, `INV-*`, `NON-GOAL-*`, `QUALITY-*`, and `TEST-*`. Use temporary `DESIGN-REQ-*` values only as source-issue traceability, not as stable canonical claim IDs. Preserve source issue traceability or related coverage IDs when the canonical document provides it, but do not treat traceability prose as proof of behavior.
 
@@ -229,7 +229,7 @@ Each claim row must include at least one durable reference in one of these field
 
 - Code evidence, such as repository file paths with line numbers or named code symbols.
 - Test evidence, such as test file paths, test names, and command results.
-- Artifact evidence, such as artifact refs, discovery ledger paths, diagnostics refs, or report refs.
+- Artifact evidence, such as artifact refs, diagnostics refs, or report refs.
 - Gap reason, when evidence is missing, ambiguous, contradictory, or out of scope.
 
 Classify gaps separately:
@@ -238,7 +238,7 @@ Classify gaps separately:
 - Verification gaps mean tests, command evidence, or inspection evidence are missing or insufficient.
 - Doc drift means verified behavior contradicts, supersedes, or reveals ambiguity in the canonical source document.
 
-Doc drift alone does not block `FULLY_IMPLEMENTED` when implementation behavior and required verification are correct for the agreed story scope. In that case, set the claim's drift status and also record the structured drift in Source Document Drift for `moonspec-doc-reconcile`.
+Doc drift alone does not block `FULLY_IMPLEMENTED` when implementation behavior and required verification are correct for the agreed story scope. In that case, set the claim's drift status and also record the structured drift in Source Document Drift.
 
 Use durable evidence references instead of pasting large source, code, test, artifact, or log content into the report.
 
@@ -418,7 +418,7 @@ Rules:
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
-- Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section as structured input for `moonspec-doc-reconcile`. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
+- Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
 - Canonical claim doc drift alone follows the same rule: it is non-blocking when behavior and verification are correct, but implementation gaps and verification gaps remain blocking until resolved or explicitly out of scope.
 
 ## Verdict
@@ -644,8 +644,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Verification is read-only except ignored disposable test artifacts.
 - Original instructions, a declarative source document, an issue brief, or an optional `spec.md` may define the bounded verification scope.
 - `spec.md`, `plan.md`, and `tasks.md` are disposable derived artifacts. Their absence never blocks verification when another usable baseline exists.
-- When `spec.md` names a canonical source document, interpret the story against that document's in-scope stable claims; the canonical document remains the durable desired-state authority unless verified drift is handed off to doc reconciliation.
-- Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
+- When `spec.md` names a canonical source document, verify the in-scope claims the story adopted from it and record verified drift in Source Document Drift.
+- Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently drop an in-scope requirement the story adopted.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
 - Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
