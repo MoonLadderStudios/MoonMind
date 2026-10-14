@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 
-> **Retirement notice (MoonLadderStudios/MoonMind#3955):** the experimental
-> embedded host/runner transport no longer admits new work. Session creation
+> **Retirement notice:** the experimental
+> embedded host/runner transport does not admit new work. Session creation
 > and host registration through it are rejected with
 > `omnigent_embedded_transport_retired` and an actionable proxy alternative
 > (`upstream_omnigent_server_proxy`); the rejection never substitutes proxy
@@ -138,8 +138,8 @@ sessions can drain: until all three configured evidence claims (proxy
 conformance, live stock-host smoke, and host-auth conformance) resolve
 independently, pass schema and secret-scan validation, match the active
 MoonMind build/configuration and immutable image identities, and remain
-unexpired, even drain-time continuity stays gated. Proxy mode remains the
-production default and supported topology until the full #3519 matrix passes.
+unexpired, even drain-time continuity stays gated. Proxy mode is the
+production default and supported topology.
 Retired-transport denials are explicit: HTTP routes answer `410 Gone` with code
 `omnigent_embedded_transport_retired`, and WebSocket handshakes close with
 `4404` carrying `omnigent_embedded_transport_retired` plus the
@@ -155,8 +155,8 @@ mode does not imply support for the other. No embedded support row is
 advertised anymore: readiness and the support matrix report the proxy-only
 topology.
 
-Selecting embedded mode was explicit and versioned; since #3955 it is retired
-for new sessions and only retained sessions drain. Missing, stale, revoked, or
+Selecting embedded mode was explicit and versioned; it is retired for new
+sessions and only retained sessions drain. Missing, stale, revoked, or
 incompatible evidence gates readiness before retained-session continuity work
 starts. Rollback selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
 session stays with its recorded endpoint and bridge mode, and historical

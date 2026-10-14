@@ -5,8 +5,6 @@ Owners: MoonMind Engineering
 Last Updated: 2026-04-03
 Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/WorkflowArchitecture.md`
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
 ---
 
 ## 1. Summary
@@ -124,7 +122,7 @@ The TypeScript frontend owns:
 
 That means:
 
-- `/workflows`, `/workflows/new`, `/schedules`, `/settings`, and similar paths continue to be server-routed. (The `/manifests` Manifest pages were removed with the retired native Manifest product, MoonLadderStudios/MoonMind#4192; `/manifests/*` resolves to no route.)
+- `/workflows`, `/workflows/new`, `/schedules`, `/settings`, and similar paths continue to be server-routed. (There are no `/manifests` Manifest pages; `/manifests/*` resolves to no route.)
 - Client code may update query-string state and in-page filters.
 - Client code may enhance navigation behavior where useful.
 - Client code does **not** become the canonical source of route resolution in Phase 1.
@@ -194,7 +192,7 @@ The frontend source should be moved out of the static asset output directory and
 
 ### 7.1 Proposed Layout
 
-> Retired: the proposed `manifests-list.tsx` entrypoint and `features/manifests/` tree were removed with the native Manifest product (MoonLadderStudios/MoonMind#4192) and are intentionally absent below.
+> There is no `manifests-list.tsx` entrypoint or `features/manifests/` tree; they are intentionally absent below.
 
 ```text
 frontend/

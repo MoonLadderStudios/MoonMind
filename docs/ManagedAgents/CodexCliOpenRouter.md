@@ -6,8 +6,8 @@ Status: **Proposed Design**
 Owners: MoonMind Engineering  
 Last Updated: 2026-10-01
 
-> **Environment default (MoonLadderStudios/MoonMind#4538):** setting
-> `OPENROUTER_API_KEY` in `.env` no longer seeds the Codex/Qwen stock profile
+> **Environment default:** setting
+> `OPENROUTER_API_KEY` in `.env` does not seed the Codex/Qwen stock profile
 > described below. It seeds the model-neutral `opencode-openrouter` Provider
 > Profile (`OpenCode via OpenRouter`: runtime `opencode`, provider
 > `openrouter`), executed through the existing OpenCode-through-Omnigent path.

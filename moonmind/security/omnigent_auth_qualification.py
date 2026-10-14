@@ -1,7 +1,6 @@
 """K2 qualification adapter: portable Omnigent authentication interfaces.
 
 Source issue: MoonLadderStudios/MoonMind#4118 (parent #4116, depends on #4117).
-Plan coverage: K2 in ``docs/tmp/KeycloakRemovalPlan.md``.
 
 This module is the MoonMind-side qualification slice. It composes small,
 real upstream primitives (session-JWT machinery, argon2 password helpers,

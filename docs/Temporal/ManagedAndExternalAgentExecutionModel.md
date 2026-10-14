@@ -269,7 +269,7 @@ through the deterministic fixed-resource successor (stock CPUs for a zero
 value, persisted `memoryMiB` as the fixed limit, other explicit fields
 preserved) instead of ending in a replan message. Container-job capacity waits
 use durable timers under the original timeout.
-See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#fixed-limits-and-concurrency)
+See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#111-fixed-limits)
 for enforcement, prerequisites, and diagnostics.
 
 The scheduled host janitor bounds OAuth and generic-host cleanup independently.

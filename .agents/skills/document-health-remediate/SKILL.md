@@ -136,10 +136,10 @@ Example invocations:
 - Treat the review report as a recommendation, not an instruction. Confirm each finding against the current checkout before acting. A stale recommendation is not write authority: revalidate every finding's evidence against the current checkout (Phase 3) and hold back stale findings. This focused stale-evidence check is required and is not "redoing review work".
 - Do not invent new findings or broaden scope beyond the report. Within an approved finding, the focused revalidation above is mandatory.
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
-- Put migration notes, rollout checklists, and temporary investigation details under `docs/tmp/` or in gitignored handoff paths, not as the main framing of canonical docs.
+- Put migration notes, rollout checklists, and temporary investigation details in the PR description or a gitignored run artifact (for example under `artifacts/`), not as the main framing of canonical docs.
 - Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
 - When applying documentation architecture findings, fix or explicitly report missing metadata, unclear authority, missing embedded rationale, duplicate contract definitions, imperative leakage in canonical docs, and unverifiable canonical claims.
-- Route broad, multi-document, or uncertain cleanup to a bounded `docs/tmp/` improvement plan instead of expanding the remediation beyond the approved report.
+- Route broad, multi-document, or uncertain cleanup to a bounded improvement plan in the PR description or a gitignored run artifact (for example under `artifacts/`) instead of expanding the remediation beyond the approved report.
 - When a superseded document is no longer needed, prefer removing or replacing it over leaving compatibility-era ambiguity, but only when its unique content has been preserved or intentionally discarded.
 - Never apply a disallowed action, and never apply a destructive action when destructive actions are not permitted. A denied mutation is never retried through broader credentials or a wider scope.
 - Preserve useful unique content before any removal, and update inbound and relative links before removal is complete. Preserve unrelated user changes.

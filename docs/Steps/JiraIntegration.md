@@ -164,7 +164,7 @@ The minimum durable Jira issue value is:
 
 ```json
 {
-  "key": "MOON-123"
+  "key": "PROJ-123"
 }
 ```
 
@@ -172,10 +172,10 @@ An enriched value may include additional fields:
 
 ```json
 {
-  "key": "MOON-123",
+  "key": "PROJ-123",
   "summary": "Add schema-driven preset inputs",
   "description": "Create page should render preset inputs from schema.",
-  "url": "https://example.atlassian.net/browse/MOON-123",
+  "url": "https://example.atlassian.net/browse/PROJ-123",
   "status": "Ready for Dev",
   "assignee": "Nathaniel Sticco"
 }
@@ -238,9 +238,9 @@ Example configured preset step before expansion:
   "title": "Jira Orchestrate",
   "inputs": {
     "jira_issue": {
-      "key": "MOON-123",
+      "key": "PROJ-123",
       "summary": "Add schema-driven preset inputs",
-      "url": "https://example.atlassian.net/browse/MOON-123"
+      "url": "https://example.atlassian.net/browse/PROJ-123"
     }
   },
   "expansion_state": "not_expanded"
@@ -283,7 +283,7 @@ Example provenance:
   "presetSlug": "jira-orchestrate",
   "inputSnapshot": {
     "jira_issue": {
-      "key": "MOON-123"
+      "key": "PROJ-123"
     }
   }
 }
@@ -372,7 +372,7 @@ A Tool step may be authored directly:
   "tool": {
     "name": "jira.transition_issue",
     "inputs": {
-      "issueKey": "MOON-123",
+      "issueKey": "PROJ-123",
       "transitionId": "31"
     }
   }
@@ -906,7 +906,7 @@ Widget and schema errors should return field-addressable paths:
 ```json
 {
   "path": "inputs.jira_issue.key",
-  "message": "Issue MOON-123 was not found or is not visible to the configured Jira credential.",
+  "message": "Issue PROJ-123 was not found or is not visible to the configured Jira credential.",
   "code": "jira_issue_not_found"
 }
 ```

@@ -5,10 +5,6 @@ Document Class: System / Feature Design View
 Owners: MoonMind Platform
 Last updated: 2026-08-18
 
-**Issue:** [MoonLadderStudios/MoonMind#3704](https://github.com/MoonLadderStudios/MoonMind/issues/3704) ([Omnigent control plane 3/11]).
-
-**Implementation tracking:** rollout notes and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not in this canonical design document.
-
 ## Related docs
 
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md) — the durable aggregates and repositories this document fences.
@@ -23,7 +19,7 @@ activity result, a former host, a superseded session supervisor, an expired
 lease owner, a delayed provider callback, or a janitor can each attempt a write.
 Local locks and single-transaction boundaries do not protect a surface from a
 writer in another process or from an activity result that arrives after ownership
-changed. #3665 fixed exactly one lost-update race with a locked monotonic
+changed. One lost-update race is already closed with a locked monotonic
 compare-and-swap; this document generalizes that guarantee across every mutable
 control-plane surface.
 

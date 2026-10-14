@@ -2,7 +2,6 @@
 
 **Status:** Implemented  
 **Document Class:** Cross-Cutting Concept View and architectural decision record  
-**Decision:** MoonLadderStudios/MoonMind#3893  
 **Owners:** MoonMind Platform  
 **Last Updated:** 2026-09-03
 
@@ -48,9 +47,7 @@ through existing authority boundaries without a second durable work queue.
 
 ## Historical evidence and rollback boundary
 
-The former design and the read-only pre-migration inventory/export commands are
-preserved in the [historical archive](../Archive/ProposalSystem/README.md). They
-are not product authority. The schema-removal migration is reversible only by
+The schema-removal migration is reversible only by
 restoring a verified pre-upgrade database backup because an empty schema
 downgrade cannot restore deleted review and delivery evidence.
 
