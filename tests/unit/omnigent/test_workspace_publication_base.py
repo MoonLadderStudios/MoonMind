@@ -1103,12 +1103,14 @@ def _attempt_request(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("successor_second", [0, 1])
-@pytest.mark.parametrize("remote_advanced", [False, True])
+@pytest.mark.parametrize(
+    "remote_change", [None, "descendant", "foreign_author", "foreign_committer"]
+)
 async def test_successor_attempt_reconciles_predecessor_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successor_second: int,
-    remote_advanced: bool,
+    remote_change: str | None,
 ) -> None:
     """A successor Step Execution republishes the same logical candidate."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -1173,7 +1175,7 @@ async def test_successor_attempt_reconciles_predecessor_publication(
             f"GIT_{prefix}_DATE",
             f"2026-01-01T00:01:{successor_second:02d}+00:00",
         )
-    if remote_advanced:
+    if remote_change == "descendant":
         # Even identical bytes do not authorize replacing another actor's
         # later commit. Its distinct parent must remain on the remote branch.
         peer = tmp_path / "peer"
@@ -1182,6 +1184,36 @@ async def test_successor_attempt_reconciles_predecessor_publication(
         git("commit", "--allow-empty", "-m", "peer progress", cwd=peer)
         git("push", "origin", lost["push_branch"], cwd=peer)
         peer_head = git("rev-parse", "HEAD", cwd=peer)
+    elif remote_change is not None:
+        # Simulate a rewrite only in this test-owned bare origin. Everything
+        # except the original author's or committer's identity is preserved.
+        with monkeypatch.context() as foreign:
+            prefix = "AUTHOR" if remote_change == "foreign_author" else "COMMITTER"
+            foreign.setenv(f"GIT_{prefix}_NAME", "Other actor")
+            foreign.setenv(f"GIT_{prefix}_EMAIL", "other@example.invalid")
+            peer_head = git(
+                "commit-tree",
+                git("rev-parse", f"{lost['push_head_sha']}^{{tree}}", cwd=origin),
+                "-p",
+                git("rev-parse", f"{lost['push_head_sha']}^", cwd=origin),
+                "-m",
+                git(
+                    "show",
+                    "--no-patch",
+                    "--format=%B",
+                    lost["push_head_sha"],
+                    cwd=origin,
+                ),
+                cwd=origin,
+            )
+        git(
+            "update-ref",
+            f"refs/heads/{lost['push_branch']}",
+            peer_head,
+            lost["push_head_sha"],
+            cwd=origin,
+        )
+    if remote_change is not None:
         with pytest.raises(RuntimeError, match="not a fast-forward"):
             await publisher.publish_request_workspace(
                 request=second,
