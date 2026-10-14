@@ -16,7 +16,6 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.auth.github_credentials import resolve_github_credential
-from moonmind.config.settings import settings
 from moonmind.omnigent.git_identity import (
     publication_git_identity_projection,
     resolve_publication_git_identity,
@@ -1102,7 +1101,9 @@ class OmnigentWorkspacePublicationService:
                     current_workflow_id=current_workflow_id,
                     current_step_execution_id=current_step_execution_id,
                     publication_identity=logical_publication_identity(request),
-                    publication_git_identity=publication_git_identity_projection(parameters),
+                    publication_git_identity=await publication_git_identity_projection(
+                        parameters
+                    ),
                     publish_mode=publish_mode,
                     base_branch=source.repository_branch,
                     repository=identity.display_name,
@@ -1118,7 +1119,9 @@ class OmnigentWorkspacePublicationService:
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
                 publication_identity=logical_publication_identity(request),
-                publication_git_identity=publication_git_identity_projection(parameters),
+                publication_git_identity=await publication_git_identity_projection(
+                    parameters
+                ),
                 publish_mode=publish_mode,
                 base_branch=authored_starting_branch(request),
                 repository=repository,

@@ -26,9 +26,13 @@ from moonmind.omnigent.git_identity import (
         {"name": "operator\n[user]", "email": "operator@example.test"},
     ],
 )
-def test_invalid_admitted_git_identity_fails_closed(snapshot):
+@pytest.mark.asyncio
+async def test_invalid_admitted_git_identity_fails_closed(snapshot, monkeypatch):
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, snapshot)
     with pytest.raises(ValueError, match="admitted publication Git identity"):
-        resolve_execution_git_identity(
+        await resolve_execution_git_identity(
             {
                 "publicationGitIdentityAdmission": {
                     "schemaVersion": "v1",
@@ -42,12 +46,15 @@ def test_invalid_admitted_git_identity_fails_closed(snapshot):
     "legacy",
     [{"name": "Old authored", "email": "old@example.invalid"}, "malformed", {}],
 )
-def test_old_arbitrary_identity_parameter_does_not_gain_runtime_authority(
+@pytest.mark.asyncio
+async def test_old_arbitrary_identity_parameter_does_not_gain_runtime_authority(
     monkeypatch, legacy
 ):
     monkeypatch.setattr(settings.workflow, "git_user_name", "Current deployment")
     monkeypatch.setattr(settings.workflow, "git_user_email", "current@example.invalid")
-    assert resolve_execution_git_identity({"_publicationGitIdentity": legacy}) == (
+    assert await resolve_execution_git_identity(
+        {"_publicationGitIdentity": legacy}
+    ) == (
         "Current deployment",
         "current@example.invalid",
     )

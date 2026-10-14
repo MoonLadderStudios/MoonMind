@@ -89,6 +89,8 @@ A later step may start from an earlier step's verified cumulative candidate, but
 
 When the base already contains the owned candidate, an unchanged later step returns canonical `no_commits` and skips PR discovery. A zero-change result may also show a saved revision is reachable from an advanced base; that is saved-work evidence, not publication, and keeps `remoteVerified` false so exact-head remediation consumers never admit a stale base as a write destination.
 
+Git attribution is chosen at server admission and retained in workflow memo. Workspace preparation and publication read that choice through the worker's existing Temporal client, binding the lookup to the actual Activity workflow/run and its recorded parents. Authored request parameters, including retained legacy descriptors, cannot establish attribution. Confirmed absence keeps the deployment fallback; an unreadable or ambiguous recorded owner blocks instead of silently changing identity. Replay-gated child starts and Continue-As-New carry the admitted memo. This keeps restored agent-created commits and publisher-created commits attributable to the same admitted choice across deployment changes.
+
 ## 5. Workflow and Batch Inheritance
 
 ```text
