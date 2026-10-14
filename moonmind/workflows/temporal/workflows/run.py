@@ -821,6 +821,7 @@ RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
 # Explicit action requirements and resolved Skill metadata change the AgentRun
 # payload. Retained histories keep their original payload when this is absent.
 RUN_GITHUB_ACTION_PERMISSIONS_PATCH = "run-github-action-permissions-v1"
+RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH = "run-publication-git-identity-payload-v1"
 # The launching controller attests the closed canonical turn source and the Step
 # Execution a remediation attempt repairs (#3707).  This adds a field to the
 # AgentRun request payload and therefore requires a replay gate: an in-flight
@@ -22122,12 +22123,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
-        if workflow_parameters is not None:
-            identity = workflow_parameters.get("_publicationGitIdentity")
-            if isinstance(identity, Mapping):
-                # Only server-admitted workflow data, never plan/node overrides.
-                # Histories without the optional snapshot keep their old payload.
-                parameters["_publicationGitIdentity"] = dict(identity)
         if self._workflow_patch_enabled(RUN_GITHUB_ACTION_PERMISSIONS_PATCH):
             # Presence matters: a malformed null declaration must not disappear
             # into the default read-only path. Old histories keep their payload.
@@ -23457,6 +23452,34 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "allowedActions": allowed_continuation_actions,
                 "source": "validated_temporal_parent",
             }
+
+        if self._workflow_patch_enabled(RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH):
+            # Final boundary after every authored/runtime parameter projection.
+            # A pre-update worker may omit this key even with updated API input;
+            # histories without the marker retain their original Activity shape.
+            parameters.pop("_publicationGitIdentity", None)
+            projected_runtime = parameters.get("runtime")
+            if isinstance(projected_runtime, Mapping):
+                explicit = projected_runtime.get("parameters")
+                if (
+                    isinstance(explicit, Mapping)
+                    and "_publicationGitIdentity" in explicit
+                ):
+                    parameters["runtime"] = {
+                        **projected_runtime,
+                        "parameters": {
+                            key: value
+                            for key, value in explicit.items()
+                            if key != "_publicationGitIdentity"
+                        },
+                    }
+            identity = (workflow_parameters or {}).get("_publicationGitIdentity")
+            if identity is not None:
+                # Preserve malformed admitted data for the existing fail-closed
+                # runtime reader rather than silently switching to defaults.
+                parameters["_publicationGitIdentity"] = (
+                    dict(identity) if isinstance(identity, Mapping) else identity
+                )
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
