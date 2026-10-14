@@ -31,7 +31,7 @@ work stays in its owning issue plan (`docs/tmp/OmnigentBridgeRollout.md`).
 | 12 | Lifecycle reconciler transition contract | `OmnigentLifecycleReconciler.md` |
 | 13 | Control-plane aggregates, concurrency/fencing, telemetry/timeline | `ControlPlaneAggregates.md`, `ControlPlaneConcurrencyAndFencing.md`, `OmnigentSemanticTelemetryAndTimeline.md` |
 | 14 | Versioned rollout states, canary, rollback, migration status | `RuntimeProviderRollout.md` |
-| 15 | Codex support evidence, historical cutover phases, optional remediation observations and strict certification | `CodexSupportAndCutover.md` |
+| 15 | Codex support evidence, active cutover diagnostic/evidence projection (phases retired for new-work admission), optional remediation observations and strict certification | `CodexSupportAndCutover.md` |
 | 16 | Codex create-to-host wire contract | `CodexCreateToHostContract.md` |
 | 17 | Codex product-path reconciliation | `NormalCodexProductPathReconciliation.md` |
 | 18 | Conformance tiers and live-smoke boundaries | `ConformanceAndLiveSmoke.md` |
@@ -67,7 +67,7 @@ Deliberately *not* merged (distinct responsibilities, per #3962):
 - Run-owned vs profile-owned credential cleanup: never collapsed into one
   "delete credentials" instruction (`SharedHostImage.md` §4).
 - `CodexSupportAndCutover.md` vs `RuntimeProviderRollout.md`: the former owns
-  Codex evidence and historical phase interpretation; the latter owns the
+  Codex evidence and the retained phase diagnostic projection; the latter owns the
   surviving selection/rollout controls and identifies retired configuration.
 - `CodexCreateToHostContract.md` vs
   `NormalCodexProductPathReconciliation.md`: the former owns the wire contract;
