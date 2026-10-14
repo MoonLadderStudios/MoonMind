@@ -26,14 +26,23 @@ Classify obligations by their source, before checking tool availability:
 - Optional diagnostics provide additional confidence. Their absence does not gate
   acceptance, but an observed in-scope defect still requires remediation.
 - Mandatory implementation acceptance requires objective evidence, including the
-  checks required by the source and repository guidance. Missing tools do not
-  turn these obligations into exclusions. Prepare authorized isolated test
-  dependencies and complete independent safe work before reporting a blocker.
+  checks required by the source and repository guidance, subject to the rule for
+  criteria outside the verifier's reach below.
 - Separately authorized production execution is a different operation. Verify
   implementation through isolated migration, browser, or workflow tests without
   deploying or mutating production. Preserve a production prerequisite when the
   selected operation explicitly requires it (for example draining live handlers
   before their removal). Do not infer deployment authority from implementation.
+
+## Criteria outside the verifier's reach
+
+If the verifying agent can't check a criterion with the capabilities, access,
+and time it actually has, it first obtains what it reasonably can (for example,
+installing a missing tool). If it still can't check it, it records the criterion
+as **Unverified** with the reason and who could verify it. An Unverified criterion
+does not produce a non-passing verdict, remaining work, or a stop. A defect that
+any check actually observes still blocks. The selected scope is unchanged:
+Unverified criteria stay in it, are reported, and are never described as passed.
 
 Recover truncated mandatory source content through its authorized owning reader.
 When recovery cannot supply it, assess the visible scope and identify the missing
@@ -98,7 +107,8 @@ landed. Preserve the initial assessment artifact and verdict unchanged. Later
 verification has its own artifact and cannot rewrite that historical meaning.
 
 Objective verification may return `FULLY_IMPLEMENTED` only when the complete
-selected scope and every mandatory requirement have valid evidence. Use the
+selected scope and every mandatory requirement have valid evidence or are
+Unverified under the rule above. Use the
 existing verdicts and continuation actions. Record implementation defects,
 missing verification, unavailable environment, budget exhaustion, and a human
 decision separately. Bounded authorized fixes go to the existing remediation
@@ -120,8 +130,9 @@ Bind objective evidence in the existing `validatedRefs.acceptance` field using
 - `completionTarget`: intended ref, its observed revision and content digest.
   Resolve an explicitly configured target first, otherwise the remote default
   branch. A feature branch's upstream is not the default/completion target.
-- `evidence`: one record per mandatory requirement with its ID and objective
-  evidence references. All records certify the enclosing subject and scope.
+- `evidence`: one record per mandatory requirement with its ID and either objective
+  `evidenceRefs` or an `unverified` object with nonblank `reason` and
+  `verifiableBy`, never both. All records describe the enclosing subject and scope.
 - `freshness`: the required policy identity and optional expiry for time-sensitive
   evidence. Content-bound evidence need not expire arbitrarily.
 
@@ -164,9 +175,9 @@ with the report rather than only an opaque artifact ID. A false
 `recoverableInCurrentRuntime` does not mean another authorized owner cannot do it.
 
 When different evidence is obtainable, use the existing `reattempt_current_step`
-action for verification or its separate remediation owner. If no authorized path
-can currently proceed, retain `blocked` and name what must change before resuming;
-do not repeatedly submit the same rejected job. Preserve explicit stop decisions
+action for verification or its separate remediation owner. Evidence the verifier
+cannot obtain makes its criterion Unverified, not a stop; do not repeatedly submit
+the same rejected job. Preserve explicit stop decisions
 and attempt budgets. Exhaustion does not itself justify `needs_human`, and this
 policy does not create a scheduler, retry loop, publication rule, or new verdict.
 A genuine human decision must identify the exact unavailable information or

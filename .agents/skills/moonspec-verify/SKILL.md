@@ -397,8 +397,8 @@ this discovery before using `NOT RUN`, `recoverableInCurrentRuntime: false`,
 
 Use `NOT RUN` with exact owning-boundary failure evidence after attempting supported, authorized setup and execution paths.
 Use the acceptance policy when interpreting unavailable assets,
-services, credentials, or tooling. Preserve explicitly mandatory prerequisites;
-report optional diagnostics as advisory limitations.
+services, credentials, or tooling. A mandatory criterion still out of reach is
+Unverified; optional diagnostics are advisory limitations.
 
 ## Classify Items
 
@@ -414,7 +414,7 @@ Rules:
 
 - Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
 - Missing required unit tests or repo-local hermetic checks is a verification failure unless the selected verification baseline clearly makes that test class irrelevant.
-- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Unavailable external evidence follows the acceptance policy: mandatory prerequisites require a handoff, while optional diagnostics remain non-blocking.
+- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Evidence the verifier cannot obtain follows the acceptance policy: the criterion is Unverified, and optional diagnostics remain non-blocking.
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
@@ -431,12 +431,12 @@ Choose exactly one verdict:
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible. Use `BLOCKED` only for environment failures; it says nothing about implementation completeness.
 Do not choose a blocking verdict solely because advisory validation cannot run.
-Use `FULLY_IMPLEMENTED` when the acceptance policy is satisfied. Missing required
-external evidence uses `NO_DETERMINATION` with an evidence retry when obtainable,
-or `blocked` when unavailable after supported attempts. Use `needs_human` only
-for an actual human-owned authority or information decision. Missing runtime
-capabilities preventing required checks use `BLOCKED` with `blocked`. These stopping
-verdicts preserve uncertainty about completeness; they are not assertion failures.
+Use `FULLY_IMPLEMENTED` when the acceptance policy is satisfied, including when
+some criteria are Unverified because they are outside the verifier's reach.
+Missing evidence the verifier can still obtain uses `NO_DETERMINATION` with an
+evidence retry. Use `needs_human` only for an actual human-owned authority or
+information decision. These stopping verdicts preserve uncertainty about
+completeness; they are not assertion failures.
 
 When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
 
@@ -450,7 +450,7 @@ Distinguish implementation gaps from verification gaps:
 
 - Implementation gaps mean required behavior, wiring, persistence, contracts, UI/API behavior, or configuration is absent, partial, or contradictory.
 - Verification gaps mean tests, command evidence, fixture coverage, integration evidence, or inspectable artifacts are missing or insufficient.
-- Environment gaps prevent controlling checks: missing runtime capabilities use `BLOCKED`; required external evidence or authority decisions use `NO_DETERMINATION`. Advisory environment gaps remain non-blocking limitations, not Remaining Work.
+- Environment gaps the verifier cannot close make their criteria Unverified, not Remaining Work. A contaminated or untrustworthy environment still uses `BLOCKED`.
 
 Emit concrete `remainingWork` for every `ADDITIONAL_WORK_NEEDED` result. Each item must be bounded enough for a remediation step to act on without reinterpreting the whole report.
 
@@ -479,18 +479,13 @@ Before requesting another attempt, identify the concrete change or controlling
 check that an authorized remediation step can actually execute. Distinguish
 repository work from prerequisites such as a missing container-test capability,
 live deployment access, or a required operator decision. Complete feasible
-repository work while preserving those prerequisites; once only unavailable
-prerequisites remain, use the appropriate stop action from the acceptance policy and name the required owner,
-the evidence they must supply, and the check that resumes verification. A newer
-commit, more unexecuted tests, or a rewritten report does not resolve an unchanged
-prerequisite. Do not spend another attempt repeating that same blocked check
-without evidence that its environment or authority changed.
+repository work; criteria that remain out of the verifier's reach are
+Unverified, so once only those remain, return `FULLY_IMPLEMENTED`. Do not spend
+another attempt repeating a check that cannot run here.
 
-Keep mandatory acceptance conditions visible in this handoff. An explicitly
-required deployment drain or permission check cannot be waived as advisory just
-because the sandbox lacks access. Conversely, optional deployment diagnostics
-remain non-blocking under the test-evidence policy above. Missing test tooling is
-an environment limitation, not proof that an implementation or assertion failed.
+Keep Unverified criteria visible in the report and handoff with their reason and
+who could verify them. Missing test tooling is an environment limitation, not
+proof that an implementation or assertion failed.
 
 An explicit `needs_human` or `blocked` decision for `ADDITIONAL_WORK_NEEDED` or
 `NO_DETERMINATION` stops automatic verifier retry and implementation remediation.
@@ -570,6 +565,11 @@ Use this structure:
 |-----------|-------------------|----------|----------|
 | [docs/ path + claim] | [verified behavior] | [file/test/reference] | definite/possible |
 
+## Unverified Criteria
+
+| Criterion | Reason | Verifiable By |
+|-----------|--------|---------------|
+
 ## Gaps
 
 - [Blocking gaps first]
@@ -647,6 +647,6 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently drop an in-scope requirement the story adopted.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
-- Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
+- Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; mandatory criteria outside the verifier's reach are Unverified, never blockers and never reported as passed.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.
 - Do not mark the feature complete when required behavior is only inferred and not verified.

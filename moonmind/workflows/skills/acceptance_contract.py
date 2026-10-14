@@ -38,9 +38,25 @@ class AcceptanceScope(_Record):
     requirement_ids: list[str] = Field(alias="requirementIds", min_length=1)
 
 
+class UnverifiedCriterion(_Record):
+    """A criterion the verifier could not check with what it had."""
+
+    reason: str = Field(min_length=1)
+    verifiable_by: str = Field(alias="verifiableBy", min_length=1)
+
+
 class RequirementEvidence(_Record):
     requirement_id: str = Field(alias="requirementId", min_length=1)
-    evidence_refs: list[str] = Field(alias="evidenceRefs", min_length=1)
+    evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs")
+    unverified: UnverifiedCriterion | None = None
+
+    @model_validator(mode="after")
+    def evidenced_or_unverified(self) -> "RequirementEvidence":
+        if bool(self.evidence_refs) == (self.unverified is not None):
+            raise ValueError(
+                "a requirement has evidenceRefs or an unverified record, not both"
+            )
+        return self
 
 
 class EvidenceFreshness(_Record):

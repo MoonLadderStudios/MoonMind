@@ -258,3 +258,41 @@ def test_malformed_evidence_is_actionable_missing_proof(candidate, binding):
     report["validatedRefs"]["acceptance"] = binding
     assert not portable.reuse(report, current)["reusable"]
     assert acceptance_evidence(report) is None
+
+
+def _unverified_ac2(report, unverified):
+    rows = report["validatedRefs"]["acceptance"]["evidence"]
+    rows[1] = {"requirementId": "AC-2", "unverified": unverified}
+
+
+def test_criterion_outside_verifier_reach_passes_as_unverified(candidate):
+    _, current, report = candidate
+    _unverified_ac2(
+        report,
+        {"reason": "Needs a GPU render host.", "verifiableBy": "GPU CI lane"},
+    )
+    assert portable.reuse(report, current)["reusable"]
+    evidence = acceptance_evidence(report)
+    assert evidence is not None
+    assert [row.unverified.verifiable_by for row in evidence.evidence if row.unverified] == [
+        "GPU CI lane"
+    ]
+    assert (
+        parse_step_gate_result(report, require_acceptance=True).verdict
+        == "FULLY_IMPLEMENTED"
+    )
+
+
+@pytest.mark.parametrize(
+    "unverified", [{"reason": "Needs a GPU render host."}, {"verifiableBy": "GPU CI"}]
+)
+def test_unverified_criterion_without_reason_or_owner_is_not_acceptance(
+    candidate, unverified
+):
+    _, _, report = candidate
+    _unverified_ac2(report, unverified)
+    assert acceptance_evidence(report) is None
+    assert (
+        parse_step_gate_result(report, require_acceptance=True).verdict
+        == "NO_DETERMINATION"
+    )
