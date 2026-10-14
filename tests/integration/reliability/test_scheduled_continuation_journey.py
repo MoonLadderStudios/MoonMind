@@ -22,6 +22,7 @@ from temporalio.client import (
     ScheduleActionStartWorkflow,
     ScheduleSpec,
     ScheduleState,
+    ScheduleUpdate,
 )
 from temporalio.common import (
     SearchAttributeKey,
@@ -75,6 +76,99 @@ REPLAY = json.loads(
         Path(__file__).with_name("replays") / "scheduled-recovery" / "manifest.json"
     ).read_text()
 )
+
+
+@pytest.mark.parametrize("system_owned", [False, True])
+async def test_scheduled_repository_reader_uses_immutable_start_authority(
+    monkeypatch, system_owned
+):
+    """Exercise real Temporal/DB source recovery without provider or Git effects."""
+    from api_service.db import base as db_base
+    from moonmind.workflows.temporal.runtime import managed_api_key_resolve as resolver
+
+    client = await resolver_test_client()
+    owner = "system" if system_owned else str(uuid4())
+    start = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "owner_user_id": None if system_owned else owner,
+        "initial_parameters": {
+            "repository": {
+                "provider": "git",
+                "connectionRef": "repository-connection:original",
+                "repository": {"name": "acme/repo"},
+            },
+        },
+    }
+    schedule = await client.create_schedule(
+        "repository-authority-" + uuid4().hex,
+        Schedule(
+            action=ScheduleActionStartWorkflow(
+                "MoonMind.UserWorkflow",
+                start,
+                id="mm:repository-authority-" + uuid4().hex,
+                task_queue="unpolled-repository-authority-" + uuid4().hex,
+                typed_search_attributes=TypedSearchAttributes(
+                    [
+                        SearchAttributePair(
+                            SearchAttributeKey.for_keyword("mm_owner_id"), owner
+                        ),
+                        SearchAttributePair(
+                            SearchAttributeKey.for_keyword("mm_owner_type"),
+                            "system" if system_owned else "user",
+                        ),
+                    ]
+                ),
+            ),
+            spec=ScheduleSpec(),
+            state=ScheduleState(paused=True),
+        ),
+    )
+    workflow_id = None
+    try:
+        await schedule.trigger()
+        for _ in range(100):
+            actions = (await schedule.describe()).info.recent_actions
+            if actions:
+                break
+            await asyncio.sleep(0.05)
+        assert actions
+        workflow_id = actions[-1].action.workflow_id
+        run_id = actions[-1].action.first_execution_run_id
+
+        def change_target(update):
+            replacement = json.loads(json.dumps(start))
+            replacement["initial_parameters"]["repository"][
+                "connectionRef"
+            ] = "repository-connection:edited-schedule"
+            update.description.schedule.action.args = [replacement]
+            return ScheduleUpdate(schedule=update.description.schedule)
+
+        await schedule.update(change_target)
+        async with isolated_postgres([]) as sessions:
+            async with sessions() as session:
+                connection = await session.connection()
+                await connection.run_sync(Base.metadata.create_all)
+                await session.commit()
+            monkeypatch.setattr(db_base, "async_session_maker", sessions)
+            environment = ActivityEnvironment(client=client)
+            admitted = await environment.run(
+                resolver._admitted_repository_record, workflow_id
+            )
+            assert admitted == (workflow_id, run_id, start["initial_parameters"])
+            assert await environment.run(
+                resolver.load_admitted_repository_access, workflow_id
+            ) == ("repository-connection:original", False)
+            async with sessions() as session:
+                assert (
+                    await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+                    is None
+                )
+    finally:
+        if workflow_id:
+            await client.get_workflow_handle(workflow_id).terminate(
+                "Qualification completed without a provider turn"
+            )
+        await schedule.delete()
 
 
 @pytest.mark.parametrize("authored", [False, True])
