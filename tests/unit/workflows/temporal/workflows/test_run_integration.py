@@ -364,6 +364,52 @@ async def test_blocked_assessment_terminal_routes_claim_to_durable_finalizer(
     assert finalizers[0].get("writerEvidence", {}).get("writersStopped") is not True
     assert summary["publishContext"]["objectiveOutcome"] == "verification_blocked"
 
+
+@pytest.mark.asyncio
+async def test_unavailable_assessment_records_original_blocker_before_fail_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subject = MoonMindRunWorkflow()
+    subject._trusted_issue_context = subject._trusted_previous_outputs_context(
+        {
+            "trustedSource": "moonmind.github.get_issue",
+            "issue": {"repository": "MoonLadderStudios/Tactics", "number": 2741},
+            "issueClaimLease": {
+                "owner": "default/wf-auto-publish",
+                "attemptId": "att-a5dff863c1b5-9dd5",
+                "repository": "moonladderstudios/tactics",
+                "issueNumber": 2741,
+            },
+        }
+    )
+    subject._failure_diagnostic = {
+        "stepTitle": "github.check_issue_blockers",
+        "message": "The assessment could not be read.",
+    }
+    subject._record_early_issue_blocker_result(
+        {
+            "decision": "blocked",
+            "assessmentArtifactRef": "art_unavailable",
+            "summary": "Required assessment art_unavailable was unavailable; rerun assessment.",
+        }
+    )
+    calls: list[tuple[str, Any]] = []
+    summary = await _finalize_and_capture_summary(
+        monkeypatch,
+        subject,
+        parameters={"publishMode": "none", "runtime": {"mode": "auto"}},
+        status="failed",
+        error="Assessment unavailable before implementation.",
+        captured_activities=calls,
+    )
+
+    finalizers = [payload for activity, payload in calls if activity == "github_issue.finalize_failed_attempt"]
+    assert len(finalizers) == 1
+    assert finalizers[0]["executionEvent"] == "blocked"
+    assert finalizers[0]["assessmentArtifactRef"] == "art_unavailable"
+    assert "rerun assessment" in finalizers[0]["reason"]
+    assert summary["publishContext"]["objectiveOutcome"] == "failed"
+
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
     **_kwargs: Any,

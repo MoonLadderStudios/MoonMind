@@ -821,6 +821,7 @@ async def reconcile_local_claims(
                     intent = (receipt.finalization_json or {}).get("intent")
                     if not isinstance(intent, dict):
                         intent = {}
+                    blocked_intent = str(intent.get("executionEvent") or "").strip() == "blocked"
                     intent_reason = str(intent.get("reason") or "").strip()
                     assessment_ref = str(intent.get("assessmentArtifactRef") or "").strip()
                     if intent_reason and assessment_ref and assessment_ref not in intent_reason:
@@ -835,6 +836,22 @@ async def reconcile_local_claims(
                             else "Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
                         )
                         + (", ".join(checkpoints) or "no agent runtime started")
+                    )
+                    disposition_evidence = recovery_disposition_evidence(
+                        agent_started=runtime_started,
+                        remaining=remaining,
+                        runtime_unavailable=runtime_unavailable,
+                    )
+                    if blocked_intent:
+                        disposition_evidence.update(
+                            blockedPrerequisite=True,
+                            freshRetryAllowed=False,
+                            blockingReason=recovery_reason,
+                        )
+                    next_action = (
+                        "obtain_attention"
+                        if blocked_intent or not (remaining or runtime_unavailable)
+                        else "fresh_retry"
                     )
                     result.update(
                         await finalize_failed_attempt(
@@ -860,16 +877,10 @@ async def reconcile_local_claims(
                                 "saveMethod": "explicit_no_work",
                                 "trustworthyNoWork": True,
                             },
-                            disposition_evidence=recovery_disposition_evidence(
-                                agent_started=runtime_started,
-                                remaining=remaining,
-                                runtime_unavailable=runtime_unavailable,
-                            ),
+                            disposition_evidence=disposition_evidence,
                             remaining_requirements=retained_requirements,
                             reason=recovery_reason,
-                            next_action="fresh_retry"
-                            if remaining or runtime_unavailable
-                            else "obtain_attention",
+                            next_action=next_action,
                             service=service,
                             claim_store=store,
                             claim_receipt=receipt,
