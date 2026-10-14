@@ -366,9 +366,19 @@ async def _apply_failed_attempt_finalization(
             == "explicit_no_work"
         )
         if abandon and not own_destination and not available_no_work:
+            # An observed successor prevents our GitHub mutation. It does not
+            # prove this owner's writers stopped or its output was preserved.
+            ownership_releasable = (
+                not cancellation_hold
+                and finalization.confirm_writer_stop(writer_evidence)["stopped"]
+                and finalization.settle_shared_mutations(mutation_evidence)["settled"]
+                and finalization.preserve_authoritative_output(
+                    preservation_evidence
+                )["preserved"]
+            )
             return {
                 "released": False,
-                "ownershipReleasable": True,
+                "ownershipReleasable": ownership_releasable,
                 "reasonCode": "successor_observed",
                 "summary": f"Pre-mutation read observes a successor; no new mutations attempted: {abandon_reason}.",
                 "disposition": "",

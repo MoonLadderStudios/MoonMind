@@ -6020,6 +6020,39 @@ async def test_github_assessment_block_reports_durable_reason_before_writes(
 
 
 @pytest.mark.asyncio
+async def test_github_blocker_preserves_exact_unmet_assessment_requirements(monkeypatch):
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_blocked": {
+                "verdict": "BLOCKED",
+                "summary": "GPU proof unavailable",
+                "requirements": [
+                    {"id": "R-1", "description": "Keep the existing adapter.", "status": "met"},
+                    {"id": "R-2", "description": "Run packaged GPU proof.", "status": "unverifiable"},
+                    {"id": "R-3", "description": "Publish nine worlds.", "status": "not_met"},
+                ],
+            }
+        }
+    )
+    result = await check_github_issue_blockers(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "assessmentArtifactRef": "art_blocked",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=_FakeGitHubService,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["remainingRequirements"] == [
+        "R-2: Run packaged GPU proof.",
+        "R-3: Publish nine worlds.",
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("payload", [None, {}, {"verdict": "UNKNOWN"}, ["BLOCKED"]])
 async def test_github_blocker_check_rejects_unusable_assessment(monkeypatch, payload):
     monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
