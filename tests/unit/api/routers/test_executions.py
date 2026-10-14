@@ -21016,6 +21016,8 @@ def _mm3935_post_through_plan_owner(
     test_client: TestClient,
     service: AsyncMock,
     payload: dict[str, Any],
+    *,
+    db_session: Any = None,
 ) -> tuple[Any, AsyncMock, OmnigentExecutionPlanBinding]:
     """POST one create request with the deployment-default Agent Profile."""
 
@@ -21027,13 +21029,14 @@ def _mm3935_post_through_plan_owner(
         default_model=None,
         default_effort=None,
     )
-    db_session = SimpleNamespace(
-        # The idempotency reservation finds no admitted record; the plan
-        # compiler then loads the default Agent Profile's Provider Profile.
-        get=AsyncMock(side_effect=[None, provider_profile, None]),
-        commit=AsyncMock(),
-        refresh=AsyncMock(),
-    )
+    if db_session is None:
+        db_session = SimpleNamespace(
+            # The idempotency reservation finds no admitted record; the plan
+            # compiler then loads the default Agent Profile's Provider Profile.
+            get=AsyncMock(side_effect=[None, provider_profile, None]),
+            commit=AsyncMock(),
+            refresh=AsyncMock(),
+        )
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -21128,6 +21131,97 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
     )
     assert kwargs["title"] == "CLI run"
     assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+class _Mm3833AgentProfileAdmissionSession:
+    """Create's session around the real Agent Profile snapshot resolver.
+
+    The Agent Profile, its immutable version and the Provider Profile are the
+    selection-boundary fixture; this adds only what Create itself reads: the
+    idempotency lookup, the named Provider Profile, and the commit.
+    """
+
+    def __init__(self) -> None:
+        from tests.unit.services.test_omnigent_agent_profile_selection import (
+            _Session,
+        )
+
+        self.selection = _Session()
+        self.commit = AsyncMock()
+        self.refresh = AsyncMock()
+
+    async def get(self, model: Any, key: Any) -> Any:
+        if model is ManagedAgentProviderProfile:
+            provider = self.selection.provider
+            return provider if key == provider.profile_id else None
+        return await self.selection.get(model, key)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.selection, name)
+
+
+@pytest.mark.parametrize(
+    "cli_shape",
+    ["current", "agent_profile_only"],
+)
+def test_mm3833_cli_agent_profile_reaches_snapshot_resolution_with_its_account(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    cli_shape: str,
+) -> None:
+    """`--agent-profile` with `--provider-profile` is admitted like the form.
+
+    The pre-change CLI sent ``agentProfile: {profileId}`` alone; the server's
+    snapshot resolver rejects that before any effect, because the Agent
+    Profile cannot be resolved without the account it runs against.
+    """
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    payload = build_execution_payload(
+        instructions="Run the named configuration on the named account.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+        idempotency_key=f"mm3833-cli-agent-profile-{cli_shape}",
+    )
+    if cli_shape == "agent_profile_only":
+        payload["payload"]["agentProfile"].pop("providerProfileRef")
+    assert payload["payload"]["agentProfile"]["profileId"] == "team-codex"
+
+    test_client, service, _user = client
+    session = _Mm3833AgentProfileAdmissionSession()
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client, service, payload, db_session=session
+    )
+
+    if cli_shape == "agent_profile_only":
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == (
+            "agentProfile.providerProfileRef is required"
+        )
+        compile_plan.assert_not_awaited()
+        service.create_execution.assert_not_awaited()
+        assert session.selection.added == []
+        return
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    snapshot = initial_parameters["agentProfileSnapshot"]
+    assert snapshot["profileId"] == "team-codex"
+    assert snapshot["version"] == 2
+    assert snapshot["providerProfileRef"] == "oauth-team"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    # The resolver persisted exactly this snapshot as the workflow's usage.
+    (usage,) = session.selection.added
+    assert usage.effective_snapshot == snapshot
 
 
 def test_mm3935_cli_extra_params_survive_plan_admission(
