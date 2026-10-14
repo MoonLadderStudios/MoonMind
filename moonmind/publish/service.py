@@ -805,8 +805,9 @@ class PublishService:
 
         A successor attempt recommits the saved work, so its commit differs from
         the predecessor's pushed commit only in timestamps. When the remote tip
-        has the same tree and parents, it is that same publication and becomes
-        the local branch; any other content is a foreign commit and is refused.
+        matches in everything but those timestamps (tree, parents, author,
+        committer, and message), it is that same publication and becomes the
+        local branch; any other commit is a concurrent update and is refused.
         """
 
         if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", remote_sha):
@@ -821,9 +822,15 @@ class PublishService:
         if getattr(fetched, "returncode", 1) != 0:
             return False
 
-        async def tree_and_parents(revision: str) -> str | None:
+        async def identity_without_dates(revision: str) -> str | None:
             result = await run_command(
-                [self._git_binary, "show", "-s", "--format=%T %P", revision],
+                [
+                    self._git_binary,
+                    "show",
+                    "-s",
+                    "--format=%T %P%n%an <%ae>%n%cn <%ce>%n%B",
+                    revision,
+                ],
                 cwd=repo_dir,
                 check=False,
             )
@@ -831,8 +838,8 @@ class PublishService:
                 return None
             return str(result.stdout or "").strip() or None
 
-        remote_shape = await tree_and_parents(remote_sha)
-        if remote_shape is None or remote_shape != await tree_and_parents(
+        remote_identity = await identity_without_dates(remote_sha)
+        if remote_identity is None or remote_identity != await identity_without_dates(
             branch_name
         ):
             return False
