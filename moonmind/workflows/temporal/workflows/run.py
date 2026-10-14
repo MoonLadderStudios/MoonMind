@@ -3046,8 +3046,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             and str(evidence.get("checkpointManifestRef") or "").strip()
         ):
-            archive_ref = str(evidence.get("workspaceArchiveRef") or "").strip()
-        if not archive_ref.startswith("artifact://"):
+            # Capture records compact ``art_`` ids; restore takes a durable ref.
+            archive_ref = (
+                self._bounded_story_loop_artifact_ref(
+                    evidence.get("workspaceArchiveRef")
+                )
+                or ""
+            )
+        if not archive_ref:
             # A host lost before its own capture still restored the save it
             # inherited from an earlier interruption; keep carrying that save.
             archive_ref = self._interrupted_step_restore_refs.get(
@@ -3056,7 +3062,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 ),
                 "",
             )
-        if archive_ref.startswith("artifact://"):
+        if archive_ref:
             self._interrupted_step_restore_refs[key] = archive_ref
             return
         self._fresh_source_step_execution_attempts.add(key)

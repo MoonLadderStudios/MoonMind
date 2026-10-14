@@ -664,14 +664,25 @@ class OmnigentOAuthHostRepository:
             await session.refresh(record)
             return self._lease_model(record)
 
-    async def mark_host_lease_failed(
+    async def record_unconfirmed_host_cleanup(
         self, lease_id: str, *, code: str, summary: str
     ) -> OmnigentHostLease:
+        """Keep a host whose stop is unconfirmed fenced for the janitor.
+
+        A terminal status would release the Provider Profile's exclusive host
+        index while the launched container may still run with its credentials
+        and workspace. The lease stays ``draining`` under the cleanup claim's
+        expiry, so the janitor resumes the stop and a successor waits for it.
+        """
+
         async with self._session_factory() as session:
             record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if record is None:
                 raise OmnigentOAuthHostError("host lease does not exist")
-            record.status = "failed"
+            if record.status != "draining":
+                raise OmnigentOAuthHostError(
+                    "only a claimed host cleanup can remain unconfirmed"
+                )
             record.error_code = code[:96]
             record.error_summary = redact_sensitive_text(summary)[:512]
             record.last_heartbeat_at = datetime.now(UTC)

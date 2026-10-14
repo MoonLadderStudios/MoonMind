@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Own one provider-free recovery row in the existing exact-artifact CI job.
+"""Own the provider-free recovery rows in the existing exact-artifact CI job.
 
 This is not the concurrency/provider qualification runner. Only test drivers
 are mounted into the already built application image; its production imports
 remain image-owned. The upstream server, host and their observed identities
 are supplied by the job's pinned-source builds, never inferred from latest.
+
+Two rows run on one isolated stack: the same-session host recovery row, then
+the interrupted-step journey (MoonLadderStudios/MoonMind#4627), which replaces
+a real host mid-step under a real Temporal server and requires the step's
+successor to restore the saved workspace on a new host.
 """
 
 from __future__ import annotations
@@ -27,6 +32,14 @@ TEST_NAME = "test_exact_host_replacement_resumes_same_session_without_provider_i
 TEST_FILE = "test_exact_docker_n_way_concurrency.py"
 RECEIPT = "credential-recovery-exact-docker.json"
 JUNIT = "credential-recovery-junit.xml"
+JOURNEY_TEST_NAME = "test_exact_omnigent_host_update_restarts_only_the_interrupted_step"
+JOURNEY_TEST_FILE = "tests/integration/reliability/test_interrupted_step_replacement_journey.py"
+JOURNEY_RECEIPT = "interrupted-step-exact-docker.json"
+JOURNEY_JUNIT = "interrupted-step-junit.xml"
+JOURNEY_STEPS = ("prepare", "analyze", "implement")
+#: The canonical Compose PostgreSQL service's test-only superuser.
+DATABASE_URL = "postgresql://postgres:moonmind-test-db@postgres:5432/moonmind"
+TEMPORAL_ADDRESS = "temporal:7233"
 POSTGRES_IMAGE = "postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60"
 READINESS_SCRIPT = """import json
 import os
@@ -55,6 +68,30 @@ while time.monotonic() < deadline:
     time.sleep(2)
 else:
     raise SystemExit('Omnigent internal service did not become ready')
+"""
+TEMPORAL_READINESS_SCRIPT = """import asyncio
+import time
+
+from temporalio.api.workflowservice.v1 import DescribeNamespaceRequest
+from temporalio.client import Client
+
+
+async def ready():
+    # Stay inside the driver's per-command budget.
+    deadline = time.monotonic() + 200
+    while time.monotonic() < deadline:
+        try:
+            client = await Client.connect('temporal:7233')
+            await client.workflow_service.describe_namespace(
+                DescribeNamespaceRequest(namespace='default')
+            )
+            return
+        except Exception:
+            await asyncio.sleep(2)
+    raise SystemExit('Temporal did not serve the default namespace')
+
+
+asyncio.run(ready())
 """
 
 
@@ -234,10 +271,108 @@ def validate_evidence(
     return row
 
 
-def _junit_failure(root):
+def _sha256(value):
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+
+
+def validate_journey_evidence(root, *, source_commit, host_image_ref, host_image_id):
+    """Accept only an executed journey whose step moved to a new real host."""
+    try:
+        row = json.loads((root / JOURNEY_RECEIPT).read_text())
+        cases = ET.parse(root / JOURNEY_JUNIT).getroot().findall(".//testcase")
+    except (OSError, ValueError, ET.ParseError) as exc:
+        raise RecoveryError(f"interrupted-step evidence unavailable: {exc}") from exc
+    _require(
+        len(cases) == 1
+        and cases[0].get("name") == JOURNEY_TEST_NAME
+        and all(
+            cases[0].find(kind) is None for kind in ("skipped", "failure", "error")
+        ),
+        "the required interrupted-step journey was not successfully executed",
+    )
+    _require(
+        isinstance(row, dict)
+        and set(row)
+        <= {
+            "schemaVersion",
+            "sourceCommit",
+            "hostImageRef",
+            "workflowId",
+            "logicalStepId",
+            "steps",
+            "predecessor",
+            "successor",
+            "hostLoss",
+            "savedWorkspaceDigest",
+            "restoredWorkspaceDigest",
+            "completedWorkspaceDigest",
+        },
+        "unrecognized interrupted-step receipt fields",
+    )
+    _require(row.get("schemaVersion") == 1, "unsupported interrupted-step receipt")
+    _require(row.get("sourceCommit") == source_commit, "stale journey sourceCommit")
+    _require(row.get("hostImageRef") == host_image_ref, "journey host ref mismatch")
+    _require(
+        isinstance(row.get("workflowId"), str) and bool(row["workflowId"]),
+        "missing journey workflow identity",
+    )
+    _require(row.get("logicalStepId") == "implement", "wrong interrupted step")
+    _require(
+        row.get("steps")
+        == [{"logicalStepId": step, "status": "completed"} for step in JOURNEY_STEPS],
+        "the original workflow did not complete every step",
+    )
+    attempts = (row.get("predecessor"), row.get("successor"))
+    for ordinal, attempt in enumerate(attempts, start=1):
+        _require(isinstance(attempt, dict), "missing observed step attempt")
+        _require(
+            set(attempt)
+            <= {
+                "executionOrdinal",
+                "containerName",
+                "hostId",
+                "hostImageId",
+                "sessionId",
+            },
+            "unrecognized step attempt fields",
+        )
+        _require(attempt.get("executionOrdinal") == ordinal, "wrong step attempt")
+        for field in ("containerName", "hostId", "sessionId"):
+            _require(
+                isinstance(attempt.get(field), str) and bool(attempt[field]),
+                f"missing observed {field}",
+            )
+        _require(
+            attempt.get("hostImageId") == host_image_id, "actual host image mismatch"
+        )
+    for field in ("containerName", "hostId", "sessionId"):
+        _require(
+            attempts[0][field] != attempts[1][field],
+            f"the step successor did not get a new {field}",
+        )
+    _require(
+        row.get("hostLoss")
+        == {"runnerOnline": False, "hostOnline": False, "hostResumable": False},
+        "host loss was not observed through the Omnigent session",
+    )
+    saved = row.get("savedWorkspaceDigest")
+    _require(_sha256(saved), "missing saved workspace digest")
+    _require(
+        row.get("restoredWorkspaceDigest") == saved,
+        "the successor did not restore the saved workspace",
+    )
+    _require(
+        _sha256(row.get("completedWorkspaceDigest"))
+        and row["completedWorkspaceDigest"] != saved,
+        "the successor did not complete the step",
+    )
+    return row
+
+
+def _junit_failure(root, junit=JUNIT):
     """Return the failing row's own message and traceback tail, if recorded."""
     try:
-        cases = ET.parse(root / JUNIT).getroot().findall(".//testcase")
+        cases = ET.parse(root / junit).getroot().findall(".//testcase")
     except (OSError, ET.ParseError):
         return ""
     for case in cases:
@@ -265,6 +400,19 @@ def run_test(command, root, **identity):
     return validate_evidence(root, **identity)
 
 
+def run_journey(command, root, **identity):
+    for name in (JOURNEY_RECEIPT, JOURNEY_JUNIT):
+        (root / name).unlink(missing_ok=True)
+    result = subprocess.run(command, check=False, timeout=1500)
+    if result.returncode:
+        failure = _junit_failure(root, JOURNEY_JUNIT)
+        raise RecoveryError(
+            f"interrupted-step journey failed (exit {result.returncode})"
+            + (f": {failure}" if failure else "")
+        )
+    return validate_journey_evidence(root, **identity)
+
+
 def _annotation(text):
     """Escape a GitHub Actions workflow-command message."""
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -274,7 +422,7 @@ def compose_document(source, repo_root, server_image, *, moonmind_image):
     """Reuse canonical init/registration commands, replacing deployment wiring."""
     names = (
         "postgres", "omnigent-db-init", "omnigent-agent-init", "omnigent",
-        "sandbox-egress-proxy",
+        "sandbox-egress-proxy", "temporal",
     )
     services = {name: copy.deepcopy(source["services"][name]) for name in names}
     for service in services.values():
@@ -291,6 +439,29 @@ def compose_document(source, repo_root, server_image, *, moonmind_image):
             "POSTGRES_DB": "moonmind",
         },
         volumes=["postgres-data:/var/lib/postgresql/data"],
+    )
+    # The canonical Temporal server on the same isolated PostgreSQL. Its
+    # auto-setup creates the default namespace the journey's workers use.
+    services["temporal"].update(
+        environment={
+            "DB": "postgres12",
+            "DB_PORT": "5432",
+            "POSTGRES_SEEDS": "postgres",
+            "POSTGRES_USER": "postgres",
+            "POSTGRES_PWD": "moonmind-test-db",
+            "DBNAME": "temporal",
+            "VISIBILITY_DBNAME": "temporal_visibility",
+            "NUM_HISTORY_SHARDS": "1",
+            "DYNAMIC_CONFIG_FILE_PATH": (
+                "/etc/temporal/dynamicconfig/development-sql.yaml"
+            ),
+            "SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES": "true",
+            "BIND_ON_IP": "0.0.0.0",
+        },
+        ports=[],
+        volumes=[
+            f"{repo_root}/services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro"
+        ],
     )
     services["omnigent-db-init"].update(
         image=POSTGRES_IMAGE,
@@ -351,6 +522,27 @@ def compose_document(source, repo_root, server_image, *, moonmind_image):
     }
 
 
+def temporal_readiness_command(*, image, network):
+    """Wait until the isolated Temporal server serves its default namespace."""
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--network",
+        network,
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        TEMPORAL_READINESS_SCRIPT,
+    ]
+
+
 def readiness_command(*, image, network, token):
     """Probe the built service from the exact driver's isolated network."""
     return [
@@ -385,6 +577,10 @@ def test_command(
     host_image_ref,
     token,
     project,
+    target=f"/test-driver/{TEST_FILE}::{TEST_NAME}",
+    junit=JUNIT,
+    extra_environment=None,
+    pytest_options=("--confcutdir=/test-driver",),
 ):
     command = [
         "docker",
@@ -427,6 +623,7 @@ def test_command(
         "AUTH_PROVIDER": "disabled",
         "MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION": "1",
         "COMPOSE_PROJECT_NAME": project,
+        **(extra_environment or {}),
     }
     for key, value in environment.items():
         command.extend(["--env", f"{key}={value}"])
@@ -442,15 +639,34 @@ def test_command(
             "pytest_asyncio.plugin",
             "-c",
             "/dev/null",
-            "--confcutdir=/test-driver",
-            f"/test-driver/{TEST_FILE}::{TEST_NAME}",
+            *pytest_options,
+            target,
             "-q",
             "--tb=short",
             f"--basetemp={work / 'workspace'}",
-            f"--junitxml={work / JUNIT}",
+            f"--junitxml={work / junit}",
         ]
     )
     return command
+
+
+def journey_command(**kwargs):
+    """Run the interrupted-step journey from the copied repository tests."""
+    return test_command(
+        **kwargs,
+        target=f"/test-driver/{JOURNEY_TEST_FILE}::{JOURNEY_TEST_NAME}",
+        junit=JOURNEY_JUNIT,
+        extra_environment={
+            # Import the journey's repository test helpers; production
+            # imports still resolve from the image's /app first.
+            "PYTHONPATH": "/app:/test-driver",
+            "MOONMIND_TEST_TEMPORAL_ADDRESS": TEMPORAL_ADDRESS,
+            "MOONMIND_TEST_POSTGRES_URL": DATABASE_URL,
+        },
+        # The journey needs only builtin fixtures; repository conftest files
+        # may import tooling that is not part of the deployable image.
+        pytest_options=("--rootdir=/test-driver", "--noconftest"),
+    )
 
 
 def _cleanup(compose, network, driver_name):
@@ -487,7 +703,13 @@ def main(argv=None):
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     # Clear before even Docker/source prerequisites are checked.
-    for name in (RECEIPT, JUNIT, "credential-recovery-result.json"):
+    for name in (
+        RECEIPT,
+        JUNIT,
+        JOURNEY_RECEIPT,
+        JOURNEY_JUNIT,
+        "credential-recovery-result.json",
+    ):
         (output / name).unlink(missing_ok=True)
     work = Path(tempfile.mkdtemp(prefix="moonmind-test-recovery-"))
     project = "moonmind-test-recovery-" + uuid.uuid4().hex[:12]
@@ -508,6 +730,7 @@ def main(argv=None):
     identity = {}
     app = None
     row = None
+    journey = None
     phase = "setup"
     try:
         _require(shutil.which("docker") is not None, "Docker is unavailable")
@@ -585,7 +808,14 @@ def main(argv=None):
             root / "tests/integration/omnigent" / TEST_FILE,
             work / "driver" / TEST_FILE,
         )
-        _command([*compose, "up", "-d", "omnigent", "sandbox-egress-proxy"])
+        # The journey imports repository test helpers, so it runs from a copy
+        # of the candidate's tests; the image's production source stays /app.
+        shutil.copytree(
+            root / "tests",
+            work / "driver" / "tests",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        _command([*compose, "up", "-d", "omnigent", "sandbox-egress-proxy", "temporal"])
         for service, role, expected_image in (
             ("omnigent", "server", images["server"]["id"]),
             ("sandbox-egress-proxy", "proxy", app["Id"]),
@@ -598,6 +828,7 @@ def main(argv=None):
             )
             identity[f"{role}ContainerId"] = actual["Id"]
         _command(readiness_command(image=app["Id"], network=network, token=token))
+        _command(temporal_readiness_command(image=app["Id"], network=network))
         command = test_command(
             image=app["Id"],
             network=network,
@@ -618,8 +849,33 @@ def main(argv=None):
             host_image_id=images["host"]["id"],
             expected_harness_identity=expected_harness_identity,
         )
+        journey = run_journey(
+            journey_command(
+                image=app["Id"],
+                network=network,
+                name=driver_name,
+                work=work,
+                dependencies=args.dependencies.resolve(),
+                source_commit=source,
+                host_image_ref=args.host_image,
+                token=token,
+                project=project,
+            ),
+            work,
+            source_commit=source,
+            host_image_ref=args.host_image,
+            host_image_id=images["host"]["id"],
+        )
         (output / "credential-recovery-result.json").write_text(
-            json.dumps({**identity, "status": "passed", "recovery": row}, indent=2)
+            json.dumps(
+                {
+                    **identity,
+                    "status": "passed",
+                    "recovery": row,
+                    "interruptedStep": journey,
+                },
+                indent=2,
+            )
             + "\n"
         )
         return 0
@@ -652,7 +908,7 @@ def main(argv=None):
                 logs = _command(
                     [*compose, "logs", "--no-color", "--tail", "200"], check=False
                 )
-                if row is None:
+                if journey is None:
                     print((logs.stdout + logs.stderr).replace(token, "[test-owner]"))
                 _cleanup(compose, network, driver_name)
                 if app is not None:
@@ -683,31 +939,34 @@ def main(argv=None):
                 print(f"test-only recovery cleanup unavailable: {type(exc).__name__}")
         # Publish only a validated allowlisted receipt. A rejected receipt may
         # contain arbitrary diagnostic fields and must never enter artifacts.
-        if row is not None:
-            (output / RECEIPT).write_text(json.dumps(row, indent=2) + "\n")
-        junit = work / JUNIT
-        if junit.is_file():
-            try:
-                original = ET.parse(junit).getroot()
-                summary = ET.Element("testsuites")
-                suite = ET.SubElement(
-                    summary, "testsuite", name="credential-free-recovery"
-                )
-                for case in original.findall(".//testcase"):
-                    projected = ET.SubElement(
-                        suite, "testcase", name=case.get("name", "unknown")
-                    )
-                    for kind in ("skipped", "error", "failure"):
-                        if case.find(kind) is not None:
-                            ET.SubElement(
-                                projected, kind, message="See the owning Actions log"
-                            )
-                ET.ElementTree(summary).write(output / JUNIT, encoding="unicode")
-            except (OSError, ET.ParseError):
-                # The projected summary is auxiliary evidence; an unreadable
-                # report is omitted rather than failing cleanup of the run.
-                pass
+        for name, receipt in ((RECEIPT, row), (JOURNEY_RECEIPT, journey)):
+            if receipt is not None:
+                (output / name).write_text(json.dumps(receipt, indent=2) + "\n")
+        for name in (JUNIT, JOURNEY_JUNIT):
+            _project_junit(work / name, output / name)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _project_junit(source, target):
+    """Publish only case names and outcomes; the Actions log owns details."""
+    if not source.is_file():
+        return
+    try:
+        original = ET.parse(source).getroot()
+        summary = ET.Element("testsuites")
+        suite = ET.SubElement(summary, "testsuite", name="credential-free-recovery")
+        for case in original.findall(".//testcase"):
+            projected = ET.SubElement(
+                suite, "testcase", name=case.get("name", "unknown")
+            )
+            for kind in ("skipped", "error", "failure"):
+                if case.find(kind) is not None:
+                    ET.SubElement(projected, kind, message="See the owning Actions log")
+        ET.ElementTree(summary).write(target, encoding="unicode")
+    except (OSError, ET.ParseError):
+        # The projected summary is auxiliary evidence; an unreadable
+        # report is omitted rather than failing cleanup of the run.
+        pass
 
 
 if __name__ == "__main__":

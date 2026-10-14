@@ -29,6 +29,7 @@ from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
@@ -4471,6 +4472,93 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_unconfirmed_host_stop_fences_successor_until_janitor_confirms(
+    tmp_path,
+) -> None:
+    """An unacknowledged stop resumes reconciliation, not parallel compute."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/fence.db")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    max_parallel_runs=1,
+                    credential_generation=3,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                )
+            )
+            await session.commit()
+        repository = OmnigentOAuthHostRepository(factory)
+        binding = await repository.create_or_update_static_binding(
+            profile_id="codex", endpoint_ref="default", static_host_id="host-1"
+        )
+
+        async def admit(attempt: int):
+            return await repository.create_or_get_host_lease(
+                binding=binding,
+                provider_lease_id=f"provider-lease-{attempt}",
+                holder_workflow_id="workflow-1",
+                agent_run_id=f"step-1:execution:{attempt}",
+                idempotency_key=f"idem-step-1-execution-{attempt}",
+            )
+
+        predecessor = await admit(1)
+        with pytest.raises(OmnigentOAuthHostError, match="claimed host cleanup"):
+            await repository.record_unconfirmed_host_cleanup(
+                predecessor.lease_id, code="early", summary="not claimed"
+            )
+        claimed = await repository.claim_host_lease_cleanup(
+            predecessor.lease_id,
+            expected_status=predecessor.status,
+            expected_last_heartbeat_at=predecessor.last_heartbeat_at,
+        )
+        assert claimed is not None
+        # The Docker engine never acknowledged the stop of the lost host.
+        unconfirmed = await repository.record_unconfirmed_host_cleanup(
+            predecessor.lease_id,
+            code="OmnigentOAuthHostError",
+            summary="docker stop token=private-test-token timed out",
+        )
+        assert unconfirmed.status == "draining"
+        async with factory() as session:
+            row = await session.get(OmnigentOAuthHostLeaseRecord, predecessor.lease_id)
+            assert row.error_code == "OmnigentOAuthHostError"
+            assert "private-test-token" not in str(row.error_summary)
+
+        with pytest.raises(OmnigentOAuthHostError) as busy:
+            await admit(2)
+        assert busy.value.code == HOST_PROFILE_BUSY_ERROR_CODE
+        # The stale owner cannot revive it, and the janitor resumes the stop
+        # once the cleanup claim lapses.
+        with pytest.raises(OmnigentOAuthHostError) as revived:
+            await repository.heartbeat_host_lease(predecessor.lease_id)
+        assert revived.value.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
+        expired = await repository.list_expired_host_leases(
+            now=unconfirmed.expires_at + timedelta(seconds=1)
+        )
+        assert [lease.lease_id for lease in expired] == [predecessor.lease_id]
+
+        await repository.mark_host_lease_stopped(predecessor.lease_id)
+        successor = await admit(2)
+        assert successor.lease_id != predecessor.lease_id
+        assert successor.status == "allocating"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_host_lease_rejects_binding_changed_before_serialized_acquisition(
     tmp_path,
 ) -> None:
@@ -4767,7 +4855,7 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup(exposure) 
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, *_args, **_kwargs):
             actions.append("host_failed")
 
         async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
@@ -4983,7 +5071,7 @@ async def _drive_authority_chain_coordinator(
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, *_args, **_kwargs):
             return None
 
     class Runtime:
@@ -5817,7 +5905,7 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, *_args, **_kwargs):
             return None
 
     class Runtime:
@@ -5976,7 +6064,7 @@ async def test_coordinator_compiles_durable_workspace_intent_before_host_mutatio
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, *_args, **_kwargs):
             return None
 
     class Runtime:
@@ -6360,8 +6448,11 @@ async def _run_coordinator_failure_case(
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
-            return None
+        async def record_unconfirmed_host_cleanup(self, _lease_id, *, code, summary):
+            # Mirrors the repository: only a claimed cleanup stays unconfirmed.
+            assert self.lease.status == "draining"
+            self.unconfirmed_cleanup = {"code": code, "summary": summary}
+            return self.lease
 
         async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
             return self.lease
@@ -6956,10 +7047,20 @@ async def test_coordinator_failure_matrix_preserves_actionable_terminal_evidence
 async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_janitor(
     fail_at: str, code: str
 ) -> None:
+    captured: dict[str, object] = {}
+
+    async def capture(_runtime, coordinator):
+        captured["hosts"] = coordinator._hosts
+
     events, actions, owner_calls = await _run_coordinator_failure_case(
-        fail_at=fail_at, code=code
+        fail_at=fail_at, code=code, setup=capture
     )
     assert owner_calls[-1] == fail_at
+    # An unacknowledged stop keeps the profile's exclusive host fenced: a
+    # terminal lease would admit a successor beside a possibly running host.
+    hosts = captured["hosts"]
+    assert hosts.lease.status == "draining"
+    assert hosts.unconfirmed_cleanup["code"] == "OmnigentOAuthHostError"
     cleanup = next(
         kwargs
         for stage, kwargs in events

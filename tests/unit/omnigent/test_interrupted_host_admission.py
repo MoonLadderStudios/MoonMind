@@ -443,3 +443,88 @@ async def test_a_lost_lease_keeps_the_binding_recoverable_when_resources_fail_to
     host_lease = await read_host_lease(stranded.hostLeaseRef)
     assert host_lease.status != "cleaned"
     assert "host-cleaned" not in harness.events
+
+
+@pytest.mark.asyncio
+async def test_completed_compute_survives_a_lost_provider_lease_without_rerun(
+    monkeypatch,
+):
+    """A lost provider lease resumes only the unfinished publication.
+
+    The first delivery finished its provider turn and saved the workspace,
+    then lost its worker before publication. Its retry found the admitted
+    lease gone. Re-admitting under a new epoch would start a new binding and
+    repeat completed compute; the recorded receipts finish the attempt instead.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan("opencode-go/model")
+    request = harness.publish_request.model_copy(
+        update={
+            "admitted_provider_capacity": AdmittedProviderCapacity(
+                leaseOwnerId="agent-run-1",
+                profiles=[
+                    {
+                        "providerProfileRef": "opencode-go-primary",
+                        "providerRuntimeId": "opencode",
+                    }
+                ],
+                executionPlanRef=plan.planRef,
+                stepExecutionId="step-1",
+                idempotencyKey=harness.publish_request.idempotency_key,
+                admissionEpoch=1,
+            )
+        }
+    )
+    publisher = harness.realizer._workspace_publisher
+    publish = publisher.publish_request_workspace
+    publications: list[str] = []
+
+    async def worker_lost_before_publication(**kwargs):
+        publications.append(kwargs["request"].idempotency_key)
+        if len(publications) == 1:
+            raise asyncio.CancelledError()
+        return await publish(**kwargs)
+
+    publisher.publish_request_workspace = worker_lost_before_publication
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: True
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await harness.realizer._execute_lifecycle(request, plan)
+    key = stable_binding_id(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=request.idempotency_key,
+        admission_epoch=1,
+    )
+    interrupted = await harness.runtime_store.get(key)
+    assert {"workspace", "compute", "saved"} <= set(interrupted.phaseResults)
+    assert "publication" not in interrupted.phaseResults
+    assert harness.events.count("message-completed") == 1
+
+    async def lease_lost(**_kwargs):
+        raise HarnessPlatformError(
+            "workflow-admitted provider capacity is not usable for "
+            "opencode-go-primary: the manager does not report an active lease",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
+        )
+
+    harness.realizer._provider_leases.acquire_all = lease_lost
+    result = await harness.realizer._execute_lifecycle(request, plan)
+
+    assert result.failure_class is None
+    assert result.metadata["push_status"] == "pushed"
+    # Compute ran once; the retry finished only the unfinished publication,
+    # under the same logical publication identity.
+    assert harness.events.count("message-completed") == 1
+    assert harness.events.count("host-ready") == 1
+    assert harness.events.count("workspace-saved") == 1
+    assert harness.events.count("workspace-published") == 1
+    assert publications == [request.idempotency_key, request.idempotency_key]
+    recovered = await harness.runtime_store.get(key)
+    assert recovered.state is RuntimeBindingState.cleaned
+    assert recovered.phaseResults["publication"]["metadata"]["push_status"] == (
+        "pushed"
+    )
+    host_lease = await harness.realizer._host_leases.get(interrupted.hostLeaseRef)
+    assert host_lease.status == "cleaned"

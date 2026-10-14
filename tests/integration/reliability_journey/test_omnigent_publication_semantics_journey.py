@@ -814,7 +814,7 @@ async def _drive_coordinator_materialization_to_cleanup(
             self.lease = self.lease.model_copy(update={"status": "stopped"})
             return self.lease
 
-        async def mark_host_lease_failed(self, *_args, **_kwargs):
+        async def record_unconfirmed_host_cleanup(self, *_args, **_kwargs):
             return None
 
     class Runtime:
