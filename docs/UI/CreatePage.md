@@ -181,7 +181,11 @@ Optional summary, description, URL, status, and assignee do not become mandatory
 
 ## Repository and Branch Selection
 
-The ordinary repository-backed flow renders one repository/source selection and one branch role. The branch picker uses authorized provider data with a supported manual fallback, not an unconditional `main` default.
+The ordinary repository-backed flow renders one optional Repository field and one branch role. A blank Repository is scratch work: results are saved on the workflow, Publish Mode shows None, and no repository or credential prompt appears. Branch and PR modes are disabled without a repository; an explicit destination choice made earlier stays visible with an explanation, blocks submission with focus on Repository, and applies again once a repository is entered.
+
+Repository identity belongs to the connection that resolves it, so Create applies no GitHub shorthand rule: nested group paths and other Git hosts are submitted as authored. Create rejects before submission only what can never be a token-free remote source (whitespace, embedded credentials, local paths) and moves focus to the field. Create submits only the repository source that the task-create request admits. The compiler's anonymous, artifact, checkpoint, and existing-workspace sources stay off the form until that request admits them, so none appears as a selectable dead end.
+
+The branch picker uses authorized provider data with a supported manual fallback, not an unconditional `main` default. An omitted branch submits the bare repository name, the same form the CLI sends, and the backend clones the remote's default branch, so submission never waits for default-branch discovery. Advisory branch lookup runs only for GitHub-shaped values.
 
 | Operation | Branch presentation |
 | --- | --- |
@@ -220,7 +224,7 @@ There is one selector for the authored workflow/batch policy:
 
 Compiled execution `auto` is the Skill-owned protocol, not another UI option. The backend retains the authored selection separately from each step/coordinator's derived execution mode. Reconstructing a batch must not replace its PR policy with local coordinator `none`.
 
-The selector shows only supported choices or disabled choices with reasons. It never silently switches a selected value to make a new step fit. Selection of Auto follows declared definition metadata and current task inputs, not model improvisation. An unresolved or conflicting default blocks submission rather than guessing a permissive policy.
+The selector shows only supported choices or disabled choices with reasons, and a line beside it states the selected outcome (saved only, the branch pushed, or the pull request opened on the named repository). It never silently switches a selected value to make a new step fit. Selection of Auto follows declared definition metadata and current task inputs, not model improvisation. An unresolved or conflicting default blocks submission rather than guessing a permissive policy.
 
 The retired `workflow.default_publish_mode` and environment aliases are not lower-priority fallbacks and must not hydrate the selector as an apparent explicit value. For affected historical settings/drafts/schedules, the UI presents proven effective intent or a review requirement under [Settings System section 10.6](../Security/SettingsSystem.md#106-publication-default-ownership-and-retired-setting). It cannot silently change a configured None/Branch to PR or use an old global value instead of the selected composition's Auto.
 

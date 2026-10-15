@@ -8,7 +8,6 @@ import {
 
 const DRAFT_STORAGE_PREFIX = 'moonmind.remediation-create-draft.';
 const DRAFT_PRESENCE_PREFIX = 'moonmind.remediation-create-draft-presence.';
-const DEFAULT_REMEDIATION_REPOSITORY = 'MoonLadderStudios/MoonMind';
 const MAX_REMEDIATION_STEP_SELECTORS = 25;
 export const REMEDIATION_CREATE_DRAFT_TTL_MS = 2 * 60 * 60 * 1000;
 
@@ -262,6 +261,11 @@ export function buildRemediationCreateDraft(
   );
   const repositoryParameters = asRecord(inputParameters.repository);
   const repositoryBranch = asRecord(repositoryParameters.branch);
+  // A scratch target has no repository; remediation keeps that source instead
+  // of substituting one, and stays save-only so nothing targets a destination.
+  const repository = cleanText(
+    execution.repository || asRecord(repositoryParameters.repository).name,
+  );
   const gitParameters = asRecord(workflowParameters.git || inputParameters.git);
   const omnigentParameters = asRecord(inputParameters.omnigent);
   const remediationParameters = asRecord(workflowParameters.remediation);
@@ -302,10 +306,10 @@ export function buildRemediationCreateDraft(
       ...(state ? { state } : {}),
       ...(stepSelectors.length > 0 ? { stepSelectors } : {}),
     },
-    repository: cleanText(execution.repository) || DEFAULT_REMEDIATION_REPOSITORY,
+    repository,
     ...(startingBranch ? { branch: startingBranch, startingBranch } : {}),
     ...(workBranch ? { workBranch } : {}),
-    publishMode: 'pr',
+    publishMode: repository ? 'pr' : 'none',
     ...(executionProfileRef ? { executionProfileRef } : {}),
     ...(launchPolicyRef ? { launchPolicyRef } : {}),
     runtime: {
@@ -434,7 +438,7 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     createdAtMillis(draft.createdAt) !== null &&
     isNonEmptyText(target.workflowId) &&
     isNonEmptyText(target.runId) &&
-    isNonEmptyText(draft.repository) &&
+    typeof draft.repository === 'string' &&
     remediationTarget.workflowId === target.workflowId &&
     remediationTarget.runId === target.runId &&
     stepSelectorsAreValid(target.stepSelectors) &&
