@@ -31,7 +31,7 @@ MoonSpec skill IDs and command IDs use `moonspec-*` and `/moonspec.*`.
 - If no request or active feature context is available, ask once for the missing input before starting.
 - Inputs that still need story splitting are out of scope for this skill. Route them through a higher-level workflow such as `moonspec-breakdown` before starting MoonSpec Orchestrate.
 
-Default intent is `runtime`: production code plus tests must be delivered. Use `docs` intent only when the user explicitly asks for documentation-only work.
+Default intent is `runtime`: satisfy requested behavior, reusing existing implementation where appropriate. Use `docs` intent only when the user explicitly asks for documentation-only work.
 
 ## Core Rules
 
@@ -41,7 +41,7 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 - Single-story requests go through `moonspec-specify`.
 - Run `moonspec-assess` after `moonspec-specify` when source acceptance evidence exists. Preserve the original source acceptance matrix, the bounded backlog, and any note that a single story may span multiple implementation surfaces.
 - TDD is the default strategy.
-- Unit tests and integration tests are both expected.
+- Apply requirement statuses before all coverage and execution gates: `unverified` rows retain source IDs, reason and verifiableBy without executable tasks; `needs_human` rows retain the exact decision, owner, and action without executing it or claiming its completion. Only executable rows require code, tests, setup, and red-first evidence. Observed defects remain executable remediation; unavailable checks do not become defects.
 - The original request or source design preserved in `spec.md` `**Input**` is the final alignment source. Derived artifacts never silently drop or override requirements it adopted.
 - `moonspec-align` replaces the old multi-step analyze remediation sequence.
 - Do not synthesize user approvals, scripted user responses, or pretend an analyze report exists.
@@ -84,23 +84,23 @@ Use these gates before advancing:
   - `research.md` and `quickstart.md` exist.
   - `data-model.md` exists when the story involves data.
   - `contracts/` exists when the story exposes an API, CLI, UI contract, event, parser, library surface, or external interface.
-  - Unit and integration test strategies are identified.
+  - Unit and integration strategies are identified for executable rows; disclosure-only or authority-held rows use N/A.
 - Tasks gate:
   - `tasks.md` exists.
   - It covers exactly one story.
-  - It includes unit test tasks, integration test tasks, red-first confirmation tasks, implementation tasks, story validation, and final `/moonspec.verify`.
-  - Source design or original request mappings have task coverage.
+  - Executable rows have applicable test, red-first, implementation, and validation tasks; all-Unverified stories need only disclosures and final `/moonspec.verify`.
+  - Source mappings have executable task coverage, Unverified disclosures, or explicit `needs_human` handoffs.
 - Align gate:
   - `moonspec-align` has run after `tasks.md` generation unless the user explicitly skipped alignment.
   - Any artifact changes from alignment have been validated or propagated.
 - Implement gate:
   - Required implementation work is done.
   - Completed tasks are marked `[X]`.
-  - Unit and integration tests have been run or blocked with exact reasons.
+  - Feasible planned tests have results; unavailable checks retain Unverified disclosures. No test or code work is required for an all-Unverified story.
 - Verify gate:
   - `moonspec-verify` produced a concrete report for the active `spec.md`.
   - Verdict is not `NO_DETERMINATION` or `BLOCKED`.
-  - Completion is claimed only when verdict is `FULLY_IMPLEMENTED`.
+  - Completion is claimed only when verdict is `FULLY_IMPLEMENTED` and no actual `needs_human` authority handoff for the selected operation remains.
 
 If a gate fails, stop or run the appropriate upstream skill. Do not continue on a claimed success without artifacts or evidence.
 
@@ -116,20 +116,31 @@ Use the provided input as a preselected single-story request or active feature d
 4. Verify the specify gate.
 5. Do not run `moonspec-breakdown` or create more than one spec from this workflow.
 
-### 2. Plan
+### 2. Assess Matching Source Acceptance
+
+Run `moonspec-assess` before planning when `artifacts/moonspec/source-acceptance.json`
+exists and its `featureId` matches the active feature. Preserve the assessment's
+bounded backlog, Unverified disclosures, and actual authority handoffs for planning.
+If no matching source matrix exists, skip assessment without blocking planning.
+A new or changed assessment makes existing plan and tasks stale when source,
+statuses, backlog, disclosures, or authority handoffs change. Refresh the plan
+before regenerating tasks, even if their artifact gates previously passed.
+An unchanged assessment or timestamp-only rewrite does not require regeneration.
+
+### 3. Plan
 
 For the selected spec:
 
-1. Run `moonspec-plan` if the plan gate is incomplete.
+1. Run `moonspec-plan` if the plan gate is incomplete or its assessment changed.
 2. Verify generated artifacts.
 3. Stop if planning requires unresolved user input.
 
-### 3. Generate Tasks
+### 4. Generate Tasks
 
 1. Run `moonspec-tasks` if the tasks gate is incomplete or upstream artifacts changed.
-2. Verify `tasks.md` format, single-story focus, TDD order, unit/integration coverage, source traceability, and final `/moonspec.verify`.
+2. Verify task format and source traceability, applying TDD and unit/integration coverage only to executable rows; preserve disclosures, authority handoffs, and final `/moonspec.verify`.
 
-### 4. Align Artifacts
+### 5. Align Artifacts
 
 1. Run `moonspec-align` after task generation.
 2. Let `moonspec-align` make conservative artifact edits without asking for follow-up responses.
@@ -138,14 +149,14 @@ For the selected spec:
 
 This replaces the old manual analyze remediation flow. Do not provide scripted "yes", "continue", or other user responses to get through analyze limitations.
 
-### 5. Implement
+### 6. Implement
 
-1. Run `moonspec-implement` when implementation work remains.
-2. Require TDD execution: unit tests and integration tests are written and confirmed failing before production code.
+1. Run `moonspec-implement` for authorized executable work; skip implementation when no executable work remains. Preserve actual authority handoffs without attempting their actions.
+2. Require applicable tests and red-first confirmation before new production code, never for disclosure-only rows.
 3. Require completed work to be marked `[X]` in `tasks.md`.
 4. Preserve story scope; do not add hidden scope to make verification easier.
 
-### 6. Verify
+### 7. Verify
 
 1. Run `moonspec-verify` as the final gate unless an up-to-date verification report already covers the current code and artifacts.
 2. If verdict is `FULLY_IMPLEMENTED`, report success.
@@ -207,6 +218,6 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Do not invent user approvals or fake intermediate outputs.
 - Do not run `moonspec-breakdown` or perform story routing from inside this workflow.
 - Enforce one story per spec.
-- Keep TDD, unit tests, integration tests, and `/moonspec.verify` in the pipeline.
+- Apply TDD and testing to executable work; keep final `/moonspec.verify` for evidence, disclosures, and actual authority handoffs.
 - Treat verification as the final authority for completion.
 - Never let derived artifacts silently override the original request.

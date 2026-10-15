@@ -714,56 +714,128 @@ class GitHubService:
         return result
 
     async def mark_automation_draft_ready(
-        self, repository: str, pr_number: int, head_sha: str, *, admitted_workflow_id: str,
+        self, repository: str, pr_number: int, head_sha: str, *, admitted_workflow_id: str, observe_only: bool = False,
     ) -> dict[str, Any]:
-        """Remove an automation-owned draft after the caller's acceptance guard.
+        """Release an accepted workflow-owned draft without clearing later holds.
 
-        The owning Activity validates the persisted gate and absence of user holds.
-        This adapter reuses admitted merge-request authority and exact PR identity.
-        GitHub has no expected-head argument for this mutation: read-back detects
-        movement and the merge owner must retain its independent exact-head guard.
+        The owning Activity validates acceptance and creation ownership. A later
+        conversion to draft is a hold, even on a PR this workflow created. Only
+        reads retry after uncertain mutations; GitHub has no conditional ready
+        mutation, so a racing hold is restored once and reconciled by read-back.
         """
         _actions_validate_input(repository, pr_number, head_sha)
         if not str(admitted_workflow_id or "").strip():
             raise ValueError("An admitted workflow is required for ready-for-review")
         result: dict[str, Any] = {"ready": False, "status": "unavailable", "headSha": head_sha, "retryable": True}
+        ready_attempted = False
         try:
             api_base, headers = await self._repository_reader(repository, None, admitted_workflow_id, operation="merge_request")
             root = api_base.rstrip("/")
             graphql_url = root.removesuffix("/api/v3") + "/api/graphql" if root.endswith("/api/v3") else root + "/graphql"
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-                async def read() -> dict[str, Any]:
+                async def read(*, require_head: bool = True) -> dict[str, Any]:
                     pr = await _actions_json(client, f"{root}/repos/{repository}/pulls/{pr_number}", headers)
                     result["observedHeadSha"] = (pr.get("head") or {}).get("sha")
                     if (pr.get("number") != pr_number
                         or str(((pr.get("base") or {}).get("repo") or {}).get("full_name") or "").lower() != repository.lower()
-                        or result["observedHeadSha"] != head_sha or pr.get("state") != "open"):
+                        or (require_head and result["observedHeadSha"] != head_sha) or pr.get("state") != "open"):
                         raise _ActionsEvidenceGap("pull_request_identity_or_state_changed")
                     return pr
 
+                async def check_draft_history(node_id: str) -> None:
+                    query = "query($id: ID!) { node(id: $id) { ... on PullRequest { id timelineItems(last: 1, itemTypes: [CONVERT_TO_DRAFT_EVENT]) { nodes { ... on ConvertToDraftEvent { createdAt } } } } } }"
+                    async with client.stream("POST", graphql_url, headers=headers,
+                        json={"query": query, "variables": {"id": node_id}}) as response:
+                        response.raise_for_status()
+                        outcome = json.loads(await _actions_response_bytes(response, _ACTIONS_METADATA_BYTES))
+                    data = outcome.get("data") if isinstance(outcome, Mapping) else None
+                    node = data.get("node") if isinstance(data, Mapping) else None
+                    timeline = node.get("timelineItems") if isinstance(node, Mapping) else None
+                    events = timeline.get("nodes") if isinstance(timeline, Mapping) else None
+                    if (not isinstance(outcome, Mapping) or outcome.get("errors")
+                        or not isinstance(node, Mapping) or node.get("id") != node_id
+                        or not isinstance(events, list) or len(events) > 1
+                        or any(not isinstance(event, Mapping) or _parse_github_timestamp(event.get("createdAt")) is None for event in events)):
+                        raise _ActionsEvidenceGap("pull_request_draft_timeline_unavailable")
+                    if events:
+                        raise _ActionsEvidenceGap("pull_request_redrafted_hold")
+
+                async def reconcile_read(operation):
+                    for attempt in range(3):
+                        try:
+                            return await operation()
+                        except (httpx.HTTPError, ValueError) as exc:
+                            if isinstance(exc, _ActionsEvidenceGap) and str(exc) != "pull_request_draft_timeline_unavailable":
+                                raise
+                            if attempt == 2:
+                                raise
+                    return None
+
                 pr = await read()
+                result["draft"] = pr.get("draft")
+                if observe_only:
+                    node_id = pr.get("node_id")
+                    if not isinstance(node_id, str) or not node_id:
+                        raise _ActionsEvidenceGap("pull_request_draft_identity_unavailable")
+                    await reconcile_read(lambda: check_draft_history(node_id))
+                    ready = pr.get("draft") is False
+                    return {**result, "ready": ready,
+                        "status": "ready" if ready else "unavailable",
+                        "retryable": False, "reconciliationRequired": not ready}
                 if pr.get("draft") is not False:
                     node_id = pr.get("node_id")
                     if pr.get("draft") is not True or not isinstance(node_id, str) or not node_id:
                         raise _ActionsEvidenceGap("pull_request_draft_identity_unavailable")
+                    await reconcile_read(lambda: check_draft_history(node_id))
                     mutation = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+                    ready_attempted = True
                     try:
                         async with client.stream("POST", graphql_url, headers=headers,
                             json={"query": mutation, "variables": {"id": node_id}}) as response:
                             response.raise_for_status()
                             outcome = json.loads(await _actions_response_bytes(response, _ACTIONS_METADATA_BYTES))
-                        if outcome.get("errors"):
+                        if not isinstance(outcome, Mapping) or outcome.get("errors"):
                             result["reasonCode"] = "github_ready_mutation_rejected"
-                    except httpx.HTTPError:
-                        # Reconcile a lost acknowledgement before any caller retry.
+                    except (httpx.HTTPError, ValueError):
                         result["reasonCode"] = "github_ready_mutation_unconfirmed"
-                    pr = await read()
+                    # Head movement does not erase a racing draft hold. Reconcile
+                    # this same PR first, then report its changed candidate.
+                    pr = await reconcile_read(lambda: read(require_head=False))
+                    try:
+                        await reconcile_read(lambda: check_draft_history(node_id))
+                    except _ActionsEvidenceGap as exc:
+                        if str(exc) != "pull_request_redrafted_hold":
+                            raise
+                        restored = pr.get("draft") is True
+                        if not restored:
+                            restore = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+                            try:
+                                async with client.stream("POST", graphql_url, headers=headers,
+                                    json={"query": restore, "variables": {"id": node_id}}) as response:
+                                    response.raise_for_status()
+                            except httpx.HTTPError:
+                                # The restore may have succeeded despite a lost
+                                # response; the read below confirms its outcome.
+                                pass
+                            pr = await reconcile_read(lambda: read(require_head=False))
+                            restored = pr.get("draft") is True
+                        return {**result, "status": "held" if restored else "unavailable",
+                            "retryable": False, "reconciliationRequired": not restored,
+                            "draft": pr.get("draft"), "draftHoldRestored": restored,
+                            "reasonCode": ("pull_request_redrafted_hold" if restored
+                                else "pull_request_redrafted_hold_restore_unconfirmed")}
+                if result["observedHeadSha"] != head_sha:
+                    raise _ActionsEvidenceGap("pull_request_identity_or_state_changed")
                 result["ready"] = pr.get("draft") is False
                 result["draft"] = pr.get("draft")
                 result["status"] = "ready" if result["ready"] else "unavailable"
                 result["retryable"] = not result["ready"]
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             result["reasonCode"] = str(exc) if isinstance(exc, _ActionsEvidenceGap) else "github_ready_transition_unavailable"
+            if result["reasonCode"] == "pull_request_redrafted_hold":
+                result.update(status="held", retryable=False)
+            elif ready_attempted or observe_only:
+                result.update(retryable=False, reconciliationRequired=True)
         return result
 
     async def read_pull_request(
@@ -2133,6 +2205,125 @@ class GitHubService:
                         f" {exc.__class__.__name__}"
                     ),
                 )
+
+    async def sync_pull_request_unverified_criteria(
+        self, *, repo: str, pr_url: str, section: str,
+        expected_head_sha: str | None = None,
+        admitted_workflow_id: str | None = None,
+    ) -> bool:
+        """Append a revision-labelled disclosure without editing shared PR prose.
+
+        GitHub does not provide compare-and-swap for a PR body. An immutable
+        comment keeps concurrent human edits safe; exact content identifies a
+        confirmed or lost-acknowledgment attempt on retry. Concurrent publishers
+        can duplicate a comment, but cannot overwrite another actor's work.
+        """
+        from moonmind.auth.github_app_wiring import github_api_base_for
+
+        # Omitted heads are retained-history compatibility. New workflows bind
+        # disclosure to the candidate whose acceptance evidence they consumed.
+        if expected_head_sha is not None and not expected_head_sha.strip():
+            raise ValueError("Expected PR head must not be blank")
+        parsed = re.fullmatch(
+            r"https://([^/@\s]+)/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", pr_url
+        )
+        if not parsed or f"{parsed[2]}/{parsed[3]}".lower() != repo.lower():
+            raise ValueError(
+                "Unverified criteria PR must belong to the workflow repository"
+            )
+        api_base = github_api_base_for(f"https://{parsed[1]}")
+        # Direct public-GitHub calls retain their existing default resolution;
+        # enterprise destinations must bind even a default connection to its host.
+        if admitted_workflow_id is None and api_base != "https://api.github.com":
+            admitted_workflow_id = ""
+        headers, error = await self._operation_headers(
+            None, repo=repo, admitted_workflow_id=admitted_workflow_id,
+            operation="review_request", action="update PR verification disclosure",
+            api_base=api_base,
+        )
+        if headers is None:
+            raise ValueError(error or "Repository authority cannot update PR disclosure")
+        api_url = f"{api_base}/repos/{repo}/pulls/{parsed[4]}"
+        comments_url = f"{api_base}/repos/{repo}/issues/{parsed[4]}/comments"
+        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+            async def read_head() -> str:
+                response = await client.get(api_url, headers=headers)
+                response.raise_for_status()
+                document = response.json()
+                if not isinstance(document, Mapping) or document.get("state") != "open":
+                    raise ValueError(
+                        "Unverified criteria can only be synchronized on an open PR"
+                    )
+                head = document.get("head")
+                revision = head.get("sha") if isinstance(head, Mapping) else None
+                if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+                    raise ValueError("PR head is unavailable for verification disclosure")
+                if expected_head_sha is not None and revision != expected_head_sha:
+                    raise ValueError(
+                        "PR head no longer matches the accepted verification candidate"
+                    )
+                return revision
+
+            revision = await read_head()
+            section = section.strip().replace("<!--", "&lt;!--")
+            digest = hashlib.sha256(section.encode("utf-8")).hexdigest()
+            prefix = f"<!-- moonmind:unverified:head={revision}:sha256="
+            disclosure = (
+                f"{prefix}{digest} -->\n"
+                f"## MoonMind verification disclosure for commit `{revision}`\n\n"
+                "The latest MoonMind disclosure for this commit supersedes earlier "
+                "disclosures for the same commit; earlier comments and the initial "
+                "PR description remain historical.\n\n"
+                + (section or "This verification report records no Unverified criteria.")
+            )
+            async def read_comments(page: int) -> tuple[list[dict], httpx.Response]:
+                response = await client.get(
+                    comments_url, headers=headers, params={"per_page": 100, "page": page},
+                )
+                response.raise_for_status()
+                comments = response.json()
+                if (not isinstance(comments, list) or len(comments) > 100
+                    or any(not isinstance(comment, Mapping) or not isinstance(comment.get("body"), str)
+                        for comment in comments)):
+                    raise ValueError("GitHub PR comment history is malformed")
+                return comments, response
+
+            first, response = await read_comments(1)
+            last_url = response.links.get("last", {}).get("url")
+            page = 1
+            if last_url:
+                try:
+                    hints = httpx.URL(last_url).params.get_list("page")
+                except httpx.InvalidURL as exc:
+                    raise ValueError("GitHub PR comment pagination is malformed") from exc
+                if len(hints) != 1 or not re.fullmatch(r"[1-9][0-9]{0,8}", hints[0]):
+                    raise ValueError("GitHub PR comment pagination is malformed")
+                page = int(hints[0])
+            if response.links.get("next") and page == 1:
+                raise ValueError("GitHub PR comment pagination is missing its last page")
+            latest = None
+            # Only the numeric hint is used; credentials never follow Link URLs.
+            # Old disclosures outside the recent window may safely be reasserted.
+            for _ in range(5):
+                comments = first if page == 1 else (await read_comments(page))[0]
+                latest = next((comment["body"] for comment in reversed(comments)
+                    if comment["body"].startswith(prefix)), None)
+                if latest is not None or page == 1:
+                    break
+                page -= 1
+            # Pagination may take long enough for the accepted candidate to move.
+            if await read_head() != revision:
+                raise ValueError("PR head changed while reading verification disclosure")
+            if latest == disclosure:
+                return False
+            response = await client.post(
+                comments_url, headers=headers, json={"body": disclosure},
+            )
+            response.raise_for_status()
+            comment = response.json()
+            if not isinstance(comment, Mapping) or comment.get("body") != disclosure:
+                raise ValueError("GitHub did not confirm the verification disclosure comment")
+            return True
 
     async def reconcile_pull_request(
         self,

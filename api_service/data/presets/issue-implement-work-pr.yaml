@@ -258,6 +258,7 @@ steps:
     - a summary of the implementation
     - tests run
     - remaining risks
+    - a note that MoonMind publishes the current Unverified criteria, reasons, and verification owners in its commit-labelled verification-disclosure comment; do not write a separate Unverified section because the parent workflow owns that disclosure
 
     After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at {{ inputs.pr_artifact_path }} with keys issue_provider, issue_ref, pull_request_url, and, for Jira compatibility when issue_provider is jira, jira_issue_key. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
   skill:

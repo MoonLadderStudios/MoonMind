@@ -59,9 +59,19 @@ Original issue scope and constraints control implementation acceptance. Related
 epics, old assessments, and previous reports are context. They do not add unrelated
 acceptance obligations. Separate production operations and physical-event release
 qualification from implementation unless the selected scope explicitly owns them.
-Required runtime, rendered, or other tests cannot be waived merely because the
-current agent lacks their toolchain. An AI visual judgment must use the actual
-images and rubric through the repository's declared proof owner.
+A criterion the verifier cannot check with the capabilities, access, and time it
+has is recorded as Unverified, with the reason and who can verify it. It is listed
+in the pull request instead of blocking publication, and is never reported as
+passed. New native PR bodies label their initial verification snapshot. Reused
+PRs receive a commit-labelled MoonMind verification-disclosure comment, including
+an explicit statement when no Unverified criteria remain. The latest such comment
+for a revision is its current disclosure; prior snapshots are historical. Posting
+checks the candidate head first and never rewrites operator body text or comments.
+PR-creating agents leave disclosure to the parent workflow rather than writing a
+second unowned section. Incomplete draft reports also list their Unverified criteria without
+turning observed implementation gaps into success. Workflow history keeps bounded
+disclosure text and the full report reference. An AI visual judgment that does run must use the actual images and rubric
+through the repository's declared proof owner.
 
 Input sections remain bounded to 64,000 bytes, the complete prompt to 256,000
 bytes, and responses to 64,000 bytes. Feedback and finding limits stay enforced
@@ -116,7 +126,7 @@ Use the existing canonical verdict and action vocabulary:
 | `FULLY_IMPLEMENTED` | `advance` for the verified scope only |
 | `ADDITIONAL_WORK_NEEDED` with actionable implementation work | Existing bounded remediation owner |
 | `NO_DETERMINATION` with obtainable new evidence | Evidence collection/review against the preserved candidate |
-| Required capability currently unavailable | `blocked`, with the prerequisite and resumption check |
+| Review provider or controlling review input unavailable | `blocked`, with the prerequisite and resumption check |
 | Actual human-only information or authorization | Explicit `needs_human`, naming that decision |
 | `FAILED_UNRECOVERABLE` | Preserve evidence and stop under existing policy |
 
@@ -131,10 +141,10 @@ runtime within the existing review-attempt budget, even when
 `recoverableInCurrentRuntime` is false. An example is an expired session-scoped
 capability.
 
-Missing evidence is not accepted because confidence is low or no assertion ran.
-Optional diagnostics remain optional according to the selected acceptance policy,
-not by relabeling a mandatory missing check. Neither `failure_mode: CONTINUE` nor
-a draft PR turns incomplete verification into successful acceptance.
+Disclosed Unverified criteria never count as passed; observed defects and failed
+checks remain blocking. Optional diagnostics remain optional according to the
+selected acceptance policy. Neither `failure_mode: CONTINUE` nor a draft PR
+bypasses that policy.
 
 MoonSpec's resolved acceptance policy keeps browser checks advisory by default.
 An unavailable browser, missing screenshot, or need for visual signoff alone

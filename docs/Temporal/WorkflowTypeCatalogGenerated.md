@@ -265,6 +265,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `release.reconcile` | `deployment` | `mm.activity.deployment` |
 | `repo.create_pr` | `integrations` | `mm.activity.integrations` |
 | `repo.merge_pr` | `integrations` | `mm.activity.integrations` |
+| `repo.sync_pr_unverified_criteria` | `integrations` | `mm.activity.integrations` |
 | `resilience.compile_policy` | `artifacts` | `mm.activity.artifacts` |
 | `sandbox.apply_patch` | `sandbox` | `mm.activity.sandbox` |
 | `sandbox.checkout_repo` | `sandbox` | `mm.activity.sandbox` |

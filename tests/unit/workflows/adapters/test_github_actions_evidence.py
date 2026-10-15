@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import zipfile
 from unittest.mock import AsyncMock
 
@@ -80,6 +81,10 @@ def fixture(monkeypatch, *, files=None):
                 )
             if request.url.path == "/graphql":
                 assert request.method == "POST" and state["published"]
+                if "timelineItems" in json.loads(request.content)["query"]:
+                    return httpx.Response(200, json={"data": {"node": {
+                        "id": "PR_7", "timelineItems": {"nodes": []},
+                    }}})
                 state["marked_ready"] = True
                 return httpx.Response(
                     200,
@@ -555,6 +560,10 @@ async def test_mark_ready_uses_admitted_mutation_and_exact_head(monkeypatch, mov
             import json
 
             body = json.loads(request.content)
+            if "timelineItems" in body["query"]:
+                return httpx.Response(200, json={"data": {"node": {
+                    "id": "PR_7", "timelineItems": {"nodes": []},
+                }}})
             assert "markPullRequestReadyForReview" in body["query"]
             assert body["variables"]["id"] == "PR_7"
             draft = False
