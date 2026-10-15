@@ -105,7 +105,14 @@ async def test_activity_rejects_blank_expected_head(monkeypatch, expected_head):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", ["## Unverified criteria\n\n- GPU: unavailable", ""])
+@pytest.mark.parametrize(
+    "section",
+    [
+        "## Unverified criteria\n\n- GPU: unavailable",
+        "",
+        "## Unverified criteria\n\nReviewer: the release hardware check still needs attention.",
+    ],
+)
 async def test_unmarked_human_disclosure_is_preserved(monkeypatch, section):
     body = (
         "Human introduction.\n\n## Unverified criteria\n\n"
@@ -124,6 +131,13 @@ async def test_unmarked_human_disclosure_is_preserved(monkeypatch, section):
             "<!-- moonmind:unverified:start -->\n"
             f"{section}\n<!-- moonmind:unverified:end -->"
         )
+        await service.sync_pull_request_unverified_criteria(
+            repo="o/r",
+            pr_url="https://github.com/o/r/pull/7",
+            section="",
+            expected_head_sha=HEAD_SHA,
+        )
+        assert document["body"].startswith(body)
 
 
 @pytest.mark.asyncio
@@ -288,9 +302,22 @@ async def test_activity_uses_its_admitted_enterprise_connection(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_native_multiline_section_is_adopted_without_orphaned_text(monkeypatch):
-    section = "## Unverified criteria\n\n- GPU: unavailable\n## Details\nHost missing. Verifiable by: GPU CI"
-    body = "Human introduction.\n\n" + section + "\n\n## Review notes\nKeep this."
+async def test_native_multiline_section_is_managed_without_orphaned_text(
+    monkeypatch, source_bound_report
+):
+    row = _disclose_unverified(source_bound_report)
+    row["unverified"]["reason"] = "GPU unavailable.\n## Details\nHost missing."
+    parent = run_module.MoonMindRunWorkflow()
+    parent._publish_context["moonSpecGate"] = source_bound_report
+    section = parent._moonspec_unverified_body_section()
+    body = (
+        parent._resolve_native_pr_body(
+            publish_payload={"prBody": "Human introduction."}, task_payload={}
+        )
+        + "\n\n## Review notes\nKeep this."
+    )
+    assert "<!-- moonmind:unverified:start -->" in body
+    assert "<!-- moonmind:unverified:end -->" in body
     service, document, writes = wire(monkeypatch, body)
     for _ in range(2):
         await service.sync_pull_request_unverified_criteria(
