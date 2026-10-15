@@ -2287,6 +2287,17 @@ export function resolveWorkflowSourceContext(execution: {
   return { repository, startingBranch, hasRepository, startingBranchState };
 }
 
+// Recorded targetRuntime presented as Harness and Backend. An Omnigent run
+// records its Backend, not a Harness name, so no Harness is guessed for it.
+function recordedHarnessLabel(targetRuntime: string | null | undefined): string | null {
+  return targetRuntime && targetRuntime !== 'omnigent' ? formatRuntimeLabel(targetRuntime) : null;
+}
+
+function recordedBackendLabel(targetRuntime: string | null | undefined): string | null {
+  if (!targetRuntime) return null;
+  return targetRuntime === 'omnigent' ? 'Omnigent' : 'Direct';
+}
+
 // Provider Profile identity and the upstream Provider stay separate facts, so
 // a provider name is never presented as the recorded Profile.
 function recordedProviderSummary(
@@ -8841,7 +8852,8 @@ function RunComparisonPanel({
               <th>Workflow</th>
               <th>Run</th>
               <th>Status</th>
-              <th>Runtime</th>
+              <th>Harness</th>
+              <th>Backend</th>
               <th>Model</th>
             </tr>
           </thead>
@@ -8851,7 +8863,8 @@ function RunComparisonPanel({
               <td><code>{execution.workflowId || execution.taskId}</code></td>
               <td><code>{execution.runId || execution.temporalRunId || '—'}</code></td>
               <td>{formatStatusLabel(currentStatus)}</td>
-              <td>{formatRuntimeLabel(execution.targetRuntime)}</td>
+              <td>{recordedHarnessLabel(execution.targetRuntime) ?? '—'}</td>
+              <td>{recordedBackendLabel(execution.targetRuntime) ?? '—'}</td>
               <td>{execution.model || execution.resolvedModel || execution.requestedModel || '—'}</td>
             </tr>
             {execution.relatedRuns.map((run, index) => (
@@ -8860,7 +8873,8 @@ function RunComparisonPanel({
                 <td><a href={run.href}><code>{run.workflowId}</code></a></td>
                 <td><code>{run.runId || '—'}</code></td>
                 <td>{formatStatusLabel(run.status || 'unknown')}</td>
-                <td>{formatRuntimeLabel(run.targetRuntime)}</td>
+                <td>{recordedHarnessLabel(run.targetRuntime) ?? '—'}</td>
+                <td>{recordedBackendLabel(run.targetRuntime) ?? '—'}</td>
                 <td>{run.model || run.resolvedModel || run.requestedModel || '—'}</td>
               </tr>
             ))}
@@ -10449,15 +10463,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               />
 
               <FactGroup title="Agent">
-                {/* Recorded identity only: an Omnigent run records its target
-                    path below, not a Harness name to guess from. */}
-                {execution.targetRuntime && execution.targetRuntime !== 'omnigent' ? (
-                  <Fact label="Harness">{formatRuntimeLabel(execution.targetRuntime)}</Fact>
+                {recordedHarnessLabel(execution.targetRuntime) ? (
+                  <Fact label="Harness">{recordedHarnessLabel(execution.targetRuntime)}</Fact>
                 ) : null}
-                {execution.targetRuntime ? (
-                  <Fact label="Backend">
-                    {execution.targetRuntime === 'omnigent' ? 'Omnigent' : 'Direct'}
-                  </Fact>
+                {recordedBackendLabel(execution.targetRuntime) ? (
+                  <Fact label="Backend">{recordedBackendLabel(execution.targetRuntime)}</Fact>
                 ) : null}
                 {historicalModel ? (
                   <Fact label="Model">
