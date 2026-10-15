@@ -8,6 +8,8 @@ For substantial changes, please open an issue first so we can agree on the appro
 
 Do not include secrets, credentials, private data, private configuration, or unredacted logs in issues or pull requests.
 
+Coding agents use the root [AGENTS.md](AGENTS.md). Claude Code reads it directly with v2.1.277 or later; use v2.1.281 or later for Bedrock or telemetry-disabled sessions. A project or ancestor `CLAUDE.md`, `.claude/CLAUDE.md`, or `CLAUDE.local.md` takes precedence by default. If guidance is missing, check `/context` and the [Project instructions setting](https://code.claude.com/docs/en/memory#agentsmd), including whether the built-in AGENTS.md plugin is enabled.
+
 ## Development and testing
 
 Clone the repository and initialize its submodules at their recorded commits:
