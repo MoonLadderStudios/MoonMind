@@ -7,7 +7,6 @@ MoonLadderStudios/MoonMind#3932.
 from __future__ import annotations
 
 import pathlib
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -33,15 +32,6 @@ from moonmind.omnigent.retirement_surfaces import (
     discover_legacy_surfaces,
     parse_surface_ref,
 )
-from moonmind.omnigent.session_supervisor_rollback import (
-    RollbackExerciseDecision,
-    RollbackExerciseRecord,
-    RollbackScope,
-    evaluate_rollback_exercise,
-    legacy_rollback_generation_from_settings,
-)
-
-NOW = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
 
 
 def _record(**overrides: object) -> LegacyPathRecord:
@@ -71,10 +61,12 @@ def test_record_requires_admission_source_while_it_still_admits() -> None:
         _record(retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH)
 
 
-def test_record_requires_rollback_allowlist_for_rollback_only() -> None:
-    with pytest.raises(ValueError, match="exact permitted rollback generation"):
+def test_record_rejects_the_retired_rollback_only_class() -> None:
+    # A row either admits new work or refuses it; there is no rollback-gated
+    # re-admission class.
+    with pytest.raises(ValueError):
         _record(
-            retirementClass=RetirementClass.ROLLBACK_ONLY,
+            retirementClass="rollback_only",
             newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
         )
 
@@ -211,8 +203,7 @@ def test_two_rows_cannot_claim_the_same_surface() -> None:
 
 def test_profile_bound_admission_follows_the_code_owned_class() -> None:
     record = get_retirement_record("omnigent.legacy.profile_bound_realizer")
-    # Today the class still admits: #3833 has not promoted the generic rows, and
-    # the issue forbids stopping admission before qualified defaults exist.
+    # The realizer still provides required behavior, so it keeps admitting.
     assert record.retirement_class is RetirementClass.ACTIVE_PRODUCT_PATH
     assert evaluate_new_admission(record).allowed is True
 
@@ -227,64 +218,17 @@ def test_profile_bound_admission_follows_the_code_owned_class() -> None:
     assert decision.reason_code == "new_admission_disabled:new_admission_disabled"
 
 
-def test_rollback_only_admits_only_the_exact_allowlisted_generation() -> None:
-    rollback_only = _record(
-        retirementClass=RetirementClass.ROLLBACK_ONLY,
+def test_admission_has_exactly_one_admitting_and_one_refusing_class() -> None:
+    assert {member.value for member in RetirementClass} == {
+        "active_product_path",
+        "new_admission_disabled",
+    }
+    admitting = _record(
+        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
-        rollbackGenerations=frozenset({"gen-7"}),
     )
-    assert evaluate_new_admission(rollback_only).reason_code == (
-        "rollback_generation_required"
-    )
-    # Exact membership only: a prefix of the allowlisted generation is rejected.
-    assert (
-        evaluate_new_admission(rollback_only, rollback_generation="gen-").reason_code
-        == "rollback_generation_not_allowlisted"
-    )
-    # The generation is a single global string, so it is necessary but not
-    # sufficient: without a scoped exercise decision one allowlisted generation
-    # would re-admit every scope using the path.
-    assert (
-        evaluate_new_admission(rollback_only, rollback_generation="gen-7").reason_code
-        == "rollback_exercise_evidence_required"
-    )
-    unsatisfied = evaluate_new_admission(
-        rollback_only,
-        rollback_generation="gen-7",
-        rollback_exercise=RollbackExerciseDecision(
-            retirementPathId=rollback_only.path_id,
-            satisfied=False,
-            reasonCode="rollback_evidence_expired",
-        ),
-    )
-    assert unsatisfied.allowed is False
-    assert unsatisfied.reason_code == (
-        "rollback_exercise_unsatisfied:rollback_evidence_expired"
-    )
-    # Evidence recorded for a different row never re-admits this one.
-    other_row = evaluate_new_admission(
-        rollback_only,
-        rollback_generation="gen-7",
-        rollback_exercise=RollbackExerciseDecision(
-            retirementPathId="omnigent.legacy.other",
-            satisfied=True,
-            reasonCode="rollback_exercise_recorded",
-        ),
-    )
-    assert other_row.allowed is False
-    assert other_row.reason_code == "rollback_exercise_scope_mismatch"
-
-    permitted = evaluate_new_admission(
-        rollback_only,
-        rollback_generation="gen-7",
-        rollback_exercise=RollbackExerciseDecision(
-            retirementPathId=rollback_only.path_id,
-            satisfied=True,
-            reasonCode="rollback_exercise_recorded",
-        ),
-    )
-    assert permitted.allowed is True
-    assert permitted.reason_code == "rollback_generation_permitted"
+    assert evaluate_new_admission(admitting).reason_code == "active_product_path"
+    assert evaluate_new_admission(_record()).allowed is False
 
 
 def test_assert_new_admission_raises_with_a_stable_reason_code() -> None:
@@ -356,96 +300,6 @@ def test_runtime_selection_consults_the_retirement_class(monkeypatch) -> None:
         ).runtime_id
         == "omnigent"
     )
-
-
-def test_legacy_rollback_generation_requires_the_explicit_control() -> None:
-    class _Flags:
-        omnigent_session_supervisor_rollback_mode = "none"
-        omnigent_session_supervisor_generation = "gen-7"
-
-    assert legacy_rollback_generation_from_settings(_Flags()) is None
-
-    class _RollbackFlags(_Flags):
-        omnigent_session_supervisor_rollback_mode = "revert_default_to_legacy"
-
-    assert legacy_rollback_generation_from_settings(_RollbackFlags()) == "gen-7"
-
-
-# --------------------------------------------------------------- rollback
-
-
-def _scope(**overrides: str) -> RollbackScope:
-    payload = {
-        "agentProfileRef": "profile@3",
-        "hostClassRef": "codex-oauth-host@1",
-        "materializerRef": "codex-oauth-home@1",
-        "executionRealizerRef": "codex-profile-bound@1",
-        "modelQualifiedId": "gpt-5-codex",
-        "launchPolicyRef": "codex-static@1",
-        "hostMode": "static",
-        "architecture": "amd64",
-        "ownerCohort": "internal",
-    }
-    payload.update(overrides)
-    return RollbackScope(**payload)  # type: ignore[arg-type]
-
-
-def _exercise(**overrides: object) -> RollbackExerciseRecord:
-    payload: dict[str, object] = {
-        "retirementPathId": "omnigent.legacy.profile_bound_realizer",
-        "scope": _scope(),
-        "exercisedAt": NOW - timedelta(days=1),
-        "evidenceRef": "artifact://rollback/exercise-1",
-        "succeeded": True,
-    }
-    payload.update(overrides)
-    return RollbackExerciseRecord(**payload)  # type: ignore[arg-type]
-
-
-def test_rollback_exercise_requires_an_exact_scope_match() -> None:
-    decision = evaluate_rollback_exercise(
-        retirement_path_id="omnigent.legacy.profile_bound_realizer",
-        scope=_scope(),
-        records=[_exercise()],
-        now=NOW,
-    )
-    assert decision.satisfied is True
-
-    mismatched = evaluate_rollback_exercise(
-        retirement_path_id="omnigent.legacy.profile_bound_realizer",
-        scope=_scope(hostMode="on_demand"),
-        records=[_exercise()],
-        now=NOW,
-    )
-    assert mismatched.satisfied is False
-    assert mismatched.reason_code == "rollback_scope_mismatch"
-
-
-def test_rollback_exercise_expires() -> None:
-    decision = evaluate_rollback_exercise(
-        retirement_path_id="omnigent.legacy.profile_bound_realizer",
-        scope=_scope(),
-        records=[_exercise(exercisedAt=NOW - timedelta(days=90))],
-        now=NOW,
-    )
-    assert decision.satisfied is False
-    assert decision.reason_code == "rollback_evidence_expired"
-
-
-def test_rollback_exercise_that_touched_existing_work_is_not_evidence() -> None:
-    decision = evaluate_rollback_exercise(
-        retirement_path_id="omnigent.legacy.profile_bound_realizer",
-        scope=_scope(),
-        records=[_exercise(futureAdmissionOnly=False)],
-        now=NOW,
-    )
-    assert decision.satisfied is False
-    assert decision.reason_code == "rollback_exercise_touched_existing_work"
-
-
-def test_rollback_scope_rejects_a_blank_dimension() -> None:
-    with pytest.raises(ValueError, match="exact value"):
-        _scope(ownerCohort="  ")
 
 
 # --------------------------------------------------- obsolete configuration

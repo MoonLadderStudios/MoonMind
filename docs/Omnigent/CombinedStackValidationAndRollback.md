@@ -234,13 +234,9 @@ Rolling back to a legacy runtime default changes **future admission only**. It
 never rewrites an active or historical execution, never substitutes a different
 profile, host mode, policy, or session for a request, and never releases Provider
 Profile capacity before credential consumers stop and cleanup completes. A
-rollback is scoped to one exact combination — Agent Profile, Host Class,
-materializer, realizer, model, launch policy, host mode, architecture, and owner
-cohort — matched by exact equality, and a legacy path classified `rollback_only`
-re-admits new work only under the exact rollback generation the operator
-selected. Rollback evidence expires: a recorded exercise older than its freshness
-bound no longer counts, so a legacy path can never be silently reactivated on
-stale support evidence. See `moonmind/omnigent/session_supervisor_rollback.py`
+legacy path whose retirement class is `new_admission_disabled` stays closed to
+new work; restoring it means changing its class in code, not supplying rollback
+evidence at admission. See `moonmind/omnigent/session_supervisor_rollback.py`
 and [Omnigent Module Architecture §5](OmnigentModuleArchitecture.md#5-retained-duplicate-architecture-and-its-retirement-owners).
 
 Legacy Compose profiles (`omnigent-host-codex`, `omnigent-host-claude`,

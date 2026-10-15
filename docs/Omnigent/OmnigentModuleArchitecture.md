@@ -192,8 +192,8 @@ legacy surface that no row classifies.
 
 - `RETIREMENT_INVENTORY` holds one row per retained legacy path that a
   new-admission boundary can select or that an architecture exemption names.
-  Each row records its owner, **retirement class**, surfaces, the source that
-  still admits new work, and any exact permitted rollback generations.
+  Each row records its owner, **retirement class**, surfaces, and the source
+  that still admits new work.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
   row each one shelters.
 - `moonmind/omnigent/retirement_surfaces.py` derives the legacy surfaces the
@@ -207,7 +207,6 @@ legacy surface that no row classifies.
 | Class | Meaning |
 | --- | --- |
 | `active_product_path` | Still the supported path for new work. |
-| `rollback_only` | New work only under an exactly allowlisted rollback generation with a fresh, exactly scoped rollback exercise. |
 | `new_admission_disabled` | No new plan may select it; recorded work continues. |
 
 Plan compilation (`harness_platform/planner.py:compile_execution_plan`), runtime
