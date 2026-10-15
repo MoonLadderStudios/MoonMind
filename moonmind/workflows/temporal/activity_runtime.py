@@ -9140,6 +9140,23 @@ class TemporalAgentRuntimeActivities:
                 },
             }
 
+        async def _link_verifier_artifact_to_parent(artifact_id: str) -> None:
+            # Both the raw report and its remediation wrapper can control the
+            # next step. Child linkage alone does not grant the parent access.
+            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.moonspec_verify_handoff",
+                    ),
+                )
+
         async def _publish_moonspec_remediation_verification_artifact(
             gate_payload: Mapping[str, Any],
             *,
@@ -9211,6 +9228,7 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            await _link_verifier_artifact_to_parent(ref.artifact_id)
             return ref
 
         async def _publish_moonspec_verify_artifact() -> dict[str, Any]:
@@ -9420,22 +9438,7 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
-            # The owning workflow must reread the complete report before
-            # interpreting its projection. Child-only linkage does not admit
-            # the parent's execution-scoped artifact reader.
-            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
-            parent_run_id = str(metadata.get("parentRunId") or "").strip()
-            if parent_workflow_id and parent_run_id and info is not None:
-                await self._artifact_service.link_artifact(
-                    artifact_id=verify_ref.artifact_id,
-                    principal="system:agent_runtime",
-                    execution_ref=ExecutionRef(
-                        namespace=info.namespace,
-                        workflow_id=parent_workflow_id,
-                        run_id=parent_run_id,
-                        link_type="input.moonspec_verify_handoff",
-                    ),
-                )
+            await _link_verifier_artifact_to_parent(verify_ref.artifact_id)
             gate_payload["gateResultRef"] = verify_ref.artifact_id
             if remaining_work_declared and isinstance(remaining_work, list):
                 # The publisher owns the durable reference to the verifier's

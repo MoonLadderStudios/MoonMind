@@ -871,6 +871,11 @@ RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-o
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
 )
+# Hydrated acceptance evidence stays in workflow state and the durable report,
+# not in the next AgentRun's instruction. Preserve pre-cutover request bytes.
+RUN_ARTIFACT_BACKED_VERIFIER_INSTRUCTION_PATCH = (
+    "run-artifact-backed-verifier-instruction-v1"
+)
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = "run-moonspec-verify-remediation-index-v1"
 RUN_MOONSPEC_REMEDIATION_STEP_SKIP_PATCH = "run-moonspec-remediation-step-skip-v1"
 RUN_MOONSPEC_TITLE_ROLE_SKILL_BOUNDARY_PATCH = "run-moonspec-title-role-skill-boundary-v1"
@@ -10351,16 +10356,67 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _append_trusted_previous_outputs_to_agent_inputs(
         self,
         node_inputs: Mapping[str, Any],
+        *,
+        agent_kind: str | None = None,
     ) -> dict[str, Any]:
         include_assessment = self._patched_or_false_outside_workflow(
             RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
         )
+        previous_outputs = node_inputs.get("previousOutputs")
+        artifact_backed_gate = False
+        if (
+            include_assessment
+            and agent_kind is not None
+            and isinstance(previous_outputs, Mapping)
+            and self._patched_or_false_outside_workflow(
+                RUN_ARTIFACT_BACKED_VERIFIER_INSTRUCTION_PATCH
+            )
+        ):
+            gate = self._publish_context.get("moonSpecGate")
+            gate_ref = gate.get("gateResultRef") if isinstance(gate, Mapping) else None
+            if (
+                isinstance(gate_ref, str)
+                and len(gate_ref) <= 400
+                and self._bounded_story_loop_artifact_ref(gate_ref)
+                in self._append_durable_handoff_attachment_refs(
+                    [], agent_kind=agent_kind
+                )
+            ):
+                # The publisher-owned attachment carries every requirement and
+                # finding. Per-string truncation cannot bound a many-row report.
+                # Project only orientation here; never mutate hydrated proof or
+                # use an authored previousOutputs ref to choose its replacement.
+                handoff: dict[str, Any] = {"gateResultRef": gate_ref}
+                for key in (
+                    "verdict",
+                    "recommendedNextAction",
+                    "recoverableInCurrentRuntime",
+                    "invalid",
+                    "degraded",
+                ):
+                    value = gate.get(key)
+                    if isinstance(value, bool):
+                        handoff[key] = value
+                    elif isinstance(value, str):
+                        handoff[key] = self._coerce_text(value, max_chars=120)
+                previous_outputs = {
+                    **previous_outputs,
+                    "moonSpecVerify": handoff,
+                    "moonSpecVerifyArtifactRef": gate_ref,
+                }
+                artifact_backed_gate = True
         previous_context = self._trusted_previous_outputs_instruction(
-            node_inputs.get("previousOutputs"),
+            previous_outputs,
             include_assessment=include_assessment,
         )
         if not previous_context:
             return dict(node_inputs)
+        if artifact_backed_gate:
+            previous_context += (
+                "\nRead the complete controlling verifier attachment, including all "
+                "remaining work and acceptance evidence. The inline gate fields "
+                "are navigation context, not the full findings or acceptance proof."
+            )
         merged_inputs = dict(node_inputs)
         for key in (
             "instructions",
@@ -22253,7 +22309,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         trusted_remediation_checkpoint_restore_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
-        node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(node_inputs)
         runtime_block_raw = node_inputs.get("runtime")
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
@@ -22269,9 +22324,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 f"{AUTO_RUNTIME_SENTINEL!r} is a planning-time selection sentinel"
             )
 
+        agent_kind = self._agent_kind_for_id(agent_id)
+        node_inputs = self._append_trusted_previous_outputs_to_agent_inputs(
+            node_inputs, agent_kind=agent_kind
+        )
         if self._workflow_patch_enabled("run-supported-runtime-admission-v1"):
             resolve_runtime_execution_capabilities(agent_id)
-        agent_kind = self._agent_kind_for_id(agent_id)
         # Prefer runtime_block profile values (set by the runtime planner)
         # over top-level node_inputs keys, which may have been corrupted
         # by AI-generated plan modifications or template injection.
