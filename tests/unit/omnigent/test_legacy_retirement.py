@@ -206,8 +206,7 @@ def test_two_rows_cannot_claim_the_same_surface() -> None:
 
 def test_profile_bound_admission_follows_the_code_owned_class() -> None:
     record = get_retirement_record("omnigent.legacy.profile_bound_realizer")
-    # Today the class still admits: #3833 has not promoted the generic rows, and
-    # the issue forbids stopping admission before qualified defaults exist.
+    # The realizer still provides required behavior, so it keeps admitting.
     assert record.retirement_class is RetirementClass.ACTIVE_PRODUCT_PATH
     assert evaluate_new_admission(record).allowed is True
 
