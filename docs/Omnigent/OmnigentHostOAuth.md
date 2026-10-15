@@ -540,6 +540,11 @@ Run cleanup may not remove:
 
 A janitor acts only from durable cleanup authority and current fencing generations. Provider Profile release still follows confirmed host teardown, even when cleanup requires retries. The janitor marks the host lease `stopped` only after the release, the terminal cleanup record, and the runtime-binding cleanup complete. A lease that is still `draining` therefore means the handoff is unfinished. A recovered dispatch that receives its idempotent lease while it is `draining` waits, within a bounded budget, for that state to clear. If the Provider Profile lease is still active, it then restarts the same host lease. If the wait aborts, it leaves cleanup to the janitor and keeps the capacity held.
 
+Terminal host inventory includes only matching Provider Profile leases in `held`
+or `cleanup_requested` state. Released lease tombstones remain fencing history
+and do not trigger repeated host/session probes. Expiry alone does not release
+capacity. Active-host and orphan reconciliation remain independent of this filter.
+
 On-demand OAuth initialization uses a deterministic `<host-container>-init`
 container carrying the host lease, profile, and credential generation labels.
 Docker `--rm` alone does not cover interruption between container creation and
