@@ -117,7 +117,7 @@ A broken application health check is diagnostic input, not a prerequisite, becau
 
 Host and UI submissions share one per-stack local lock; a second request reattaches to the existing operation or waits within a bound. Ownership is not transferred merely because a PID or timestamp looks old in another container namespace. Controller replacement holds the same lock, so controller lifecycle and deployment mutation share one exclusion boundary. Separate deployment projects have independent locks.
 
-Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient failure ends in `failed` or a later `succeeded` instead of staying open. Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded rather than replayed over confirmed intent. A retried submission for an already-installed image reattaches to the recorded terminal success, including after a lost response.
+Staging/apply failures retry automatically up to the bounded per-group attempt budget, so a transient failure ends in `failed` or a later `succeeded` instead of staying open. Restart recovery reconciles before applying: only the newest open operation per stack survives, and an open operation older than a confirmed installation for the same stack is superseded rather than replayed over confirmed intent. Resubmitting the same operation identity, including after a lost response, observes that operation's terminal result instead of repeating it. Any other request is new work even when its image is already installed: `latest` names whatever was published last, so each update to it pulls again.
 
 ### 10.3 Capture before state
 

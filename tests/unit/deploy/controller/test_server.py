@@ -1274,6 +1274,43 @@ def test_lost_ack_and_duplicate_submissions_reattach_to_one_writer(
         harness.close()
 
 
+def test_each_update_request_for_latest_pulls_and_applies_again(
+    controller_path, tmp_path
+):
+    applied = []
+    holder = {}
+
+    def applier(operation):
+        applied.append(operation["operationId"])
+        holder["store"].confirm_installed(
+            operation["operationId"], image=operation["desired"]["image"]
+        )
+
+    harness = _ThreadedHarness(tmp_path, applier)
+    holder["store"] = harness.store
+    body = {
+        "stack": "moonmind",
+        "desiredImage": "ghcr.io/org/app:latest",
+        "operationId": "ui-1",
+    }
+    try:
+        status, first = harness.call("POST", "/v1/operations", body)
+        assert (status, first["operationId"], first["status"]) == (
+            202, "ui-1", "succeeded"
+        )
+        # The next update to `latest` runs its own apply (which pulls the
+        # tag again) instead of answering with the earlier success.
+        status, second = harness.call(
+            "POST", "/v1/operations", {**body, "operationId": "ui-2"}
+        )
+        assert (status, second["operationId"], second["status"]) == (
+            202, "ui-2", "succeeded"
+        )
+        assert applied == ["ui-1", "ui-2"]
+    finally:
+        harness.close()
+
+
 def test_operation_id_naming_a_different_request_is_refused(
     controller_path, tmp_path
 ):
@@ -1588,9 +1625,13 @@ def test_reattaching_submission_does_not_rederive_the_target(controller_path, tm
         port = httpd.server_address[1]
         body = {"stack": "moonmind", "desiredImage": "img", "operationId": "ui-1"}
         assert _post_operation(port, body)[0] == 202
-        status, again = _post_operation(port, {**body, "operationId": "ui-2"})
+        status, again = _post_operation(port, body)
         assert (status, again["operationId"]) == (202, "ui-1")
         assert derived == ["moonmind"]
+        # A new request is new work: its own operation gets a fresh target.
+        status, fresh = _post_operation(port, {**body, "operationId": "ui-2"})
+        assert (status, fresh["operationId"]) == (202, "ui-2")
+        assert derived == ["moonmind", "moonmind"]
     finally:
         httpd.shutdown()
         thread.join(timeout=10)
