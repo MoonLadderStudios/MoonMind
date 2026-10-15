@@ -4290,9 +4290,11 @@ async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     ]
 
 
+@pytest.mark.parametrize("lease_released", [True, False])
 async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    lease_released: bool,
 ) -> None:
     """Replay mm:4e1c43a5 at host readiness and cleanup-authority handoffs."""
 
@@ -4372,7 +4374,7 @@ async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
             request.idempotency_key,
             event_type="terminal",
             status="failed",
-            metadata={"cleanupCompleted": True, "leaseReleased": True},
+            metadata={"cleanupCompleted": True, "leaseReleased": lease_released},
         )
 
         reopened = await store.get_or_create(
