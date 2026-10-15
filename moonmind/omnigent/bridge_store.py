@@ -1036,12 +1036,8 @@ class OmnigentBridgeSessionStore:
                         (
                             isinstance(terminal_metadata, dict)
                             and terminal_metadata.get("cleanupCompleted") is True
-                            and terminal_metadata.get("leaseReleased") is True
                         )
-                        or (
-                            terminal_refs.get("cleanupState") == "completed"
-                            and terminal_refs.get("leaseReleaseState") == "released"
-                        )
+                        or terminal_refs.get("cleanupState") == "completed"
                     )
                     cleanup_authority = reset_metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
                     prior_attempts = list(
@@ -1062,9 +1058,11 @@ class OmnigentBridgeSessionStore:
                     if cleanup_complete and isinstance(cleanup_authority, dict):
                         # The terminal lifecycle event or host-scoped janitor
                         # result is the objective handoff proving that the old
-                        # endpoint no longer exists and provider capacity was
-                        # released. Preserve only compact artifact/identity refs
-                        # for history, then require fresh live authority.
+                        # endpoint no longer exists. Provider capacity can stay
+                        # with the workflow across Activity retries; its release
+                        # is independent of retiring a cleaned host identity.
+                        # Preserve compact artifact/identity refs for history,
+                        # then require fresh live authority.
                         prior_attempt["egressCleanupAuthority"] = {
                             key: cleanup_authority.get(key)
                             for key in (

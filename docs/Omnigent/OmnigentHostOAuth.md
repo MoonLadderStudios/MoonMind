@@ -580,6 +580,12 @@ execution scope has the same provider lease, profile, and credential generation
 and no bound host or session authority. Completion still checks its revision and
 fencing generation; a replacement binding remains protected.
 
+A retry of an unposted bridge attempt retires its prior host cleanup authority
+only after confirmed host teardown. Provider Profile capacity may remain owned
+by the workflow across Activity retries; releasing that slot is not required to
+archive the removed host's authority and attest its replacement. An incomplete
+cleanup retains the original authority even if capacity release was recorded.
+
 Runtime-binding cleanup completion is idempotent for the same current binding
 and fencing generation. A coordinator and janitor that observed the same
 authority converge on the already-completed state without advancing its revision
