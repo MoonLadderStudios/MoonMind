@@ -666,6 +666,7 @@ async def resume_published_issue_evidence(
                             timeout=min(timedelta(seconds=60), deadline - workflow.now()),
                         )
                     except asyncio.TimeoutError:
+                        # The observation interval elapsed; re-read the same PR.
                         pass
                     await owner._wait_if_paused_at_safe_boundary()
                     if owner._cancel_requested or workflow.now() >= deadline:

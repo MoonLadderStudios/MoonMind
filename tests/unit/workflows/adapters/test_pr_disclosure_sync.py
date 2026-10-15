@@ -14,9 +14,11 @@ from tests.unit.workflows.skills.test_acceptance_source_binding import (
 
 pytest_plugins = ("tests.unit.workflows.skills.test_acceptance_source_binding",)
 
+HEAD_SHA = "a" * 40
+
 
 def wire(monkeypatch, body):
-    document = {"state": "open", "body": body}
+    document = {"state": "open", "body": body, "head": {"sha": HEAD_SHA}}
     writes = []
 
     def respond(request):
@@ -43,6 +45,85 @@ def wire(monkeypatch, body):
         )
     )
     return service, document, writes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observed_head", [{"sha": "b" * 40}, {}, None])
+@pytest.mark.parametrize(
+    "section",
+    [
+        "## Unverified criteria\n\n- GPU: unavailable",
+        "",
+        "## Unverified criteria\n\n- OLD: obsolete reason",
+    ],
+    ids=["replace", "clear", "no-op"],
+)
+async def test_activity_rejects_unaccepted_pr_head_before_body_update(
+    monkeypatch, observed_head, section
+):
+    body = (
+        "Human introduction.\n\n<!-- moonmind:unverified:start -->\n"
+        "## Unverified criteria\n\n- OLD: obsolete reason\n"
+        "<!-- moonmind:unverified:end -->"
+    )
+    service, document, writes = wire(monkeypatch, body)
+    document["head"] = observed_head
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
+    )
+    with pytest.raises(ValueError, match="head"):
+        await jules_activities.repo_sync_pr_unverified_criteria_activity(
+            {
+                "repo": "o/r",
+                "prUrl": "https://github.com/o/r/pull/7",
+                "section": section,
+                "expectedHeadSha": HEAD_SHA,
+            }
+        )
+    assert writes == []
+    assert document["body"] == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_head", ["", "   "])
+async def test_activity_rejects_blank_expected_head(monkeypatch, expected_head):
+    service, document, writes = wire(monkeypatch, "Human introduction.")
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
+    )
+    with pytest.raises(ValueError):
+        await jules_activities.repo_sync_pr_unverified_criteria_activity(
+            {
+                "repo": "o/r",
+                "prUrl": "https://github.com/o/r/pull/7",
+                "section": "## Unverified criteria\n\n- GPU: unavailable",
+                "expectedHeadSha": expected_head,
+            }
+        )
+    assert writes == []
+    assert document["body"] == "Human introduction."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("section", ["## Unverified criteria\n\n- GPU: unavailable", ""])
+async def test_unmarked_human_disclosure_is_preserved(monkeypatch, section):
+    body = (
+        "Human introduction.\n\n## Unverified criteria\n\n"
+        "Reviewer: the release hardware check still needs attention.\n\n"
+        "## Validation\nKeep these results."
+    )
+    service, document, writes = wire(monkeypatch, body)
+    for _ in range(2):
+        await service.sync_pull_request_unverified_criteria(
+            repo="o/r", pr_url="https://github.com/o/r/pull/7", section=section
+        )
+    assert document["body"].startswith(body)
+    assert len(writes) == bool(section)
+    if section:
+        assert document["body"].endswith(
+            "<!-- moonmind:unverified:start -->\n"
+            f"{section}\n<!-- moonmind:unverified:end -->"
+        )
 
 
 @pytest.mark.asyncio
@@ -104,6 +185,7 @@ async def test_activity_honors_admitted_connection_denial(monkeypatch):
                 "repo": "o/r",
                 "prUrl": "https://github.com/o/r/pull/7",
                 "section": "## Unverified criteria\n\n- GPU: Hardware unavailable",
+                "expectedHeadSha": HEAD_SHA,
             }
         )
     assert writes == []
@@ -116,18 +198,23 @@ async def test_fresh_workflow_clears_stale_managed_disclosure(
 ):
     parent = run_module.MoonMindRunWorkflow()
     parent._repo = "example/repo"
+    source_bound_report["validatedRefs"]["acceptance"]["subject"]["revision"] = HEAD_SHA
     parent._publish_context["moonSpecGate"] = source_bound_report
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
     service, document, _writes = wire(
         monkeypatch,
-        "Human introduction.\n\n## Unverified criteria\n\n- OLD: obsolete reason\n\n## Validation\nKeep this.",
+        "Human introduction.\n\n<!-- moonmind:unverified:start -->\n"
+        "## Unverified criteria\n\n- OLD: obsolete reason\n"
+        "<!-- moonmind:unverified:end -->\n\n## Validation\nKeep this.",
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.GitHubService", lambda: service
     )
 
     async def execute(name, payload, **kwargs):
         assert name == "repo.sync_pr_unverified_criteria"
-        return await service.sync_pull_request_unverified_criteria(
-            repo=payload["repo"], pr_url=payload["prUrl"], section=payload["section"]
-        )
+        assert payload["expectedHeadSha"] == HEAD_SHA
+        return await jules_activities.repo_sync_pr_unverified_criteria_activity(payload)
 
     monkeypatch.setattr(
         run_module.workflow, "execute_activity", AsyncMock(side_effect=execute)
@@ -152,7 +239,9 @@ async def test_activity_uses_its_admitted_enterprise_connection(monkeypatch):
     service.resolve_github_token = AsyncMock(
         side_effect=AssertionError("No default credential allowed")
     )
-    document = {"state": "open", "body": "Human introduction."}
+    document = {
+        "state": "open", "body": "Human introduction.", "head": {"sha": HEAD_SHA}
+    }
     requests = []
 
     def respond(request):
@@ -183,6 +272,7 @@ async def test_activity_uses_its_admitted_enterprise_connection(monkeypatch):
             "repo": "o/r",
             "prUrl": "https://git.example.test/o/r/pull/7",
             "section": "## Unverified criteria\n\n- GPU: Hardware unavailable",
+            "expectedHeadSha": HEAD_SHA,
             "admittedWorkflowId": "forged",
         }
     )
@@ -212,7 +302,8 @@ async def test_native_multiline_section_is_adopted_without_orphaned_text(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_lost_ack_sync_retry_reads_before_mutating(monkeypatch):
+@pytest.mark.parametrize("moved_head", [False, True])
+async def test_lost_ack_sync_retry_reads_before_mutating(monkeypatch, moved_head):
     service = GitHubService()
     service.resolve_github_token = AsyncMock(return_value=("default-token", None))
     service._repository_reader = AsyncMock(
@@ -221,7 +312,9 @@ async def test_lost_ack_sync_retry_reads_before_mutating(monkeypatch):
             {"Authorization": "Bearer selected-token"},
         )
     )
-    document = {"state": "open", "body": "Human introduction."}
+    document = {
+        "state": "open", "body": "Human introduction.", "head": {"sha": HEAD_SHA}
+    }
     writes = []
 
     def respond(request):
@@ -241,8 +334,14 @@ async def test_lost_ack_sync_retry_reads_before_mutating(monkeypatch):
         "repo": "o/r",
         "pr_url": "https://github.com/o/r/pull/7",
         "section": "## Unverified criteria\n\n- GPU: unavailable\n## Detail\nStill unavailable",
+        "expected_head_sha": HEAD_SHA,
     }
     with pytest.raises(httpx.ReadError):
         await service.sync_pull_request_unverified_criteria(**payload)
-    assert await service.sync_pull_request_unverified_criteria(**payload) is False
+    if moved_head:
+        document["head"]["sha"] = "b" * 40
+        with pytest.raises(ValueError, match="head"):
+            await service.sync_pull_request_unverified_criteria(**payload)
+    else:
+        assert await service.sync_pull_request_unverified_criteria(**payload) is False
     assert len(writes) == 1

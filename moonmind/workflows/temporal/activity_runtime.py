@@ -9385,7 +9385,7 @@ class TemporalAgentRuntimeActivities:
                     contract_violations.append("Verification evidence rows are malformed")
                 elif isinstance(inventory, Mapping):
                     for row in rows:
-                        evidence_refs = row.get("evidenceRefs") if isinstance(row, Mapping) else None
+                        evidence_refs = row.get("evidenceRefs", []) if isinstance(row, Mapping) else None
                         if not isinstance(evidence_refs, list) or any(
                             not isinstance(ref, str) or ref not in inventory for ref in evidence_refs
                         ):

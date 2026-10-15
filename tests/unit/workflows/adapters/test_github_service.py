@@ -59,7 +59,11 @@ def _mock_get_response_with_headers(
 )
 async def test_sync_unverified_criteria_preserves_reused_pr_edits(monkeypatch, section):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
-    original = "Reviewer's introduction.\n\n## Unverified criteria\n\n- AC-old: Stale.\n\n## Validation\n\nKeep these results."
+    original = (
+        "Reviewer's introduction.\n\n<!-- moonmind:unverified:start -->\n"
+        "## Unverified criteria\n\n- AC-old: Stale.\n"
+        "<!-- moonmind:unverified:end -->\n\n## Validation\n\nKeep these results."
+    )
     document = {"state": "open", "body": original}
     writes = []
 

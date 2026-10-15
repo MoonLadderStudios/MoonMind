@@ -769,6 +769,7 @@ class GitHubService:
                                 raise
                             if attempt == 2:
                                 raise
+                    return None
 
                 pr = await read()
                 result["draft"] = pr.get("draft")
@@ -813,6 +814,8 @@ class GitHubService:
                                     json={"query": restore, "variables": {"id": node_id}}) as response:
                                     response.raise_for_status()
                             except httpx.HTTPError:
+                                # The restore may have succeeded despite a lost
+                                # response; the read below confirms its outcome.
                                 pass
                             pr = await reconcile_read(lambda: read(require_head=False))
                             restored = pr.get("draft") is True
@@ -2204,11 +2207,17 @@ class GitHubService:
                 )
 
     async def sync_pull_request_unverified_criteria(
-        self, *, repo: str, pr_url: str, section: str, admitted_workflow_id: str | None = None
+        self, *, repo: str, pr_url: str, section: str,
+        expected_head_sha: str | None = None,
+        admitted_workflow_id: str | None = None,
     ) -> bool:
         """Reconcile verifier disclosure using the workflow's repository authority."""
         from moonmind.auth.github_app_wiring import github_api_base_for
 
+        # Omitted heads are retained-history compatibility. New workflows bind
+        # disclosure to the candidate whose acceptance evidence they consumed.
+        if expected_head_sha is not None and not expected_head_sha.strip():
+            raise ValueError("Expected PR head must not be blank")
         parsed = re.fullmatch(
             r"https://([^/@\s]+)/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", pr_url
         )
@@ -2237,6 +2246,12 @@ class GitHubService:
                 raise ValueError(
                     "Unverified criteria can only be synchronized on an open PR"
                 )
+            if expected_head_sha is not None:
+                head = document.get("head")
+                if not isinstance(head, Mapping) or head.get("sha") != expected_head_sha:
+                    raise ValueError(
+                        "PR head no longer matches the accepted verification candidate"
+                    )
             body = document.get("body") or ""
             if not isinstance(body, str):
                 raise TypeError("GitHub PR body is malformed")
@@ -2255,18 +2270,9 @@ class GitHubService:
                 # it intact, including multiline reasons with their own headings.
                 updated = body.replace(original_section, managed, 1)
             else:
-                # Preserve the existing heading-based format during its first
-                # synchronization; later updates use explicit managed boundaries.
-                match = re.search(
-                    r"(?ms)^## Unverified criteria[ \t]*\n.*?(?=^## |\Z)", body
-                )
-                if match:
-                    replacement = (
-                        managed + ("\n\n" if match.end() < len(body) else "")
-                        if managed else ""
-                    )
-                    updated = body[:match.start()] + replacement + body[match.end():]
-                elif managed:
+                # A shared heading does not establish ownership of reviewer
+                # prose. Only explicit markers or the exact current section do.
+                if managed:
                     updated = body.rstrip() + ("\n\n" if body.strip() else "") + managed
                 else:
                     updated = body

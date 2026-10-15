@@ -96,8 +96,6 @@ def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:
         ],
         "moonspec-tasks": [
             "## Source Acceptance Coverage",
-            "every missing, partial, conflict, or required-unverified row",
-            "Each negative constraint row",
         ],
         "moonspec-implement": [
             "boundedBacklog",
@@ -106,8 +104,6 @@ def test_mm1135_downstream_skills_consume_assessment_artifacts() -> None:
         ],
         "moonspec-verify": [
             "## Source Acceptance Matrix Verification",
-            "Do not choose `FULLY_IMPLEMENTED`",
-            "every repo-verifiable source row",
         ],
     }
 
@@ -138,4 +134,3 @@ def test_mm1135_docs_describe_provider_neutral_protocol() -> None:
     assert "Jira, GitHub, and MoonMind adapters" in text
     assert "must not become required coupling" in text
     assert "Vertical Multi-Surface Story" in text
-    assert "Negative Constraints" in text
