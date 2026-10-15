@@ -705,6 +705,15 @@ function selectDraftSteps(
   return taskSteps.length > 0 ? taskSteps : artifactTaskSteps;
 }
 
+// A structured repository target ({provider, repository: {name}, ...}) is
+// authored by name; never stringify the object itself.
+function repositoryNameValue(value: unknown): unknown {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return objectValue(objectValue(value).repository).name;
+  }
+  return value;
+}
+
 function nullableStringValue(...values: unknown[]): string | null {
   return stringValue(...values) || null;
 }
@@ -959,7 +968,6 @@ export function buildTemporalSubmissionDraftFromExecution(
     artifactTaskSteps,
   );
 
-  const artifactRepository = stringValue(artifactParams.repository);
   const taskSkills = skillSelectorNames(task.skills);
   const executionTaskSkills = Array.isArray(execution.taskSkills)
     ? execution.taskSkills
@@ -979,6 +987,7 @@ export function buildTemporalSubmissionDraftFromExecution(
       task.branch,
       git.branch,
       params.branch,
+      objectValue(objectValue(params.repository).branch).name,
       artifactTask.branch,
       artifactGit.branch,
     ),
@@ -1077,14 +1086,16 @@ export function buildTemporalSubmissionDraftFromExecution(
       artifactRuntime.tierFallback,
     ),
     repository: nullableStringValue(
-      snapshotDraft.repository,
-      execution.repository,
-      params.repository,
-      task.repository,
-      git.repository,
-      artifactRepository,
-      artifactTask.repository,
-      artifactGit.repository,
+      ...[
+        snapshotDraft.repository,
+        execution.repository,
+        params.repository,
+        task.repository,
+        git.repository,
+        artifactParams.repository,
+        artifactTask.repository,
+        artifactGit.repository,
+      ].map(repositoryNameValue),
     ),
     branch: legacyBranchDraft.branch,
     legacyBranchWarning: legacyBranchDraft.warning,
