@@ -168,6 +168,15 @@ cannot drift apart, without a second implementation to pair against.
 | Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
 | Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
 
+The stable runtime binding store and legacy harness binding store currently
+share a table and binding-ID prefix, but not a serialized authority schema.
+Generic recovery inventory selects only stable rows, identified by their
+immutable initial `omnigent-runtime-binding-snapshot:sha256:` primary key.
+Legacy records (including `cleanup_complete`) stay with their lifecycle owner;
+they are not projected into stable cleanup authority. Stable snapshot validation
+and the positive Temporal-owner-closed gate remain mandatory. This separation
+is needed until the legacy producer and its retained records are retired.
+
 The stable runtime binding store recomputes its snapshot digest from the
 persisted row. The shared contract fixture is SQLite, which returns
 `DateTime(timezone=True)` columns as naive datetimes, so that digest can only be
