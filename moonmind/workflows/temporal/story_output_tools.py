@@ -41,6 +41,7 @@ from moonmind.workflows.skills.tool_definitions import (
     default_registry_tool_payload,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.temporal.agent_result_payloads import hydrate_acceptance_projection
 from moonmind.workflows.temporal.github_issue_attempts import (
     activity_for_lifecycle_mode,
     build_attempt_handoff,
@@ -6651,6 +6652,8 @@ def _assessment_artifact_ref(
 async def _read_json_artifact_by_ref(
     ref: str,
     context: Mapping[str, Any] | None,
+    *,
+    acceptance_projection: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any] | None:
     """Read a JSON artifact payload by ref using the injected artifact service.
 
@@ -6666,14 +6669,28 @@ async def _read_json_artifact_by_ref(
         _string((context or {}).get("deployment_evidence_principal"))
         or "system:agent_runtime"
     )
+    read_scope = {}
+    if acceptance_projection is not None:
+        owner = _admitted_repository_workflow(context)
+        if not owner:
+            return None
+        read_scope["admitted_principal"] = f"workflow:{owner}"
     try:
         _artifact, payload = await service.read(
-            artifact_id=ref,
+            artifact_id=ref.removeprefix("artifact://"),
             principal=principal,
             allow_restricted_raw=True,
+            **read_scope,
         )
     except Exception:
         return None
+    if acceptance_projection is not None:
+        try:
+            return hydrate_acceptance_projection(
+                acceptance_projection, report_bytes=payload, report_ref=ref,
+            )
+        except (TypeError, ValueError):
+            return None
     if isinstance(payload, Mapping):
         return payload
     try:
@@ -6956,9 +6973,25 @@ async def _objective_verification_payload(
     reference is authoritative over a stale local file or compact projection.
     """
     ref = _github_status_verification_ref_from_previous_outputs(inputs, context)
+    payload = _github_status_verification_payload_from_previous_outputs(inputs, context)
+    refs = _mapping(_mapping(payload).get("validatedRefs"))
+    projection = refs.get("acceptanceProjection")
+    if isinstance(projection, Mapping):
+        report_ref = _string(projection.get("reportRef"))
+        allowed_refs = {
+            _string(value).removeprefix("artifact://")
+            for value in (
+                report_ref, _mapping(payload).get("gateResultRef"),
+                _mapping(payload).get("sourceMoonSpecVerifyArtifactRef"),
+            ) if value
+        }
+        if not report_ref or (ref and ref.removeprefix("artifact://") not in allowed_refs):
+            return None
+        return await _read_json_artifact_by_ref(
+            report_ref, context, acceptance_projection=payload,
+        )
     if ref:
         return await _read_json_artifact_by_ref(ref, context)
-    payload = _github_status_verification_payload_from_previous_outputs(inputs, context)
     if payload:
         return payload
     path = _string(inputs.get("verificationArtifactPath") or inputs.get("verification_artifact_path"))

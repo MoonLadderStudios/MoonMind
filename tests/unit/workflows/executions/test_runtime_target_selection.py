@@ -219,6 +219,46 @@ def test_authored_product_intention_resolves_to_the_qualified_target():
     assert selection.target_id == "codex.generic-omnigent"
 
 
+def test_profile_route_is_selected_as_non_authored_provenance():
+    """An omitted runtime follows the selected Profile's route, not the default.
+
+    The derived Harness is recorded as Profile-derived, never as authored, so
+    later readers can tell a chosen runtime from one the Profile implied.
+    """
+
+    from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+
+    control_plane_metrics.reset()
+    try:
+        selection = resolve_runtime_target_selection(
+            surface=AuthoringSurface.schedule,
+            profile_runtime="codex_cli",
+            policy=_policy({_CODEX_GATE: "true"}),
+        )
+        assert selection.source is SelectionSource.profile
+        assert selection.runtime_id == "codex_cli"
+        assert selection.available
+        labels = [
+            dict(labels)
+            for name, labels, _value in control_plane_metrics.counter_series()
+            if name == control_plane_metrics.MIGRATION_SELECTED_PATH
+        ]
+        assert [label["selection_source"] for label in labels] == ["profile"]
+    finally:
+        control_plane_metrics.reset()
+
+
+def test_authored_runtime_wins_over_the_profile_route():
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="omnigent",
+        profile_runtime="codex_cli",
+        policy=_policy({_CODEX_GATE: "true"}),
+    )
+    assert selection.source is SelectionSource.authored
+    assert selection.runtime_id == "omnigent"
+
+
 def test_claude_and_opencode_promotion_is_independent():
     policy = _policy({_CLAUDE_GATE: "true"})
     catalog = resolve_runtime_target_catalog(policy=policy)

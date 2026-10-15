@@ -20001,7 +20001,9 @@ def _mm3788_provider_profile(
     )
 
 
-def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, AsyncMock]]:
+def _mm3788_client(
+    profile: SimpleNamespace, *, execute: Any = None
+) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
@@ -20020,6 +20022,8 @@ def _mm3788_client(profile: SimpleNamespace) -> Iterator[tuple[TestClient, Async
             return None
 
         async def execute(self, _stmt):
+            if execute is not None:
+                return await execute(_stmt)
             return SimpleNamespace(all=lambda: [])
 
     app.dependency_overrides[get_async_session] = lambda: _Session()
@@ -20287,6 +20291,336 @@ async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None
 
     assert metadata["targetRuntime"] == "claude_code"
     assert metadata["profileId"] == "claude_minimax_team"
+
+
+class _ProfileRouteSession:
+    """Session holding one Provider Profile and no Omnigent configuration."""
+
+    def __init__(self, profile: SimpleNamespace) -> None:
+        self._profile = profile
+
+    async def get(self, _model: object, profile_id: str) -> object | None:
+        return self._profile if self._profile.profile_id == profile_id else None
+
+    async def execute(self, _stmt: object) -> SimpleNamespace:
+        return SimpleNamespace(all=lambda: [])
+
+
+def _mm3833_recurring_request(runtime: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {"workflow": {"runtime": runtime}},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        {"providerProfileRef": "subscription"},
+        # The form's untouched advanced control is not an authored runtime.
+        {
+            "mode": "omnigent",
+            "authored": False,
+            "providerProfileRef": "subscription",
+        },
+    ],
+    ids=["omitted", "untouched_control"],
+)
+async def test_mm3833_recurring_schedule_follows_the_profile_route_like_create(
+    monkeypatch, runtime
+) -> None:
+    """A schedule pinned to a direct Profile resolves the runtime Create does."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        _mm3833_recurring_request(dict(runtime)),
+        session=_ProfileRouteSession(profile),
+    )
+
+    assert metadata["targetRuntime"] == "codex_cli"
+    assert metadata["profileId"] == "subscription"
+    assert metadata["runtimeCutover"]["selectionSource"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_keeps_explicit_runtime_and_custom_model(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="claude_team", runtime_id="claude_code"
+    )
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        _mm3833_recurring_request(
+            {
+                "mode": "claude_code",
+                "providerProfileRef": "claude_team",
+                "model": "claude-custom-model",
+                "effort": "high",
+            }
+        ),
+        session=_ProfileRouteSession(profile),
+    )
+
+    assert metadata["targetRuntime"] == "claude_code"
+    assert metadata["runtimeCutover"]["selectionSource"] == "authored"
+    assert metadata["model"] == "claude-custom-model"
+    assert metadata["requestedModel"] == "claude-custom-model"
+    assert metadata["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_rejects_a_forged_untouched_pair() -> None:
+    """A forged explicit runtime is still checked when the Profile is loaded first."""
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_recurring_runtime_metadata(
+            _mm3833_recurring_request(
+                {"mode": "claude_code", "providerProfileRef": "codex_minimax_team"}
+            ),
+            session=_ProfileRouteSession(profile),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "provider_profile_runtime_mismatch"
+
+
+def test_mm3833_create_records_the_profile_route_as_non_authored(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    body = _mm3788_task_request(target_runtime="codex_cli", profile_id="subscription")
+    del body["payload"]["targetRuntime"]
+    del body["payload"]["workflow"]["runtime"]["mode"]
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_cli_profile_pin_selects_the_create_route(monkeypatch) -> None:
+    """`moonmind workflow run --provider-profile` resolves like the form."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    profile.default_model = "gpt-profile-default"
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post(
+            "/api/executions",
+            json=build_execution_payload(
+                instructions="Run with the pinned Profile.",
+                provider_profile="subscription",
+                idempotency_key="mm3833-cli-profile",
+            ),
+        )
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert parameters["targetRuntime"] == "codex_cli"
+    assert parameters["profileId"] == "subscription"
+    assert parameters["model"] == "gpt-profile-default"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_cli_envelope_with_a_forged_runtime_fails_before_effects() -> None:
+    from moonmind.workflow_cli import build_execution_payload
+
+    profile = _mm3788_provider_profile(
+        profile_id="codex_minimax_team", runtime_id="codex_cli"
+    )
+    body = build_execution_payload(
+        instructions="Forge an incompatible pair.",
+        provider_profile="codex_minimax_team",
+        idempotency_key="mm3833-cli-forged",
+    )
+    body["payload"]["targetRuntime"] = "claude_code"
+
+    for test_client, service in _mm3788_client(profile):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "provider_profile_runtime_mismatch"
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mm3833_goal_preset_expands_with_the_profile_route(monkeypatch) -> None:
+    """Preset steps inherit the runtime Create will admit, not the bare default."""
+
+    from moonmind.workflows.executions.preset_goal_scheduler import (
+        GoalPresetSchedule,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    captured: dict[str, Any] = {}
+
+    class _CapturingCatalog:
+        def __init__(self, session):
+            self.session = session
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        _CapturingCatalog,
+    )
+
+    await _expand_goal_preset_for_workflow_submission(
+        task_payload={
+            "goal": "Expand one goal preset",
+            "runtime": {"providerProfileRef": "subscription"},
+        },
+        request_payload={"repository": "MoonLadderStudios/MoonMind"},
+        session=_ProfileRouteSession(profile),
+        user=SimpleNamespace(id=uuid4(), is_superuser=False),
+    )
+
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+
+
+@pytest.mark.asyncio
+async def test_mm3833_recurring_schedule_with_an_agent_profile_keeps_omnigent(
+    monkeypatch,
+) -> None:
+    """An explicit Agent Profile is Omnigent intent, whatever the account's route."""
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    request = _mm3833_recurring_request({"providerProfileRef": "subscription"})
+    request["agentProfile"] = {
+        "profileId": "team-codex",
+        "version": 2,
+        "providerProfileRef": "subscription",
+    }
+
+    metadata = await _resolve_recurring_runtime_metadata(
+        request, session=_ProfileRouteSession(profile)
+    )
+
+    assert metadata["targetRuntime"] == "omnigent"
+    assert metadata["runtimeCutover"]["selectionSource"] == "profile"
+
+
+def test_mm3833_preset_expansion_and_admission_share_one_profile_route(
+    monkeypatch,
+) -> None:
+    """A configuration activated mid-submission cannot split its Backend.
+
+    Preset expansion previews the Profile's route before Create admits it; both
+    must use one decision so expanded steps match the admitted workflow.
+    """
+
+    from api_service.db.models import OmnigentAgentProfile
+    from moonmind.workflows.executions.preset_goal_scheduler import (
+        GoalPresetSchedule,
+    )
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    profile = _mm3788_provider_profile(
+        profile_id="subscription", runtime_id="codex_cli"
+    )
+    profile.credential_source = "oauth_volume"
+    profile.runtime_materialization_mode = "oauth_home"
+    activated = (
+        SimpleNamespace(
+            profile_id="activated", active_version=1, default_for_runtime=True
+        ),
+        SimpleNamespace(
+            version=1,
+            digest="sha256:" + "9" * 64,
+            validation_result={"ready": True},
+            document={
+                "providerRequirements": {
+                    "runtimeId": "codex_cli",
+                    "credentialSource": "oauth_volume",
+                    "materializationMode": "oauth_home",
+                }
+            },
+        ),
+    )
+    configuration_reads: list[object] = []
+
+    async def execute(statement: Any) -> SimpleNamespace:
+        columns = getattr(statement, "column_descriptions", None) or []
+        if any(column.get("entity") is OmnigentAgentProfile for column in columns):
+            configuration_reads.append(statement)
+            # The configuration is activated right after the first read.
+            rows = [] if len(configuration_reads) == 1 else [activated]
+            return SimpleNamespace(all=lambda: rows)
+        return SimpleNamespace(all=lambda: [])
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingCatalog:
+        def __init__(self, session):
+            self.session = session
+
+        async def expand_template(self, **kwargs):
+            captured.update(kwargs)
+            return {"steps": [{"id": "step-1", "instructions": "Run"}]}
+
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.schedule_preset_from_goal",
+        lambda goal: GoalPresetSchedule(
+            goal=goal, slug="goal-preset", inputs={}, reason="test", issue_key=None
+        ),
+    )
+    monkeypatch.setattr(
+        "api_service.services.presets.catalog.PresetCatalogService",
+        _CapturingCatalog,
+    )
+    body = {
+        "type": "workflow",
+        "payload": {
+            "workflow": {
+                "goal": "Expand one goal preset",
+                "runtime": {"providerProfileRef": "subscription"},
+            },
+        },
+    }
+
+    for test_client, service in _mm3788_client(profile, execute=execute):
+        response = test_client.post("/api/executions", json=body)
+
+    assert response.status_code == 201, response.text
+    parameters = service.create_execution.await_args.kwargs["initial_parameters"]
+    assert captured["context"]["targetRuntime"] == "codex_cli"
+    assert parameters["targetRuntime"] == "codex_cli"
 
 
 @pytest.mark.asyncio
@@ -20798,6 +21132,8 @@ def _mm3935_post_through_plan_owner(
     test_client: TestClient,
     service: AsyncMock,
     payload: dict[str, Any],
+    *,
+    db_session: Any = None,
 ) -> tuple[Any, AsyncMock, OmnigentExecutionPlanBinding]:
     """POST one create request with the deployment-default Agent Profile."""
 
@@ -20809,13 +21145,14 @@ def _mm3935_post_through_plan_owner(
         default_model=None,
         default_effort=None,
     )
-    db_session = SimpleNamespace(
-        # The idempotency reservation finds no admitted record; the plan
-        # compiler then loads the default Agent Profile's Provider Profile.
-        get=AsyncMock(side_effect=[None, provider_profile, None]),
-        commit=AsyncMock(),
-        refresh=AsyncMock(),
-    )
+    if db_session is None:
+        db_session = SimpleNamespace(
+            # The idempotency reservation finds no admitted record; the plan
+            # compiler then loads the default Agent Profile's Provider Profile.
+            get=AsyncMock(side_effect=[None, provider_profile, None]),
+            commit=AsyncMock(),
+            refresh=AsyncMock(),
+        )
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -20910,6 +21247,153 @@ def test_mm3935_cli_run_payload_reaches_the_plan_owner(
     )
     assert kwargs["title"] == "CLI run"
     assert kwargs["idempotency_key"] == "mm3935-cli"
+
+
+class _Mm3833AgentProfileAdmissionSession:
+    """Create's session around the real Agent Profile snapshot resolver.
+
+    The Agent Profile, its immutable version and the Provider Profile are the
+    selection-boundary fixture; this adds only what Create itself reads: the
+    idempotency lookup, the named Provider Profile, and the commit.
+    """
+
+    def __init__(self) -> None:
+        from tests.unit.services.test_omnigent_agent_profile_selection import (
+            _Session,
+        )
+
+        self.selection = _Session()
+        self.commit = AsyncMock()
+        self.refresh = AsyncMock()
+
+    async def get(self, model: Any, key: Any) -> Any:
+        if model is ManagedAgentProviderProfile:
+            provider = self.selection.provider
+            return provider if key == provider.profile_id else None
+        return await self.selection.get(model, key)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.selection, name)
+
+
+@pytest.mark.parametrize(
+    "cli_shape",
+    ["current", "agent_profile_only"],
+)
+def test_mm3833_cli_agent_profile_reaches_snapshot_resolution_with_its_account(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+    cli_shape: str,
+) -> None:
+    """`--agent-profile` with `--provider-profile` is admitted like the form.
+
+    The pre-change CLI sent ``agentProfile: {profileId}`` alone; the server's
+    snapshot resolver rejects that before any effect, because the Agent
+    Profile cannot be resolved without the account it runs against.
+    """
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    payload = build_execution_payload(
+        instructions="Run the named configuration on the named account.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+        idempotency_key=f"mm3833-cli-agent-profile-{cli_shape}",
+    )
+    if cli_shape == "agent_profile_only":
+        payload["payload"]["agentProfile"].pop("providerProfileRef")
+    assert payload["payload"]["agentProfile"]["profileId"] == "team-codex"
+
+    test_client, service, _user = client
+    session = _Mm3833AgentProfileAdmissionSession()
+    response, compile_plan, plan_binding = _mm3935_post_through_plan_owner(
+        test_client, service, payload, db_session=session
+    )
+
+    if cli_shape == "agent_profile_only":
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == (
+            "agentProfile.providerProfileRef is required"
+        )
+        compile_plan.assert_not_awaited()
+        service.create_execution.assert_not_awaited()
+        assert session.selection.added == []
+        return
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    snapshot = initial_parameters["agentProfileSnapshot"]
+    assert snapshot["profileId"] == "team-codex"
+    assert snapshot["version"] == 2
+    assert snapshot["providerProfileRef"] == "oauth-team"
+    assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
+        plan_binding.plan_ref
+    )
+    # The resolver persisted exactly this snapshot as the workflow's usage.
+    (usage,) = session.selection.added
+    assert usage.effective_snapshot == snapshot
+
+
+class _Mm3833HistoricalAgentProfileSession(_Mm3833AgentProfileAdmissionSession):
+    """Version 2 stays launch-ready, but version 3 is now the active one."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.selection.profile.active_version = 3
+
+    async def execute(self, statement: Any) -> Any:
+        result = await self.selection.execute(statement)
+        # Only active versions are loaded for an unpinned Provider Profile.
+        rows = [
+            row
+            for row in result.all()
+            if not (
+                len(row) == 2
+                and row[0] is self.selection.profile
+                and row[1].version != row[0].active_version
+            )
+        ]
+        return SimpleNamespace(all=lambda: rows)
+
+
+def test_mm3833_explicit_historical_agent_profile_keeps_the_omnigent_route(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected historical version is not reinterpreted as a direct Profile."""
+
+    from moonmind.workflow_cli import build_execution_payload
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    payload = build_execution_payload(
+        instructions="Run the named historical configuration.",
+        agent_profile="team-codex",
+        provider_profile="oauth-team",
+        idempotency_key="mm3833-historical-agent-profile",
+    )
+    payload["payload"]["agentProfile"]["version"] = 2
+
+    test_client, service, _user = client
+    response, compile_plan, _plan_binding = _mm3935_post_through_plan_owner(
+        test_client,
+        service,
+        payload,
+        db_session=_Mm3833HistoricalAgentProfileSession(),
+    )
+
+    assert response.status_code == 201, response.text
+    compile_plan.assert_awaited_once()
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["targetRuntime"] == "omnigent"
+    assert initial_parameters["agentProfileSnapshot"]["version"] == 2
 
 
 def test_mm3935_cli_extra_params_survive_plan_admission(

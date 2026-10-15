@@ -40,6 +40,54 @@ from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
 
 pytestmark = [pytest.mark.asyncio]
 
+
+@pytest.mark.parametrize("owned_admission", [False, True])
+@pytest.mark.parametrize("migrated_route", [False, True])
+async def test_existing_action_needs_server_identity_admission(
+    mock_temporal_adapter, owned_admission, migrated_route,
+):
+    from moonmind.workflows.executions.provider_profile_projection import (
+        PROVIDER_PROFILE_MEMO_KEY,
+        PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    )
+
+    definition_id = uuid4()
+    service = RecurringWorkflowsService(
+        None, temporal_client_adapter=mock_temporal_adapter
+    )
+    workflow_type, workflow_input = service._workflow_bundle_for_target(
+        definition_id=definition_id,
+        name="Scheduled work",
+        owner_user_id=None,
+        target_payload={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {},
+        },
+    )
+    memo = {PROVIDER_PROFILE_MEMO_KEY: {}}
+    if owned_admission:
+        memo["publicationGitIdentityAdmission"] = {
+            "schemaVersion": "v1",
+            "identity": workflow_input["initial_parameters"]["_publicationGitIdentity"],
+        }
+    action = SimpleNamespace(
+        workflow=workflow_type,
+        id=make_scheduled_workflow_id_base(definition_id),
+        args=[workflow_input],
+        task_queue="mm.workflow.user.v2" + (".publication-v1" if migrated_route else ""),
+        memo=memo,
+        typed_search_attributes=[
+            SimpleNamespace(key=SimpleNamespace(name=PROVIDER_PROFILE_SEARCH_ATTRIBUTE))
+        ],
+    )
+    assert service._schedule_action_mismatch(
+        action=action,
+        definition_id=definition_id,
+        workflow_type=workflow_type,
+        workflow_input=workflow_input,
+    ) is (not (owned_admission and migrated_route))
+
+
 @asynccontextmanager
 async def recurring_db(tmp_path: Path):
     db_path = tmp_path / "recurring_workflows.db"
@@ -57,6 +105,7 @@ async def recurring_db(tmp_path: Path):
         yield async_session_maker
     finally:
         await engine.dispose()
+
 
 @pytest.fixture(autouse=True)
 def _managed_default_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,9 +135,18 @@ def mock_temporal_adapter():
     adapter.resolve_workflow_task_queue = MagicMock(return_value="mm.workflow.user.v2")
     return adapter
 
+
+@pytest.mark.parametrize(
+    "forged_identity",
+    [{"name": "forged", "email": "forged@example.invalid"}, "malformed"],
+)
 async def test_create_definition_creates_temporal_schedule(
-    tmp_path: Path, mock_temporal_adapter
+    tmp_path: Path, mock_temporal_adapter, monkeypatch, forged_identity
 ) -> None:
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", "Admitted operator")
+    monkeypatch.setattr(settings.workflow, "git_user_email", "admitted@example.invalid")
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringWorkflowsService(
@@ -107,6 +165,14 @@ async def test_create_definition_creates_temporal_schedule(
                 target={
                     "workflowType": "MoonMind.UserWorkflow",
                     "initialParameters": {
+                        "_publicationGitIdentity": forged_identity,
+                        "publicationGitIdentityAdmission": {
+                            "schemaVersion": "v1",
+                            "identity": {
+                                "name": "forged",
+                                "email": "forged@example.invalid",
+                            },
+                        },
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
                         "task": {
@@ -135,9 +201,29 @@ async def test_create_definition_creates_temporal_schedule(
                 "MoonMind.UserWorkflow"
             )
             assert "workflowType" not in call_kwargs["workflow_input"]
-            assert call_kwargs["workflow_input"]["initial_parameters"]["task"][
-                "instructions"
-            ] == "Queue job"
+            identity = {
+                "name": "Admitted operator",
+                "email": "admitted@example.invalid",
+            }
+            assert (
+                call_kwargs["workflow_input"]["initial_parameters"][
+                    "_publicationGitIdentity"
+                ]
+                == identity
+            )
+            assert call_kwargs["memo"]["publicationGitIdentityAdmission"] == {
+                "schemaVersion": "v1",
+                "identity": identity,
+            }
+            assert (
+                "_publicationGitIdentity" not in definition.target["initialParameters"]
+            )
+            assert (
+                call_kwargs["workflow_input"]["initial_parameters"]["task"][
+                    "instructions"
+                ]
+                == "Queue job"
+            )
             assert call_kwargs["workflow_input"]["initial_parameters"]["system"][
                 "recurrence"
             ]["definitionId"] == str(definition.id)
@@ -199,6 +285,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
             ),
             artifact_refs=("art_profile", "art_skills", "art_plan"),
             resolved_skillset_ref="art_skills",
+            runtime_provider_rollout={"targetId": "codex.generic-omnigent"},
         )
     )
     monkeypatch.setattr(
@@ -272,6 +359,12 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
             actor=SimpleNamespace(id=uuid4()),
         )
 
+    # The created target is provenance, not a pin: fresh occurrences follow
+    # the installed backend's qualified target.
+    assert definition.target["runtimeProviderTarget"] == {
+        "targetId": "codex.generic-omnigent"
+    }
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     initial_parameters = definition.target["initialParameters"]
     assert initial_parameters["agentProfileSnapshot"] == snapshot
     assert initial_parameters["omnigent"] == {
@@ -1442,7 +1535,7 @@ async def test_create_manual_run_triggers_temporal_schedule(
                         workflow=workflow_type,
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
-                        task_queue="mm.workflow.user.v2",
+                        task_queue="mm.workflow.user.v2.publication-v1",
                         memo=created_metadata["memo"],
                         typed_search_attributes=_build_typed_search_attributes(
                             {key: [value] for key, value in created_metadata["search_attributes"].items()}
@@ -2349,7 +2442,7 @@ async def test_reconcile_skips_update_when_metadata_and_action_match(
                         workflow="MoonMind.UserWorkflow",
                         id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
-                        task_queue="mm.workflow.user.v2",
+                        task_queue="mm.workflow.user.v2.publication-v1",
                         memo=created["memo"],
                         typed_search_attributes=_build_typed_search_attributes(
                             {key: [value] for key, value in created["search_attributes"].items()}
@@ -2926,7 +3019,7 @@ async def test_schedule_refresh_rejects_unverifiable_original_principal(
     assert initial_parameters["omnigentExecutionPlan"] == _schedule_plan_binding("1")
 
 
-async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(
+async def test_schedule_records_its_runtime_provider_target_on_first_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _stub_compiled_plan(
@@ -2952,14 +3045,16 @@ async def test_schedule_pins_its_runtime_provider_target_on_first_refresh(
     assert definition.target["runtimeProviderTarget"]["targetId"] == (
         "codex.generic-omnigent"
     )
-    assert definition.target["runtimeProviderTargetUpdatePolicy"] == "pinned"
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     # Advancing the schedule's authority advances its revision.
     assert definition.version == 5
 
 
-async def test_pinned_schedule_rejects_a_runtime_provider_target_change(
+async def test_unauthored_schedule_follows_a_changed_installed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A fresh occurrence uses the installed target without recreating the schedule."""
+
     _stub_compiled_plan(
         monkeypatch,
         binding=_schedule_plan_binding("2"),
@@ -2977,23 +3072,29 @@ async def test_pinned_schedule_rejects_a_runtime_provider_target_change(
         ),
     }
     service, definition = _pinned_schedule_service(monkeypatch, target=target)
+    definition_id = definition.id
 
-    with pytest.raises(
-        RecurringWorkflowValidationError, match="explicit schedule revision"
-    ):
-        await service._refresh_omnigent_execution_plan_target(
-            definition, target=target, initial_parameters=initial_parameters
-        )
-    # The recorded plan authority is preserved for an explicit operator revision.
-    assert initial_parameters["omnigentExecutionPlan"] == (
-        _schedule_plan_binding("1")
+    changed = await service._refresh_omnigent_execution_plan_target(
+        definition, target=target, initial_parameters=initial_parameters
     )
-    assert definition.version == 4
+
+    assert changed is True
+    assert definition.id == definition_id
+    assert definition.target["runtimeProviderTarget"]["targetId"] == (
+        "codex.generic-omnigent"
+    )
+    assert definition.target["initialParameters"]["targetRuntime"] == "omnigent"
+    assert definition.target["agentProfileSnapshot"] == {
+        "providerProfileRef": "codex_openai_oauth"
+    }
+    assert definition.version == 5
 
 
-async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
+async def test_stored_retired_pin_does_not_block_the_installed_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A legacy ``pinned`` value is history, not authority over new occurrences."""
+
     _stub_compiled_plan(
         monkeypatch,
         binding=_schedule_plan_binding("2"),
@@ -3009,7 +3110,7 @@ async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
         "runtimeProviderTarget": _rollout_record(
             "codex.legacy-profile-bound-omnigent"
         ),
-        "runtimeProviderTargetUpdatePolicy": "follow_qualified_default",
+        "runtimeProviderTargetUpdatePolicy": "pinned",
     }
     service, definition = _pinned_schedule_service(monkeypatch, target=target)
 
@@ -3021,34 +3122,8 @@ async def test_follow_qualified_default_adopts_the_new_target_as_a_revision(
     assert definition.target["runtimeProviderTarget"]["targetId"] == (
         "codex.generic-omnigent"
     )
+    assert "runtimeProviderTargetUpdatePolicy" not in definition.target
     assert definition.version == 5
-
-
-async def test_unsupported_schedule_target_update_policy_fails_fast(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _stub_compiled_plan(
-        monkeypatch,
-        binding=_schedule_plan_binding("2"),
-        rollout=_rollout_record("codex.generic-omnigent"),
-    )
-    initial_parameters = {
-        "targetRuntime": "omnigent",
-        "omnigentExecutionPlan": _schedule_plan_binding("1"),
-    }
-    target = {
-        "initialParameters": initial_parameters,
-        "agentProfileSnapshot": {"providerProfileRef": "codex_openai_oauth"},
-        "runtimeProviderTargetUpdatePolicy": "always_upgrade",
-    }
-    service, definition = _pinned_schedule_service(monkeypatch, target=target)
-
-    with pytest.raises(
-        RecurringWorkflowValidationError, match="update policy"
-    ):
-        await service._refresh_omnigent_execution_plan_target(
-            definition, target=target, initial_parameters=initial_parameters
-        )
 
 
 @pytest.mark.parametrize("lost_ack", [False, True])
@@ -3453,10 +3528,15 @@ async def test_schedule_actions_record_provider_profile_projection_4640(
         assert expected_summary["selectionState"] == selection
 
         def assert_projection(kwargs):
+            from moonmind.omnigent.git_identity import resolve_git_identity
+            name, email = resolve_git_identity()
+            identity = {"name": name, "email": email}
             assert kwargs["memo"] == {
                 "definitionId": str(definition.id),
                 PROVIDER_PROFILE_MEMO_KEY: expected_summary,
+                "publicationGitIdentityAdmission": {"schemaVersion": "v1", "identity": identity},
             }
+            assert kwargs["workflow_input"]["initial_parameters"]["_publicationGitIdentity"] == identity
             assert kwargs["search_attributes"] == {
                 "mm_owner_type": "system",
                 "mm_owner_id": "system",

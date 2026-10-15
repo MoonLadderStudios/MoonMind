@@ -779,6 +779,7 @@ async def _running(docker, name: str) -> bool:
 async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
     """Run the update journey on ``fleet`` and assert its shared outcome."""
 
+    print("Interrupted-step recovery: connecting to Temporal", flush=True)
     connected = await connect()
     client = Client(
         connected.service_client,
@@ -1146,6 +1147,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                 )
                 result_task = asyncio.ensure_future(handle.result())
                 started_task = asyncio.ensure_future(turn_started.wait())
+                print("Interrupted-step recovery: awaiting the saved turn", flush=True)
                 await asyncio.wait(
                     {result_task, started_task},
                     timeout=fleet.turn_start_seconds,
@@ -1159,17 +1161,21 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                 # The update: the worker stops mid-turn, the affected agent
                 # host container is removed, and a new worker composition
                 # starts with only the durable state.
+                print("Interrupted-step recovery: stopping the old worker", flush=True)
                 await old_worker.shutdown()
                 await asyncio.gather(old_worker_task)
                 assert await host_running(lost_host)
                 await docker.run(["docker", "rm", "-f", lost_host])
+                print("Interrupted-step recovery: old host removed", flush=True)
                 current["realizer"] = build_realizer()
                 async with Worker(
                     client, task_queue=agent_queue, activities=[agent_binding.handler]
                 ):
                     rows = await asyncio.wait_for(result_task, fleet.recovery_seconds)
+                    print("Interrupted-step recovery: successor completed", flush=True)
                 history = await handle.fetch_history()
         finally:
+            print("Interrupted-step recovery: cleaning fixture state", flush=True)
             if "manager" in locals():
                 await manager.terminate(reason="interrupted step journey finished")
             if not old_worker_task.done():
@@ -1240,11 +1246,13 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         assert "successorBlocked" not in lost.phaseResults
         lease = await DbOmnigentHostLeaseRepository(sessions).get(lost.hostLeaseRef)
         assert lease.status == "cleaned"
+        print("Interrupted-step recovery: replaying completed history", flush=True)
         await Replayer(
             workflows=[InterruptedStepUpdateJourney],
             workflow_runner=UnsandboxedWorkflowRunner(),
             data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
         ).replay_workflow(history)
+        print("Interrupted-step recovery: history replayed", flush=True)
     return {
         "workflowId": queue,
         "rows": rows,

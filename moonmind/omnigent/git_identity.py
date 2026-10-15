@@ -10,6 +10,7 @@ instead of blocking a commit-capable run.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from moonmind.utils.workspace_paths import (
@@ -32,6 +33,134 @@ def resolve_git_identity() -> tuple[str, str]:
         str(settings.workflow.git_user_email or "").strip() or DEFAULT_GIT_USER_EMAIL
     )
     return name, email
+
+
+PUBLICATION_GIT_IDENTITY_MEMO_KEY = "publicationGitIdentityAdmission"
+
+
+def _identity_from_snapshot(snapshot: object) -> tuple[str, str]:
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("admitted publication Git identity must be an object")
+    values = tuple(snapshot.get(key) for key in ("name", "email"))
+    if any(
+        not isinstance(value, str)
+        or not value.strip()
+        or any(char in value for char in "\0\n\r")
+        for value in values
+    ):
+        raise ValueError(
+            "admitted publication Git identity must contain compact name/email"
+        )
+    return str(values[0]), str(values[1])
+
+
+def publication_git_identity_admission(snapshot: object) -> dict[str, object]:
+    """Serialize the server's choice in its existing workflow memo."""
+    name, email = _identity_from_snapshot(snapshot)
+    return {"schemaVersion": "v1", "identity": {"name": name, "email": email}}
+
+
+def admitted_publication_git_identity(
+    memo: Mapping[str, object],
+) -> tuple[str, str] | None:
+    """Legacy authored parameters cannot attest to server admission."""
+    admission = memo.get(PUBLICATION_GIT_IDENTITY_MEMO_KEY)
+    if not isinstance(admission, Mapping) or admission.get("schemaVersion") != "v1":
+        return None
+    return _identity_from_snapshot(admission.get("identity"))
+
+
+def publication_git_identity_memo(memo: Mapping[str, object]) -> dict[str, object]:
+    """Carry only the already admitted choice across workflow boundaries."""
+    identity = admitted_publication_git_identity(memo)
+    return (
+        {
+            PUBLICATION_GIT_IDENTITY_MEMO_KEY: publication_git_identity_admission(
+                {"name": identity[0], "email": identity[1]}
+            )
+        }
+        if identity is not None
+        else {}
+    )
+
+
+def admit_publication_git_identity(
+    parameters: dict[str, object],
+    *,
+    source_memo: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """One server owner for API, recurring action and recovery attribution."""
+    inherited = admitted_publication_git_identity(source_memo or {})
+    parameters.pop(PUBLICATION_GIT_IDENTITY_MEMO_KEY, None)
+    name, email = inherited or resolve_git_identity()
+    snapshot = {"name": name, "email": email}
+    parameters["_publicationGitIdentity"] = snapshot
+    return publication_git_identity_admission(snapshot)
+
+
+async def _recorded_publication_memo() -> Mapping[str, object]:
+    """Read admission from this Activity's recorded run and parent chain.
+
+    Request parameters were authorable in retained payloads. Only the worker's
+    existing Temporal client and actual Activity context locate this authority.
+    A failed read is unavailable authority; it never selects a new identity.
+    """
+    from temporalio import activity
+
+    if not activity.in_activity():
+        return {}
+    info = activity.info()
+    owner = (info.workflow_id, info.workflow_run_id)
+    visited: set[tuple[str, str]] = set()
+    for _ in range(8):
+        if not all(owner) or owner in visited:
+            raise RuntimeError("publication admission parent/run authority is invalid")
+        visited.add(owner)
+        described = (
+            await activity.client()
+            .get_workflow_handle(owner[0], run_id=owner[1])
+            .describe()
+        )
+        if (described.id, described.run_id) != owner:
+            raise RuntimeError(
+                "publication admission description does not match its run"
+            )
+        memo = await described.memo()
+        if admitted_publication_git_identity(memo) is not None:
+            return memo
+        if not described.parent_id:
+            return {}
+        owner = (described.parent_id, described.parent_run_id or "")
+    raise RuntimeError("publication admission parent chain exceeds its existing bound")
+
+
+async def resolve_execution_git_identity(
+    parameters: Mapping[str, object],
+) -> tuple[str, str]:
+    """Use recorded admission; legacy authored parameters remain inert."""
+    identity = await publication_git_identity_projection(parameters)
+    return (
+        _identity_from_snapshot(identity)
+        if identity is not None
+        else resolve_git_identity()
+    )
+
+
+async def publication_git_identity_projection(
+    parameters: Mapping[str, object] | None = None,
+) -> dict[str, str] | None:
+    """Ports receive the recorded choice, never an authored payload assertion."""
+    identity = admitted_publication_git_identity(await _recorded_publication_memo())
+    return {"name": identity[0], "email": identity[1]} if identity is not None else None
+
+
+def resolve_publication_git_identity(snapshot: object | None) -> tuple[str, str]:
+    """The explicit port argument is absent on pre-change callers."""
+    return (
+        resolve_git_identity()
+        if snapshot is None
+        else _identity_from_snapshot(snapshot)
+    )
 
 
 def _quote_config_value(value: str) -> str:
@@ -149,6 +278,7 @@ def ensure_workspace_git_identity(
     *,
     runtime_uid: int | None,
     runtime_gid: int | None,
+    identity: tuple[str, str] | None = None,
 ) -> bool:
     """Reapply the resolved commit identity to a materialized Git workspace.
 
@@ -167,7 +297,7 @@ def ensure_workspace_git_identity(
     preparation cannot complete without applying the required identity.
     """
 
-    name, email = resolve_git_identity()
+    name, email = identity if identity is not None else resolve_git_identity()
     root = Path(workspace)
     git_dir = _resolve_workspace_git_dir(root)
     if git_dir is None:

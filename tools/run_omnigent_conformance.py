@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 from moonmind.omnigent.conformance import (  # noqa: E402
     ConformanceContractError,
     assert_secret_free,
+    redact_secrets,
 )
 
 # Activation contract for the bounded fake/stock-compatible provider path.  A
@@ -57,6 +58,7 @@ def resolve_fake_provider_selection(
         "authMode": auth_mode,
         "source": "cli" if cli_flag else "env",
     }
+
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
@@ -208,6 +210,13 @@ def main() -> int:
                 text=True,
             )
         log_paths.append(log_path)
+        if completed.returncode:
+            print(
+                f"Conformance layer {index} failed with exit code "
+                f"{completed.returncode}; log: {_artifact_ref(log_path)}"
+            )
+            redacted_log = redact_secrets(log_path.read_text(encoding="utf-8"))
+            print("\n".join(redacted_log.splitlines()[-200:]))
         command_results.append(
             {
                 "commandIndex": index,
@@ -219,6 +228,17 @@ def main() -> int:
             }
         )
         failed |= completed.returncode != 0
+        if completed.returncode != 0:
+            print(
+                f"::error::Conformance layer {index} failed "
+                f"(exit code {completed.returncode}); log: {_artifact_ref(log_path)}",
+                file=sys.stderr,
+            )
+            print(
+                redact_secrets(log_path.read_text(encoding="utf-8")),
+                file=sys.stderr,
+                end="",
+            )
 
     profile = json.loads(PROFILE.read_text(encoding="utf-8"))
     profile_case_ids = {case["id"] for case in profile["cases"]}
@@ -233,9 +253,7 @@ def main() -> int:
         path_results = []
         for path in paths:
             matching_commands = [
-                result
-                for result in command_results
-                if path in result["arguments"]
+                result for result in command_results if path in result["arguments"]
             ]
             passed = bool(matching_commands) and all(
                 result["exitCode"] == 0 for result in matching_commands
@@ -255,9 +273,7 @@ def main() -> int:
             "status": (
                 "pending"
                 if name in PENDING_EVIDENCE_GROUPS and paths_passed
-                else "passed"
-                if paths_passed
-                else "failed"
+                else "passed" if paths_passed else "failed"
             ),
             "paths": path_results,
         }
@@ -271,9 +287,7 @@ def main() -> int:
                     if case["id"] in DETERMINISTIC_CASES
                     else "skipped"
                 ),
-                "evidenceRefs": [
-                    _artifact_ref(path) for path in log_paths
-                ],
+                "evidenceRefs": [_artifact_ref(path) for path in log_paths],
             }
         )
     scan_path = args.output_dir / "secret-scan.json"
@@ -281,9 +295,10 @@ def main() -> int:
         for log_path in log_paths:
             assert_secret_free(log_path.read_text(encoding="utf-8"))
         scan_status = "passed"
-    except ConformanceContractError:
+    except ConformanceContractError as exc:
         scan_status = "failed"
         failed = True
+        print(f"::error::{exc}", file=sys.stderr)
     scan_path.write_text(
         json.dumps({"status": scan_status, "scope": "deterministic-runner-logs"})
         + "\n",
@@ -306,9 +321,7 @@ def main() -> int:
         "deterministicCoverage": {
             "requiredCaseIds": sorted(DETERMINISTIC_CASES),
             "missingCaseIds": sorted(missing_deterministic),
-            "pendingProductionShapedCaseIds": sorted(
-                PENDING_PRODUCTION_SHAPED_CASES
-            ),
+            "pendingProductionShapedCaseIds": sorted(PENDING_PRODUCTION_SHAPED_CASES),
             "missingPendingCaseIds": sorted(missing_pending),
             "issueLinks": list(ISSUE_LINKS),
             "evidenceGroups": {

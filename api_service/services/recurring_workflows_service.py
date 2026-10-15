@@ -85,25 +85,14 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
 
-# MoonLadderStudios/MoonMind#3833: a schedule either pins its runtime-provider
-# target version or follows the qualified default through an explicit,
-# separately versioned update policy. Changing a schedule's target advances the
-# schedule revision (``definition.version``); it never happens silently.
-# MoonLadderStudios/MoonMind#3931: future launches follow installed managed
-# runtime selection through the one shared boundary (Workflow Create/schedule
-# submission), without independent image/rollout pins. The stored target below
-# is recorded authority for occurrences (identity, cadence, paused state,
-# Profile, and intent preserved); new schedules persist ``pinned`` at creation
-# and reconcile incompatible persisted inputs through an explicit schedule
-# revision, never by recreating the schedule. Schedules that should track the
-# qualified default opt into ``follow_qualified_default``; the refresh path
-# raises for ``pinned`` on target change so the follow happens only via that
-# explicit revision.
-SCHEDULE_TARGET_PINNED = "pinned"
-SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT = "follow_qualified_default"
-_SCHEDULE_TARGET_UPDATE_POLICIES = frozenset(
-    {SCHEDULE_TARGET_PINNED, SCHEDULE_TARGET_FOLLOW_QUALIFIED_DEFAULT}
-)
+# MoonLadderStudios/MoonMind#3833: fresh occurrences follow the installed
+# backend's qualified runtime-provider target; a schedule has no target pin of
+# its own. ``runtimeProviderTarget`` records the last resolution as provenance.
+# Adopting a new target advances the schedule revision (``definition.version``)
+# and keeps identity, cadence, paused state, Profile and intent, never
+# recreating the schedule. A stored, retired ``runtimeProviderTargetUpdatePolicy``
+# is ignored and dropped when the schedule's authority next advances.
+_RETIRED_SCHEDULE_TARGET_POLICY_KEY = "runtimeProviderTargetUpdatePolicy"
 # Per schedule: the reusable plan this process last compiled for it and the
 # digest of the inputs it was compiled from. What a compile reads from the
 # image or process environment (built-in Skills, rollout policy, evidence
@@ -323,6 +312,8 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     initial_parameters = copy.deepcopy(dict(initial_parameters))
+    initial_parameters.pop("_publicationGitIdentity", None)
+    initial_parameters.pop("publicationGitIdentityAdmission", None)
     try:
         from moonmind.workflows.executions.execution_contract import (
             validate_workflow_runtime_targets,
@@ -588,6 +579,9 @@ class RecurringWorkflowsService:
         recurrence["definitionId"] = str(definition_id)
         system["recurrence"] = recurrence
         initial_parameters["system"] = system
+        from moonmind.omnigent.git_identity import admit_publication_git_identity
+
+        admit_publication_git_identity(initial_parameters)
         return workflow_type, {
             "workflow_type": workflow_type,
             "title": str(target_payload.get("title") or name),
@@ -653,6 +647,11 @@ class RecurringWorkflowsService:
         """
 
         parameters = workflow_input.get("initial_parameters") or {}
+        from moonmind.omnigent.git_identity import (
+            PUBLICATION_GIT_IDENTITY_MEMO_KEY,
+            publication_git_identity_admission,
+        )
+
         summary, search_value = build_provider_profile_projection(
             parameters,
             labels=await provider_profile_label_snapshot(self._session, parameters),
@@ -660,6 +659,9 @@ class RecurringWorkflowsService:
         return {
             "memo": {
                 "definitionId": str(definition_id),
+                PUBLICATION_GIT_IDENTITY_MEMO_KEY: publication_git_identity_admission(
+                    parameters.get("_publicationGitIdentity")
+                ),
                 PROVIDER_PROFILE_MEMO_KEY: summary,
             },
             "search_attributes": {
@@ -714,8 +716,32 @@ class RecurringWorkflowsService:
                 for pair in typed_attributes
             )
         )
+        from moonmind.omnigent.git_identity import admitted_publication_git_identity
+
+        try:
+            admitted_identity = (
+                admitted_publication_git_identity(memo)
+                if isinstance(memo, Mapping)
+                else None
+            )
+        except ValueError:
+            admitted_identity = None
+        expected_identity = (workflow_input.get("initial_parameters") or {}).get(
+            "_publicationGitIdentity"
+        )
+        has_identity_admission = (
+            admitted_identity is not None
+            and isinstance(expected_identity, Mapping)
+            and admitted_identity
+            == (expected_identity.get("name"), expected_identity.get("email"))
+        )
+        if has_identity_admission and expected_task_queue is not None:
+            from moonmind.workflows.temporal.activity_catalog import publication_task_queue
+
+            expected_task_queue = publication_task_queue(expected_task_queue)
         return (
             not has_profile_projection
+            or not has_identity_admission
             or temporal_workflow_type != workflow_type
             or temporal_workflow_id_base != expected_workflow_id_base
             or temporal_input != workflow_input
@@ -1007,10 +1033,6 @@ class RecurringWorkflowsService:
                     if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef"}
                 },
                 "runtimeProviderTarget": target.get("runtimeProviderTarget"),
-                "runtimeProviderTargetUpdatePolicy": str(
-                    target.get("runtimeProviderTargetUpdatePolicy")
-                    or SCHEDULE_TARGET_PINNED
-                ).strip(),
                 "taskInputSnapshotDigest": binding.task_input_snapshot_digest,
                 "providerProfile": {
                     "profileId": getattr(provider_profile, "profile_id", None),
@@ -1161,46 +1183,19 @@ class RecurringWorkflowsService:
                 persisted_plan.binding.plan_ref,
                 inputs_digest,
             )
-        # MoonLadderStudios/MoonMind#3833: a schedule pins its runtime-provider
-        # target. Advancing time-limited admission evidence must never silently
-        # move the schedule onto a different harness, realizer, or rollout row.
-        pinned_target = target.get("runtimeProviderTarget")
+        # MoonLadderStudios/MoonMind#3833: a changed installed target is
+        # adopted as a schedule revision below, never refused or recreated.
+        recorded_target = target.get("runtimeProviderTarget")
         current_target_payload = getattr(
             persisted_plan, "runtime_provider_rollout", None
         )
         current_target_payload = (
             dict(current_target_payload) if current_target_payload else None
         )
-        update_policy = str(
-            target.get("runtimeProviderTargetUpdatePolicy")
-            or SCHEDULE_TARGET_PINNED
-        ).strip()
-        if update_policy not in _SCHEDULE_TARGET_UPDATE_POLICIES:
-            raise RecurringWorkflowValidationError(
-                "unsupported scheduled runtime-provider target update policy: "
-                f"{update_policy!r}"
-            )
-        if (
-            isinstance(pinned_target, Mapping)
-            and current_target_payload is not None
-            and str(pinned_target.get("targetId") or "")
-            != str(current_target_payload.get("targetId") or "")
-        ):
-            if update_policy == SCHEDULE_TARGET_PINNED:
-                raise RecurringWorkflowValidationError(
-                    "scheduled Omnigent runtime-provider target changed from "
-                    f"{pinned_target.get('targetId')!r} to "
-                    f"{current_target_payload.get('targetId')!r}; the schedule "
-                    "pins its target, so an explicit schedule revision is "
-                    "required before the new target is used"
-                )
-            # follow_qualified_default: adopting a newly qualified target is a
-            # schedule default change, so it advances the schedule revision
-            # below alongside the new plan authority.
 
         if (
             persisted_plan.binding == current_binding
-            and pinned_target == current_target_payload
+            and recorded_target == current_target_payload
         ):
             return False
 
@@ -1266,7 +1261,7 @@ class RecurringWorkflowsService:
 
         if current_target_payload is not None:
             target["runtimeProviderTarget"] = current_target_payload
-        target.setdefault("runtimeProviderTargetUpdatePolicy", update_policy)
+        target.pop(_RETIRED_SCHEDULE_TARGET_POLICY_KEY, None)
         initial_parameters["omnigentExecutionPlan"] = (
             persisted_plan.binding.model_dump(
                 mode="json", by_alias=True, exclude_none=True
@@ -1648,9 +1643,9 @@ class RecurringWorkflowsService:
         initial_parameters["resolvedSkillsetRef"] = (
             persisted_plan.resolved_skillset_ref
         )
-        # Seed the schedule pin from the creation result so the first
-        # refresh compares against the initially compiled target instead of
-        # None (MoonLadderStudios/MoonMind#3988).
+        # Record the creation result so the first refresh compares against
+        # the initially compiled target instead of None
+        # (MoonLadderStudios/MoonMind#3988).
         created_rollout = getattr(
             persisted_plan, "runtime_provider_rollout", None
         )
@@ -1671,9 +1666,9 @@ class RecurringWorkflowsService:
                 *persisted_plan.artifact_refs,
             ],
         }
+        admitted.pop(_RETIRED_SCHEDULE_TARGET_POLICY_KEY, None)
         if created_target is not None:
             admitted["runtimeProviderTarget"] = created_target
-            admitted["runtimeProviderTargetUpdatePolicy"] = SCHEDULE_TARGET_PINNED
         return admitted
 
     async def create_definition(
