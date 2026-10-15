@@ -26,6 +26,11 @@ class _Repository:
     ):
         return []
 
+    async def list_terminal_host_leases_with_pending_binding_cleanup(
+        self, *, profile_id=None, failures=None
+    ):
+        return []
+
     async def validate_binding(self, _binding_ref):
         return SimpleNamespace(
             credential_mount_ref=SimpleNamespace(

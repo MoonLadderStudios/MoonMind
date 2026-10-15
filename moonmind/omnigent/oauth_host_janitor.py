@@ -800,8 +800,19 @@ class OmnigentOAuthHostJanitor:
         terminal_provider_lease_refs = {
             lease.lease_id for lease in terminal_provider_leases
         }
+        binding_cleanup_leases = (
+            await self._repository.list_terminal_host_leases_with_pending_binding_cleanup(
+                profile_id=profile_id, failures=actions
+            )
+            if self._runtime_binding_store is not None
+            else []
+        )
+        binding_cleanup_refs = {lease.lease_id for lease in binding_cleanup_leases}
         leases = list(
-            {lease.lease_id: lease for lease in [*leases, *terminal_provider_leases]}.values()
+            {
+                lease.lease_id: lease
+                for lease in [*leases, *terminal_provider_leases, *binding_cleanup_leases]
+            }.values()
         )
         cleanup_required = (
             await self._run_store.cleanup_required_host_lease_refs()
@@ -823,6 +834,23 @@ class OmnigentOAuthHostJanitor:
         for lease in leases:
             try:
                 if profile_id and lease.provider_profile_id != profile_id:
+                    continue
+                if lease.lease_id in binding_cleanup_refs:
+                    # Teardown and release are already durable. Replaying the
+                    # release without a manager claim would rewrite its receipt
+                    # as held, so reconcile only the pending fenced binding.
+                    binding = await self._repository.validate_binding(lease.binding_ref)
+                    state = await self._runtime_binding_cleanup_authority(
+                        binding=binding, lease=lease
+                    )
+                    if state is not None:
+                        await self._complete_runtime_binding_cleanup(state)
+                        actions.append(
+                            {
+                                "hostLeaseRef": lease.lease_id,
+                                "action": "runtime_binding_cleanup_reconciled",
+                            }
+                        )
                     continue
                 expired = lease.expires_at <= now
                 stale = lease.last_heartbeat_at <= now - self._heartbeat_timeout
