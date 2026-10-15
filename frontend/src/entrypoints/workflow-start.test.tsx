@@ -275,6 +275,70 @@ describe("buildEditParametersPatch", () => {
   });
 });
 
+describe("MoonLadderStudios/MoonMind#2619 buildEditParametersPatch source intent", () => {
+  const recordedMergeAutomation = {
+    workflowId: "mm:merge-off",
+    inputParameters: {
+      publishMode: "pr",
+      mergeAutomation: { enabled: true },
+      workflow: {
+        instructions: "Ship it.",
+        mergeAutomation: { enabled: true },
+        publish: { mode: "pr", mergeAutomation: { enabled: true } },
+      },
+    },
+  };
+
+  it("states a turned-off merge automation instead of inheriting the recorded switch", () => {
+    const submittedWorkflow = { instructions: "Ship it.", publish: { mode: "pr" } };
+    const patch = buildEditParametersPatch({
+      execution: recordedMergeAutomation,
+      submittedPayload: { publishMode: "pr", task: submittedWorkflow },
+      submittedWorkflow,
+    });
+
+    expect(patch.mergeAutomation).toEqual({ enabled: false });
+    const workflow = patch.workflow as Record<string, unknown>;
+    expect(workflow).not.toHaveProperty("mergeAutomation");
+    expect(workflow.publish).toEqual({ mode: "pr" });
+  });
+
+  it("keeps merge automation the edit still requests", () => {
+    const submittedWorkflow = { instructions: "Ship it.", publish: { mode: "pr" } };
+    const patch = buildEditParametersPatch({
+      execution: recordedMergeAutomation,
+      submittedPayload: {
+        publishMode: "pr",
+        mergeAutomation: { enabled: true },
+        task: submittedWorkflow,
+      },
+      submittedWorkflow,
+    });
+
+    expect(patch.mergeAutomation).toEqual({ enabled: true });
+  });
+
+  it("restates the workspace source for re-admission instead of the recorded spec", () => {
+    const submittedWorkflow = { instructions: "Read it." };
+    const patch = buildEditParametersPatch({
+      execution: {
+        workflowId: "mm:anonymous-off",
+        inputParameters: {
+          repository: "octo/public",
+          workspace: { workspaceSource: { kind: "repository", accessMode: "anonymous" } },
+          workspaceSpec: { workspaceSource: { kind: "repository", accessMode: "anonymous" } },
+          workflow: submittedWorkflow,
+        },
+      },
+      submittedPayload: { repository: "octo/public", workspace: null, task: submittedWorkflow },
+      submittedWorkflow,
+    });
+
+    expect(patch.workspace).toBeNull();
+    expect(patch).not.toHaveProperty("workspaceSpec");
+  });
+});
+
 describe("WorkflowStartPage loading placeholders", () => {
   let fetchSpy: MockInstance;
 
@@ -13361,6 +13425,271 @@ describe("Task Create MM-641 authoring validation", () => {
     // resubmitted.
     expect("rag" in request.parametersPatch).toBe(false);
     expect("followUpRetrieval" in request.parametersPatch).toBe(false);
+  });
+
+  // MoonLadderStudios/MoonMind#2619: edit and rerun keep recorded intent.
+  function mockRecordedExecution(
+    execution: Record<string, unknown>,
+    updateResponse: () => Response = () =>
+      ({
+        ok: true,
+        json: async () => ({
+          accepted: true,
+          applied: "continue_as_new",
+          message: "Rerun requested.",
+          execution: { workflowId: "mm:recorded-next" },
+        }),
+      }) as Response,
+  ): Array<Record<string, unknown>> {
+    const workflowId = encodeURIComponent(String(execution.workflowId));
+    const updates: Array<Record<string, unknown>> = [];
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `/api/executions/${workflowId}?source=temporal`) {
+        return Promise.resolve({ ok: true, json: async () => execution } as Response);
+      }
+      if (url === `/api/executions/${workflowId}/update`) {
+        updates.push(JSON.parse(String(init?.body || "{}")) as Record<string, unknown>);
+        return Promise.resolve(updateResponse());
+      }
+      return defaultFetch?.(input, init) as ReturnType<typeof fetch>;
+    });
+    return updates;
+  }
+
+  const recordedGitLabTarget = {
+    provider: "git",
+    connectionRef: "repository-connection:team-gitlab",
+    repository: { name: "gitlab.example.com/platform/deployer" },
+    branch: { name: "develop" },
+  };
+
+  it("reruns an object-form repository and keeps its connection on a branch-only change", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:object-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "branch",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        publishMode: "branch",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "branch" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aobject-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("gitlab.example.com/platform/deployer"));
+    const branch = screen.getByLabelText("Branch") as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("develop"));
+    expect((screen.getByLabelText("Publish Mode") as HTMLSelectElement).value).toBe("branch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    // An unchanged rerun resubmits the recorded target as-is (or not at all).
+    const unchanged = updates[0]?.parametersPatch as Record<string, unknown> | null;
+    expect(unchanged?.repository ?? recordedGitLabTarget).toEqual(recordedGitLabTarget);
+
+    fireEvent.change(branch, { target: { value: "release" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(2));
+    const patch = updates[1]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toEqual({
+      ...recordedGitLabTarget,
+      branch: { name: "release" },
+    });
+    expect(patch.publishMode).toBe("branch");
+    expect(patch.workspace).toBeNull();
+  });
+
+  it("keeps a recorded publish mode when the Skill's default loads later", async () => {
+    mockPublishContractCatalogs();
+    mockRecordedExecution({
+      workflowId: "mm:recorded-publish",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "MoonLadderStudios/MoonMind",
+        publishMode: "none",
+        workflow: {
+          instructions: "Run the self-publishing skill without publishing.",
+          runtime: { mode: "codex_cli" },
+          tool: { type: "skill", name: "custom-self-publisher" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Arecorded-publish");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const publish = (await screen.findByLabelText("Publish Mode")) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/workflows/skills")),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect((screen.getByLabelText("Repository") as HTMLInputElement).value).toBe(
+        "MoonLadderStudios/MoonMind",
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(publish.value).toBe("none");
+  });
+
+  it("round-trips an anonymous public-repository read through rerun", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:anonymous-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/public",
+        publishMode: "none",
+        workspaceSpec: {
+          workspaceSource: { kind: "repository", repository: "octo/public", accessMode: "anonymous" },
+        },
+        workflow: {
+          instructions: "Summarize the public repository.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Aanonymous-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const anonymous = (await screen.findByLabelText(
+      "Read without credentials (public repository)",
+    )) as HTMLInputElement;
+    expect(anonymous.checked).toBe(true);
+    expect(screen.getByText(
+      "Reads octo/public without credentials and saves results on this workflow; nothing is published.",
+    )).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toBe("octo/public");
+    expect(patch.publishMode).toBe("none");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/public",
+        branch: "docs",
+        accessMode: "anonymous",
+      },
+    });
+  });
+
+  it("offers an anonymous public-repository read as an advanced source choice", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Summarize the public repository." },
+    });
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "octo/public" },
+    });
+    const anonymousLabel = "Read without credentials (public repository)";
+    // Ordinary work keeps the default connection and shows no extra choice.
+    expect(screen.queryByLabelText(anonymousLabel)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText(anonymousLabel));
+    const publish = screen.getByLabelText("Publish Mode") as HTMLSelectElement;
+    await waitFor(() => expect(publish.value).toBe("none"));
+    expect(within(publish).getByRole("option", { name: "PR" })).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.repository).toBe("octo/public");
+    expect(payload.publishMode).toBe("none");
+    expect(payload.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/public",
+        branch: "docs",
+        accessMode: "anonymous",
+      },
+    });
+  });
+
+  it("keeps the edit draft and focuses the reason when the server rejects it", async () => {
+    const rejection = "payload.workspace is invalid: the recorded checkpoint expired.";
+    const updates = mockRecordedExecution(
+      {
+        workflowId: "mm:rejected-edit",
+        workflowType: "MoonMind.UserWorkflow",
+        state: "executing",
+        targetRuntime: "codex_cli",
+        publishMode: "none",
+        inputParameters: {
+          targetRuntime: "codex_cli",
+          publishMode: "none",
+          workflow: {
+            instructions: "Draft the summary.",
+            runtime: { mode: "codex_cli" },
+            publish: { mode: "none" },
+          },
+        },
+        actions: { canUpdateInputs: true, canRerun: false },
+      },
+      () =>
+        ({
+          ok: false,
+          status: 422,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          json: async () => ({ detail: { code: "invalid_execution_request", message: rejection } }),
+          text: async () =>
+            JSON.stringify({ detail: { code: "invalid_execution_request", message: rejection } }),
+          clone() {
+            return this;
+          },
+        }) as unknown as Response,
+    );
+    window.history.pushState({}, "Task Edit", "/workflows/new?editExecutionId=mm%3Arejected-edit");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    await waitFor(() => expect(instructions.value).toBe("Draft the summary."));
+    fireEvent.change(instructions, { target: { value: "Draft the revised summary." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    const alert = await screen.findByText(rejection);
+    expect(updates).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(instructions.value).toBe("Draft the revised summary.");
   });
 
   it("does not serialize the primary Skill onto blank added steps", async () => {

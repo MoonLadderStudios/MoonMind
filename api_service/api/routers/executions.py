@@ -12049,6 +12049,55 @@ def _admit_workspace_source(
     return workspace, repository or source.repository_ref, source.kind
 
 
+def _reject_anonymous_source_publication(
+    workspace_spec: Mapping[str, Any] | None, *publish_modes: object
+) -> None:
+    # Direct runtimes never reach Omnigent plan admission, so an anonymous
+    # read must not schedule work that would later need publication authority.
+    if (
+        workspace_spec is None
+        or not authored_repository_access({"workspaceSpec": workspace_spec})[1]
+    ):
+        return
+    if any(str(mode or "none").strip().lower() != "none" for mode in publish_modes):
+        raise _invalid_workflow_request(
+            "anonymous workspace source cannot publish; set publish.mode to "
+            "'none' or choose routed or explicit access."
+        )
+
+
+def _readmit_edited_workspace_source(
+    parameters_patch: Mapping[str, Any], *, workflow_id: str
+) -> dict[str, Any]:
+    """Admit the source an edit or rerun states, exactly as Create does.
+
+    The patch is merged shallowly over the recorded parameters, so the
+    re-admitted ``workspaceSpec`` (``None`` when the source was removed)
+    replaces the recorded one instead of inheriting it unchecked.
+    """
+
+    admitted = dict(parameters_patch)
+    repository_payload, repository = _normalize_submitted_repository(
+        admitted.get("repository")
+    )
+    workspace_spec, repository, _kind = _admit_workspace_source(
+        admitted.get("workspace"),
+        repository_payload=repository_payload,
+        repository=repository,
+        workflow_id=workflow_id,
+    )
+    if repository_payload is None and repository:
+        admitted["repository"] = repository
+    workflow = _workflow_payload_from_parameters(admitted)
+    _reject_anonymous_source_publication(
+        workspace_spec,
+        admitted.get("publishMode"),
+        _coerce_mapping(workflow.get("publish")).get("mode"),
+    )
+    admitted["workspaceSpec"] = workspace_spec
+    return admitted
+
+
 def _selected_repository_skill_names(
     task_payload: Mapping[str, Any],
 ) -> set[str]:
@@ -12511,17 +12560,7 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         publish_payload=publish_payload,
     )
-    # Direct runtimes never reach Omnigent plan admission, so an anonymous
-    # read must not schedule work that would later need publication authority.
-    if (
-        workspace_spec is not None
-        and authored_repository_access({"workspaceSpec": workspace_spec})[1]
-        and str(publish_payload.get("mode") or "none").strip().lower() != "none"
-    ):
-        raise _invalid_workflow_request(
-            "anonymous workspace source cannot publish; set publish.mode to "
-            "'none' or choose routed or explicit access."
-        )
+    _reject_anonymous_source_publication(workspace_spec, publish_payload.get("mode"))
     normalized_task_skills = _normalize_task_skill_selectors(
         task_payload.get("skills"),
         field_name="payload.workflow.skills",
@@ -20143,6 +20182,14 @@ async def update_execution(
     )
 
     effective_parameters_patch = payload.parameters_patch
+    if (
+        is_task_editing_update
+        and effective_parameters_patch is not None
+        and "workspace" in effective_parameters_patch
+    ):
+        effective_parameters_patch = _readmit_edited_workspace_source(
+            effective_parameters_patch, workflow_id=record.workflow_id
+        )
     if exact_plan_rerun:
         exact_snapshot_parameters = await _exact_rerun_parameters_from_snapshot(
             session=session,

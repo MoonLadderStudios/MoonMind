@@ -10506,6 +10506,109 @@ def test_input_snapshot_records_admitted_workspace_source() -> None:
     assert snapshot["draft"]["repository"] == "Moon/Mind"
 
 
+_ANONYMOUS_WORKSPACE = {
+    "workspaceSource": {
+        "kind": "repository",
+        "repository": "Moon/Mind",
+        "branch": "release",
+        "accessMode": "anonymous",
+    }
+}
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("workspace", "expected_spec"),
+    [
+        (_ANONYMOUS_WORKSPACE, _ANONYMOUS_WORKSPACE),
+        # A stated null clears the recorded source instead of inheriting it.
+        (None, None),
+    ],
+)
+def test_edit_and_rerun_readmit_the_stated_workspace_source(
+    update_name: str,
+    workspace: dict[str, Any] | None,
+    expected_spec: dict[str, Any] | None,
+) -> None:
+    """MoonLadderStudios/MoonMind#2619: edit/rerun reuse Create's admission."""
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workspaceSpec": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+            "workflow": dict(_NO_PUBLISH_TASK),
+        }
+        service.describe_execution.return_value = record
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "next_safe_point",
+            "message": "Accepted.",
+        }
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "repository": "Moon/Mind",
+                    "workspace": copy.deepcopy(workspace),
+                    "publishMode": "none",
+                    "workflow": dict(_NO_PUBLISH_TASK),
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.json()
+        patch = service.update_execution.await_args.kwargs["parameters_patch"]
+        assert patch["workspaceSpec"] == expected_spec
+
+
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        (
+            {
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "Moon/Mind"},
+                    "branch": {"name": "main"},
+                },
+                "workspace": {
+                    "workspaceSource": {"kind": "repository", "accessMode": "anonymous"}
+                },
+                "workflow": dict(_NO_PUBLISH_TASK),
+            },
+            "anonymous access reads a selected repository without a connectionRef",
+        ),
+        (
+            {
+                "repository": "Moon/Mind",
+                "workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+                "publishMode": "pr",
+                "workflow": {"instructions": "Summarize.", "publish": {"mode": "pr"}},
+            },
+            "anonymous workspace source cannot publish",
+        ),
+    ],
+)
+def test_edit_rejects_a_workspace_source_create_would_reject(
+    patch: dict[str, Any], message: str
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={"updateName": "UpdateInputs", "parametersPatch": patch},
+        )
+
+        assert response.status_code == 422, response.json()
+        assert message in response.json()["detail"]["message"]
+        service.update_execution.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("submitted", "message"),
     [

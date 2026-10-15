@@ -120,8 +120,13 @@ export type TemporalSubmissionDraft = {
   modelTier: number | null;
   tierFallback: 'clamp' | 'strict' | null;
   repository: string | null;
+  // The recorded provider-discriminated target, when the run authored one, so
+  // a resubmission keeps its provider and connection instead of the default.
+  repositoryTarget: Record<string, unknown> | null;
   branch: string | null;
   legacyBranchWarning: string | null;
+  // The admitted payload.workspace (for example an anonymous public read).
+  workspace: Record<string, unknown> | null;
   publishMode: string | null;
   mergeAutomationEnabled: boolean;
   reportOutputEnabled: boolean;
@@ -709,6 +714,30 @@ function nullableStringValue(...values: unknown[]): string | null {
   return stringValue(...values) || null;
 }
 
+function firstRepositoryTarget(
+  ...values: unknown[]
+): Record<string, unknown> | null {
+  for (const value of values) {
+    const target = objectValue(value);
+    if (stringValue(objectValue(target.repository).name)) {
+      return target;
+    }
+  }
+  return null;
+}
+
+// A repository is authored either as a bare name or as a target object whose
+// repository and branch are `{name}` records.
+function repositoryNameValue(...values: unknown[]): string | null {
+  return nullableStringValue(
+    ...values.map((value) =>
+      value && typeof value === "object"
+        ? objectValue(objectValue(value).repository).name
+        : value,
+    ),
+  );
+}
+
 function booleanEnabledValue(...values: unknown[]): boolean {
   return values.some((value) => {
     if (value === true) {
@@ -959,7 +988,22 @@ export function buildTemporalSubmissionDraftFromExecution(
     artifactTaskSteps,
   );
 
-  const artifactRepository = stringValue(artifactParams.repository);
+  const repositoryValues = [
+    snapshotDraft.repository,
+    execution.repository,
+    params.repository,
+    task.repository,
+    git.repository,
+    artifactParams.repository,
+    artifactTask.repository,
+    artifactGit.repository,
+  ];
+  const repositoryTarget = firstRepositoryTarget(...repositoryValues);
+  const workspace = firstObjectValue(
+    snapshotDraft.workspace,
+    params.workspaceSpec,
+    params.workspace,
+  );
   const taskSkills = skillSelectorNames(task.skills);
   const executionTaskSkills = Array.isArray(execution.taskSkills)
     ? execution.taskSkills
@@ -975,6 +1019,7 @@ export function buildTemporalSubmissionDraftFromExecution(
     publishMode,
     branch: nullableStringValue(
       snapshotDraft.branch,
+      objectValue(repositoryTarget?.branch).name,
       execution.branch,
       task.branch,
       git.branch,
@@ -1076,18 +1121,11 @@ export function buildTemporalSubmissionDraftFromExecution(
       runtime.tierFallback,
       artifactRuntime.tierFallback,
     ),
-    repository: nullableStringValue(
-      snapshotDraft.repository,
-      execution.repository,
-      params.repository,
-      task.repository,
-      git.repository,
-      artifactRepository,
-      artifactTask.repository,
-      artifactGit.repository,
-    ),
+    repository: repositoryNameValue(...repositoryValues),
+    repositoryTarget,
     branch: legacyBranchDraft.branch,
     legacyBranchWarning: legacyBranchDraft.warning,
+    workspace: Object.keys(workspace).length > 0 ? workspace : null,
     publishMode,
     mergeAutomationEnabled: Boolean(
       publishMode === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE ||
