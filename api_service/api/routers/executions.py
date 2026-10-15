@@ -12073,6 +12073,31 @@ def _reject_anonymous_source_publication(
         )
 
 
+def _stated_runtime(
+    parameters: Mapping[str, Any], *, last_applied: bool = False
+) -> object:
+    """Return the runtime ``parameters`` state, or ``None``.
+
+    A run starts on the first of the top-level, ``workflow.runtime``,
+    ``runtime``, and ``authoredTaskInput.runtime`` selections; an in-flight
+    update applies them in reverse, so its last stated one wins.
+    """
+
+    sources = [
+        parameters,
+        _coerce_mapping(_workflow_payload_from_parameters(parameters).get("runtime")),
+        _coerce_mapping(parameters.get("runtime")),
+        _coerce_mapping(
+            _coerce_mapping(parameters.get("authoredTaskInput")).get("runtime")
+        ),
+    ]
+    for runtime in reversed(sources) if last_applied else sources:
+        for key in ("targetRuntime", "target_runtime", "mode"):
+            if str(runtime.get(key) or "").strip():
+                return runtime[key]
+    return None
+
+
 def _readmit_edited_workspace_source(
     parameters_patch: Mapping[str, Any],
     *,
@@ -12090,7 +12115,7 @@ def _readmit_edited_workspace_source(
 
     admitted = dict(parameters_patch)
     repository_payload, repository = _normalize_submitted_repository(
-        admitted.get("repository")
+        admitted.get("repository", recorded_parameters.get("repository"))
     )
     workspace_spec, repository, kind = _admit_workspace_source(
         admitted["workspace"] if "workspace" in admitted else admitted["workspaceSpec"],
@@ -12103,9 +12128,19 @@ def _readmit_edited_workspace_source(
     admitted["workspaceSpec"] = workspace_spec
     merged = {**recorded_parameters, **admitted}
     if kind is not None:
-        _check_workspace_source_runtime(
-            kind, normalize_runtime_id(merged.get("targetRuntime"))
-        )
+        # The source must run on whichever runtime the edit selects: an update
+        # applies the patch to the running workflow, and a rerun starts from
+        # the merge.
+        for runtime in dict.fromkeys(
+            (
+                normalize_runtime_id(
+                    _stated_runtime(admitted, last_applied=True)
+                    or _stated_runtime(recorded_parameters)
+                ),
+                normalize_runtime_id(_stated_runtime(merged)),
+            )
+        ):
+            _check_workspace_source_runtime(kind, runtime)
     _reject_anonymous_source_publication(
         workspace_spec,
         merged.get("publishMode"),

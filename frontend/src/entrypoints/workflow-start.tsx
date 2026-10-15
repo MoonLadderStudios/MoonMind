@@ -3007,21 +3007,25 @@ const DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default";
 
 // The source a submission states for the backend to admit. Server-issued
 // saved-work sources are resubmitted unchanged. A repository source follows
-// the visible Repository and Branch fields and keeps its access and
-// connection. A target object requires a branch, so a branchless repository
-// keeps a non-default connection in the source instead.
+// the visible Repository and Branch fields and keeps its access, connection,
+// and non-Git provider; checkout reads the recorded top-level repository
+// aliases before the source, so those are dropped. A target object requires a
+// branch, so a branchless repository keeps a non-default connection and
+// provider in the workspace instead.
 function submittedWorkspaceFor({
   recordedWorkspace,
   repository,
   branch,
   anonymous,
   keptConnectionRef,
+  keptProvider,
 }: {
   recordedWorkspace: unknown;
   repository: string;
   branch: string;
   anonymous: boolean;
   keptConnectionRef: string;
+  keptProvider: string;
 }): Record<string, unknown> | null {
   const recorded = recordValue(recordedWorkspace);
   const recordedSource = recordValue(recorded.workspaceSource);
@@ -3049,13 +3053,30 @@ function submittedWorkspaceFor({
       branch: _recordedBranch,
       ...source
     } = recordedSource;
+    const {
+      repository: _recordedRepository,
+      repo: _recordedRepo,
+      repositoryTarget: recordedTarget,
+      branch: _recordedAliasBranch,
+      startingBranch: _recordedStartingBranch,
+      headBranch: _recordedHeadBranch,
+      ...workspace
+    } = recorded;
     const connectionRef = String(
       source.connectionRef ||
         recordValue(repositoryTarget).connectionRef ||
-        (source.accessMode === "routed" ? "" : keptConnectionRef),
+        (source.accessMode === "routed"
+          ? ""
+          : recordValue(recordedTarget).connectionRef || keptConnectionRef),
     ).trim();
     return {
-      ...recorded,
+      ...nonGitProvider(
+        workspace.provider ||
+          recordValue(recordedTarget).provider ||
+          recordValue(repositoryTarget).provider ||
+          keptProvider,
+      ),
+      ...workspace,
       workspaceSource: {
         ...source,
         repository,
@@ -3070,6 +3091,7 @@ function submittedWorkspaceFor({
     keptConnectionRef !== DEFAULT_GIT_CONNECTION_REF
   ) {
     return {
+      ...nonGitProvider(keptProvider),
       workspaceSource: {
         kind: "repository",
         repository,
@@ -3078,6 +3100,11 @@ function submittedWorkspaceFor({
     };
   }
   return null;
+}
+
+function nonGitProvider(provider: unknown): { provider?: string } {
+  const value = String(provider || "").trim();
+  return value && value !== "git" ? { provider: value } : {};
 }
 
 function isAnonymousWorkspace(workspace: unknown): boolean {
@@ -10650,6 +10677,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       branch: submissionBranch,
       anonymous: submittedAnonymousRead,
       keptConnectionRef: String(keptRepositoryTarget.connectionRef || "").trim(),
+      keptProvider: String(keptRepositoryTarget.provider || "").trim(),
     });
     // An omitted branch submits the bare name (the CLI's form), which the
     // backend clones at the remote's default branch, so submission never waits
