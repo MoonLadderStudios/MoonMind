@@ -142,7 +142,10 @@ runtime within the existing review-attempt budget, even when
 capability.
 
 Disclosed Unverified criteria never count as passed; observed defects and failed
-checks remain blocking. Optional diagnostics remain optional according to the
+checks remain blocking. An unchanged repository is a publication outcome,
+not an implementation failure or proof of completion. Already-implemented work
+continues to the same verifier and live completion-target checks without creating
+a filler commit or repeating the agent solely to obtain a diff. Optional diagnostics remain optional according to the
 selected acceptance policy. Neither `failure_mode: CONTINUE` nor a draft PR
 bypasses that policy.
 
