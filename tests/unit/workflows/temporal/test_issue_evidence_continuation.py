@@ -712,3 +712,100 @@ def test_real_remaining_work_shrinks_semantic_gap_without_optional_issues(owner)
         assert state.consumed_budgets.consecutive_semantic_no_progress == (
             1 if index == 2 else 0
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["ready", "held", "deadline", "cancel", "legacy"])
+async def test_unknown_ready_observes_without_repeating_verifier_or_mutation(
+    admitted, monkeypatch, outcome
+):
+    from moonmind.workflows.skills.approval_policy import StepGateResult
+    from moonmind.workflows.temporal.remediation_loop import RemediationLoopPhase
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    if outcome == "legacy":
+        monkeypatch.setattr(
+            run_module.workflow, "patched",
+            lambda name: name != "run-issue-evidence-ready-observation-v1",
+        )
+    subject = {
+        "repository": "example/repo",
+        "revision": "a" * 40,
+        "contentDigest": "tree",
+    }
+    observed = {
+        "status": "ready",
+        "headSha": "a" * 40,
+        "subject": subject,
+        "semanticDigest": "sha256:bytes",
+        "evidenceSetDigest": "sha256:inventory",
+        "manifestRef": "artifact://manifest",
+        "evidenceRefs": ["artifact://proof"],
+        "runIds": [12],
+    }
+    reader = AsyncMock(
+        side_effect=[
+            observed,
+            {"status": "ready", "headSha": "a" * 40},
+            {"status": "unavailable", "headSha": "a" * 40, "reconciliationRequired": True},
+            {"status": "unavailable", "headSha": "a" * 40, "reconciliationRequired": True},
+            {"status": outcome, "headSha": "a" * 40, "reasonCode": "observed-result"},
+        ]
+    )
+    monkeypatch.setattr(continuation, "_activity", reader)
+    async def wait(*_args, **_kwargs):
+        if outcome == "deadline":
+            monkeypatch.setattr(run_module.workflow, "now", lambda: datetime(2027, 1, 1, tzinfo=timezone.utc))
+        elif outcome == "cancel":
+            owner._cancel_requested = True
+    waiting = AsyncMock(side_effect=wait)
+    monkeypatch.setattr(run_module.workflow, "wait_condition", waiting)
+    verifier = AsyncMock(return_value={"gateResultRef": "artifact://new-gate"})
+    monkeypatch.setattr(continuation, "_verify", verifier)
+    gate = StepGateResult(
+        verdict="FULLY_IMPLEMENTED",
+        recommended_next_action="advance",
+        validated_refs={
+            "acceptance": {"subject": subject, "evidenceSetDigest": "sha256:inventory"}
+        },
+    )
+    monkeypatch.setattr(owner, "_moonspec_verify_gate_result", lambda _: gate)
+    monkeypatch.setattr(
+        owner, "_moonspec_verify_gate_result_ref", lambda _: "artifact://new-gate"
+    )
+    monkeypatch.setattr(owner, "_record_moonspec_verify_gate", lambda **_: None)
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+    verifier.assert_awaited_once()
+    assert reader.await_args_list[-1].args[1]["action"] == "mark_ready"
+    assert reader.await_args_list[-1].args[1]["automationOwnedDraft"] is True
+    assert owner._remediation_loop_state.phase == RemediationLoopPhase.ACCEPTED
+    assert owner._remediation_loop_state.consumed_budgets.attempts == 0
+    assert owner._remediation_loop_state.consumed_budgets.evidence_retries == 1
+    if outcome == "legacy":
+        assert reader.await_count == 3
+        waiting.assert_not_awaited()
+        assert "publicationObservation" not in owner._publish_context["issueEvidenceContinuation"]
+        return
+    if outcome in {"deadline", "cancel"}:
+        assert reader.await_count == 3
+        waiting.assert_awaited_once()
+        record = owner._publish_context["issueEvidenceContinuation"]
+        assert record["status"] == "blocked"
+        assert record["publicationObservation"]["reconciliationRequired"] is True
+        assert owner._moonspec_draft_publication_reason
+        return
+    assert reader.await_count == 5
+    assert "observeOnly" not in reader.await_args_list[2].args[1]
+    assert all(call.args[1]["observeOnly"] is True for call in reader.await_args_list[3:])
+    record = owner._publish_context["issueEvidenceContinuation"]
+    assert record["publicationObservation"]["status"] == outcome
+    assert record["publicationObservation"]["reasonCode"] == "observed-result"
+    assert record["status"] == ("accepted" if outcome == "ready" else "blocked")
+    assert (owner._moonspec_draft_publication_reason is None) is (outcome == "ready")
+    observations = [call.kwargs["payload"].get("publicationObservation") for call in owner._write_json_artifact.await_args_list]
+    assert sum(row is not None and row.get("reconciliationRequired") is True for row in observations) == 2

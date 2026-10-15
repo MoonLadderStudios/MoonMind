@@ -115,6 +115,8 @@ beforeEach(async () => {
   document.documentElement.classList.remove('dark');
   navigateTo('/skills');
   await screen.findByText('PR Resolver');
+  // Navigation preserves the real pointer; park it outside rows before checking their neutral style.
+  await userEvent.hover(screen.getByRole('link', { name: 'MoonMind workflows' }));
 });
 
 afterEach(async () => {

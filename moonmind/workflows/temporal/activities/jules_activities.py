@@ -535,7 +535,8 @@ async def repo_sync_pr_unverified_criteria_activity(payload: dict) -> dict:
     if not scan.allowed:
         raise ValueError("Unverified criteria contain blocked outbound content")
     updated = await GitHubService().sync_pull_request_unverified_criteria(
-        repo=validated.repo, pr_url=validated.prUrl, section=validated.section
+        repo=validated.repo, pr_url=validated.prUrl, section=validated.section,
+        admitted_workflow_id=(activity.info().workflow_id if activity.in_activity() else None),
     )
     return {"updated": updated}
 

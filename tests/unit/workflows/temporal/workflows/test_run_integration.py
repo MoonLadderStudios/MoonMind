@@ -6776,9 +6776,11 @@ async def test_dynamic_loop_active_cancellation_keeps_terminal_evidence_and_pair
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publication_memo_enabled", [False, True])
 async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
+    publication_memo_enabled: bool,
 ) -> None:
     loop = {
         "kind": "remediation_loop",
@@ -6850,10 +6852,29 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
             RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
         },
     )
+    memo = {
+        "publicationGitIdentityAdmission": {
+            "schemaVersion": "v1",
+            "identity": {"name": "Admitted", "email": "admitted@example.invalid"},
+        }
+    }
+    monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: memo)
+    old_patch = run_workflow_module.workflow.patched
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch: (
+            publication_memo_enabled
+            if patch == "run-publication-git-identity-continuation-v1"
+            else old_patch(patch)
+        ),
+    )
     carried: list[dict[str, Any]] = []
+    carried_options = []
 
-    def capture_continue(payload: dict[str, Any]) -> None:
+    def capture_continue(payload: dict[str, Any], **kwargs) -> None:
         carried.append(payload)
+        carried_options.append(kwargs)
         raise RuntimeError("continued")
 
     monkeypatch.setattr(
@@ -6868,6 +6889,7 @@ async def test_dynamic_loop_continue_as_new_carries_compact_state_without_reset(
             remaining_work_ref="artifact://remaining/R1",
         )
 
+    assert carried_options == [{"memo": memo} if publication_memo_enabled else {}]
     continuation = carried[0]["remediation_loop_continuation"]
     assert continuation["schemaVersion"] == 1
     assert continuation["state"]["attemptOrdinal"] == 2
@@ -10754,3 +10776,25 @@ async def test_pr_disclosure_failure_preserves_confirmed_creation(
     assert workflow._pull_request_url == url
     assert workflow._publish_context["pullRequestUrl"] == url
     assert workflow._publish_status == "published"
+
+
+@pytest.mark.parametrize("text", ["Environment detail " * 20000, "😀" * 20000], ids=["ascii", "unicode"])
+def test_long_unverified_disclosure_preserves_rows_with_report_backed_previews(
+    mock_run_workflow, unverified_publication_gate, text
+):
+    gate = unverified_publication_gate
+    gate["gateResultRef"] = "art_complete_report"
+    binding = gate["validatedRefs"]["acceptance"]
+    binding["evidence"] = [
+        {"requirementId": f"AC-{i}", "unverified": {"reason": text, "verifiableBy": text}}
+        for i in range(20)
+    ]
+    binding["scope"]["requirementIds"] = [row["requirementId"] for row in binding["evidence"]]
+    mock_run_workflow._publish_context["moonSpecGate"] = gate
+    section = mock_run_workflow._moonspec_unverified_body_section()
+    assert len(section.encode("utf-8")) <= 32000
+    assert "are previews" in section
+    assert "art_complete_report" in section
+    for row in binding["evidence"]:
+        assert row["requirementId"] in section
+        assert row["unverified"]["reason"] == text

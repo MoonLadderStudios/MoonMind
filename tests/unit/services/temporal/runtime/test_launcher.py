@@ -1543,8 +1543,9 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["GITHUB_TOKEN"] == "ghp-runtime"
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_launch_gives_an_unconfigured_deployment_a_commit_identity(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, admitted
 ):
     """Commit-capable runs must not depend on optional identity settings.
 
@@ -1557,6 +1558,10 @@ async def test_launch_gives_an_unconfigured_deployment_a_commit_identity(
         DEFAULT_GIT_USER_EMAIL,
         DEFAULT_GIT_USER_NAME,
     )
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    identity = {"name": "Admitted", "email": "admitted@example.invalid"}
+    recorded_publication_identity(monkeypatch, identity if admitted else None)
 
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     for key in (
@@ -1568,6 +1573,9 @@ async def test_launch_gives_an_unconfigured_deployment_a_commit_identity(
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(settings.workflow, "git_user_name", None)
     monkeypatch.setattr(settings.workflow, "git_user_email", None)
+    if admitted:
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed")
+        monkeypatch.setattr(settings.workflow, "git_user_email", "changed@example.invalid")
     launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path))
 
     async def _fake_resolve(*args, **kwargs):
@@ -1604,14 +1612,17 @@ async def test_launch_gives_an_unconfigured_deployment_a_commit_identity(
     _record, process, _cleanup, _deferred_cleanup = await launcher.launch(
         run_id="run-identity-1",
         request=_make_request(),
-        profile=_make_profile(command_template=["echo", "hello"]),
+        profile=_make_profile(
+            command_template=["echo", "hello"],
+            env_overrides={"GIT_AUTHOR_NAME": "Spoofed"} if admitted else {},
+        ),
     )
     await process.wait()
 
-    assert captured_env["GIT_AUTHOR_NAME"] == DEFAULT_GIT_USER_NAME
-    assert captured_env["GIT_COMMITTER_NAME"] == DEFAULT_GIT_USER_NAME
-    assert captured_env["GIT_AUTHOR_EMAIL"] == DEFAULT_GIT_USER_EMAIL
-    assert captured_env["GIT_COMMITTER_EMAIL"] == DEFAULT_GIT_USER_EMAIL
+    assert captured_env["GIT_AUTHOR_NAME"] == (identity["name"] if admitted else DEFAULT_GIT_USER_NAME)
+    assert captured_env["GIT_COMMITTER_NAME"] == (identity["name"] if admitted else DEFAULT_GIT_USER_NAME)
+    assert captured_env["GIT_AUTHOR_EMAIL"] == (identity["email"] if admitted else DEFAULT_GIT_USER_EMAIL)
+    assert captured_env["GIT_COMMITTER_EMAIL"] == (identity["email"] if admitted else DEFAULT_GIT_USER_EMAIL)
 
 
 @pytest.mark.asyncio

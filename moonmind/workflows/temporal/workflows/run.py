@@ -247,6 +247,8 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityRoute,
     build_default_activity_catalog,
     get_workflow_child_task_queue,
+    get_activity_task_queue,
+    PUBLICATION_GIT_IDENTITY_FLEETS,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -824,6 +826,13 @@ RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
 # Explicit action requirements and resolved Skill metadata change the AgentRun
 # payload. Retained histories keep their original payload when this is absent.
 RUN_GITHUB_ACTION_PERMISSIONS_PATCH = "run-github-action-permissions-v1"
+RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH = "run-publication-git-identity-payload-v1"
+RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH = (
+    "run-publication-git-identity-continuation-v1"
+)
+RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH = (
+    "run-publication-git-identity-child-memo-v1"
+)
 # The launching controller attests the closed canonical turn source and the Step
 # Execution a remediation attempt repairs (#3707).  This adds a field to the
 # AgentRun request payload and therefore requires a replay gate: an in-flight
@@ -1965,8 +1974,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 retry_policy,
                 maximum_attempts=max_attempts_override,
             )
+        current_queue = ""
+        if route.fleet in PUBLICATION_GIT_IDENTITY_FLEETS:
+            try:
+                current_queue = workflow.info().task_queue
+            except Exception as exc:
+                if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                    raise
         kwargs: dict[str, Any] = {
-            "task_queue": route.task_queue,
+            "task_queue": get_activity_task_queue(route, current_queue),
             "start_to_close_timeout": timedelta(
                 seconds=route.timeouts.start_to_close_seconds
             ),
@@ -4343,6 +4359,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_remediation_loop_projection()
         self._sync_progress_snapshot(updated_at=workflow.now())
 
+    @staticmethod
+    def _publication_identity_memo() -> dict[str, object]:
+        from moonmind.omnigent.git_identity import publication_git_identity_memo
+
+        try:
+            return publication_git_identity_memo(workflow.memo() or {})
+        except Exception as exc:
+            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            return {}
+
+    def _continue_remediation_loop_as_new(
+        self, *, ordered_nodes: Sequence[Mapping[str, Any]]
+    ) -> None:
+        continuation_options = {}
+        if self._workflow_patch_enabled(
+            RUN_PUBLICATION_GIT_IDENTITY_CONTINUATION_PATCH
+        ):
+            continuation_options["memo"] = {
+                **(workflow.memo() or {}),
+                **self._publication_identity_memo(),
+            }
+        workflow.continue_as_new(
+            self._build_remediation_loop_continue_as_new_input(
+                ordered_nodes=ordered_nodes,
+            ),
+            **continuation_options,
+        )
+
     def _build_remediation_loop_continue_as_new_input(
         self,
         *,
@@ -5070,11 +5115,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_progress_snapshot(updated_at=workflow.now())
         if continue_after_admission:
             await workflow.wait_condition(workflow.all_handlers_finished)
-            workflow.continue_as_new(
-                self._build_remediation_loop_continue_as_new_input(
-                    ordered_nodes=ordered_nodes,
-                )
-            )
+            self._continue_remediation_loop_as_new(ordered_nodes=ordered_nodes)
+
         return admitted
 
     def _capture_prepared_input_refs(self, parameters: Mapping[str, Any]) -> list[str]:
@@ -17969,9 +18011,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
 
         gate = self._publish_context.get("moonSpecGate")
-        evidence = acceptance_evidence(gate) if isinstance(gate, Mapping) else None
+        source = gate if isinstance(gate, Mapping) else {}
+        evidence = acceptance_evidence(source)
         rows = [
-            (row.requirement_id, row.unverified)
+            (
+                row.requirement_id.replace("<!--", "&lt;!--"),
+                row.unverified.reason.replace("<!--", "&lt;!--"),
+                row.unverified.verifiable_by.replace("<!--", "&lt;!--"),
+            )
             for row in (evidence.evidence if evidence else ())
             if row.unverified is not None
         ]
@@ -17983,12 +18030,49 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "MoonSpec verification could not check these criteria in its environment:",
             "",
         ]
-        lines.extend(
-            f"- {requirement}: {unverified.reason} "
-            f"Verifiable by: {unverified.verifiable_by}"
-            for requirement, unverified in rows
+        report_ref = self._coerce_text(source.get("gateResultRef"), max_chars=700)
+        report_lines = (
+            ["", f"Full verification disclosure: {report_ref}"] if report_ref else []
         )
-        return "\n".join(lines)
+        preview_note = (
+            "Entries ending in ... are previews; the full text is preserved in the report."
+        )
+        # Read disclosure from the already validated, hydrated rows. Recompacting
+        # strict acceptance replaces it with a descriptor, which cannot be read
+        # as proof and would silently erase every disclosure from the PR.
+        overhead = len("\n".join(lines + ["", preview_note] + report_lines).encode("utf-8"))
+        overhead += sum(
+            len(requirement.encode("utf-8")) + len("- :  Verifiable by: ") + 1
+            for requirement, _, _ in rows
+        )
+        if overhead + sum(
+            len(reason.encode("utf-8")) + len(owner.encode("utf-8")) for _, reason, owner in rows
+        ) > 32000:
+            limit = max(3, min(700, (32000 - overhead) // (2 * len(rows))))
+
+            def preview(value: str) -> str:
+                if len(value.encode("utf-8")) <= limit:
+                    return value
+                prefix = value.encode("utf-8")[: limit - 3].decode("utf-8", errors="ignore")
+                return prefix.rstrip() + "..."
+
+            rows = [
+                (requirement, preview(reason), preview(owner))
+                for requirement, reason, owner in rows
+            ]
+        lines.extend(
+            f"- {requirement}: {reason} Verifiable by: {owner}"
+            for requirement, reason, owner in rows
+        )
+        if report_ref:
+            if any(
+                value.endswith("...")
+                for _, reason, owner in rows
+                for value in (reason, owner)
+            ):
+                lines.extend(["", preview_note])
+            lines.extend(report_lines)
+        return "\n".join(lines).replace("<!--", "&lt;!--")
 
     def _resolve_publish_base_branch(
         self, publish_payload: Mapping[str, Any]
@@ -21438,6 +21522,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 ),
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",
+                **(
+                    {"memo": self._publication_identity_memo()}
+                    if self._workflow_patch_enabled(
+                        RUN_PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH
+                    )
+                    else {}
+                ),
             )
 
         try:
@@ -23636,6 +23727,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "allowedActions": allowed_continuation_actions,
                 "source": "validated_temporal_parent",
             }
+
+        if self._workflow_patch_enabled(RUN_PUBLICATION_GIT_IDENTITY_PAYLOAD_PATCH):
+            # Final boundary after every authored/runtime parameter projection.
+            # A pre-update worker may omit this key even with updated API input;
+            # histories without the marker retain their original Activity shape.
+            parameters.pop("_publicationGitIdentity", None)
+            parameters.pop("publicationGitIdentityAdmission", None)
+            projected_runtime = parameters.get("runtime")
+            if isinstance(projected_runtime, Mapping):
+                explicit = projected_runtime.get("parameters")
+                if isinstance(explicit, Mapping) and {
+                    "_publicationGitIdentity",
+                    "publicationGitIdentityAdmission",
+                }.intersection(explicit):
+                    parameters["runtime"] = {
+                        **projected_runtime,
+                        "parameters": {
+                            key: value
+                            for key, value in explicit.items()
+                            if key
+                            not in {
+                                "_publicationGitIdentity",
+                                "publicationGitIdentityAdmission",
+                            }
+                        },
+                    }
+            parameters.update(self._publication_identity_memo())
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
