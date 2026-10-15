@@ -25,7 +25,7 @@ This skill edits MoonSpec execution artifacts, not application feature code. Typ
 
 Alignment edits only temporary execution artifacts, never canonical `docs/` files. Preserve explicit task-authorized behavior changes even when existing documentation describes the old behavior; their required in-place documentation corrections belong to implementation, not alignment edits. Otherwise use the adopted source requirements to guide the derived artifacts.
 
-Do not ask the user for clarification. Resolve uncertainty by reading project context, making conservative decisions, documenting assumptions, and applying the least surprising artifact changes.
+Resolve ordinary artifact uncertainty from project context. Preserve actual `needs_human` authority decisions for their owner; do not invent approval or convert them into implementation work.
 
 ## Inputs
 
@@ -86,7 +86,7 @@ Build an internal model before editing:
 
 - Requirements inventory keyed by explicit `FR-###`, `SC-###`, `DESIGN-REQ-###`, and stable slugs for unnumbered items.
 - User-story inventory with acceptance scenarios and edge cases.
-- Task coverage mapping from task IDs to requirements, scenarios, success criteria, and design artifacts.
+- Apply requirement statuses before all coverage and execution gates: `unverified` rows retain source IDs, reason and verifiableBy without executable tasks; `needs_human` rows retain the exact decision, owner, and action without executing it or claiming its completion. Only executable rows require code, tests, setup, and red-first evidence. Observed defects remain executable remediation; unavailable checks do not become defects. For all-Unverified artifacts, preserve disclosures and final verification only.
 - Artifact authority order:
   1. Explicit task-authorized behavior changes.
   2. Applicable `AGENTS.md` requirements.
@@ -106,12 +106,12 @@ Identify high-signal findings. Aggregate related issues instead of creating nois
 - Ambiguity: vague terms such as fast, scalable, secure, intuitive, robust without measurable criteria; unresolved placeholders; unclear actors or data ownership.
 - Underspecification: requirements missing objects or outcomes, success criteria without validation path, edge cases with no acceptance coverage, tasks referencing undefined components.
 - Principle alignment: conflicts with `AGENTS.md` `MUST` statements, missing mandated quality gates, unjustified complexity.
-- Coverage gaps: requirements or buildable success criteria with no tasks, tests absent for required behavior, contracts not represented in quickstart or tasks.
+- Coverage gaps: executable rows lack required tasks or feasible tests. Do not add tasks for `unverified` or `needs_human` rows.
 - Inconsistency: terminology drift, entity drift, contradictory stack choices, test strategy mismatch, task ordering conflicts, implementation tasks before required tests.
 
 ## Uncertainty And Tradeoff Handling
 
-For each material uncertainty, choose a resolution without asking the user.
+For ordinary artifact uncertainty, choose a resolution from context; preserve an actual missing authority decision as `needs_human`.
 
 Use this decision process:
 
@@ -133,7 +133,7 @@ Default choices:
 - Resolve task, spec, plan, and source conflicts using the artifact authority order above. Bring stale upstream artifacts into line with an explicitly task-authorized change before aligning downstream artifacts; otherwise use the adopted requirements.
 - If `spec.md` is ambiguous but the repo has a clear established convention, update `spec.md` with that convention as an assumption or measurable requirement.
 - If two options are equally plausible and neither is required by higher authority, choose the simpler and more reversible option.
-- If a finding cannot be remediated without inventing product scope, add a bounded assumption and a validation task instead of asking the user.
+- Do not invent product scope or authority; preserve any actual unresolved owner decision as `needs_human`.
 
 ## Remediation Rules
 
@@ -144,7 +144,7 @@ Prefer these remediation patterns:
 - Merge duplicate requirements and update downstream references.
 - Replace vague adjectives with measurable, testable criteria when context supports a defensible threshold.
 - Add missing acceptance criteria for already-implied behavior.
-- Add tasks for uncovered requirements, edge cases, contracts, buildable success criteria, and required in-scope documentation corrections; check that those tasks cover the identified gaps before handing off to implementation.
+- Add tasks only for uncovered executable rows, including real code, test, and required documentation gaps. Preserve non-executable disclosures and authority handoffs.
 - Add or reorder test tasks so tests precede implementation when the workflow requires test-first development.
 - Align terminology across artifacts with the term used by the highest-authority artifact.
 - Update `quickstart.md` so it validates the same story, contracts, and test commands represented by `tasks.md`.
@@ -180,13 +180,12 @@ After editing:
 1. Rerun the prerequisite script.
 2. Rebuild the analysis model.
 3. Verify:
-   - every adopted in-scope source requirement maps to a functional requirement and a task, and every functional requirement has task coverage
-   - every buildable success criterion has task or quickstart coverage
-   - test tasks cover required unit and integration behavior where applicable
+   - every adopted requirement remains traceable to executable work, an Unverified disclosure, or a `needs_human` handoff
+   - executable rows have applicable task, test, or quickstart coverage
    - no unresolved applicable `AGENTS.md` conflict remains after honoring explicit task overrides
    - no unresolved placeholders remain unless explicitly intentional and explained
    - feature checklists remain consistent with the updated artifacts; do not mark unverified work complete
-   - task ordering is coherent and coverage is complete for the bounded scope before handoff; repair partial task lists during alignment
+   - task ordering is coherent and executable coverage is complete; do not repair a disclosure-only row by inventing tasks
 4. Run lightweight repository tests or formatting commands when the edits touched generated checks, test commands, or machine-readable contracts. If no relevant command exists, say so.
 
 ## Report

@@ -51,6 +51,9 @@ with workflow.unsafe.imports_passed_through():
     )
 
 WORKFLOW_NAME = "MoonMind.MergeAutomation"
+PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH = (
+    "merge-automation-publication-git-identity-child-memo-v1"
+)
 STATE_WAITING = "waiting"
 STATE_EXECUTING = "executing"
 STATE_BLOCKED = "blocked"
@@ -850,6 +853,17 @@ class MoonMindMergeAutomationWorkflow:
             "initial_parameters": initial_parameters,
         }
 
+    @staticmethod
+    def _publication_identity_child_memo() -> dict[str, object]:
+        from moonmind.omnigent.git_identity import publication_git_identity_memo
+
+        try:
+            return publication_git_identity_memo(workflow.memo() or {})
+        except Exception as exc:
+            if exc.__class__.__name__ != "_NotInWorkflowEventLoopError":
+                raise
+            return {}
+
     async def _run_bounded_remediation(
         self,
         *,
@@ -873,6 +887,11 @@ class MoonMindMergeAutomationWorkflow:
                 static_summary="Bounded pr-resolver remediation for merge automation",
                 static_details=(
                     f"Remediate {verdict.get('finalReason') or 'pr-resolver blocker'}"
+                ),
+                **(
+                    {"memo": self._publication_identity_child_memo()}
+                    if workflow.patched(PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH)
+                    else {}
                 ),
             )
         except CancelledError:
@@ -1996,7 +2015,6 @@ class MoonMindMergeAutomationWorkflow:
             MERGE_AUTOMATION_REVIEW_FAILURE_SETTLEMENT_PATCH_PREFIX + observation_key
         )
 
-
     def _settle_active_review_request(
         self, evaluation: Any
     ) -> ReadinessBlockerModel | None:
@@ -2654,6 +2672,11 @@ class MoonMindMergeAutomationWorkflow:
                             else None
                         ),
                     )
+                if workflow.patched(PUBLICATION_GIT_IDENTITY_CHILD_MEMO_PATCH):
+                    child_kwargs["memo"] = {
+                        **child_kwargs.get("memo", {}),
+                        **self._publication_identity_child_memo(),
+                    }
                 try:
                     resolver_result = await workflow.execute_child_workflow(
                         "MoonMind.UserWorkflow",

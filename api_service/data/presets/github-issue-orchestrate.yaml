@@ -426,6 +426,7 @@ steps:
     - verification verdict, or a note that verification was disabled for this workflow execution
     - tests run
     - remaining risks
+    - a note that MoonMind publishes the current Unverified criteria, reasons, and verification owners in its commit-labelled verification-disclosure comment; do not write a separate Unverified section because the parent workflow owns that disclosure
     - a Documentation Conformance section listing canonical sources, temporary artifacts consulted, claim coverage, and canonical docs updated with the change
 
     After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/github-issue-orchestrate-pr.json with keys issue_provider, issue_ref, repository, issue_number, and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.

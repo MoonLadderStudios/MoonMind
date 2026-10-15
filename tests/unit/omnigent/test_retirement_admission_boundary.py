@@ -10,9 +10,9 @@ code-owned retirement class is proven to gate real Codex plan admission.
 
 They also prove the two ordering rules the issue insists on:
 
-* new admission stops *only* when the class says so — the profile-bound
-  realizer is still ``active_product_path``, so Codex plan compilation still
-  succeeds; and
+* new admission stops *only* when the class says so — today every legacy row is
+  ``active_product_path`` because #3833 has not promoted the qualified generic
+  rows, so Codex plan compilation still succeeds; and
 * disabling new admission never touches execution, cancellation, cleanup, or
   reads for an already-recorded plan.
 """
@@ -256,17 +256,11 @@ def test_alternate_client_cannot_bypass_the_retirement_state(
     assert "no longer admits new work" in str(excinfo.value)
 
 
-@pytest.mark.parametrize(
-    "retired_input",
-    ["rollback_generation", "rollback_owner_cohort", "rollback_exercise_records"],
-)
-def test_plan_compilation_has_no_rollback_readmission_inputs(
-    codex_plan_inputs, retired_input: str
-) -> None:
-    """A path either admits new work or refuses it; no rollback evidence reopens it."""
+def test_plan_compilation_takes_no_rollback_generation(codex_plan_inputs) -> None:
+    """Plan admission follows the code-owned class alone; no generation re-admits."""
 
     with pytest.raises(TypeError):
-        compile_execution_plan(**codex_plan_inputs, **{retired_input: None})
+        compile_execution_plan(**codex_plan_inputs, rollback_generation="gen-1")
 
 
 def test_disabled_admission_does_not_change_recorded_plans(

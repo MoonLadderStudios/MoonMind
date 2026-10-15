@@ -229,10 +229,15 @@ production registries and resolved settings produce.
 
 The workflow poll topology (`get_workflow_poll_task_queues()` in
 `activity_catalog.py`: default start queue, the replay queue, and the
-merge-automation queue) is wider than the drain/fan-out scope
-(`_MOONMIND_TASK_QUEUES` in `client.py`). The lists above follow `client.py`,
-`config/settings.py`, and `workflow_registry.py`; quoting a separate queue
-count elsewhere invites drift.
+merge-automation queue) also serves their `.publication-v1` contract queues.
+Server-admitted Git attribution selects these queues for API starts and recurring
+actions. Children retain the contract, and sandbox/agent-runtime Activities use
+the corresponding queues in their existing fleets. Old unversioned pollers
+cannot consume this work; absent capable pollers, it waits under its existing
+timeout instead of falling back. Current workers retain the original queues
+for pre-contract histories until they drain. Merge queues retain their existing
+slot budgets, and default drain/Pause/Resume enumeration includes both contracts.
+The lists above follow `client.py`, `config/settings.py`, and `workflow_registry.py`.
 
 ## 4.2 Queue policy
 

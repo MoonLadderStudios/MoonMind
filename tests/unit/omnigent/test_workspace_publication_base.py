@@ -1102,8 +1102,17 @@ def _attempt_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("successor_second", [0, 1])
+@pytest.mark.parametrize("deployment_identity_changed", [False, True])
+@pytest.mark.parametrize(
+    "remote_change", [None, "descendant", "foreign_author", "foreign_committer"]
+)
 async def test_successor_attempt_reconciles_predecessor_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    successor_second: int,
+    remote_change: str | None,
+    deployment_identity_changed: bool,
 ) -> None:
     """A successor Step Execution republishes the same logical candidate."""
     monkeypatch.setattr(settings.security, "high_security_mode", False)
@@ -1134,13 +1143,29 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     git("remote", "add", "origin", str(origin), cwd=source)
     git("push", "origin", "main", cwd=source)
 
+    admitted_identity = {
+        "name": settings.workflow.git_user_name or "MoonMind Worker",
+        "email": settings.workflow.git_user_email
+        or "moonmind-worker@users.noreply.github.com",
+    }
     first, first_workspace = _attempt_request(tmp_path, ordinal=1)
+    from tests.helpers.publication_identity import recorded_publication_identity
+
+    recorded_publication_identity(monkeypatch, admitted_identity)
+    first.parameters["publicationGitIdentityAdmission"] = {
+        "schemaVersion": "v1",
+        "identity": dict(admitted_identity),
+    }
     first_workspace.parent.mkdir(parents=True)
     git("clone", str(origin), str(first_workspace), cwd=tmp_path)
     (first_workspace / "work.txt").write_text("completed work\n")
     # The verified after_execution save precedes publication, so the successor
     # restores the agent's uncommitted result rather than the publisher commit.
     second, second_workspace = _attempt_request(tmp_path, ordinal=2)
+    second.parameters["publicationGitIdentityAdmission"] = {
+        "schemaVersion": "v1",
+        "identity": dict(admitted_identity),
+    }
     second_workspace.parent.mkdir(parents=True)
     shutil.copytree(first_workspace, second_workspace, symlinks=True)
 
@@ -1155,17 +1180,88 @@ async def test_successor_attempt_reconciles_predecessor_publication(
 
     publisher._run = record  # type: ignore[method-assign]
     # The predecessor's push lands, then its host is lost before the
-    # acknowledgment reaches the workflow. The successor runs later, so the
-    # commit it recreates from the same saved work has a different timestamp.
+    # acknowledgment reaches the workflow.
     for prefix in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:00:00Z")
+        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:01:00+00:00")
     lost = await publisher.publish_request_workspace(
         request=first,
         current_workflow_id="workflow-4627",
         current_step_execution_id=first.step_execution.step_execution_id,
     )
     for prefix in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{prefix}_DATE", "2026-01-01T00:05:00Z")
+        monkeypatch.setenv(
+            f"GIT_{prefix}_DATE",
+            f"2026-01-01T00:01:{successor_second:02d}+00:00",
+        )
+    if deployment_identity_changed:
+        monkeypatch.setattr(settings.workflow, "git_user_name", "Changed default")
+        monkeypatch.setattr(
+            settings.workflow, "git_user_email", "changed@example.invalid"
+        )
+    if remote_change == "descendant":
+        # Even identical bytes do not authorize replacing another actor's
+        # later commit. Its distinct parent must remain on the remote branch.
+        peer = tmp_path / "peer"
+        git("clone", str(origin), str(peer), cwd=tmp_path)
+        git("checkout", lost["push_branch"], cwd=peer)
+        git("commit", "--allow-empty", "-m", "peer progress", cwd=peer)
+        git("push", "origin", lost["push_branch"], cwd=peer)
+        peer_head = git("rev-parse", "HEAD", cwd=peer)
+    elif remote_change is not None:
+        # Simulate a rewrite only in this test-owned bare origin. Everything
+        # except the original author's or committer's identity is preserved.
+        with monkeypatch.context() as foreign:
+            for prefix, formats in (
+                ("AUTHOR", ("%an", "%ae")),
+                ("COMMITTER", ("%cn", "%ce")),
+            ):
+                for field, fmt in zip(("NAME", "EMAIL"), formats):
+                    foreign.setenv(
+                        f"GIT_{prefix}_{field}",
+                        git(
+                            "show",
+                            "--no-patch",
+                            f"--format={fmt}",
+                            lost["push_head_sha"],
+                            cwd=origin,
+                        ),
+                    )
+            prefix = "AUTHOR" if remote_change == "foreign_author" else "COMMITTER"
+            foreign.setenv(f"GIT_{prefix}_NAME", "Other actor")
+            foreign.setenv(f"GIT_{prefix}_EMAIL", "other@example.invalid")
+            peer_head = git(
+                "commit-tree",
+                git("rev-parse", f"{lost['push_head_sha']}^{{tree}}", cwd=origin),
+                "-p",
+                git("rev-parse", f"{lost['push_head_sha']}^", cwd=origin),
+                "-m",
+                git(
+                    "show",
+                    "--no-patch",
+                    "--format=%B",
+                    lost["push_head_sha"],
+                    cwd=origin,
+                ),
+                cwd=origin,
+            )
+        git(
+            "update-ref",
+            f"refs/heads/{lost['push_branch']}",
+            peer_head,
+            lost["push_head_sha"],
+            cwd=origin,
+        )
+    if remote_change is not None:
+        with pytest.raises(RuntimeError, match="not a fast-forward"):
+            await publisher.publish_request_workspace(
+                request=second,
+                current_workflow_id="workflow-4627",
+                current_step_execution_id=second.step_execution.step_execution_id,
+            )
+        assert git("rev-parse", lost["push_branch"], cwd=origin) == peer_head
+        assert (second_workspace / "work.txt").read_text() == "completed work\n"
+        assert len(pushes) == 1
+        return
     successor = await publisher.publish_request_workspace(
         request=second,
         current_workflow_id="workflow-4627",
@@ -1173,6 +1269,7 @@ async def test_successor_attempt_reconciles_predecessor_publication(
     )
 
     assert successor["push_branch"] == lost["push_branch"]
+    assert successor["push_head_sha"] == lost["push_head_sha"]
     assert (
         successor["pull_request_url"] == "https://github.com/example/repository/pull/7"
     )

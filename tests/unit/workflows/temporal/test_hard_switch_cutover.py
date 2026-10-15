@@ -140,6 +140,9 @@ def test_workflow_task_queue_constant_stays_replay_stable_while_start_queue_is_l
         "mm.workflow.user.v2",
         "mm.workflow",
         "mm.workflow.merge_automation",
+        "mm.workflow.user.v2.publication-v1",
+        "mm.workflow.publication-v1",
+        "mm.workflow.merge_automation.publication-v1",
     )
 
 
@@ -151,6 +154,8 @@ def test_workflow_poll_task_queues_ignore_missing_replay_queue() -> None:
     assert get_workflow_poll_task_queues(temporal_settings) == (
         "mm.workflow.user.v2",
         "mm.workflow.merge_automation",
+        "mm.workflow.user.v2.publication-v1",
+        "mm.workflow.merge_automation.publication-v1",
     )
 
 
@@ -162,6 +167,8 @@ def test_workflow_poll_task_queues_poll_a_shared_merge_queue_once() -> None:
     assert get_workflow_poll_task_queues(temporal_settings) == (
         "mm.workflow.user.v2",
         "mm.workflow",
+        "mm.workflow.user.v2.publication-v1",
+        "mm.workflow.publication-v1",
     )
 
 
@@ -188,6 +195,9 @@ def test_renamed_contract_workflow_fleet_polls_start_replay_and_merge_queues() -
         "mm.workflow.user.v2",
         "mm.workflow",
         "mm.workflow.merge_automation",
+        "mm.workflow.user.v2.publication-v1",
+        "mm.workflow.publication-v1",
+        "mm.workflow.merge_automation.publication-v1",
     )
     assert (
         catalog.resolve_activity("integration.resolve_adapter_metadata").task_queue

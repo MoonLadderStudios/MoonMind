@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,9 +25,7 @@ def test_cumulative_remediation_stays_pending_until_production_shaped_proof() ->
     runner = _load_runner()
 
     assert "product.cumulative-remediation" not in runner.DETERMINISTIC_CASES
-    assert runner.PENDING_PRODUCTION_SHAPED_CASES == {
-        "product.cumulative-remediation"
-    }
+    assert runner.PENDING_PRODUCTION_SHAPED_CASES == {"product.cumulative-remediation"}
     assert runner.PENDING_EVIDENCE_GROUPS == {"cumulativeJourney"}
     assert runner.EVIDENCE_GROUPS["cumulativeJourney"] == (
         "tests/integration/reliability_journey/"
@@ -115,18 +114,19 @@ def test_runner_derives_group_results_from_executed_commands(
 
     assert runner.main() == 1
     evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
-    assert evidence["deterministicCoverage"][
-        "pendingProductionShapedCaseIds"
-    ] == ["product.cumulative-remediation"]
+    assert evidence["deterministicCoverage"]["pendingProductionShapedCaseIds"] == [
+        "product.cumulative-remediation"
+    ]
     cumulative = next(
         case
         for case in evidence["cases"]
         if case["caseId"] == "product.cumulative-remediation"
     )
     assert cumulative["status"] == "skipped"
-    assert evidence["deterministicCoverage"]["evidenceGroupResults"]["journey"][
-        "status"
-    ] == "pending"
+    assert (
+        evidence["deterministicCoverage"]["evidenceGroupResults"]["journey"]["status"]
+        == "pending"
+    )
     missing = evidence["deterministicCoverage"]["evidenceGroupResults"]["undeclared"]
     assert missing == {
         "status": "failed",
@@ -153,6 +153,51 @@ def test_fake_provider_activation_via_cli_flag_is_recorded() -> None:
         "authMode": "deterministic-fake",
         "source": "cli",
     }
+
+
+def test_failed_layer_diagnostics_are_visible_and_redacted(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    runner = _load_runner()
+    monkeypatch.setattr(
+        runner,
+        "COMMANDS",
+        (
+            (
+                runner.sys.executable,
+                "-c",
+                "print('Recovery assertion failed'); "
+                "print('Authorization: Bearer diagnostic-test-secret'); "
+                "raise SystemExit(1)",
+            ),
+        ),
+    )
+    monkeypatch.setattr(runner, "EVIDENCE_GROUPS", {})
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            str(SCRIPT),
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+        ],
+    )
+
+    assert runner.main() == 1
+
+    output = capsys.readouterr().out
+    assert "Recovery assertion failed" in output
+    assert "diagnostic-test-secret" not in output
+    assert "[redacted]" in output
+    evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["commandResults"][0]["exitCode"] == 1
+    assert json.loads((tmp_path / "secret-scan.json").read_text())["status"] == "failed"
 
 
 def test_fake_provider_activation_via_env_var_is_recorded() -> None:
@@ -191,9 +236,7 @@ def test_main_records_fake_provider_selection_in_evidence(
     monkeypatch, tmp_path: Path
 ) -> None:
     runner = _load_runner()
-    monkeypatch.setattr(
-        runner, "COMMANDS", (("python", "-m", "pytest", "proof-a.py"),)
-    )
+    monkeypatch.setattr(runner, "COMMANDS", (("python", "-m", "pytest", "proof-a.py"),))
     monkeypatch.setattr(runner, "EVIDENCE_GROUPS", {})
     monkeypatch.setattr(runner, "PENDING_EVIDENCE_GROUPS", set())
     monkeypatch.setattr(
@@ -352,4 +395,53 @@ def test_recovery_evidence_retains_its_executed_command_and_failure(
         case["status"] == expected_status
         for case in evidence["cases"]
         if case["caseId"] in runner.DETERMINISTIC_CASES
+    )
+
+
+@pytest.mark.parametrize(
+    "secret", ["", "Authorization: Bearer fixture-token_123456789"]
+)
+def test_failed_layer_diagnostics_are_readable_without_artifact_downloads(
+    monkeypatch, tmp_path: Path, capsys, secret: str
+) -> None:
+    runner = _load_runner()
+    diagnostic = "AssertionError: durable Skill was not delivered"
+    monkeypatch.setattr(
+        runner,
+        "COMMANDS",
+        (
+            (
+                sys.executable,
+                "-c",
+                f"print({diagnostic!r}); print({secret!r}); raise SystemExit(7)",
+            ),
+        ),
+    )
+    monkeypatch.setattr(runner, "EVIDENCE_GROUPS", {})
+    monkeypatch.delenv(runner.FAKE_PROVIDER_ENV, raising=False)
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            "run_omnigent_conformance.py",
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+        ],
+    )
+
+    assert runner.main() == 1
+    output = capsys.readouterr().err
+    assert diagnostic in output
+    assert "exit code 7" in output
+    assert "fixture-token_123456789" not in output
+    evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["commandResults"][0]["exitCode"] == 7
+    assert evidence["evidenceScans"]["logs"]["status"] == (
+        "failed" if secret else "passed"
     )

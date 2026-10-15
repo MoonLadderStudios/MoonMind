@@ -15,6 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
+from moonmind.omnigent.git_identity import publication_git_identity_projection
 
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
@@ -283,6 +284,26 @@ def _enforce_session_worker_authority_barrier(plan: Any) -> None:
         ) from exc
 
 
+def _assert_rollback_allows_new_admission(
+    feature_flags: Any, *, recorded_execution_owner: str
+) -> None:
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SessionRollbackContext,
+        resolve_rollback_effect,
+        rollback_mode_from_settings,
+    )
+
+    rollback = resolve_rollback_effect(
+        mode=rollback_mode_from_settings(feature_flags),
+        context=SessionRollbackContext(
+            admittedViaSupervisor=True,
+            recordedExecutionOwner=recorded_execution_owner,
+        ),
+    )
+    if not rollback.new_supervisor_admission_allowed:
+        raise ValueError("recorded rollback generation blocks new supervisor admission")
+
+
 async def omnigent_evaluate_session_admission_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -327,23 +348,10 @@ async def omnigent_evaluate_session_admission_activity(
             )
         else:
             _enforce_session_worker_authority_barrier(plan)
-        from moonmind.omnigent.session_supervisor_rollback import (
-            SessionRollbackContext,
-            resolve_rollback_effect,
-            rollback_mode_from_settings,
+        _assert_rollback_allows_new_admission(
+            settings.feature_flags,
+            recorded_execution_owner=plan.payload.executionRealizerRef,
         )
-
-        rollback = resolve_rollback_effect(
-            mode=rollback_mode_from_settings(settings.feature_flags),
-            context=SessionRollbackContext(
-                admittedViaSupervisor=True,
-                recordedExecutionOwner=plan.payload.executionRealizerRef,
-            ),
-        )
-        if not rollback.new_supervisor_admission_allowed:
-            raise ValueError(
-                "recorded rollback generation blocks new supervisor admission"
-            )
         capacity_authority = await _plan_capacity_authority(
             plan, execution_profile_ref=request.execution_profile_ref
         )
@@ -366,9 +374,16 @@ async def omnigent_evaluate_session_admission_activity(
         )
         if plan is None:
             raise ValueError("admitted Omnigent execution plan is unavailable")
-    # Recorded plan authority alone decides admission. A request that carries
-    # no plan (for example a history recorded before plan binding) keeps the
-    # default supervisor admission; no deployment setting selects another lane.
+
+    # Reference-only plans and retained plan-less histories follow the same
+    # rollback control as fully bound plans.
+    _assert_rollback_allows_new_admission(
+        settings.feature_flags,
+        recorded_execution_owner=(
+            plan.payload.executionRealizerRef if plan is not None else ""
+        ),
+    )
+
     admitted = True
     reason = "enabled"
     if (
@@ -3479,6 +3494,9 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         preflight = await OmnigentOAuthHostRuntime(client=client).prepare_host(
             binding=binding,
             host_lease=lease,
+            publication_git_identity=await publication_git_identity_projection(
+                agent_request.parameters
+            ),
             workspace_key=f"{workflow_id}:{step_execution_id}",
             workspace_locator=workspace_locator,
             current_workflow_id=workflow_id,
@@ -5125,6 +5143,9 @@ async def omnigent_publish_workspace_activity(
                 github_token=github_token,
                 accepted_published_head=(agent_request.parameters or {}).get(
                     "acceptedPublishedHead"
+                ),
+                publication_git_identity=await publication_git_identity_projection(
+                    agent_request.parameters or {}
                 ),
             )
         finally:
