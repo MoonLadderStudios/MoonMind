@@ -4597,6 +4597,78 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
         assert service._client_adapter.update_workflow.await_count == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["update_inputs", "open_rerun", "terminal_rerun"])
+async def test_edit_cleared_repository_source_runs_as_scratch(
+    tmp_path, mock_client_adapter, path
+):
+    """An edit/rerun that clears Repository (#2619) leaves no stored source binding."""
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "repository": {
+                    "provider": "git",
+                    "connectionRef": "repository-connection:git-default",
+                    "repository": {"name": "octo/repo"},
+                    "branch": {"name": "main"},
+                },
+                "branch": "main",
+                "publishMode": "pr",
+                "workflow": {
+                    "instructions": "Ship it.",
+                    "git": {"branch": "main"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+            idempotency_key=None,
+        )
+        if path == "terminal_rerun":
+            await service.record_terminal_state(
+                workflow_id=created.workflow_id,
+                state="completed",
+                close_status="completed",
+                summary="done",
+            )
+        # The Create page's scratch edit patch (workflow-start.tsx
+        # buildEditParametersPatch): explicit clears for the source binding.
+        scratch_patch = {
+            "repository": None,
+            "branch": None,
+            "publishMode": "none",
+            "workflow": {"instructions": "Ship it.", "publish": {"mode": "none"}},
+        }
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="UpdateInputs" if path == "update_inputs" else "RequestRerun",
+            parameters_patch=scratch_patch,
+            idempotency_key=f"scratch-{path}",
+        )
+        result = await service.describe_execution(
+            response.get("workflow_id") or created.workflow_id
+        )
+
+        assert response["accepted"] is True
+        assert "repository" not in result.parameters
+        assert "branch" not in result.parameters
+        assert result.parameters["publishMode"] == "none"
+        assert result.parameters["workflow"]["instructions"] == "Ship it."
+        assert result.parameters["workflow"]["publish"] == {"mode": "none"}
+        assert "git" not in result.parameters["workflow"]
+        if path == "terminal_rerun":
+            assert result.workflow_id != created.workflow_id
+            assert not result.search_attributes.get("mm_repo")
+
+
 async def _insert_historical_cloud_execution(session, *, runtime_recorded):
     parameters = {"workflow": {"instructions": "Preserve historical task"}}
     if runtime_recorded:

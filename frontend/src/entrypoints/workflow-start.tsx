@@ -1809,7 +1809,8 @@ export function buildEditParametersPatch({
   // the source run's provider or named connection. Keep that identity while
   // the repository is unchanged. A cleared or different repository is a
   // source change: drop the inherited binding and its branch so the edit
-  // runs against what was authored (scratch when blank).
+  // runs against what was authored (scratch when blank). The backend merges
+  // the patch over the stored parameters, so a drop is an explicit null.
   const submittedName = repositoryTargetName(submittedPayload.repository);
   const baseTarget = [
     executionParameters.repository,
@@ -1821,7 +1822,7 @@ export function buildEditParametersPatch({
       repositoryTargetName(target) === submittedName,
   );
   if (!submittedName) {
-    delete parametersPatch.repository;
+    parametersPatch.repository = null;
   } else if (baseTarget) {
     parametersPatch.repository = carryRepositoryIdentity(
       baseTarget,
@@ -1830,7 +1831,7 @@ export function buildEditParametersPatch({
     );
   }
   if (submittedName !== repositoryTargetName(baseParameters.repository)) {
-    delete parametersPatch.branch;
+    parametersPatch.branch = null;
     const workflowGit = recordValue(mergedWorkflow.git);
     delete workflowGit.branch;
     delete workflowGit.repository;

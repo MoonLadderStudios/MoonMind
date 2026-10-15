@@ -239,7 +239,7 @@ describe("buildEditParametersPatch", () => {
     });
 
     expect(patch.repository).toEqual(submittedRepository);
-    expect("branch" in patch).toBe(false);
+    expect(patch.branch).toBeNull();
     expect(patch.workflow).not.toHaveProperty("git");
     expect(patch.workflow).toMatchObject({ instructions: "Ship it." });
   });
@@ -272,8 +272,8 @@ describe("buildEditParametersPatch", () => {
       submittedWorkflow: { ...editWorkflow, publish: { mode: "none" } },
     });
 
-    expect("repository" in patch).toBe(false);
-    expect("branch" in patch).toBe(false);
+    expect(patch.repository).toBeNull();
+    expect(patch.branch).toBeNull();
     expect(patch.publishMode).toBe("none");
     expect(patch.workflow).not.toHaveProperty("git");
     expect(patch.workflow).toMatchObject({
@@ -13628,7 +13628,8 @@ describe("Task Create MM-641 authoring validation", () => {
       fireEvent.change(repoInput, { target: { value: "" } });
     });
 
-    expect("repository" in patch).toBe(false);
+    expect(patch.repository).toBeNull();
+    expect(patch.branch).toBeNull();
     expect(patch.publishMode).toBe("none");
     expect(patch.workflow).toMatchObject({
       instructions: "Rebuild the level lighting with baked GI.",
