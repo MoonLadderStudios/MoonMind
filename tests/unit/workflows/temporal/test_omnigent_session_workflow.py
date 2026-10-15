@@ -485,6 +485,34 @@ def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("admitted", "reason_code", "admission_mode"),
+    [
+        (True, "canary_selected", "canary"),
+        (False, "canary_owner_not_allowlisted", "canary"),
+        (False, "execution_profile_not_allowlisted", "enabled"),
+        (False, "feature_generation_mismatch", "enabled"),
+        (False, "new_selection_disabled", "disabled"),
+    ],
+)
+def test_recorded_rollout_setting_decisions_remain_replay_decodable(
+    admitted: bool, reason_code: str, admission_mode: str
+) -> None:
+    # AgentRun replay validates the admission result already in history, so
+    # decisions recorded under the retired rollout settings must still decode.
+    decision = OmnigentSessionAdmissionDecision.model_validate(
+        {
+            "admitted": admitted,
+            "reasonCode": reason_code,
+            "admissionMode": admission_mode,
+            "admittedFeatureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        }
+    )
+
+    assert decision.admitted is admitted
+    assert decision.reason_code == reason_code
+
+
 @pytest.mark.asyncio
 async def test_unbound_legacy_host_launch_follows_durable_policy_default() -> None:
     service = SimpleNamespace(
