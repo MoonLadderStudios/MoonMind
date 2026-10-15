@@ -10609,6 +10609,95 @@ def test_edit_rejects_a_workspace_source_create_would_reject(
         service.update_execution.assert_not_awaited()
 
 
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("patch", "message"),
+    [
+        # The patch omits publication, so the recorded PR mode would survive
+        # the shallow merge.
+        (
+            {"workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE)},
+            "anonymous workspace source cannot publish",
+        ),
+        # A derived workspaceSpec is admitted like an authored workspace.
+        (
+            {"workspaceSpec": copy.deepcopy(_ANONYMOUS_WORKSPACE)},
+            "anonymous workspace source cannot publish",
+        ),
+        (
+            {"workspaceSpec": {"workspacePath": "/srv/host/checkout"}},
+            "payload.workspace is invalid",
+        ),
+    ],
+)
+def test_edit_admits_the_source_against_the_merged_parameters(
+    update_name: str, patch: dict[str, Any], message: str
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "publishMode": "pr",
+            "workflow": {"instructions": "Summarize.", "publish": {"mode": "pr"}},
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={"updateName": update_name, "parametersPatch": patch},
+        )
+
+        assert response.status_code == 422, response.json()
+        assert message in response.json()["detail"]["message"]
+        service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+@pytest.mark.parametrize(
+    ("recorded_runtime", "patch_runtime"),
+    [
+        # The edit selects the runtime the source cannot run on.
+        ({}, {"targetRuntime": "claude_code"}),
+        # The edit keeps the recorded runtime, which Create would also reject.
+        ({"targetRuntime": "claude"}, {}),
+    ],
+)
+def test_edit_and_rerun_apply_creates_source_runtime_check(
+    update_name: str,
+    recorded_runtime: dict[str, Any],
+    patch_runtime: dict[str, Any],
+) -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workflow": dict(_NO_PUBLISH_TASK),
+            **recorded_runtime,
+        }
+        service.describe_execution.return_value = record
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "repository": "Moon/Mind",
+                    "workspace": copy.deepcopy(_ANONYMOUS_WORKSPACE),
+                    "publishMode": "none",
+                    "workflow": dict(_NO_PUBLISH_TASK),
+                    **patch_runtime,
+                },
+            },
+        )
+
+        assert response.status_code == 422, response.json()
+        assert (
+            "workspace source 'repository' is not supported on runtime "
+            "'claude_code'" in response.json()["detail"]["message"]
+        )
+        service.update_execution.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("submitted", "message"),
     [
