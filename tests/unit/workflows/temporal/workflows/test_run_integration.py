@@ -10852,3 +10852,16 @@ async def test_nonpassing_draft_discloses_unverified_without_accepting_success(
         assert execute.await_args.args[1]['expectedHeadSha'] == 'abc'
         assert 'AC-2' in execute.await_args.args[1]['section']
         assert acceptance_evidence(gate) is None
+
+
+@pytest.mark.parametrize('current', [True, False], ids=['current', 'retained-history'])
+def test_native_disclosure_labels_initial_snapshot_and_current_comment(
+    mock_run_workflow, monkeypatch, unverified_publication_gate, current
+):
+    owner = mock_run_workflow
+    owner._publish_context['moonSpecGate'] = unverified_publication_gate
+    monkeypatch.setattr(run_workflow_module.workflow, 'patched', lambda key: current if key == 'run-unverified-pr-comment-disclosure-v1' else True)
+    body = owner._resolve_native_pr_body(publish_payload={'prBody': 'Implementation'}, task_payload={})
+    assert 'AC-2' in body
+    assert ('Initial verification snapshot for revision abc.' in body) is current
+    assert ('latest MoonMind verification-disclosure comment' in body) is current

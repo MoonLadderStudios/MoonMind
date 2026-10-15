@@ -527,8 +527,11 @@ async def test_repo_create_pr_activity_validates_payload():
     with pytest.raises(ValueError, match="Invalid payload"):
         await repo_create_pr_activity({})
 
-async def test_repo_create_pr_activity_delegates():
+@pytest.mark.parametrize("high_security_mode", [False, True])
+async def test_repo_create_pr_activity_delegates(monkeypatch, high_security_mode):
     from moonmind.workflows.temporal.activities.jules_activities import repo_create_pr_activity
+
+    monkeypatch.setattr(settings.security, "high_security_mode", high_security_mode)
     
     with patch("moonmind.workflows.adapters.github_service.GitHubService") as mock_svc_cls:
         mock_svc = mock_svc_cls.return_value
@@ -556,6 +559,75 @@ async def test_repo_create_pr_activity_delegates():
             body="Body",
             draft=False,
         )
+
+
+@pytest.mark.parametrize("field", ["title", "body"])
+@pytest.mark.parametrize(
+    "sensitive_text",
+    [
+        "Authorization: Bearer unit-test-pr-bearer-value",
+        "password=unit-test-pr-password-value",
+    ],
+)
+@pytest.mark.parametrize("high_security_mode", [False, True])
+async def test_repo_create_pr_activity_scans_final_text_before_github(
+    monkeypatch, field, sensitive_text, high_security_mode
+):
+    from moonmind.workflows.adapters.github_service import CreatePRResult
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_create_pr_activity,
+    )
+
+    monkeypatch.setattr(settings.security, "high_security_mode", high_security_mode)
+    payload = {
+        "repo": "owner/repo",
+        "head": "branch",
+        "base": "main",
+        "title": "Saved candidate",
+        "body": "Unverified criteria: CI unavailable.",
+    }
+    payload[field] += f"\n{sensitive_text}"
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as service:
+        create = AsyncMock(
+            return_value=CreatePRResult(
+                url="https://github.com/owner/repo/pull/42", created=True, summary=""
+            )
+        )
+        service.return_value.create_pull_request = create
+        if high_security_mode:
+            with pytest.raises(ValueError, match="Request blocked") as exc_info:
+                await repo_create_pr_activity(payload)
+            assert "unit-test-pr-" not in str(exc_info.value)
+            service.assert_not_called()
+            create.assert_not_awaited()
+        else:
+            result = await repo_create_pr_activity(payload)
+            assert result["created"] is True
+            create.assert_awaited_once_with(**payload, draft=False)
+
+
+@pytest.mark.parametrize("field", ["title", "body"])
+@pytest.mark.parametrize("high_security_mode", [False, True])
+async def test_repo_create_pr_activity_preserves_provider_token_blocking(
+    monkeypatch, field, high_security_mode
+):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_create_pr_activity,
+    )
+
+    monkeypatch.setattr(settings.security, "high_security_mode", high_security_mode)
+    payload = {
+        "repo": "owner/repo",
+        "head": "branch",
+        "base": "main",
+        "title": "Saved candidate",
+        "body": "Unverified criteria: CI unavailable.",
+    }
+    payload[field] += "\n" + "ghp_" + "x" * 36
+    with patch("moonmind.workflows.adapters.github_service.GitHubService") as service:
+        with pytest.raises(ValueError, match="Request blocked"):
+            await repo_create_pr_activity(payload)
+        service.assert_not_called()
 
 
 async def test_repo_create_pr_activity_delegates_draft_flag():

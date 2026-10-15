@@ -447,9 +447,7 @@ class RuntimeSelection:
         }
 
 
-def assert_runtime_new_admission(
-    runtime_id: str, *, rollback_generation: str | None = None
-) -> None:
+def assert_runtime_new_admission(runtime_id: str) -> None:
     """Reject a runtime whose code-owned retirement class stopped admitting.
 
     The cutover phase is the *rollout* authority; the retirement class is the
@@ -460,11 +458,6 @@ def assert_runtime_new_admission(
     selection: an authored per-step ``runtime.mode`` override is new admission
     too, so API callers apply this check to each step runtime before persisting
     the workflow.
-
-    A runtime id alone cannot name the exact rollback scope a ``rollback_only``
-    class requires, so this boundary supplies no rollback-exercise evidence and
-    a ``rollback_only`` runtime fails closed here. Plan compilation is where a
-    scoped exercise can be evaluated.
     """
 
     if not runtime_id:
@@ -475,10 +468,7 @@ def assert_runtime_new_admission(
     )
 
     try:
-        assert_surface_admits_new_work(
-            f"runtime-strategy:{runtime_id}",
-            rollback_generation=rollback_generation,
-        )
+        assert_surface_admits_new_work(f"runtime-strategy:{runtime_id}")
     except LegacyAdmissionRejected as exc:
         raise ValueError(
             f"runtime_new_admission_disabled:{runtime_id}:{exc.reason_code}"
@@ -492,7 +482,6 @@ def select_runtime(
     phase: CutoverPhase,
     submission_kind: str = "create",
     release_status: EffectivePhase | None = None,
-    rollback_generation: str | None = None,
     versioned_default: bool = False,
     env: Mapping[str, Any] | None = None,
     now: datetime | None = None,
@@ -528,7 +517,7 @@ def select_runtime(
     if explicit:
         explicit = normalize_runtime_id(explicit)
         assert_new_admission_allowed(explicit, env=env, now=now)
-        assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
+        assert_runtime_new_admission(explicit)
         return RuntimeSelection(
             explicit,
             True,
@@ -559,7 +548,7 @@ def select_runtime(
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
     assert_new_admission_allowed(selected, env=env, now=now)
-    assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
+    assert_runtime_new_admission(selected)
     return RuntimeSelection(
         selected,
         False,

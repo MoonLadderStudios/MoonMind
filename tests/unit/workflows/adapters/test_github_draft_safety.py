@@ -15,7 +15,7 @@ HEAD = "a" * 40
 @pytest.mark.parametrize(
     "scenario",
     [
-        "original", "lost_ack", "malformed_ack", "readback_retry", "readback_outage",
+        "original", "initial_timeline_retry", "lost_ack", "malformed_ack", "readback_retry", "readback_outage",
         "redrafted", "timeline_unavailable", "race", "race_lost_ack", "race_head_moved",
         "race_timeline_retry", "restore_lost_ack", "restore_outage", "user_ready_after_restore",
     ],
@@ -43,6 +43,8 @@ async def test_ready_preserves_remote_draft_holds_and_reconciles_ack(monkeypatch
         query = json.loads(request.content)["query"]
         if "timelineItems" in query:
             if scenario == "timeline_unavailable" or (
+                scenario == "initial_timeline_retry" and not state["timeline_failures"]
+            ) or (
                 scenario == "race_timeline_retry" and state["ready"] and not state["timeline_failures"]
             ):
                 state["timeline_failures"] += 1
@@ -80,7 +82,11 @@ async def test_ready_preserves_remote_draft_holds_and_reconciles_ack(monkeypatch
     ))
     result = await service.mark_automation_draft_ready("org/repo", 7, HEAD, admitted_workflow_id="owner")
     assert state["ready"] <= 1 and state["restore"] <= 1
-    if scenario in {"original", "lost_ack", "malformed_ack", "readback_retry"}:
+    if scenario == "initial_timeline_retry":
+        assert state["timeline_failures"] == 1
+    elif scenario == "timeline_unavailable":
+        assert state["timeline_failures"] == 3
+    if scenario in {"original", "initial_timeline_retry", "lost_ack", "malformed_ack", "readback_retry"}:
         assert result["ready"] is True
         assert state["ready"] == 1
     elif scenario in {"redrafted", "timeline_unavailable"}:

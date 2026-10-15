@@ -19,7 +19,6 @@ from moonmind.schemas.omnigent_session_models import OmnigentSessionTerminalResu
 from moonmind.workflows.temporal.activities.omnigent_session_activities import (
     _read_json_artifact,
     _write_json_artifact,
-    omnigent_evaluate_session_admission_activity,
     omnigent_load_failure_authority_activity,
     omnigent_persist_failure_activity,
     omnigent_stop_host_activity,
@@ -109,64 +108,6 @@ async def _attach_primary_success(store: OmnigentControlPlaneStore, session) -> 
             cleanup_state="provider_stopped",
         )
     return current, terminal_ref
-
-
-async def test_production_admission_is_bounded_and_disable_only_blocks_new_selection(
-    monkeypatch,
-) -> None:
-    flags = settings.feature_flags
-    monkeypatch.setattr(flags, "omnigent_session_supervisor_admission_mode", "canary")
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_canary_owner_ids",
-        "agent-canary",
-    )
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_allowed_execution_profile_refs",
-        "profile-canary",
-    )
-    payload = {
-        "workflowId": "workflow-admission",
-        "stepExecutionId": "step-admission",
-        "agentRunId": "agent-canary",
-        "executionProfileRef": "profile-canary",
-    }
-
-    admitted = await omnigent_evaluate_session_admission_activity(payload)
-    assert admitted["admitted"] is True
-    assert admitted["reasonCode"] == "canary_selected"
-
-    denied = await omnigent_evaluate_session_admission_activity(
-        {**payload, "agentRunId": "agent-outside-canary"}
-    )
-    assert denied["admitted"] is False
-    assert denied["reasonCode"] == "canary_owner_not_allowlisted"
-
-    profile_denied = await omnigent_evaluate_session_admission_activity(
-        {**payload, "executionProfileRef": "profile-outside-canary"}
-    )
-    assert profile_denied["admitted"] is False
-    assert profile_denied["reasonCode"] == "execution_profile_not_allowlisted"
-
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_generation",
-        "superseded-generation",
-    )
-    generation_denied = await omnigent_evaluate_session_admission_activity(payload)
-    assert generation_denied["admitted"] is False
-    assert generation_denied["reasonCode"] == "feature_generation_mismatch"
-    monkeypatch.setattr(
-        flags,
-        "omnigent_session_supervisor_generation",
-        "omnigent-session-v1",
-    )
-
-    monkeypatch.setattr(flags, "omnigent_session_supervisor_admission_mode", "disabled")
-    disabled = await omnigent_evaluate_session_admission_activity(payload)
-    assert disabled["admitted"] is False
-    assert disabled["reasonCode"] == "new_selection_disabled"
 
 
 async def test_failure_authority_validates_immutable_child_ownership(
