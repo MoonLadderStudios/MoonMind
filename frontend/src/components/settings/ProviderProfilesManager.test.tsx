@@ -3040,6 +3040,94 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     expect(payload).not.toHaveProperty('default_effort');
   });
 
+  function patchPayload(fetchSpy: { mock: { calls: unknown[][] } }) {
+    const call = fetchSpy.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH');
+    return JSON.parse(String((call?.[1] as RequestInit).body));
+  }
+
+  it('offers one Edit action that focuses the editor with saved settings and tiers', async () => {
+    renderProviderProfilesManager([tierProfile]);
+    const actions = within(screen.getByRole('table')).getAllByRole('button').map((button) => button.textContent);
+    expect(actions.filter((label) => label?.includes('Edit'))).toEqual(['Edit']);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const heading = screen.getByRole('heading', { name: 'Edit Profile: tier-profile' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
+    expect(screen.getByRole('list', { name: 'Model and effort tiers' })).toBeTruthy();
+    expect((screen.getByLabelText('Tier 3 label') as HTMLInputElement).value).toBe('Docs');
+    expect((screen.getByLabelText('Tier 3 effort') as HTMLSelectElement).value).toBe('xhigh');
+  });
+
+  it('saves a tier change and an ordinary field change through one draft without rewriting untouched data', async () => {
+    const profile: ProviderProfile = {
+      ...tierProfile,
+      secret_refs: { api_key: 'env://OPENAI_API_KEY' },
+      model_tiers: [
+        { label: 'Plan', model: 'gpt-5.5', effort: 'medium', parameters: { temperature: 0.2 }, annotations: { source: 'operator' } },
+        { label: 'Impl', model: 'gpt-5.5', effort: 'xhigh', parameters: { vendor_flag: 'keep' }, annotations: { note: 'unknown-but-kept' } },
+      ],
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => profile } as Response);
+    renderProviderProfilesManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Tier 1 effort'), { target: { value: 'high' } });
+    fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    const payload = patchPayload(fetchSpy);
+    expect(payload.max_parallel_runs).toBe(3);
+    expect(payload.model_tiers).toEqual([
+      { label: 'Plan', model: 'gpt-5.5', effort: 'high', parameters: { temperature: 0.2 }, annotations: { source: 'operator' } },
+      { label: 'Impl', model: 'gpt-5.5', effort: 'xhigh', parameters: { vendor_flag: 'keep' }, annotations: { note: 'unknown-but-kept' } },
+    ]);
+    expect(payload.default_model_tier).toBe(2);
+    for (const untouched of ['secret_refs', 'provider_id', 'cooldown_after_429_seconds', 'rate_limit_policy', 'enabled']) {
+      expect(payload).not.toHaveProperty(untouched);
+    }
+  });
+
+  it('leaves untouched tier policy out of an ordinary field update', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => tierProfile } as Response);
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    const payload = patchPayload(fetchSpy);
+    expect(payload.max_parallel_runs).toBe(2);
+    expect(payload).not.toHaveProperty('model_tiers');
+    expect(payload).not.toHaveProperty('default_model_tier');
+  });
+
+  it('cancel discards tier and field edits without saving', () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+    renderProviderProfilesManager([tierProfile]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Changed' } });
+    fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel edit' }));
+    expect(fetchSpy.mock.calls.some(([, init]) => ['PATCH', 'PUT', 'POST'].includes(String((init as RequestInit | undefined)?.method)))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect((screen.getByLabelText('Tier 1 label') as HTMLInputElement).value).toBe('Plan');
+    expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
+  });
+
+  it('repairs a profile with no saved tiers through Edit', async () => {
+    const brokenProfile: ProviderProfile = { ...tierProfile, model_tiers: [], default_model_tier: 1 };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => brokenProfile } as Response);
+    renderProviderProfilesManager([brokenProfile]);
+    expect(screen.getByText('Tier policy unavailable · needs repair')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Invalid saved default: Tier 1')).toBeTruthy();
+    expect((screen.getByLabelText('Tier 1 effort') as HTMLSelectElement).value).toBe('__runtime_default__');
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    const payload = patchPayload(fetchSpy);
+    expect(payload.model_tiers).toHaveLength(1);
+    expect(payload.model_tiers[0]).toMatchObject({ model: null, effort: null });
+    expect(payload.default_model_tier).toBe(1);
+  });
+
   it('read-only users see complete ordered policy as values', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -3047,8 +3135,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
         <ProviderProfilesManager profiles={[tierProfile]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} canWriteProviderProfiles={false} />
       </QueryClientProvider>,
     );
-    expect(screen.queryByRole('button', { name: 'Edit tiers tier-profile' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Edit/ })).toBeNull();
     expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add tier' })).toBeNull();
     // collection summary expansion is accessible without edit mode
