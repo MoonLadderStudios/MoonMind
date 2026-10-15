@@ -174,6 +174,23 @@ FULL_RERUN_RECOVERY_CARRYOVER_PARAM_KEYS = frozenset(
 )
 
 
+# Edits apply a shallow parameters patch, where an omitted key keeps its stored
+# value. An explicit null for the source binding removes it instead, so an edit
+# or rerun that clears Repository matches a create that omitted it (scratch).
+_CLEARABLE_SOURCE_PARAM_KEYS = ("repository", "branch")
+
+
+def _merge_parameters_patch(
+    parameters: Mapping[str, Any] | None, patch: Mapping[str, Any]
+) -> dict[str, Any]:
+    merged = dict(parameters or {})
+    merged.update(patch)
+    for key in _CLEARABLE_SOURCE_PARAM_KEYS:
+        if key in patch and patch[key] is None:
+            merged.pop(key, None)
+    return merged
+
+
 def _mapping_payload(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -3165,9 +3182,9 @@ class TemporalExecutionService:
                 and self._integration_state(record) is not None
             ):
                 self._require_integration_state(record)
-            rerun_parameters = dict(record.parameters or {})
-            if parameters_patch:
-                rerun_parameters.update(parameters_patch)
+            rerun_parameters = _merge_parameters_patch(
+                record.parameters, parameters_patch or {}
+            )
             self._validate_rerun_execution_targets(record, rerun_parameters)
 
         if update_name == "RequestRerun" and record.state not in TERMINAL_STATES:
@@ -4718,9 +4735,9 @@ class TemporalExecutionService:
                 record.artifact_refs = refs
 
         if parameters_patch:
-            merged = dict(record.parameters or {})
-            merged.update(parameters_patch)
-            record.parameters = merged
+            record.parameters = _merge_parameters_patch(
+                record.parameters, parameters_patch
+            )
             updated = True
             if parameters_patch.get("request_continue_as_new") is True:
                 major_reconfiguration = True
@@ -4869,10 +4886,8 @@ class TemporalExecutionService:
                     refs.append(ref)
             record.artifact_refs = refs
         if parameters_patch:
-            params = dict(record.parameters or {})
-            params.update(parameters_patch)
             record.parameters = self._full_rerun_parameters(
-                params,
+                _merge_parameters_patch(record.parameters, parameters_patch),
                 recovery_provenance=self._full_retry_recovery_from_patch(
                     parameters_patch,
                     source_workflow_id=record.workflow_id,
@@ -4915,7 +4930,7 @@ class TemporalExecutionService:
     ) -> dict[str, Any]:
         params = dict(record.parameters or {})
         if parameters_patch:
-            params.update(parameters_patch)
+            params = _merge_parameters_patch(params, parameters_patch)
             recovery_provenance = self._full_retry_recovery_from_patch(
                 parameters_patch,
                 source_workflow_id=record.workflow_id,
