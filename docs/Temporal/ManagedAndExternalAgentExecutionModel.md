@@ -486,10 +486,10 @@ ownership in flight.
 
 For that retained lane, plan-less admission is a distinct bounded Activity
 behind its own replay patch. It freezes the admitted feature generation and
-has no separate rollout selection: like plan admission, it admits the
-supervisor unless the operator's supervisor rollback control blocks new
-admission. Recorded decisions from the retired canary/allowlist modes still
-replay. An already admitted child does not re-evaluate admission, so blocking
+has no separate rollout selection. Fully bound plans, reference-only plans,
+and plan-less inputs all apply the operator's supervisor rollback control
+before new admission. Recorded decisions from the retired canary/allowlist
+modes still replay. An already admitted child does not re-evaluate admission, so blocking
 new admission cannot disable replay, query, cancellation, cleanup, or
 historical reads for an admitted session. Remove the plan-less branch when no
 retained execution without a persisted plan can still be replayed or exactly
