@@ -1789,7 +1789,25 @@ export function buildEditParametersPatch({
   parametersPatch.profileId = submittedRuntimeProfile || null;
   delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
-    delete parametersPatch.mergeAutomation;
+    // The run reads merge automation from any of these records and the server
+    // merges the patch shallowly, so a turned-off switch must be stated rather
+    // than omitted or it would survive from the recorded parameters.
+    if ("mergeAutomation" in baseParameters) {
+      parametersPatch.mergeAutomation = { enabled: false };
+    } else {
+      delete parametersPatch.mergeAutomation;
+    }
+    if (!("mergeAutomation" in editWorkflow)) {
+      delete mergedWorkflow.mergeAutomation;
+    }
+    const mergedPublish = recordValue(mergedWorkflow.publish);
+    if (!("mergeAutomation" in recordValue(editWorkflow.publish))) {
+      delete mergedPublish.mergeAutomation;
+    }
+  }
+  if ("workspace" in submittedPayload) {
+    // The server re-admits the stated source and derives workspaceSpec from it.
+    delete parametersPatch.workspaceSpec;
   }
   // Built-in vector retrieval is retired (#4105): `rag` /
   // `followUpRetrieval` must never reach a new edit or rerun submission,
@@ -2973,7 +2991,134 @@ function blankSourcePublishNotice(selection: string): string {
     : "";
 }
 
-function publicationOutcomeText(selection: string, repository: string): string {
+function anonymousSourcePublishNotice(selection: string): string {
+  const label =
+    normalizePublishModeSelection(selection) === "auto"
+      ? "Auto"
+      : destinationPublishLabel(selection);
+  return label
+    ? `${label} publishing needs repository credentials. Turn off reading without credentials, or choose None to keep results save-only.`
+    : "";
+}
+
+// The backend's well-known Git connection, which a bare repository name
+// selects (DEFAULT_GIT_CONNECTION_REF in repository_contract.py).
+const DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default";
+
+// The source a submission states for the backend to admit. Server-issued
+// saved-work sources are resubmitted unchanged. A repository source follows
+// the visible Repository and Branch fields and keeps its access, connection,
+// and non-Git provider; checkout reads the recorded top-level repository
+// aliases before the source, so those are dropped. A target object requires a
+// branch, so a branchless repository keeps a non-default connection and
+// provider in the workspace instead.
+function submittedWorkspaceFor({
+  recordedWorkspace,
+  repository,
+  branch,
+  anonymous,
+  keptConnectionRef,
+  keptProvider,
+}: {
+  recordedWorkspace: unknown;
+  repository: string;
+  branch: string;
+  anonymous: boolean;
+  keptConnectionRef: string;
+  keptProvider: string;
+}): Record<string, unknown> | null {
+  const recorded = recordValue(recordedWorkspace);
+  const recordedSource = recordValue(recorded.workspaceSource);
+  const kind = String(recordedSource.kind || "").trim();
+  if (kind && kind !== "repository" && kind !== "scratch") {
+    return recorded;
+  }
+  if (!repository) {
+    return kind === "scratch" ? recorded : null;
+  }
+  const branchField = branch ? { branch } : {};
+  if (anonymous) {
+    return {
+      workspaceSource: {
+        kind: "repository",
+        repository,
+        ...branchField,
+        accessMode: "anonymous",
+      },
+    };
+  }
+  if (kind === "repository" && recordedSource.accessMode !== "anonymous") {
+    const {
+      repositoryTarget,
+      branch: _recordedBranch,
+      ...source
+    } = recordedSource;
+    const {
+      repository: _recordedRepository,
+      repo: _recordedRepo,
+      repositoryTarget: recordedTarget,
+      branch: _recordedAliasBranch,
+      startingBranch: _recordedStartingBranch,
+      headBranch: _recordedHeadBranch,
+      ...workspace
+    } = recorded;
+    const connectionRef = String(
+      source.connectionRef ||
+        recordValue(repositoryTarget).connectionRef ||
+        (source.accessMode === "routed"
+          ? ""
+          : recordValue(recordedTarget).connectionRef || keptConnectionRef),
+    ).trim();
+    return {
+      ...nonGitProvider(
+        workspace.provider ||
+          recordValue(recordedTarget).provider ||
+          recordValue(repositoryTarget).provider ||
+          keptProvider,
+      ),
+      ...workspace,
+      workspaceSource: {
+        ...source,
+        repository,
+        ...branchField,
+        ...(connectionRef ? { connectionRef } : {}),
+      },
+    };
+  }
+  if (
+    !branch &&
+    keptConnectionRef &&
+    keptConnectionRef !== DEFAULT_GIT_CONNECTION_REF
+  ) {
+    return {
+      ...nonGitProvider(keptProvider),
+      workspaceSource: {
+        kind: "repository",
+        repository,
+        connectionRef: keptConnectionRef,
+      },
+    };
+  }
+  return null;
+}
+
+function nonGitProvider(provider: unknown): { provider?: string } {
+  const value = String(provider || "").trim();
+  return value && value !== "git" ? { provider: value } : {};
+}
+
+function isAnonymousWorkspace(workspace: unknown): boolean {
+  return (
+    recordValue(recordValue(workspace).workspaceSource).accessMode ===
+    "anonymous"
+  );
+}
+
+function publicationOutcomeText(
+  selection: string,
+  repository: string,
+  anonymousRead = false,
+): string {
   const mode = normalizePublishModeSelection(selection);
   if (mode === "auto") {
     return "The selected skill decides whether and where to publish.";
@@ -2987,7 +3132,9 @@ function publicationOutcomeText(selection: string, repository: string): string {
   if (mode === "branch") {
     return `Pushes a branch to ${repository}.`;
   }
-  return "Saves results on this workflow; nothing is published.";
+  return anonymousRead
+    ? `Reads ${repository} without credentials and saves results on this workflow; nothing is published.`
+    : "Saves results on this workflow; nothing is published.";
 }
 
 // Branch discovery is GitHub-backed advisory lookup; other identities skip it
@@ -5842,6 +5989,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   // Set only by the visible Publish Mode control. A preset expanded during
   // submit may not overwrite a mode the operator chose for this run.
   const [publishModeTouched, setPublishModeTouched] = useState(false);
+  // Explicit anonymous read of a public repository (payload.workspace
+  // workspaceSource accessMode "anonymous"); off means the default connection.
+  const [anonymousRead, setAnonymousRead] = useState(false);
   const [produceReport, setProduceReport] = useState(false);
   const [priority, setPriority] = useState(DEFAULT_PRIORITY);
   const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
@@ -5944,6 +6094,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const submitArrowExitTimeoutRef = useRef<number | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const repositoryInputRef = useRef<HTMLInputElement | null>(null);
+  const submitMessageRef = useRef<HTMLParagraphElement | null>(null);
+  const focusSubmitErrorRef = useRef(false);
+  useEffect(() => {
+    if (focusSubmitErrorRef.current && submitMessageState?.tone === "error") {
+      focusSubmitErrorRef.current = false;
+      submitMessageRef.current?.focus();
+    }
+  }, [submitMessageState]);
   const templateInputMemoryRef = useRef<Record<string, unknown>>({});
   const prevRuntimeRef = useRef(runtime);
   const prevProviderProfileRef = useRef(providerProfile);
@@ -6526,7 +6684,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           ? PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
           : normalizedDraftPublishMode,
       );
+      // The recorded mode was the run's choice, so a Skill or catalog default
+      // that loads later must not rewrite it.
+      setPublishModeTouched(true);
     }
+    setAnonymousRead(isAnonymousWorkspace(draft.workspace));
     setProduceReport(draft.reportOutputEnabled);
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
@@ -6949,18 +7111,35 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     !isSelfManagedPublishSkill(effectiveSkillDetail) &&
     !isRepositoryPublishDisabledSkill(effectiveSkillDetail);
   const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillDetail);
+  // Saved-result and workspace-grant sources come from server-issued refs, so
+  // the form keeps a recorded one as-is rather than offering fields for it.
+  const recordedSourceKind =
+    pageMode.mode !== "create"
+      ? String(
+          recordValue(
+            recordValue(temporalDraftQuery.data?.draft.workspace).workspaceSource,
+          ).kind || "",
+        ).trim()
+      : "";
+  const recordedSavedSource =
+    Boolean(recordedSourceKind) &&
+    !["repository", "scratch"].includes(recordedSourceKind);
+  const anonymousSource =
+    anonymousRead && Boolean(repository.trim()) && !recordedSavedSource;
   // Branch/PR modes need a destination; a blank source offers only None/Auto.
   const destinationPublishAvailable =
-    mergeAutomationAvailable && Boolean(repository.trim());
+    mergeAutomationAvailable && Boolean(repository.trim()) && !anonymousSource;
   // A blank source has no repository to publish to: until the operator picks
   // a mode, Create shows and submits save-only (None) instead of the page's
-  // repository default. Skill-owned Auto keeps its own declared target.
+  // repository default. Skill-owned Auto keeps its own declared target. An
+  // anonymous read cannot publish at all, so it defaults to None even then.
   const sourcePublishMode =
-    pageMode.mode === "create" &&
-    !remediationDraft &&
     !publishModeTouched &&
-    !repository.trim() &&
-    normalizePublishModeForSubmit(publishMode) !== "auto"
+    (anonymousSource ||
+      (pageMode.mode === "create" &&
+        !remediationDraft &&
+        !repository.trim() &&
+        normalizePublishModeForSubmit(publishMode) !== "auto"))
       ? "none"
       : publishMode;
 
@@ -10476,26 +10655,57 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       taskPayload.remediation = remediationDraft.remediation;
     }
 
+    const recordedDraft =
+      pageMode.mode !== "create" ? temporalDraftQuery.data?.draft : undefined;
+    const submittedAnonymousRead = anonymousSource && Boolean(normalizedRepository);
+    // Edit and rerun keep the recorded target's provider and connection while
+    // the repository is unchanged; Create has no connection selector, so an
+    // omitted connectionRef selects the deployment's default server-side.
+    const recordedRepositoryTarget = recordValue(recordedDraft?.repositoryTarget);
+    const keptRepositoryTarget =
+      String(recordValue(recordedRepositoryTarget.repository).name || "").trim() ===
+      normalizedRepository
+        ? recordedRepositoryTarget
+        : {};
+    const keptRevision =
+      submissionBranch === String(recordedDraft?.branch || "").trim()
+        ? keptRepositoryTarget.revision
+        : undefined;
+    const submittedWorkspace = submittedWorkspaceFor({
+      recordedWorkspace: recordedDraft?.workspace,
+      repository: normalizedRepository,
+      branch: submissionBranch,
+      anonymous: submittedAnonymousRead,
+      keptConnectionRef: String(keptRepositoryTarget.connectionRef || "").trim(),
+      keptProvider: String(keptRepositoryTarget.provider || "").trim(),
+    });
+    // An omitted branch submits the bare name (the CLI's form), which the
+    // backend clones at the remote's default branch, so submission never waits
+    // on advisory branch discovery. A repository source carries its own branch
+    // and access, so the repository then travels as the bare name.
+    const submittedRepository =
+      submissionBranch &&
+      recordValue(submittedWorkspace?.workspaceSource).kind !== "repository"
+        ? {
+            provider: String(keptRepositoryTarget.provider || "git"),
+            ...(keptRepositoryTarget.connectionRef
+              ? { connectionRef: keptRepositoryTarget.connectionRef }
+              : {}),
+            repository: { name: normalizedRepository },
+            branch: { name: submissionBranch },
+            ...(keptRevision ? { revision: keptRevision } : {}),
+          }
+        : normalizedRepository;
     const requestBody: Record<string, unknown> = {
       type: "task",
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        ...(normalizedRepository
-          ? {
-              // Create has no connection selector: an omitted connectionRef
-              // selects the deployment's default connection server-side. An
-              // omitted branch submits the bare name (the CLI's form), which
-              // the backend clones at the remote's default branch, so
-              // submission never waits on advisory branch discovery.
-              repository: submissionBranch
-                ? {
-                    provider: "git",
-                    repository: { name: normalizedRepository },
-                    branch: { name: submissionBranch },
-                  }
-                : normalizedRepository,
-            }
+        ...(normalizedRepository ? { repository: submittedRepository } : {}),
+        // Edit and rerun always state the source so the backend re-admits it
+        // (or clears a removed one) instead of inheriting it unchecked.
+        ...(submittedWorkspace || pageMode.mode !== "create"
+          ? { workspace: submittedWorkspace }
           : {}),
         ...(mergedCapabilities.length > 0
           ? { requiredCapabilities: mergedCapabilities }
@@ -10650,6 +10860,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? !rerunDraft ||
           selectedAttachmentFiles.length > 0 ||
           normalizedRepository !== String(rerunDraft.repository || "").trim() ||
+          submissionBranch !== String(rerunDraft.branch || "").trim() ||
+          submittedAnonymousRead !== isAnonymousWorkspace(rerunDraft.workspace) ||
           normalizedRuntime !== String(rerunDraft.runtime || "").trim() ||
           omnigentExecutionTargetRef.trim() !==
             String(rerunDraft.omnigentExecutionTargetRef || "").trim() ||
@@ -10824,6 +11036,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         });
       } else {
         setSubmitMessage(failure.message);
+        // A rejected submission keeps the draft; move focus to the reason.
+        focusSubmitErrorRef.current = true;
       }
     } finally {
       if (!didNavigateAfterCreate) {
@@ -10871,12 +11085,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the workflow starts";
-  const sourcePublishNotice = repository.trim()
-    ? ""
-    : blankSourcePublishNotice(sourcePublishMode);
+  const recordedSavedSourceNotice = recordedSavedSource
+      ? `This run starts from its recorded ${recordedSourceKind.replace("_", " ")} source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.`
+      : "";
+  const sourcePublishNotice = !repository.trim()
+    ? blankSourcePublishNotice(sourcePublishMode)
+    : anonymousSource
+      ? anonymousSourcePublishNotice(sourcePublishMode)
+      : "";
   const publicationOutcome =
     sourcePublishNotice ||
-    publicationOutcomeText(sourcePublishMode, repository.trim());
+    publicationOutcomeText(sourcePublishMode, repository.trim(), anonymousSource);
   const publishModeTooltip = autoPublishAvailable
     ? "Auto is available because the selected skill owns publishing"
     : !mergeAutomationAvailable
@@ -13030,6 +13249,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ) : submitMessage ? (
           <p
             id="queue-submit-message"
+            ref={submitMessageRef}
+            tabIndex={-1}
             role={submitMessageTone === "error" ? "alert" : "status"}
             aria-live={submitMessageTone === "error" ? "assertive" : "polite"}
             className={
@@ -13052,6 +13273,24 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <p className="queue-authoring-controls-status small">
               {branchStatusMessage}
             </p>
+          ) : null}
+          {recordedSavedSourceNotice ? (
+            <p className="queue-authoring-controls-status small">
+              {recordedSavedSourceNotice}
+            </p>
+          ) : null}
+          {repository.trim() &&
+          !recordedSavedSource &&
+          (showAdvancedStepOptions || anonymousRead) ? (
+            <label className="queue-authoring-controls-status small">
+              <input
+                type="checkbox"
+                name="anonymousRead"
+                checked={anonymousRead}
+                onChange={(event) => setAnonymousRead(event.target.checked)}
+              />{" "}
+              Read without credentials (public repository)
+            </label>
           ) : null}
           <p
             id={PUBLICATION_OUTCOME_ID}
