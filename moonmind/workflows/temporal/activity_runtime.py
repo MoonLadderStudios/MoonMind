@@ -4640,6 +4640,7 @@ class TemporalIntegrationActivities:
         return await service.mark_automation_draft_ready(
             repository=request["repository"], pr_number=request["prNumber"],
             head_sha=request["headSha"], admitted_workflow_id=request["admittedWorkflowId"],
+            observe_only=request.get("observeOnly") is True,
         )
 
     async def publication_recovery_observe(self, payload, /, **kwargs):
@@ -9419,6 +9420,22 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            # The owning workflow must reread the complete report before
+            # interpreting its projection. Child-only linkage does not admit
+            # the parent's execution-scoped artifact reader.
+            parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
+            parent_run_id = str(metadata.get("parentRunId") or "").strip()
+            if parent_workflow_id and parent_run_id and info is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=verify_ref.artifact_id,
+                    principal="system:agent_runtime",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=parent_workflow_id,
+                        run_id=parent_run_id,
+                        link_type="input.moonspec_verify_handoff",
+                    ),
+                )
             gate_payload["gateResultRef"] = verify_ref.artifact_id
             if remaining_work_declared and isinstance(remaining_work, list):
                 # The publisher owns the durable reference to the verifier's
@@ -13065,8 +13082,13 @@ class TemporalAgentRuntimeActivities:
                 attempted=False,
                 idempotencyKey=request.idempotency_key,
             )
+        from moonmind.omnigent.git_identity import publication_git_identity_projection
+
         token = await self._resolve_workspace_push_github_token(record)
-        env = self._workspace_command_env(record.workspace_path, github_token=token)
+        env = self._workspace_command_env(
+            record.workspace_path, github_token=token,
+            publication_git_identity=await publication_git_identity_projection(),
+        )
         if request.existing_branch and request.existing_head_sha:
             try:
                 remote_sha = await self._resolve_workspace_remote_branch_sha(
@@ -14571,9 +14593,10 @@ class TemporalAgentRuntimeActivities:
         workspace: str,
         *,
         github_token: str | None = None,
+        publication_git_identity: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
         """Build host Git authentication in memory without workload-owned shims."""
-        from moonmind.omnigent.git_identity import resolve_git_identity
+        from moonmind.omnigent.git_identity import resolve_publication_git_identity
         from moonmind.workflows.temporal.runtime.git_auth import (
             build_github_token_git_environment,
         )
@@ -14589,7 +14612,7 @@ class TemporalAgentRuntimeActivities:
         env = build_github_token_git_environment(token, base_env=env)
         if token:
             env["GH_TOKEN"] = token
-        git_name, git_email = resolve_git_identity()
+        git_name, git_email = resolve_publication_git_identity(publication_git_identity)
         env.update(
             GIT_AUTHOR_NAME=git_name,
             GIT_COMMITTER_NAME=git_name,
@@ -14651,8 +14674,12 @@ class TemporalAgentRuntimeActivities:
         head_branch: str | None = None,
     ) -> dict[str, Any]:
         """Create one deterministic commit when the workspace is dirty."""
+        from moonmind.omnigent.git_identity import publication_git_identity_projection
+
         _normalize_managed_git_ownership(workspace)
-        command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
+        command_env = dict(env) if env is not None else self._workspace_command_env(
+            workspace, publication_git_identity=await publication_git_identity_projection(),
+        )
 
         async def _read_status() -> tuple[int, bytes, bytes]:
             status_proc = await _create_managed_agent_subprocess(
@@ -14956,10 +14983,16 @@ class TemporalAgentRuntimeActivities:
                 resolved_github_token = await self._resolve_workspace_push_github_token(
                     record
                 )
-            command_env = self._workspace_command_env(workspace)
+            from moonmind.omnigent.git_identity import publication_git_identity_projection
+
+            identity = await publication_git_identity_projection()
+            command_env = self._workspace_command_env(
+                workspace, publication_git_identity=identity,
+            )
             auth_command_env = self._workspace_command_env(
                 workspace,
                 github_token=resolved_github_token,
+                publication_git_identity=identity,
             )
             branch_proc = await _create_managed_agent_subprocess(
                 *self._workspace_git_command(

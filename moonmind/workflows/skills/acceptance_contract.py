@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 class _Record(BaseModel):
@@ -76,7 +76,8 @@ class RequirementEvidence(_Record):
     @model_validator(mode="after")
     def evidenced_or_unverified(self) -> "RequirementEvidence":
         if self.unverified is not None and (
-            self.evidence_refs or self.status not in {None, "UNVERIFIED"}
+            self.evidence_refs
+            or ("status" in self.model_fields_set and self.status != "UNVERIFIED")
         ):
             raise ValueError(
                 "an unverified requirement has no evidenceRefs or passing status"
@@ -113,6 +114,13 @@ class AcceptanceEvidence(_Record):
     completion_target: AcceptanceTarget = Field(alias="completionTarget")
     evidence: list[RequirementEvidence] = Field(min_length=1)
     freshness: EvidenceFreshness
+    # Legacy summaries are advice, not proof or completion authority.
+    candidate_success: StrictBool | None = Field(
+        None, alias="candidateSuccess", exclude=True
+    )
+    target_completion: StrictBool | None = Field(
+        None, alias="targetCompletion", exclude=True
+    )
     verification_map: list[dict[str, Any]] | None = Field(None, alias="verificationMap")
     evidence_set: dict[str, str] | None = Field(None, alias="evidenceSet")
     evidence_set_digest: str | None = Field(None, alias="evidenceSetDigest")

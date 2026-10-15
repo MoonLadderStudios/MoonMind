@@ -15,6 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
+from moonmind.omnigent.git_identity import publication_git_identity_projection
 
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
@@ -3511,6 +3512,9 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         preflight = await OmnigentOAuthHostRuntime(client=client).prepare_host(
             binding=binding,
             host_lease=lease,
+            publication_git_identity=await publication_git_identity_projection(
+                agent_request.parameters
+            ),
             workspace_key=f"{workflow_id}:{step_execution_id}",
             workspace_locator=workspace_locator,
             current_workflow_id=workflow_id,
@@ -5157,6 +5161,9 @@ async def omnigent_publish_workspace_activity(
                 github_token=github_token,
                 accepted_published_head=(agent_request.parameters or {}).get(
                     "acceptedPublishedHead"
+                ),
+                publication_git_identity=await publication_git_identity_projection(
+                    agent_request.parameters or {}
                 ),
             )
         finally:

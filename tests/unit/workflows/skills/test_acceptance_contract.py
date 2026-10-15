@@ -465,3 +465,11 @@ def test_host_rejects_unrelated_blocker_and_shrunken_success_scope(candidate):
     assert "original source scope" in " ".join(
         assessment_scope_violations(success, assessment)
     )
+
+
+def test_legacy_unverified_disclosure_rejects_explicit_null_status(candidate):
+    _, current, report = candidate
+    _unverified_ac2(report, {"reason": "No GPU", "verifiableBy": "GPU CI"})
+    report["validatedRefs"]["acceptance"]["evidence"][1]["status"] = None
+    assert acceptance_evidence(report) is None
+    assert not portable.reuse(report, current)["reusable"]

@@ -665,7 +665,7 @@ def journey_command(**kwargs):
         },
         # The journey needs only builtin fixtures; repository conftest files
         # may import tooling that is not part of the deployable image.
-        pytest_options=("--rootdir=/test-driver", "--noconftest"),
+        pytest_options=("--rootdir=/test-driver", "--noconftest", "-s"),
     )
 
 

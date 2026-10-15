@@ -119,6 +119,7 @@ class _Harness:
         self.child_results = child_results
         self.child_workflow_ids: list[str] = []
         self.child_payloads: list[dict[str, Any]] = []
+        self.child_options: list[dict[str, Any]] = []
         self.resolver_ids: list[str] = []
         self.remediation_ids: list[str] = []
         self.sleep_seconds: list[float] = []
@@ -149,6 +150,7 @@ class _Harness:
             child_id = str(kwargs["id"])
             self.child_workflow_ids.append(child_id)
             self.child_payloads.append(payload)
+            self.child_options.append(kwargs)
             skill_id = ""
             try:
                 skill_id = str(
@@ -497,3 +499,47 @@ def test_run_workflow_skips_verdict_mutation_without_patch(
     assert workflow._pr_resolver_next_step is None
     assert workflow._terminal_contract_evidence_ref is None
     assert "prResolverStatus" not in workflow._publish_context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("publication_memo_enabled", [False, True])
+async def test_resolver_and_remediation_children_keep_parent_publication_admission(
+    monkeypatch, publication_memo_enabled
+):
+    def results(child_id, ordinal, kind):
+        if kind == "remediation":
+            return {"status": "success", "headSha": HEAD_1}
+        return (
+            _blocked_ci_failures_result(HEAD_1)
+            if ordinal == 1
+            else {"status": "merged", "headSha": HEAD_1}
+        )
+
+    harness = _Harness(
+        monkeypatch, readiness=[_ready(HEAD_1)] * 3, child_results=results
+    )
+    admission = {
+        "schemaVersion": "v1",
+        "identity": {"name": "Admitted", "email": "admitted@example.invalid"},
+    }
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "memo",
+        lambda: {"publicationGitIdentityAdmission": admission},
+    )
+    old_patch = merge_automation_module.workflow.patched
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda patch: (
+            publication_memo_enabled
+            if patch == "merge-automation-publication-git-identity-child-memo-v1"
+            else old_patch(patch)
+        ),
+    )
+    await MoonMindMergeAutomationWorkflow().run(_payload())
+    assert harness.remediation_ids and harness.resolver_ids
+    for kwargs in harness.child_options:
+        assert (kwargs.get("memo") or {}).get("publicationGitIdentityAdmission") == (
+            admission if publication_memo_enabled else None
+        )

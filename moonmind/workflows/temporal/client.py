@@ -30,7 +30,12 @@ from moonmind.gates.checkpoint_compat_drain import (
     CheckpointCompatDrainObservations,
     collect_checkpoint_compat_drain_observations,
 )
-from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
+from moonmind.workflows.temporal.activity_catalog import (
+    ARTIFACTS_TASK_QUEUE,
+    get_workflow_poll_task_queues,
+    publication_task_queue,
+)
+from moonmind.omnigent.git_identity import admitted_publication_git_identity
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     RENAMED_USER_WORKFLOW_TYPE,
@@ -55,6 +60,12 @@ _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
     "mm.activity.integrations",
     "mm.activity.agent_runtime",
 )
+
+
+def _workflow_control_task_queues() -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*_MOONMIND_TASK_QUEUES, *get_workflow_poll_task_queues())))
+
+
 MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcile"
 MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE = (
     "mm-operational:managed-session-reconcile"
@@ -398,19 +409,25 @@ class TemporalClientAdapter:
         workflow_type: str | None = None,
         *,
         task_queue: str | None = None,
+        memo: Mapping[str, Any] | None = None,
     ) -> str:
         """Resolve the task queue for the given workflow type."""
-        if task_queue:
-            return task_queue
-        if workflow_type == RENAMED_USER_WORKFLOW_TYPE:
-            return resolve_user_workflow_start_contract(settings.temporal).task_queue
-        if self._workflow_topology is None:
-            self._workflow_topology = describe_configured_worker(
-                temporal_settings=settings.temporal.model_copy(
-                    update={"worker_fleet": WORKFLOW_FLEET}
-                )
-            )
-        return self._workflow_topology.task_queues[0]
+        if not task_queue:
+            if workflow_type == RENAMED_USER_WORKFLOW_TYPE:
+                task_queue = resolve_user_workflow_start_contract(settings.temporal).task_queue
+            else:
+                if self._workflow_topology is None:
+                    self._workflow_topology = describe_configured_worker(
+                        temporal_settings=settings.temporal.model_copy(
+                            update={"worker_fleet": WORKFLOW_FLEET}
+                        )
+                    )
+                task_queue = self._workflow_topology.task_queues[0]
+        return (
+            publication_task_queue(task_queue)
+            if admitted_publication_git_identity(memo or {}) is not None
+            else task_queue
+        )
 
     def resolve_workflow_task_queue(self, workflow_type: str | None) -> str:
         """Resolve the task queue a schedule/start action should use."""
@@ -439,7 +456,7 @@ class TemporalClientAdapter:
         """
         client = await self.get_client()
 
-        task_queue = self._get_task_queue(workflow_type, task_queue=task_queue)
+        task_queue = self._get_task_queue(workflow_type, task_queue=task_queue, memo=memo)
 
         args = [input_args] if input_args is not None else []
 
@@ -611,7 +628,7 @@ class TemporalClientAdapter:
         client = await self.get_client()
 
         if task_queues is None:
-            task_queues = _MOONMIND_TASK_QUEUES
+            task_queues = _workflow_control_task_queues()
 
         visibility_filter = 'ExecutionStatus="Running"'
         if task_queues:
@@ -737,7 +754,7 @@ class TemporalClientAdapter:
                 if on_progress is not None:
                     await on_progress(result.model_copy(deep=True))
         if not result.enumerated:
-            queues = _MOONMIND_TASK_QUEUES if task_queues is None else task_queues
+            queues = _workflow_control_task_queues() if task_queues is None else task_queues
             # Queue membership alone does not imply the Pause/Resume/query
             # protocol. Operator and manifest workflows share these queues.
             query = (
@@ -1268,7 +1285,7 @@ class TemporalClientAdapter:
         client = await self.get_client()
         definition_uuid = _UUID(str(definition_id))
         schedule_id = make_schedule_id(definition_uuid)
-        task_queue = self._get_task_queue(workflow_type)
+        task_queue = self._get_task_queue(workflow_type, memo=memo)
 
         args = [workflow_input] if workflow_input is not None else []
 
@@ -1401,7 +1418,7 @@ class TemporalClientAdapter:
 
         definition_uuid = _UUID(str(definition_id))
         handle, _desc = await self._get_schedule_handle(definition_id)
-        task_queue = self._get_task_queue(workflow_type)
+        task_queue = self._get_task_queue(workflow_type, memo=memo)
 
         formatted_sa = {
             k: v if isinstance(v, list) else [v]

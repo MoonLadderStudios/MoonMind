@@ -155,6 +155,51 @@ def test_fake_provider_activation_via_cli_flag_is_recorded() -> None:
     }
 
 
+def test_failed_layer_diagnostics_are_visible_and_redacted(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    runner = _load_runner()
+    monkeypatch.setattr(
+        runner,
+        "COMMANDS",
+        (
+            (
+                runner.sys.executable,
+                "-c",
+                "print('Recovery assertion failed'); "
+                "print('Authorization: Bearer diagnostic-test-secret'); "
+                "raise SystemExit(1)",
+            ),
+        ),
+    )
+    monkeypatch.setattr(runner, "EVIDENCE_GROUPS", {})
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            str(SCRIPT),
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+        ],
+    )
+
+    assert runner.main() == 1
+
+    output = capsys.readouterr().out
+    assert "Recovery assertion failed" in output
+    assert "diagnostic-test-secret" not in output
+    assert "[redacted]" in output
+    evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["commandResults"][0]["exitCode"] == 1
+    assert json.loads((tmp_path / "secret-scan.json").read_text())["status"] == "failed"
+
+
 def test_fake_provider_activation_via_env_var_is_recorded() -> None:
     runner = _load_runner()
     selection = runner.resolve_fake_provider_selection(
