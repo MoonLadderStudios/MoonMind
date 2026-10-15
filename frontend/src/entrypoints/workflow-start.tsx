@@ -2992,10 +2992,92 @@ function blankSourcePublishNotice(selection: string): string {
 }
 
 function anonymousSourcePublishNotice(selection: string): string {
-  const label = destinationPublishLabel(selection);
+  const label =
+    normalizePublishModeSelection(selection) === "auto"
+      ? "Auto"
+      : destinationPublishLabel(selection);
   return label
     ? `${label} publishing needs repository credentials. Turn off reading without credentials, or choose None to keep results save-only.`
     : "";
+}
+
+// The backend's well-known Git connection, which a bare repository name
+// selects (DEFAULT_GIT_CONNECTION_REF in repository_contract.py).
+const DEFAULT_GIT_CONNECTION_REF = "repository-connection:git-default";
+
+// The source a submission states for the backend to admit. Server-issued
+// saved-work sources are resubmitted unchanged. A repository source follows
+// the visible Repository and Branch fields and keeps its access and
+// connection. A target object requires a branch, so a branchless repository
+// keeps a non-default connection in the source instead.
+function submittedWorkspaceFor({
+  recordedWorkspace,
+  repository,
+  branch,
+  anonymous,
+  keptConnectionRef,
+}: {
+  recordedWorkspace: unknown;
+  repository: string;
+  branch: string;
+  anonymous: boolean;
+  keptConnectionRef: string;
+}): Record<string, unknown> | null {
+  const recorded = recordValue(recordedWorkspace);
+  const recordedSource = recordValue(recorded.workspaceSource);
+  const kind = String(recordedSource.kind || "").trim();
+  if (kind && kind !== "repository" && kind !== "scratch") {
+    return recorded;
+  }
+  if (!repository) {
+    return kind === "scratch" ? recorded : null;
+  }
+  const branchField = branch ? { branch } : {};
+  if (anonymous) {
+    return {
+      workspaceSource: {
+        kind: "repository",
+        repository,
+        ...branchField,
+        accessMode: "anonymous",
+      },
+    };
+  }
+  if (kind === "repository" && recordedSource.accessMode !== "anonymous") {
+    const {
+      repositoryTarget,
+      branch: _recordedBranch,
+      ...source
+    } = recordedSource;
+    const connectionRef = String(
+      source.connectionRef ||
+        recordValue(repositoryTarget).connectionRef ||
+        (source.accessMode === "routed" ? "" : keptConnectionRef),
+    ).trim();
+    return {
+      ...recorded,
+      workspaceSource: {
+        ...source,
+        repository,
+        ...branchField,
+        ...(connectionRef ? { connectionRef } : {}),
+      },
+    };
+  }
+  if (
+    !branch &&
+    keptConnectionRef &&
+    keptConnectionRef !== DEFAULT_GIT_CONNECTION_REF
+  ) {
+    return {
+      workspaceSource: {
+        kind: "repository",
+        repository,
+        connectionRef: keptConnectionRef,
+      },
+    };
+  }
+  return null;
 }
 
 function isAnonymousWorkspace(workspace: unknown): boolean {
@@ -7002,17 +7084,35 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     !isSelfManagedPublishSkill(effectiveSkillDetail) &&
     !isRepositoryPublishDisabledSkill(effectiveSkillDetail);
   const autoPublishAvailable = isSelfManagedPublishSkill(effectiveSkillDetail);
+  // Saved-result and workspace-grant sources come from server-issued refs, so
+  // the form keeps a recorded one as-is rather than offering fields for it.
+  const recordedSourceKind =
+    pageMode.mode !== "create"
+      ? String(
+          recordValue(
+            recordValue(temporalDraftQuery.data?.draft.workspace).workspaceSource,
+          ).kind || "",
+        ).trim()
+      : "";
+  const recordedSavedSource =
+    Boolean(recordedSourceKind) &&
+    !["repository", "scratch"].includes(recordedSourceKind);
+  const anonymousSource =
+    anonymousRead && Boolean(repository.trim()) && !recordedSavedSource;
   // Branch/PR modes need a destination; a blank source offers only None/Auto.
   const destinationPublishAvailable =
-    mergeAutomationAvailable && Boolean(repository.trim()) && !anonymousRead;
+    mergeAutomationAvailable && Boolean(repository.trim()) && !anonymousSource;
   // A blank source has no repository to publish to: until the operator picks
   // a mode, Create shows and submits save-only (None) instead of the page's
-  // repository default. Skill-owned Auto keeps its own declared target.
+  // repository default. Skill-owned Auto keeps its own declared target. An
+  // anonymous read cannot publish at all, so it defaults to None even then.
   const sourcePublishMode =
     !publishModeTouched &&
-    ((pageMode.mode === "create" && !remediationDraft && !repository.trim()) ||
-      anonymousRead) &&
-    normalizePublishModeForSubmit(publishMode) !== "auto"
+    (anonymousSource ||
+      (pageMode.mode === "create" &&
+        !remediationDraft &&
+        !repository.trim() &&
+        normalizePublishModeForSubmit(publishMode) !== "auto"))
       ? "none"
       : publishMode;
 
@@ -10530,7 +10630,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     const recordedDraft =
       pageMode.mode !== "create" ? temporalDraftQuery.data?.draft : undefined;
-    const submittedAnonymousRead = anonymousRead && Boolean(normalizedRepository);
+    const submittedAnonymousRead = anonymousSource && Boolean(normalizedRepository);
     // Edit and rerun keep the recorded target's provider and connection while
     // the repository is unchanged; Create has no connection selector, so an
     // omitted connectionRef selects the deployment's default server-side.
@@ -10544,12 +10644,20 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submissionBranch === String(recordedDraft?.branch || "").trim()
         ? keptRepositoryTarget.revision
         : undefined;
+    const submittedWorkspace = submittedWorkspaceFor({
+      recordedWorkspace: recordedDraft?.workspace,
+      repository: normalizedRepository,
+      branch: submissionBranch,
+      anonymous: submittedAnonymousRead,
+      keptConnectionRef: String(keptRepositoryTarget.connectionRef || "").trim(),
+    });
     // An omitted branch submits the bare name (the CLI's form), which the
     // backend clones at the remote's default branch, so submission never waits
-    // on advisory branch discovery. An anonymous read names no connection, so
-    // its branch travels in the workspace source.
+    // on advisory branch discovery. A repository source carries its own branch
+    // and access, so the repository then travels as the bare name.
     const submittedRepository =
-      submissionBranch && !submittedAnonymousRead
+      submissionBranch &&
+      recordValue(submittedWorkspace?.workspaceSource).kind !== "repository"
         ? {
             provider: String(keptRepositoryTarget.provider || "git"),
             ...(keptRepositoryTarget.connectionRef
@@ -10560,19 +10668,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             ...(keptRevision ? { revision: keptRevision } : {}),
           }
         : normalizedRepository;
-    const submittedWorkspace: Record<string, unknown> | null =
-      submittedAnonymousRead
-        ? {
-            workspaceSource: {
-              kind: "repository",
-              repository: normalizedRepository,
-              ...(submissionBranch ? { branch: submissionBranch } : {}),
-              accessMode: "anonymous",
-            },
-          }
-        : recordedDraft?.workspace && !isAnonymousWorkspace(recordedDraft.workspace)
-          ? recordedDraft.workspace
-          : null;
     const requestBody: Record<string, unknown> = {
       type: "task",
       priority: effectivePriority,
@@ -10962,31 +11057,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
       : "Select the branch to check out before the workflow starts";
-  // Saved-result and workspace-grant sources come from server-issued refs, so
-  // the form keeps a recorded one as-is rather than offering fields for it.
-  const recordedSourceKind = String(
-    recordValue(
-      recordValue(temporalDraftQuery.data?.draft.workspace).workspaceSource,
-    ).kind || "",
-  ).trim();
-  const recordedSavedSourceNotice =
-    pageMode.mode !== "create" &&
-    recordedSourceKind &&
-    !["repository", "scratch"].includes(recordedSourceKind)
+  const recordedSavedSourceNotice = recordedSavedSource
       ? `This run starts from its recorded ${recordedSourceKind.replace("_", " ")} source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.`
       : "";
   const sourcePublishNotice = !repository.trim()
     ? blankSourcePublishNotice(sourcePublishMode)
-    : anonymousRead
+    : anonymousSource
       ? anonymousSourcePublishNotice(sourcePublishMode)
       : "";
   const publicationOutcome =
     sourcePublishNotice ||
-    publicationOutcomeText(
-      sourcePublishMode,
-      repository.trim(),
-      anonymousRead && Boolean(repository.trim()),
-    );
+    publicationOutcomeText(sourcePublishMode, repository.trim(), anonymousSource);
   const publishModeTooltip = autoPublishAvailable
     ? "Auto is available because the selected skill owns publishing"
     : !mergeAutomationAvailable
@@ -13170,7 +13251,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               {recordedSavedSourceNotice}
             </p>
           ) : null}
-          {repository.trim() && (showAdvancedStepOptions || anonymousRead) ? (
+          {repository.trim() &&
+          !recordedSavedSource &&
+          (showAdvancedStepOptions || anonymousRead) ? (
             <label className="queue-authoring-controls-status small">
               <input
                 type="checkbox"

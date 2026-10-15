@@ -13604,6 +13604,168 @@ describe("Task Create MM-641 authoring validation", () => {
     });
   });
 
+  it("keeps the recorded connection when the Branch is cleared", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:branchless-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: recordedGitLabTarget,
+        publishMode: "none",
+        workflow: {
+          instructions: "Deploy the release.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Abranchless-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const branch = (await screen.findByLabelText("Branch")) as HTMLInputElement;
+    await waitFor(() => expect(branch.value).toBe("develop"));
+    fireEvent.change(branch, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    // A target object needs a branch, so the connection travels in the source.
+    expect(patch.repository).toBe("gitlab.example.com/platform/deployer");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "gitlab.example.com/platform/deployer",
+        connectionRef: "repository-connection:team-gitlab",
+      },
+    });
+  });
+
+  it("rebuilds a recorded repository workspace from the edited repository and branch", async () => {
+    const updates = mockRecordedExecution({
+      workflowId: "mm:routed-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: {
+          workspaceSource: {
+            kind: "repository",
+            repository: "octo/app",
+            branch: "main",
+            accessMode: "routed",
+          },
+        },
+        workflow: {
+          instructions: "Review the app.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Arouted-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const repository = (await screen.findByLabelText("Repository")) as HTMLInputElement;
+    await waitFor(() => expect(repository.value).toBe("octo/app"));
+    fireEvent.change(repository, { target: { value: "octo/other" } });
+    fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.repository).toBe("octo/other");
+    expect(patch.workspace).toEqual({
+      workspaceSource: {
+        kind: "repository",
+        repository: "octo/other",
+        branch: "dev",
+        accessMode: "routed",
+      },
+    });
+  });
+
+  it("explains and resubmits a recorded checkpoint source unchanged on rerun", async () => {
+    const recordedWorkspace = {
+      workspaceSource: {
+        kind: "checkpoint",
+        checkpointRef: "art_01CHECKPOINTSOURCE",
+        baseRepository: { name: "octo/app", branch: "main" },
+      },
+    };
+    const updates = mockRecordedExecution({
+      workflowId: "mm:checkpoint-rerun",
+      workflowType: "MoonMind.UserWorkflow",
+      state: "completed",
+      targetRuntime: "codex_cli",
+      publishMode: "none",
+      inputParameters: {
+        targetRuntime: "codex_cli",
+        repository: "octo/app",
+        publishMode: "none",
+        workspaceSpec: recordedWorkspace,
+        workflow: {
+          instructions: "Continue the saved work.",
+          runtime: { mode: "codex_cli" },
+          publish: { mode: "none" },
+        },
+      },
+      actions: { canUpdateInputs: false, canRerun: true },
+    });
+    window.history.pushState({}, "Task Rerun", "/workflows/new?rerunExecutionId=mm%3Acheckpoint-rerun");
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    expect(
+      await screen.findByText(
+        "This run starts from its recorded checkpoint source, which is kept unchanged. To start from other saved work, use Continue on the saved result in the workflow's details.",
+      ),
+    ).toBeTruthy();
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    await waitFor(() => expect(instructions.value).toBe("Continue the saved work."));
+    // A saved-work source is never replaced by a fresh anonymous read.
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(
+      screen.queryByLabelText("Read without credentials (public repository)"),
+    ).toBeNull();
+
+    fireEvent.change(instructions, { target: { value: "Finish the saved work." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+    await waitFor(() => expect(updates).toHaveLength(1));
+    const patch = updates[0]?.parametersPatch as Record<string, unknown>;
+    expect(patch.workspace).toEqual(recordedWorkspace);
+    expect(patch.repository).toBe("octo/app");
+    expect(patch.publishMode).toBe("none");
+  });
+
+  it("defaults an anonymous read to None even when the Skill publishes itself", async () => {
+    mockPublishContractCatalogs();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    const skillSelect = within(primaryStep as HTMLElement).getByRole("combobox", {
+      name: /skill/i,
+    });
+    const publish = screen.getByLabelText("Publish Mode") as HTMLSelectElement;
+    fireEvent.change(skillSelect, { target: { value: "custom-self-publisher" } });
+    fireEvent.change(screen.getByLabelText("Repository"), {
+      target: { value: "octo/public" },
+    });
+    await waitFor(() => expect(publish.value).toBe("auto"));
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.click(screen.getByLabelText("Read without credentials (public repository)"));
+    await waitFor(() => expect(publish.value).toBe("none"));
+  });
+
   it("offers an anonymous public-repository read as an advanced source choice", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

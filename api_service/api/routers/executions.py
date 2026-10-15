@@ -12049,6 +12049,13 @@ def _admit_workspace_source(
     return workspace, repository or source.repository_ref, source.kind
 
 
+def _check_workspace_source_runtime(kind: str, runtime: str) -> None:
+    try:
+        check_source_runtime_supported(kind, runtime)
+    except WorkspaceSourceError as exc:
+        raise _invalid_workflow_request(f"payload.workspace is invalid: {exc}") from exc
+
+
 def _reject_anonymous_source_publication(
     workspace_spec: Mapping[str, Any] | None, *publish_modes: object
 ) -> None:
@@ -12067,34 +12074,45 @@ def _reject_anonymous_source_publication(
 
 
 def _readmit_edited_workspace_source(
-    parameters_patch: Mapping[str, Any], *, workflow_id: str
+    parameters_patch: Mapping[str, Any],
+    *,
+    recorded_parameters: Mapping[str, Any],
+    workflow_id: str,
 ) -> dict[str, Any]:
     """Admit the source an edit or rerun states, exactly as Create does.
 
     The patch is merged shallowly over the recorded parameters, so the
     re-admitted ``workspaceSpec`` (``None`` when the source was removed)
-    replaces the recorded one instead of inheriting it unchecked.
+    replaces the recorded one instead of inheriting it unchecked. A patched
+    ``workspaceSpec`` is admitted like an authored ``workspace``. Runtime and
+    publication are checked against what that merge selects.
     """
 
     admitted = dict(parameters_patch)
     repository_payload, repository = _normalize_submitted_repository(
         admitted.get("repository")
     )
-    workspace_spec, repository, _kind = _admit_workspace_source(
-        admitted.get("workspace"),
+    workspace_spec, repository, kind = _admit_workspace_source(
+        admitted["workspace"] if "workspace" in admitted else admitted["workspaceSpec"],
         repository_payload=repository_payload,
         repository=repository,
         workflow_id=workflow_id,
     )
     if repository_payload is None and repository:
         admitted["repository"] = repository
-    workflow = _workflow_payload_from_parameters(admitted)
+    admitted["workspaceSpec"] = workspace_spec
+    merged = {**recorded_parameters, **admitted}
+    if kind is not None:
+        _check_workspace_source_runtime(
+            kind, normalize_runtime_id(merged.get("targetRuntime"))
+        )
     _reject_anonymous_source_publication(
         workspace_spec,
-        admitted.get("publishMode"),
-        _coerce_mapping(workflow.get("publish")).get("mode"),
+        merged.get("publishMode"),
+        _coerce_mapping(_workflow_payload_from_parameters(merged).get("publish")).get(
+            "mode"
+        ),
     )
-    admitted["workspaceSpec"] = workspace_spec
     return admitted
 
 
@@ -12771,14 +12789,9 @@ async def _create_execution_from_workflow_request(
             )
         canonical_target_runtime = normalized_rt
     if workspace_source_kind is not None:
-        try:
-            check_source_runtime_supported(
-                workspace_source_kind, canonical_target_runtime or "omnigent"
-            )
-        except WorkspaceSourceError as exc:
-            raise _invalid_workflow_request(
-                f"payload.workspace is invalid: {exc}"
-            ) from exc
+        _check_workspace_source_runtime(
+            workspace_source_kind, canonical_target_runtime or "omnigent"
+        )
 
     if (
         runtime_payload.get("executionConfiguration") is not None
@@ -20185,10 +20198,15 @@ async def update_execution(
     if (
         is_task_editing_update
         and effective_parameters_patch is not None
-        and "workspace" in effective_parameters_patch
+        and (
+            "workspace" in effective_parameters_patch
+            or "workspaceSpec" in effective_parameters_patch
+        )
     ):
         effective_parameters_patch = _readmit_edited_workspace_source(
-            effective_parameters_patch, workflow_id=record.workflow_id
+            effective_parameters_patch,
+            recorded_parameters=dict(record.parameters or {}),
+            workflow_id=record.workflow_id,
         )
     if exact_plan_rerun:
         exact_snapshot_parameters = await _exact_rerun_parameters_from_snapshot(
