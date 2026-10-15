@@ -514,6 +514,32 @@ async def repo_create_pr_activity(payload: dict) -> dict:
         )
     return result.model_dump(by_alias=True)
 
+
+@activity.defn(name="repo.sync_pr_unverified_criteria")
+async def repo_sync_pr_unverified_criteria_activity(payload: dict) -> dict:
+    """Refresh verifier disclosure without replacing an operator's PR prose."""
+    from pydantic import BaseModel, Field
+    from moonmind.workflows.adapters.github_service import GitHubService
+
+    class _Payload(BaseModel):
+        repo: str = Field(min_length=1)
+        prUrl: str = Field(min_length=1)
+        section: str
+
+    validated = _Payload.model_validate(payload)
+    scan = scan_outbound_text(
+        validated.section,
+        location="repo.sync_pr_unverified_criteria",
+        settings=settings,
+    )
+    if not scan.allowed:
+        raise ValueError("Unverified criteria contain blocked outbound content")
+    updated = await GitHubService().sync_pull_request_unverified_criteria(
+        repo=validated.repo, pr_url=validated.prUrl, section=validated.section
+    )
+    return {"updated": updated}
+
+
 __all__ = [
     "jules_answer_question_activity",
     "jules_cancel_activity",
@@ -521,6 +547,7 @@ __all__ = [
     "jules_get_auto_answer_config_activity",
     "jules_list_activities_activity",
     "repo_create_pr_activity",
+    "repo_sync_pr_unverified_criteria_activity",
     "repo_merge_pr_activity",
     "jules_send_message_activity",
     "jules_start_activity",

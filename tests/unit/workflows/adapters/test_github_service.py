@@ -52,6 +52,65 @@ def _mock_get_response_with_headers(
 # create_pull_request
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "section", ["## Unverified criteria\n\n- AC-2: Needs GPU CI.", ""]
+)
+async def test_sync_unverified_criteria_preserves_reused_pr_edits(monkeypatch, section):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    original = "Reviewer's introduction.\n\n## Unverified criteria\n\n- AC-old: Stale.\n\n## Validation\n\nKeep these results."
+    document = {"state": "open", "body": original}
+    writes = []
+
+    def handle(request):
+        assert str(request.url) == "https://api.github.com/repos/o/r/pulls/42"
+        if request.method == "PATCH":
+            import json
+
+            payload = json.loads(request.content)
+            assert set(payload) == {"body"}
+            writes.append(payload)
+            document.update(payload)
+        else:
+            assert request.method == "GET"
+        return httpx.Response(200, json=document)
+
+    client_type = httpx.AsyncClient
+    transport = httpx.MockTransport(handle)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        side_effect=lambda **kwargs: client_type(transport=transport, **kwargs),
+    ):
+        service = GitHubService()
+        await service.sync_pull_request_unverified_criteria(
+            repo="o/r",
+            pr_url="https://github.com/o/r/pull/42",
+            section=section,
+        )
+        # Retrying a confirmed or uncertain update reconciles to a no-op.
+        await service.sync_pull_request_unverified_criteria(
+            repo="o/r",
+            pr_url="https://github.com/o/r/pull/42",
+            section=section,
+        )
+    assert len(writes) == 1
+    assert document["body"].startswith("Reviewer's introduction.\n\n")
+    assert document["body"].endswith("## Validation\n\nKeep these results.")
+    assert "AC-old" not in document["body"]
+    assert ("AC-2" in document["body"]) is bool(section)
+
+
+@pytest.mark.asyncio
+async def test_sync_unverified_criteria_rejects_another_repository():
+    with pytest.raises(ValueError, match="repository"):
+        await GitHubService().sync_pull_request_unverified_criteria(
+            repo="o/r",
+            pr_url="https://github.com/another/repo/pull/42",
+            section="",
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_pr_success(monkeypatch):
     """Successful PR creation returns created=True and the URL."""

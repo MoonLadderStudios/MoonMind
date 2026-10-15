@@ -134,14 +134,26 @@ def hydrate_acceptance_projection(
     return hydrated
 
 
-def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
+def _compact_workflow_text(
+    value: Any, *, max_chars: int = 700, max_bytes: int | None = None
+) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
     if not text:
         return None
     if len(text) > max_chars:
-        return text[: max_chars - 3].rstrip() + "..."
+        text = text[: max_chars - 3].rstrip() + "..."
+    if max_bytes is not None and len(json.dumps(text)) > max_bytes:
+        # JSON escapes can be larger than the original Unicode text.
+        prefix: list[str] = []
+        size = 5  # JSON quotes and the truncation marker.
+        for character in text:
+            size += len(json.dumps(character)) - 2
+            if size > max_bytes:
+                break
+            prefix.append(character)
+        text = "".join(prefix).rstrip() + "..."
     return text
 
 
@@ -272,6 +284,19 @@ def compact_moonspec_verify_metadata(
         and value.get("acceptanceScopeContract") != "source-bound/v1"
     ):
         projected = acceptance.model_dump(mode="json", by_alias=True, exclude_none=True)
+        disclosures = [
+            row["unverified"] for row in projected["evidence"] if row.get("unverified")
+        ]
+        # Keep display prose bounded across all rows, leaving room for the
+        # unchanged acceptance identity. Full reasons stay in the gate artifact.
+        text_budget = max(
+            16, MAX_TEMPORAL_METADATA_BYTES // (4 * max(1, len(disclosures)))
+        )
+        for disclosure in disclosures:
+            for key in ("reason", "verifiableBy"):
+                disclosure[key] = _compact_workflow_text(
+                    disclosure[key], max_bytes=text_budget
+                )
         evidence_ref = value.get("gateResultRef")
         if (
             not projected.get("evidenceSetDigest")

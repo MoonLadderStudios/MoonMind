@@ -10597,50 +10597,54 @@ async def test_preserved_draft_finalization_keeps_publication_and_blocked_object
     assert workflow._attention_required is True
 
 
+@pytest.fixture
+def unverified_publication_gate():
+    return {
+        "verdict": "FULLY_IMPLEMENTED",
+        "recommendedNextAction": "advance",
+        "recoverableInCurrentRuntime": False,
+        "validatedRefs": {
+            "acceptance": {
+                "schemaVersion": "acceptance/v1",
+                "subject": {
+                    "repository": "org/repo",
+                    "revision": "abc",
+                    "contentDigest": "git-tree:abc",
+                },
+                "scope": {
+                    "sourceRef": "org/repo#7",
+                    "sourceDigest": "sha256:source",
+                    "complete": True,
+                    "requirementIds": ["AC-1", "AC-2"],
+                },
+                "completionTarget": {
+                    "ref": "refs/heads/main",
+                    "revision": "def",
+                    "contentDigest": "git-tree:def",
+                },
+                "evidence": [
+                    {"requirementId": "AC-1", "evidenceRefs": ["test:ac-1"]},
+                    {
+                        "requirementId": "AC-2",
+                        "unverified": {
+                            "reason": "Needs a GPU render host.",
+                            "verifiableBy": "the repository's GPU CI lane",
+                        },
+                    },
+                ],
+                "freshness": {"policy": "content"},
+            }
+        },
+    }
+
+
 def test_passing_gate_lists_unverified_criteria_in_native_pr_body(
     mock_run_workflow: MoonMindRunWorkflow,
+    unverified_publication_gate,
 ) -> None:
     mock_run_workflow._record_moonspec_verify_gate(
         node_id="verify-final",
-        outputs={
-            "moonSpecVerify": {
-                "verdict": "FULLY_IMPLEMENTED",
-                "recommendedNextAction": "advance",
-                "recoverableInCurrentRuntime": False,
-                "validatedRefs": {
-                    "acceptance": {
-                        "schemaVersion": "acceptance/v1",
-                        "subject": {
-                            "repository": "org/repo",
-                            "revision": "abc",
-                            "contentDigest": "git-tree:abc",
-                        },
-                        "scope": {
-                            "sourceRef": "org/repo#7",
-                            "sourceDigest": "sha256:source",
-                            "complete": True,
-                            "requirementIds": ["AC-1", "AC-2"],
-                        },
-                        "completionTarget": {
-                            "ref": "refs/heads/main",
-                            "revision": "def",
-                            "contentDigest": "git-tree:def",
-                        },
-                        "evidence": [
-                            {"requirementId": "AC-1", "evidenceRefs": ["test:ac-1"]},
-                            {
-                                "requirementId": "AC-2",
-                                "unverified": {
-                                    "reason": "Needs a GPU render host.",
-                                    "verifiableBy": "the repository's GPU CI lane",
-                                },
-                            },
-                        ],
-                        "freshness": {"policy": "content"},
-                    }
-                },
-            }
-        },
+        outputs={"moonSpecVerify": unverified_publication_gate},
     )
 
     assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
@@ -10655,3 +10659,98 @@ def test_passing_gate_lists_unverified_criteria_in_native_pr_body(
         in body
     )
     assert "AC-1" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False], ids=["current", "retained-history"])
+@pytest.mark.parametrize("unverified", [True, False], ids=["disclose", "clear-stale"])
+async def test_reused_issue_pr_synchronizes_current_unverified_criteria(
+    mock_run_workflow,
+    monkeypatch,
+    unverified_publication_gate,
+    enabled,
+    unverified,
+):
+    workflow = mock_run_workflow
+    workflow._repo = "org/repo"
+    workflow._assessment_context = {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
+    workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    if not unverified:
+        row = unverified_publication_gate["validatedRefs"]["acceptance"]["evidence"][1]
+        row.pop("unverified")
+        row["evidenceRefs"] = ["test:ac-2"]
+    workflow._publish_context["moonSpecGate"] = unverified_publication_gate
+    execute_activity = AsyncMock(return_value={"updated": True})
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda key: (
+            enabled
+            if key == "run-unverified-pr-disclosure-v1"
+            else _all_patches_except_empty_skillset(key)
+        ),
+    )
+    url = await workflow._ensure_issue_implement_pr_before_status(
+        node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+        parameters={
+            "publishMode": "pr",
+            "workflow": {
+                "inputs": {"github_issue": {"repository": "org/repo", "number": 1}}
+            },
+        },
+    )
+    assert url == "https://github.com/org/repo/pull/7"
+    if not enabled:
+        execute_activity.assert_not_awaited()
+        return
+    execute_activity.assert_awaited_once()
+    activity, payload = execute_activity.await_args.args
+    assert activity == "repo.sync_pr_unverified_criteria"
+    assert payload["repo"] == "org/repo"
+    assert payload["prUrl"] == url
+    assert ("AC-2" in payload["section"]) is unverified
+    assert "AC-1" not in payload["section"]
+
+
+@pytest.mark.asyncio
+async def test_pr_disclosure_failure_preserves_confirmed_creation(
+    mock_run_workflow,
+    monkeypatch,
+    unverified_publication_gate,
+):
+    workflow = mock_run_workflow
+    workflow._assessment_context = {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
+    workflow._record_accepted_published_head(
+        {
+            "acceptedRepositoryEvidence": {
+                "publicationAuthorized": True,
+                "candidateContaminated": False,
+                "pushStatus": "pushed",
+                "branch": "candidate",
+                "headSha": "a" * 40,
+                "baseBranch": "main",
+            }
+        }
+    )
+    workflow._publish_context["moonSpecGate"] = unverified_publication_gate
+    url = "https://github.com/org/repo/pull/7"
+    execute_activity = AsyncMock(
+        side_effect=[{"url": url}, RuntimeError("disclosure unavailable")]
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset
+    )
+    with pytest.raises(RuntimeError, match="disclosure unavailable"):
+        await workflow._ensure_issue_implement_pr_before_status(
+            node={"annotations": {"issueImplementRole": "code-review-handoff"}},
+            parameters={"publishMode": "pr"},
+        )
+    assert workflow._pull_request_url == url
+    assert workflow._publish_context["pullRequestUrl"] == url
+    assert workflow._publish_status == "published"

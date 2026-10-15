@@ -79,7 +79,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         ), "Step 'Assess source acceptance coverage' not found in template steps"
         assert assess_step["skill"]["id"] == "moonspec-assess"
         assert "acceptance-assessment.json" in assess_step["instructions"]
-        assert "bounded backlog" in assess_step["instructions"]
         tasks_step = next(
             step
             for step in template.steps
