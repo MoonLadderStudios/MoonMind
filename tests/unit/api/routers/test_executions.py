@@ -10660,6 +10660,12 @@ def test_edit_admits_the_source_against_the_merged_parameters(
         ({}, {"targetRuntime": "claude_code"}),
         # The edit keeps the recorded runtime, which Create would also reject.
         ({"targetRuntime": "claude"}, {}),
+        # The edit selects the runtime only through the nested workflow mode,
+        # which the workflow applies over the recorded top-level runtime.
+        (
+            {"targetRuntime": "codex_cli"},
+            {"workflow": {**_NO_PUBLISH_TASK, "runtime": {"mode": "claude_code"}}},
+        ),
     ],
 )
 def test_edit_and_rerun_apply_creates_source_runtime_check(
@@ -10696,6 +10702,42 @@ def test_edit_and_rerun_apply_creates_source_runtime_check(
             "'claude_code'" in response.json()["detail"]["message"]
         )
         service.update_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize("update_name", ["UpdateInputs", "RequestRerun"])
+def test_edit_admits_a_source_against_the_recorded_repository(
+    update_name: str,
+) -> None:
+    """A workspace-only patch names its repository through the merged record."""
+    workspace = {"workspaceSource": {"kind": "repository", "accessMode": "anonymous"}}
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(has_workflow_input_snapshot=False)
+        record.parameters = {
+            "repository": "Moon/Mind",
+            "workflow": dict(_NO_PUBLISH_TASK),
+        }
+        service.describe_execution.return_value = record
+        service.update_execution.return_value = {
+            "accepted": True,
+            "applied": "next_safe_point",
+            "message": "Accepted.",
+        }
+
+        response = test_client.post(
+            "/api/executions/mm:wf-1/update",
+            json={
+                "updateName": update_name,
+                "parametersPatch": {
+                    "workspace": copy.deepcopy(workspace),
+                    "publishMode": "none",
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.json()
+        patch = service.update_execution.await_args.kwargs["parameters_patch"]
+        assert patch["workspaceSpec"] == workspace
+        assert "repository" not in patch
 
 
 @pytest.mark.parametrize(
